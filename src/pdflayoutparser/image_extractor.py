@@ -1,0 +1,69 @@
+"""Image extractor module.
+
+Extracts embedded image resources from a PDF page using PyMuPDF.
+"""
+
+import os
+from typing import List
+
+import fitz
+
+from pdflayoutparser.models import BBox, Image
+
+
+class ImageExtractor:
+    """Extract embedded images from a PDF page.
+
+    Example::
+
+        extractor = ImageExtractor(output_dir="/tmp/images")
+        images = extractor.extract("doc.pdf", page_index=0)
+    """
+
+    def __init__(self, output_dir: str):
+        """Create *output_dir* if it does not exist."""
+        self.output_dir = output_dir
+        os.makedirs(output_dir, exist_ok=True)
+
+    def extract(self, file_path: str, page_index: int) -> List[Image]:
+        """Return a list of :class:`Image` objects for the given *page_index*."""
+        doc = fitz.open(file_path)
+        try:
+            page = doc[page_index]
+            image_list = page.get_images(full=True)
+            images: List[Image] = []
+
+            for img_index, img in enumerate(image_list):
+                xref = img[0]
+                base_image = doc.extract_image(xref)
+                image_bytes = base_image["image"]
+                ext = base_image["ext"]
+                width = base_image["width"]
+                height = base_image["height"]
+
+                file_name = f"page-{page_index:03d}-img-{img_index:03d}.{ext}"
+                path = os.path.join(self.output_dir, file_name)
+                with open(path, "wb") as f:
+                    f.write(image_bytes)
+
+                # Try to get bbox from page image info
+                bbox = None
+                image_infos = page.get_image_info()
+                if img_index < len(image_infos):
+                    bbox = BBox(*image_infos[img_index]["bbox"])
+
+                images.append(
+                    Image(
+                        bbox=bbox,
+                        page_index=page_index,
+                        resource_index=img_index,
+                        width=width,
+                        height=height,
+                        path=path,
+                        ext=ext,
+                    )
+                )
+
+            return images
+        finally:
+            doc.close()
