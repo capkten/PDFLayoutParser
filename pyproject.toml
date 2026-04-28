@@ -16,5 +16,8 @@ dev = [
     "pytest>=7.0",
 ]
 
+[project.scripts]
+pdflayoutparser = "pdflayoutparser.cli:main"
+
 [tool.setuptools.packages.find]
 where = ["src"]
