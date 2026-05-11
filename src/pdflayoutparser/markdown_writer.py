@@ -1,5 +1,8 @@
 """Markdown writer for structured Document output."""
 
+from html import escape
+import re
+
 from pdflayoutparser.models import Document, LayoutElement, Table, Image, Seal
 
 
@@ -11,6 +14,14 @@ class MarkdownWriter:
         for page in document.pages:
             for element in page.layout_elements:
                 lines.extend(self._render_element(element, page.index))
+        with open(output_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines))
+
+    def write_page(self, page, output_path: str) -> None:
+        """Convert a single page into a Markdown file."""
+        lines: list[str] = []
+        for element in page.layout_elements:
+            lines.extend(self._render_element(element, page.index))
         with open(output_path, "w", encoding="utf-8") as f:
             f.write("\n".join(lines))
 
@@ -37,23 +48,69 @@ class MarkdownWriter:
     def _render_table(self, table: Table) -> list[str]:
         if not table or not table.cells:
             return []
-        # Group cells by row_index and sort by col_index
-        row_map: dict[int, list] = {}
+
+        max_row = max(
+            [table.rows - 1]
+            + [
+                cell.row_index + max(1, cell.rowspan) - 1
+                for cell in table.cells
+            ]
+        )
+        max_col = max(
+            [table.cols - 1]
+            + [
+                cell.col_index + max(1, cell.colspan) - 1
+                for cell in table.cells
+            ]
+        )
+
+        cell_map: dict[tuple[int, int], Table] = {}
         for cell in table.cells:
-            row_map.setdefault(cell.row_index, []).append(cell)
-        rows: list[list] = []
-        for ri in sorted(row_map.keys()):
-            row_cells = sorted(row_map[ri], key=lambda c: c.col_index)
-            rows.append(row_cells)
-        if not rows:
-            return []
-        # Build markdown rows
-        md_rows: list[str] = []
-        for row_cells in rows:
-            md_rows.append("| " + " | ".join(str(c.text) for c in row_cells) + " |")
-        # Add separator after first row
-        col_count = len(rows[0])
-        separator = "| " + " | ".join(["---"] * col_count) + " |"
-        md_rows.insert(1, separator)
-        md_rows.append("")
-        return md_rows
+            cell_map.setdefault((cell.row_index, cell.col_index), cell)
+
+        covered: set[tuple[int, int]] = set()
+        lines: list[str] = ["<table>", "  <tbody>"]
+        for row_index in range(max_row + 1):
+            lines.append("    <tr>")
+            for col_index in range(max_col + 1):
+                if (row_index, col_index) in covered:
+                    continue
+
+                cell = cell_map.get((row_index, col_index))
+                if cell is None:
+                    lines.append("      <td></td>")
+                    continue
+
+                rowspan = max(1, cell.rowspan or 1)
+                colspan = max(1, cell.colspan or 1)
+                for r in range(row_index, row_index + rowspan):
+                    for c in range(col_index, col_index + colspan):
+                        if r == row_index and c == col_index:
+                            continue
+                        covered.add((r, c))
+
+                attrs: list[str] = []
+                if rowspan > 1:
+                    attrs.append(f'rowspan="{rowspan}"')
+                if colspan > 1:
+                    attrs.append(f'colspan="{colspan}"')
+
+                text = self._clean_number_text(
+                    str(cell.text or "").replace("\n", " ").strip()
+                )
+                attr_text = f" {' '.join(attrs)}" if attrs else ""
+                lines.append(
+                    f"      <td{attr_text}>{escape(text, quote=False)}</td>"
+                )
+            lines.append("    </tr>")
+        lines.extend(["  </tbody>", "</table>", ""])
+        return lines
+
+    _NUM_SPACE_RE = re.compile(r"(?<=[\d,\.\-])\s+(?=[\d,\.\-])")
+
+    def _clean_number_text(self, text: str) -> str:
+        """Remove spurious spaces inside numbers that were split by newlines."""
+        # Only apply to text that looks like it contains a numeric fragment
+        if not self._NUM_SPACE_RE.search(text):
+            return text
+        return self._NUM_SPACE_RE.sub("", text)
