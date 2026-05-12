@@ -32,7 +32,13 @@ class JSONWriter:
         """Convert *document* to dict and write it to *output_path*."""
         data = self._document_to_dict(document)
         with open(output_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+            json.dump(data, f, ensure_ascii=False)
+
+    def write_page(self, page: Page, output_path: str) -> None:
+        """Convert a single *page* to dict and write it to *output_path*."""
+        data = self._page_to_dict(page)
+        with open(output_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
 
     # --------------------------------------------------------------------- #
     # Recursive converters – one per model type

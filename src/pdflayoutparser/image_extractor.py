@@ -4,6 +4,7 @@ Extracts embedded image resources from a PDF page using PyMuPDF.
 """
 
 import os
+from collections import defaultdict
 from typing import List
 
 import fitz
@@ -31,6 +32,15 @@ class ImageExtractor:
         try:
             page = doc[page_index]
             image_list = page.get_images(full=True)
+            image_infos = page.get_image_info(xrefs=True)
+            bbox_by_xref = defaultdict(list)
+            for info in image_infos:
+                xref = info.get("xref")
+                bbox = info.get("bbox")
+                if xref is None or bbox is None:
+                    continue
+                bbox_by_xref[xref].append(BBox(*bbox))
+
             images: List[Image] = []
 
             for img_index, img in enumerate(image_list):
@@ -46,11 +56,9 @@ class ImageExtractor:
                 with open(path, "wb") as f:
                     f.write(image_bytes)
 
-                # Try to get bbox from page image info
                 bbox = None
-                image_infos = page.get_image_info()
-                if img_index < len(image_infos):
-                    bbox = BBox(*image_infos[img_index]["bbox"])
+                if bbox_by_xref.get(xref):
+                    bbox = bbox_by_xref[xref].pop(0)
 
                 images.append(
                     Image(

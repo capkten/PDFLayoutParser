@@ -158,7 +158,7 @@ class TableExtractor:
         self,
         rect: fitz.Rect,
         seqno: int | None,
-        bboxlog: List[Tuple],
+        occluding_rects: List[Tuple[int, fitz.Rect]],
     ) -> bool:
         """Return True if a later opaque paint operation fully covers *rect*.
 
@@ -167,35 +167,57 @@ class TableExtractor:
         border candidate, but near-complete containment usually means the
         rectangle is not visually contributing to the final page appearance.
         """
-        if seqno is None or not bboxlog:
+        if seqno is None or not occluding_rects:
             return False
 
         area = rect.get_area()
         if area <= 0:
             return False
 
-        occluding_types = {"fill-path", "fill-image", "fill-shade"}
-        for idx, entry in enumerate(bboxlog):
-            if idx <= seqno or not entry:
-                continue
+        import bisect
+        # Find the first entry with an index > seqno.
+        start_pos = bisect.bisect_right(occluding_rects, seqno, key=lambda x: x[0])
 
-            item_type = entry[0]
-            if item_type not in occluding_types:
-                continue
+        for i in range(start_pos, len(occluding_rects)):
+            _, cover_rect = occluding_rects[i]
 
-            cover_rect = fitz.Rect(entry[1])
-            inter = rect & cover_rect
-            if inter.is_empty:
-                continue
-
-            if inter.get_area() / area >= 0.98:
+            # Fast coordinate check for containment (allowing 0.1pt tolerance)
+            # This avoids expensive Rect object creation and area calculations in the majority of cases.
+            if (
+                cover_rect.x0 <= rect.x0 + 0.1
+                and cover_rect.y0 <= rect.y0 + 0.1
+                and cover_rect.x1 >= rect.x1 - 0.1
+                and cover_rect.y1 >= rect.y1 - 0.1
+            ):
                 return True
 
+            # If not fully contained, check for partial intersection
+            # Manual bbox overlap check to avoid calling into MuPDF
+            if not (
+                rect.x1 < cover_rect.x0
+                or rect.x0 > cover_rect.x1
+                or rect.y1 < cover_rect.y0
+                or rect.y0 > cover_rect.y1
+            ):
+                inter = rect & cover_rect
+                if inter.get_area() / area >= 0.98:
+                    return True
+
         return False
+
+    def _get_occluding_rects(self, bboxlog: List[Tuple]) -> List[Tuple[int, fitz.Rect]]:
+        """Pre-filter and pre-convert occluding entries from bboxlog."""
+        occluding_types = {"fill-path", "fill-image", "fill-shade"}
+        result = []
+        for idx, entry in enumerate(bboxlog):
+            if entry and entry[0] in occluding_types:
+                result.append((idx, fitz.Rect(entry[1])))
+        return result
 
     def _iter_effective_drawing_rects(self, page: fitz.Page):
         """Yield (rect, drawing) for visible border rectangles not later occluded."""
         bboxlog = self._get_bboxlog(page)
+        occluding_rects = self._get_occluding_rects(bboxlog)
 
         try:
             drawings = page.get_drawings()
@@ -216,7 +238,7 @@ class TableExtractor:
                 ):
                     continue
 
-                if self._is_rect_fully_covered_later(rect, seqno, bboxlog):
+                if self._is_rect_fully_covered_later(rect, seqno, occluding_rects):
                     continue
 
                 yield rect, drawing

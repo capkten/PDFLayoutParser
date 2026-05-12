@@ -88,7 +88,7 @@ class TextExtractor:
                         )
                     )
 
-                line_text = "".join(w.text for w in words)
+                line_text = self._join_words(words)
                 lines.append(
                     Line(
                         text=line_text,
@@ -107,3 +107,24 @@ class TextExtractor:
             )
 
         return blocks
+
+    def _join_words(self, words: List[Word]) -> str:
+        """Join words while preserving visible gaps between spans."""
+        if not words:
+            return ""
+
+        parts = [words[0].text]
+        for prev_word, word in zip(words, words[1:]):
+            prev_text = prev_word.text or ""
+            curr_text = word.text or ""
+            if prev_text.endswith(" ") or curr_text.startswith(" "):
+                parts.append(curr_text)
+                continue
+
+            gap = word.bbox.x0 - prev_word.bbox.x1
+            if gap > 1.0:
+                parts.append(" " + curr_text)
+            else:
+                parts.append(curr_text)
+
+        return "".join(parts)

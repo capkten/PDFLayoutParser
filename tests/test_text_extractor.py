@@ -1,6 +1,7 @@
 """Tests for the text extractor."""
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -51,3 +52,41 @@ class TestTextExtractor:
             assert char.bbox is not None
             assert char.bbox.x0 < char.bbox.x1
             assert char.bbox.y0 < char.bbox.y1
+
+    def test_joining_multiple_spans_keeps_word_boundaries(self):
+        page = SimpleNamespace(
+            get_text=lambda *args, **kwargs: {
+                "blocks": [
+                    {
+                        "type": 0,
+                        "bbox": (0, 0, 100, 20),
+                        "lines": [
+                            {
+                                "bbox": (0, 0, 100, 20),
+                                "spans": [
+                                    {
+                                        "text": "Hello",
+                                        "bbox": (0, 0, 40, 20),
+                                        "font": "Helvetica",
+                                        "size": 11,
+                                    },
+                                    {
+                                        "text": "World",
+                                        "bbox": (45, 0, 90, 20),
+                                        "font": "Helvetica",
+                                        "size": 11,
+                                    },
+                                ],
+                            }
+                        ],
+                    }
+                ]
+            }
+        )
+
+        extractor = TextExtractor()
+        blocks = extractor.extract_blocks(page)
+
+        assert len(blocks) == 1
+        assert blocks[0].lines[0].text == "Hello World"
+        assert blocks[0].text == "Hello World"
