@@ -1,42 +1,41 @@
-# Text Region Detector Integration Design
+# Text Region Detector 接入设计
 
-Date: 2026-05-15
+日期：2026-05-15
 
-## Background
+## 背景
 
-The current borderless-table path lives in `TableExtractor._extract_via_text_alignment()`.
-Its responsibilities are mixed:
+当前的无线表格链路位于 `TableExtractor._extract_via_text_alignment()` 中，职责是混在一起的：
 
-1. Collect text rows from `page.get_text("words")`
-2. Discover candidate table-like regions
-3. Merge likely header spans
-4. Trim non-structured prose rows
-5. Infer column guides
-6. Build `Cell` and `Table`
+1. 从 `page.get_text("words")` 收集文本行
+2. 发现疑似表格区域
+3. 合并可能的表头 span
+4. 裁掉不结构化的正文行
+5. 推断列导线
+6. 构建 `Cell` 和 `Table`
 
-The new `text_region_detector.py` module already prototypes a stronger region-discovery stage, but it is not part of the production extraction flow. The goal of this change is to integrate that region detector into the borderless-table path without changing the wired-table path or rewriting cell construction in the same step.
+新的 `text_region_detector.py` 已经实现了一套更强的“区域发现”原型，但它目前还没有接入生产流程。这次改造的目标，是在**不改变有线表格主路径**、**不同时重写单元格构建逻辑**的前提下，把这套区域检测逻辑接入无线表格分支。
 
-## Goal
+## 目标
 
-Refactor the borderless-table flow inside `TableExtractor._extract_via_text_alignment()` into two explicit stages:
+把 `TableExtractor._extract_via_text_alignment()` 内部的无线表格流程，显式重构成两个阶段：
 
-1. Region discovery
-2. Region-internal grid reconstruction
+1. 区域发现
+2. 区域内建格
 
-The first implementation step replaces only the region-discovery stage. Existing downstream logic for header merge, trim, guide inference, and cell construction remains in place.
+第一步只替换第 1 个阶段，也就是“候选区域发现”这部分。后续已有的表头合并、trim、列导线推断和 cell 构建逻辑保持不变。
 
-## Non-Goals
+## 非目标
 
-- Do not change the main pipeline boundary in `pipeline.py`
-- Do not change the line-based table extraction path
-- Do not change the PyMuPDF fallback path
-- Do not change `LayoutBuilder` behavior
-- Do not fully rewrite `_extract_via_text_alignment()`
-- Do not let `text_region_detector` become responsible for final column/cell construction in this step
+- 不修改 `pipeline.py` 的主流程边界
+- 不修改线框表格提取路径
+- 不修改 PyMuPDF fallback 路径
+- 不修改 `LayoutBuilder` 的行为
+- 不在这一步完整重写 `_extract_via_text_alignment()`
+- 不让 `text_region_detector` 在这一步直接负责最终列结构或单元格构建
 
-## Current Flow
+## 当前流程
 
-Today the relevant borderless-table flow is:
+目前无线表格相关流程如下：
 
 ```text
 page.get_text("words")
@@ -49,42 +48,42 @@ page.get_text("words")
 -> Cell / Table
 ```
 
-This proposal replaces `_collect_text_candidate_regions(...)` with a region-detector-backed stage while preserving the rest of the flow.
+本次设计要替换的是 `_collect_text_candidate_regions(...)` 这一段，其余后半段逻辑先保留。
 
-## Proposed Design
+## 设计方案
 
-### Integration Point
+### 接入位置
 
-Keep integration inside `TableExtractor.extract()` by modifying only the internal implementation of `_extract_via_text_alignment()`. `Pipeline.run()` remains unchanged and still calls `TableExtractor.extract()` as it does today.
+接入保持在 `TableExtractor.extract()` 体系内，只修改 `_extract_via_text_alignment()` 的内部实现。`Pipeline.run()` 不需要改动，仍然像现在一样调用 `TableExtractor.extract()`。
 
-### New Internal Boundary
+### 新的内部边界
 
-Introduce a new helper in `table_extractor.py`:
+在 `table_extractor.py` 中引入一个新的辅助方法：
 
 - `_detect_text_regions(rows, page) -> list[dict]`
 
-This helper is the adapter between `table_extractor` row dictionaries and `text_region_detector`.
+这个方法作为 `table_extractor` 行结构与 `text_region_detector` 之间的适配层。
 
-### Responsibilities of `_detect_text_regions`
+### `_detect_text_regions` 的职责
 
-`_detect_text_regions(rows, page)` should:
+`_detect_text_regions(rows, page)` 负责：
 
-1. Convert `_collect_text_rows()` output into the row/fragment shape expected by `text_region_detector`
-2. Optionally derive horizontal separator hints from the page when available
-3. Call `detect_candidate_regions(...)`
-4. Map each returned `CandidateRegion` back to the original row dictionaries used by `table_extractor`
-5. Return region records compatible with the rest of `_extract_via_text_alignment()`
+1. 把 `_collect_text_rows()` 产出的行结构转换成 `text_region_detector` 所需的 row/fragment 结构
+2. 在可行时，从页面中提取水平分隔线提示
+3. 调用 `detect_candidate_regions(...)`
+4. 把返回的 `CandidateRegion` 映射回 `table_extractor` 当前使用的原始 row dict
+5. 返回与 `_extract_via_text_alignment()` 后续逻辑兼容的 region 记录
 
-The returned region records should contain, at minimum:
+返回的 region 记录至少应包含：
 
-- `rows`: the original row dict objects for the detected span
-- `bbox`: union bbox of the participating rows
+- `rows`：检测命中的原始 row dict 对象列表
+- `bbox`：这些行合并后的 bbox
 
-No new column structure should be produced at this stage.
+这一步**不产出新的列结构**，也不负责最终表格建格。
 
-## Detailed Data Flow
+## 详细数据流
 
-The new borderless-table flow becomes:
+接入后的无线表格流程如下：
 
 ```text
 page.get_text("words")
@@ -98,175 +97,175 @@ page.get_text("words")
    -> Cell / Table
 ```
 
-This preserves existing guide inference and cell construction semantics while making region discovery explicit and replaceable.
+这样可以保留现有列导线推断和 cell 构建语义，同时把“区域发现”明确拆成一个独立阶段。
 
-## Adapter Design
+## 适配层设计
 
-### Row Conversion
+### 行结构转换
 
-`_collect_text_rows()` already returns row dictionaries with token lists and row bbox information. The adapter should construct lightweight visual rows for `text_region_detector` from those same values.
+`_collect_text_rows()` 已经返回了包含 token 列表和行 bbox 的 row dict。适配层应基于这些现有数据，构造 `text_region_detector` 需要的轻量 visual row。
 
-Each visual row should preserve:
+每个 visual row 至少保留：
 
-- row bbox
-- token text
+- 行 bbox
+- token 文本
 - token bbox
-- token order within the row
+- token 在行内的顺序
 
-The adapter must also maintain a stable mapping from each visual row back to the original row dict instance. This mapping is the key to converting `CandidateRegion.rows` back into `table_extractor` spans without re-parsing text.
+同时，适配层必须维护一套稳定映射，使每个 visual row 都能对应回原始 row dict。这个映射是把 `CandidateRegion.rows` 还原成 `table_extractor` 行 span 的关键，不能再次依赖重新解析文本。
 
-### Separator Hints
+### 分隔线提示
 
-If practical, `_detect_text_regions()` may pass horizontal separators into `detect_candidate_regions(...)`.
+如果成本合适，`_detect_text_regions()` 可以向 `detect_candidate_regions(...)` 传入水平分隔线提示。
 
-In this step, separator extraction should remain conservative:
+但在第一步里，这个分隔线提取必须保持保守：
 
-- use only strong horizontal visual separators
-- avoid adding soft or speculative separators
-- if separator extraction is unavailable or unreliable, pass none
+- 只使用强信号的水平视觉分隔线
+- 不引入过于宽松或猜测性的 separator
+- 如果无法稳定提取，就直接不传
 
-The region detector must still work without separator hints.
+区域检测逻辑必须在**没有 separator 提示**时仍然可用。
 
-### Region Mapping
+### 区域映射
 
-After `detect_candidate_regions(...)` returns candidate regions:
+`detect_candidate_regions(...)` 返回候选区域后，需要：
 
-- map detector rows back to original row dicts
-- compute region bbox from the mapped rows, not from an expanded heuristic bbox
-- preserve row order exactly as it appears in `_collect_text_rows()`
+- 把 detector 的 rows 映射回原始 row dict
+- 用映射后的原始行重新计算 region bbox，而不是使用扩张后的启发式 bbox
+- 保持行顺序与 `_collect_text_rows()` 的原始顺序一致
 
-This prevents downstream logic from operating on synthetic or reordered rows.
+这样可以避免后续逻辑处理“合成行”或“重排后的行”。
 
-## Why This Design
+## 为什么这样设计
 
-This design keeps the refactor narrow and testable:
+这个方案的优点是改动边界窄、可测试性强：
 
-- `text_region_detector` owns region discovery
-- `table_extractor` still owns table assembly
-- the wired-table path is untouched
-- the ML and PyMuPDF branches are untouched
-- the existing borderless-table post-processing logic remains the same
+- `text_region_detector` 负责区域发现
+- `table_extractor` 继续负责最终表格装配
+- 有线表格路径不受影响
+- ML 和 PyMuPDF 分支不受影响
+- 现有无线表格后处理逻辑先不动
 
-This is the smallest change that meaningfully integrates the new module and establishes a cleaner boundary for later refactors.
+这是在当前阶段里，能真正把新模块接进来、同时又能保持重构风险可控的最小改动方案。
 
-## Rejected Alternatives
+## 被否决的方案
 
-### Alternative 1: Replace only when no prior table path succeeds
+### 方案 1：只在前序路径失败时才启用
 
-Rejected because the product direction is to make region detection the default entry for the borderless-table path, not a narrow fallback.
+否决原因：当前目标不是做一个窄 fallback，而是让 region detector 成为无线表格分支的默认入口。
 
-### Alternative 2: Hide the detector inside `_collect_text_candidate_regions()`
+### 方案 2：把 detector 藏进 `_collect_text_candidate_regions()`
 
-Rejected because it would preserve the old abstraction while mixing old and new heuristics behind the same interface. That would make future cleanup harder.
+否决原因：这样表面上接口不变，但会把新旧启发式继续混在一起，后续清理成本更高。
 
-### Alternative 3: Fully rewrite `_extract_via_text_alignment()`
+### 方案 3：一次性完整重写 `_extract_via_text_alignment()`
 
-Rejected for the first step because it would expand the regression surface too much. Column inference and cell construction should be refactored only after the region boundary is stable.
+否决原因：第一步就同时动区域发现、列推断和 cell 构建，回归面会明显过大。应该先把区域边界稳定下来，再考虑后续阶段重构。
 
-## Impact on Wired Tables
+## 对有线表格的影响
 
-This change should not directly alter wired-table extraction because:
+这次改动**不应直接改变**有线表格提取路径，因为：
 
-- line-based extraction still runs first
-- PyMuPDF fallback still runs independently
-- the integration point is only inside `_extract_via_text_alignment()`
+- 线框表格仍然优先执行
+- PyMuPDF fallback 仍然独立执行
+- 接入点仅位于 `_extract_via_text_alignment()` 内部
 
-Indirect risk still exists:
+但仍有两类间接风险：
 
-- region bbox changes can affect overlap-based deduplication
-- region bbox changes can affect later text filtering in `LayoutBuilder`
+- region bbox 变化可能影响重叠去重
+- region bbox 变化可能影响 `LayoutBuilder` 后续文本过滤范围
 
-For that reason, region bbox must be derived strictly from the participating rows and must not be expanded in this step.
+因此，这一步里 region bbox 必须严格基于命中行 union 计算，不能做额外扩边。
 
-## Risks
+## 风险
 
-### Row Structure Mismatch
+### 行结构不一致
 
-`text_region_detector` operates on visual rows and fragments, while `table_extractor` uses row dictionaries and token dictionaries. A mismatch here could cause region hits that cannot be mapped back cleanly.
+`text_region_detector` 使用的是 visual row / fragment 结构，`table_extractor` 当前使用的是 row dict / token dict 结构。如果适配不一致，可能出现“区域命中了，但无法稳定映射回原始行”的问题。
 
-Mitigation:
+缓解方式：
 
-- build a one-to-one adapter layer
-- keep original row dicts as the source of truth
-- add mapping-focused tests
+- 建立一对一适配层
+- 以原始 row dict 作为唯一真源
+- 增加针对映射关系的测试
 
-### Over-Broad Region Boxes
+### 区域框过宽
 
-If detected regions grow beyond the actual structured rows, later layout filtering may hide prose text incorrectly.
+如果检测出的 region 超出真实结构化行范围，后续版面合并时可能会错误吞掉正文文本。
 
-Mitigation:
+缓解方式：
 
-- compute region bbox from mapped rows only
-- avoid region padding in this step
+- region bbox 仅根据映射后的原始行计算
+- 本步骤不做 bbox padding
 
-### Behavioral Drift in Borderless Tables
+### 无线表格行为漂移
 
-Changing candidate region selection may change row spans, which can alter inferred column guides and final cell grouping.
+候选区域选择变化，可能导致行 span 改变，进而影响列导线推断和最终 cell 分组。
 
-Mitigation:
+缓解方式：
 
-- keep downstream logic unchanged
-- add regression coverage for representative borderless-table layouts
+- 下游逻辑保持不变
+- 用代表性的无线表格样例补足回归测试
 
-## Testing Strategy
+## 测试策略
 
-### 1. Region Adapter Tests
+### 1. Region 适配层测试
 
-Add tests around the new `_detect_text_regions()` integration layer to verify:
+围绕新的 `_detect_text_regions()` 增加测试，验证：
 
-- detector output maps back to the correct original row span
-- mapped rows preserve original order
-- mapped bbox matches the union of original rows
+- detector 输出能映射回正确的原始 row span
+- 映射后的行顺序保持不变
+- 映射后的 bbox 等于原始行的 union bbox
 
-### 2. Borderless Table Integration Tests
+### 2. 无线表格集成测试
 
-Add or update `tests/test_table_extractor.py` coverage for:
+在 `tests/test_table_extractor.py` 中新增或更新以下场景：
 
-- generic sparse aligned table text
-- long Chinese financial table text
-- header span merged into table body
-- separator-assisted multi-section table region
+- 通用稀疏对齐文本表格
+- 中文长财务表
+- 表头 span 合并到主体
+- 带 separator 的多段式表格区域
 
-Assertions should focus on final table shape and cell content, not only intermediate region count.
+断言重点应放在最终 `rows/cols/cells` 和 cell 文本内容，而不只是中间 region 数量。
 
-### 3. False-Positive Protection
+### 3. 误判保护测试
 
-Keep regression coverage for:
+继续保留并补强以下场景：
 
-- prose with repeated numbers
-- dense narrative rows
-- partial alignment patterns that should not become tables
+- 正文中带重复数字
+- 稠密叙述行
+- 局部对齐但不应识别为表格的文本
 
-### 4. Wired-Path Safety
+### 4. 有线路径安全性测试
 
-Run affected wired-table tests to confirm that integrating the detector into the borderless path does not change line-based outcomes.
+运行受影响的有线表格测试，确认把 detector 接入无线分支后，不会改变线框表格结果。
 
-## Implementation Notes
+## 实现顺序
 
-Expected implementation sequence:
+建议实现顺序如下：
 
-1. Add `_detect_text_regions(rows, page)` adapter
-2. Wire `_extract_via_text_alignment()` to call it instead of `_collect_text_candidate_regions(...)`
-3. Preserve existing downstream header/trim/guide/cell logic
-4. Add adapter-focused tests
-5. Update borderless-table regression tests
-6. Run affected `pytest` targets
+1. 新增 `_detect_text_regions(rows, page)` 适配层
+2. 把 `_extract_via_text_alignment()` 的候选区域生成替换为 `_detect_text_regions(...)`
+3. 保留现有 header/trim/guide/cell 下游逻辑
+4. 增加适配层测试
+5. 更新无线表格回归测试
+6. 运行受影响的 `pytest` 用例
 
-## Future Follow-Ups
+## 后续演进
 
-Once this integration is stable, later refactors can evaluate:
+等这一步稳定后，可以再评估后续重构方向：
 
-- moving more header handling into the region-discovery stage
-- replacing `_infer_column_guides()` with a region-aware guide builder
-- using detector features as confidence inputs for final table acceptance
-- simplifying or removing legacy `_collect_text_candidate_regions(...)`
+- 把更多表头处理逻辑前移到区域发现阶段
+- 用更 region-aware 的方式替换 `_infer_column_guides()`
+- 将 detector 特征作为最终表格接受度的置信度输入
+- 逐步简化甚至移除旧的 `_collect_text_candidate_regions(...)`
 
-## Success Criteria
+## 成功标准
 
-This design is successful when:
+当满足以下条件时，可以认为这版设计达成目标：
 
-- `text_region_detector` participates every time `_extract_via_text_alignment()` runs
-- the wired-table path remains unchanged in behavior
-- borderless-table extraction becomes cleaner in structure
-- existing borderless-table coverage still passes or is updated only where the new region boundary is intentionally better
-- the code has a clear separation between region discovery and region-internal table assembly
+- 每次进入 `_extract_via_text_alignment()`，都会让 `text_region_detector` 参与区域发现
+- 有线表格路径行为保持不变
+- 无线表格结构在代码上被明确拆分为“区域发现”和“区域内建格”
+- 现有无线表格测试继续通过，或仅在新 region 边界明显更合理时更新预期
+- 代码边界上形成清晰的职责分离：region discovery 负责找范围，table assembly 负责建格
