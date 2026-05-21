@@ -23,6 +23,7 @@ from pdflayoutparser.markdown_writer import MarkdownWriter
 from pdflayoutparser.models import BBox, Document, LayoutElement, Seal
 from pdflayoutparser.render_engine import RenderEngine
 from pdflayoutparser.table_extractor import TableExtractor
+from pdflayoutparser.text_alignment_debug import render_text_alignment_debug_page
 from pdflayoutparser.text_extractor import TextExtractor
 
 
@@ -41,11 +42,21 @@ class Pipeline:
         output_dir: str,
         render_dpi: int = 200,
         seal_coords: Optional[List[dict]] = None,
+        page_indices: Optional[List[int]] = None,
+        use_ml: bool = False,
+        ml_model_path: Optional[str] = None,
+        ml_confidence: float = 0.25,
+        debug: bool = False,
     ):
         self.pdf_path = pdf_path
         self.output_dir = output_dir
         self.render_dpi = render_dpi
         self.seal_coords = seal_coords or []
+        self.page_indices = page_indices
+        self.use_ml = use_ml
+        self._ml_model_path = ml_model_path
+        self._ml_confidence = ml_confidence
+        self.debug = debug
         self._stage_totals: dict[str, float] = {}
         self._page_totals: list[dict[str, float]] = []
 
@@ -163,14 +174,24 @@ class Pipeline:
         # Prepare output directories
         images_dir = os.path.join(self.output_dir, "images")
         pages_dir = os.path.join(self.output_dir, "pages")
+        text_alignment_debug_dir = os.path.join(
+            self.output_dir,
+            "debug",
+            "text-alignment",
+        )
         os.makedirs(self.output_dir, exist_ok=True)
         os.makedirs(images_dir, exist_ok=True)
         os.makedirs(pages_dir, exist_ok=True)
+        if self.debug:
+            os.makedirs(text_alignment_debug_dir, exist_ok=True)
 
         # 2. Per-page processing
         pdf_doc = fitz.open(self.pdf_path)
         try:
             for page in document.pages:
+                if self.page_indices is not None and page.index not in self.page_indices:
+                    continue
+
                 page_start = perf_counter()
                 page_handle = pdf_doc[page.index]
 
@@ -187,10 +208,34 @@ class Pipeline:
                 )
 
                 # c. Table extraction
+                table_extractor = TableExtractor(
+                    use_ml=self.use_ml,
+                    ml_model_path=self._ml_model_path,
+                    ml_confidence=self._ml_confidence,
+                )
                 page.tables, _ = self._time_stage(
                     "table_extract",
-                    lambda: TableExtractor().extract(page_handle),
+                    lambda: table_extractor.extract(page_handle),
                 )
+                if self.debug:
+                    debug_payload = table_extractor._last_text_alignment_debug
+                    has_text_alignment = any(
+                        table.source == "text_alignment" for table in page.tables
+                    )
+                    if debug_payload and has_text_alignment:
+                        debug_path = os.path.join(
+                            text_alignment_debug_dir,
+                            f"page-{page.index:03d}.png",
+                        )
+                        self._time_stage(
+                            "write_text_alignment_debug",
+                            lambda: render_text_alignment_debug_page(
+                                page=page_handle,
+                                debug_payload=debug_payload,
+                                output_path=debug_path,
+                                dpi=self.render_dpi,
+                            ),
+                        )
 
                 # d. Image extraction
                 page.images, _ = self._time_stage(

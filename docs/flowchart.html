@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PDFLayoutParser 流程图</title>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <style>
+    body {
+      margin: 0;
+      padding: 24px;
+      background: #f6f8fb;
+      color: #1f2937;
+      font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+      line-height: 1.5;
+    }
+
+    h1,
+    h2,
+    p {
+      max-width: 1200px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+
+    h1 {
+      margin-top: 0;
+      margin-bottom: 8px;
+      font-size: 28px;
+    }
+
+    h2 {
+      margin-top: 32px;
+      margin-bottom: 8px;
+      font-size: 20px;
+    }
+
+    p {
+      margin-top: 0;
+      color: #4b5563;
+    }
+
+    .diagram {
+      max-width: 1400px;
+      margin: 0 auto 24px auto;
+      padding: 16px;
+      background: #ffffff;
+      border: 1px solid #e5e7eb;
+      border-radius: 12px;
+      box-shadow: 0 4px 24px rgba(15, 23, 42, 0.05);
+      overflow-x: auto;
+    }
+
+    .mermaid {
+      display: flex;
+      justify-content: center;
+    }
+
+    code {
+      background: #eef2ff;
+      padding: 0 4px;
+      border-radius: 4px;
+    }
+  </style>
+</head>
+<body>
+  <h1>PDFLayoutParser 流程图</h1>
+  <p>下面这两张图分别展示整体流水线，以及 <code>table_extractor.py</code> 的详细分支。</p>
+
+  <h2>1. 整体流水线</h2>
+  <div class="diagram">
+    <div class="mermaid">
+graph TB
+    A[输入 PDF] --> B[Loader.load]
+    B --> C[Document 和 Page 元数据]
+    C --> D[逐页处理]
+
+    D --> E[TextExtractor]
+    E --> E1[读取 page.get_text dict]
+    E1 --> E2[恢复 Block Line Word Char]
+    E2 --> F[LayoutMapper]
+    F --> F1[生成 text LayoutElement]
+
+    F1 --> G[TableExtractor]
+    G --> G1[线框法提取]
+    G1 --> G2[PyMuPDF 回退]
+    G2 --> G3[ML 补充]
+    G3 --> G4[文本对齐补充]
+
+    G4 --> H[ImageExtractor]
+    H --> I[Seal 匹配]
+    I --> J[LayoutBuilder]
+    J --> J1[去掉表格内重复文本]
+    J1 --> J2[追加 table image seal]
+    J2 --> K[排序并写回 page.layout_elements]
+
+    K --> L[RenderEngine]
+    L --> M[写 page PNG]
+    M --> N[JSONWriter 和 MarkdownWriter 写单页]
+    N --> O{所有页结束}
+    O -->|否| D
+    O -->|是| P[写 output.json]
+    P --> Q[写 output.md]
+    Q --> R[写 timings.json]
+    R --> S[返回 Document]
+    </div>
+  </div>
+
+  <h2>2. 表格提取详细图</h2>
+  <div class="diagram">
+    <div class="mermaid">
+graph TB
+    A[TableExtractor.extract] --> B[清空调试信息]
+    B --> C{页面是否存在明显表格线}
+
+    C -->|是 有线表格| D[线框法提取]
+    D --> E[提取可见绘图矩形]
+    E --> F[合并相邻线段]
+    F --> G[按连通分量找区域]
+    G --> H[建格]
+    H --> I[按词回填文本]
+    I --> J[合并过碎列]
+    J --> K{结果是否可靠}
+    K -->|否| L[PyMuPDF 回退]
+    K -->|是| M[保留线框结果]
+
+    C -->|否 无线表格| N[文本对齐提取]
+    N --> O[收集文字行]
+    O --> P[按行聚类]
+    P --> Q[推断列参考线]
+    Q --> R[生成 text_alignment 表格]
+
+    L --> S{开启 ML}
+    M --> S
+    S -->|是| T[ML 补充表格]
+    S -->|否| U[继续合并]
+    T --> U
+
+    R --> V{与现有表格重叠}
+    U --> V
+    V -->|否| W[加入结果集]
+    V -->|是| X[丢弃重复表格]
+    W --> Y[返回 tables]
+    X --> Y
+    </div>
+  </div>
+
+  <script>
+    mermaid.initialize({
+      startOnLoad: true,
+      securityLevel: "loose",
+      theme: "default",
+    });
+  </script>
+</body>
+</html>

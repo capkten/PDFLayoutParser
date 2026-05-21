@@ -68,13 +68,10 @@ class JSONWriter:
             ],
         }
 
-    def _bbox_to_dict(self, bbox: BBox) -> Dict[str, float]:
-        return {"x0": bbox.x0, "y0": bbox.y0, "x1": bbox.x1, "y1": bbox.y1}
-
     def _char_to_dict(self, char: Char) -> Dict[str, Any]:
         return {
             "text": char.text,
-            "bbox": self._bbox_to_dict(char.bbox),
+            "bbox": {"x0": char.bbox.x0, "y0": char.bbox.y0, "x1": char.bbox.x1, "y1": char.bbox.y1},
             "font": char.font,
             "size": char.size,
             "color": char.color,
@@ -84,28 +81,28 @@ class JSONWriter:
     def _word_to_dict(self, word: Word) -> Dict[str, Any]:
         return {
             "text": word.text,
-            "bbox": self._bbox_to_dict(word.bbox),
+            "bbox": {"x0": word.bbox.x0, "y0": word.bbox.y0, "x1": word.bbox.x1, "y1": word.bbox.y1},
             "chars": [self._char_to_dict(c) for c in word.chars],
         }
 
     def _line_to_dict(self, line: Line) -> Dict[str, Any]:
         return {
             "text": line.text,
-            "bbox": self._bbox_to_dict(line.bbox),
+            "bbox": {"x0": line.bbox.x0, "y0": line.bbox.y0, "x1": line.bbox.x1, "y1": line.bbox.y1},
             "words": [self._word_to_dict(w) for w in line.words],
         }
 
     def _block_to_dict(self, block: Block) -> Dict[str, Any]:
         return {
             "text": block.text,
-            "bbox": self._bbox_to_dict(block.bbox),
+            "bbox": {"x0": block.bbox.x0, "y0": block.bbox.y0, "x1": block.bbox.x1, "y1": block.bbox.y1},
             "lines": [self._line_to_dict(ln) for ln in block.lines],
         }
 
     def _span_to_dict(self, span: Span) -> Dict[str, Any]:
         return {
             "text": span.text,
-            "bbox": self._bbox_to_dict(span.bbox),
+            "bbox": {"x0": span.bbox.x0, "y0": span.bbox.y0, "x1": span.bbox.x1, "y1": span.bbox.y1},
             "font": span.font,
             "size": span.size,
         }
@@ -115,14 +112,14 @@ class JSONWriter:
             "text": cell.text,
             "row_index": cell.row_index,
             "col_index": cell.col_index,
-            "bbox": self._bbox_to_dict(cell.bbox),
+            "bbox": {"x0": cell.bbox.x0, "y0": cell.bbox.y0, "x1": cell.bbox.x1, "y1": cell.bbox.y1},
             "rowspan": cell.rowspan,
             "colspan": cell.colspan,
         }
 
     def _table_to_dict(self, table: Table) -> Dict[str, Any]:
         return {
-            "bbox": self._bbox_to_dict(table.bbox),
+            "bbox": {"x0": table.bbox.x0, "y0": table.bbox.y0, "x1": table.bbox.x1, "y1": table.bbox.y1},
             "rows": table.rows,
             "cols": table.cols,
             "cells": [self._cell_to_dict(c) for c in table.cells],
@@ -132,7 +129,7 @@ class JSONWriter:
 
     def _image_to_dict(self, image: Image) -> Dict[str, Any]:
         return {
-            "bbox": self._bbox_to_dict(image.bbox),
+            "bbox": {"x0": image.bbox.x0, "y0": image.bbox.y0, "x1": image.bbox.x1, "y1": image.bbox.y1},
             "page_index": image.page_index,
             "resource_index": image.resource_index,
             "width": image.width,
@@ -143,7 +140,7 @@ class JSONWriter:
 
     def _seal_to_dict(self, seal: Seal) -> Dict[str, Any]:
         return {
-            "bbox": self._bbox_to_dict(seal.bbox),
+            "bbox": {"x0": seal.bbox.x0, "y0": seal.bbox.y0, "x1": seal.bbox.x1, "y1": seal.bbox.y1},
             "page_index": seal.page_index,
             "path": seal.path,
         }
@@ -159,7 +156,7 @@ class JSONWriter:
     def _layout_element_to_dict(self, element: LayoutElement) -> Dict[str, Any]:
         result: Dict[str, Any] = {
             "type": element.type,
-            "bbox": self._bbox_to_dict(element.bbox),
+            "bbox": {"x0": element.bbox.x0, "y0": element.bbox.y0, "x1": element.bbox.x1, "y1": element.bbox.y1},
             "order": element.order,
             "content": self._content_to_dict(element.content),
         }
