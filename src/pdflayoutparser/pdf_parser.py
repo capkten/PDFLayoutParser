@@ -195,6 +195,36 @@ class PDFParser:
             renders.append(engine.render(pdf_path, page.index))
         return renders
 
+    def to_json(
+        self,
+        document: Optional[Document] = None,
+    ) -> str:
+        """Serialize a Document to a JSON string (in-memory, no file I/O).
+
+        If *document* is None, uses the cached parse result (calls :meth:`parse`
+        if not yet parsed).
+        """
+        import json
+        from pdflayoutparser.json_writer import JSONWriter
+
+        doc = document if document is not None else self.parse()
+        data = JSONWriter().to_dict(doc)
+        return json.dumps(data, ensure_ascii=False)
+
+    def to_markdown(
+        self,
+        document: Optional[Document] = None,
+    ) -> str:
+        """Serialize a Document to a Markdown string (in-memory, no file I/O).
+
+        If *document* is None, uses the cached parse result (calls :meth:`parse`
+        if not yet parsed).
+        """
+        from pdflayoutparser.markdown_writer import MarkdownWriter
+
+        doc = document if document is not None else self.parse()
+        return MarkdownWriter().to_string(doc)
+
     def _collect_from_document(
         self,
         getter,

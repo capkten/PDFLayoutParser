@@ -28,6 +28,10 @@ class JSONWriter:
     top-level keys are ``document`` (metadata) and ``pages`` (list of pages).
     """
 
+    def to_dict(self, document: Document) -> Dict[str, Any]:
+        """Convert *document* to a dict without writing to disk."""
+        return self._document_to_dict(document)
+
     def write(self, document: Document, output_path: str) -> None:
         """Convert *document* to dict and write it to *output_path*."""
         data = self._document_to_dict(document)

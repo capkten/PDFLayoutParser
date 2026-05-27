@@ -9,6 +9,14 @@ from pdflayoutparser.models import Document, LayoutElement, Table, Image, Seal
 class MarkdownWriter:
     """Convert a parsed Document into a Markdown file."""
 
+    def to_string(self, document: Document) -> str:
+        """Convert *document* to a Markdown string without writing to disk."""
+        lines: list[str] = []
+        for page in document.pages:
+            for element in page.layout_elements:
+                lines.extend(self._render_element(element, page.index))
+        return "\n".join(lines)
+
     def write(self, document: Document, output_path: str) -> None:
         lines: list[str] = []
         for page in document.pages:

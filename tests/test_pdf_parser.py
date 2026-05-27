@@ -199,3 +199,55 @@ def test_render_pages_custom_dpi(tmp_dir):
     parser = PDFParser(pdf_path, render_dpi=200)
     renders = parser.render_pages(output_dir, dpi=100)
     assert renders[0].dpi == 100
+
+
+import json as json_module
+
+
+def test_to_json_returns_string(tmp_dir):
+    pdf_path = os.path.join(tmp_dir, "test.pdf")
+    make_text_pdf(pdf_path, text="JSON test")
+    parser = PDFParser(pdf_path)
+    parser.parse()
+    result = parser.to_json()
+    assert isinstance(result, str)
+    data = json_module.loads(result)
+    assert "document" in data
+    assert "pages" in data
+
+
+def test_to_json_without_parse_auto_parses(tmp_dir):
+    pdf_path = os.path.join(tmp_dir, "test.pdf")
+    make_text_pdf(pdf_path, text="Auto parse")
+    parser = PDFParser(pdf_path)
+    result = parser.to_json()
+    assert isinstance(result, str)
+    data = json_module.loads(result)
+    assert data["document"]["page_count"] == 1
+
+
+def test_to_json_with_explicit_document():
+    doc = Document(file_name="test.pdf", page_count=0, pages=[])
+    parser = PDFParser(doc)
+    result = parser.to_json(document=doc)
+    data = json_module.loads(result)
+    assert data["document"]["page_count"] == 0
+
+
+def test_to_markdown_returns_string(tmp_dir):
+    pdf_path = os.path.join(tmp_dir, "test.pdf")
+    make_text_pdf(pdf_path, text="MD test")
+    parser = PDFParser(pdf_path)
+    parser.parse()
+    result = parser.to_markdown()
+    assert isinstance(result, str)
+    assert len(result) > 0
+
+
+def test_to_markdown_without_parse_auto_parses(tmp_dir):
+    pdf_path = os.path.join(tmp_dir, "test.pdf")
+    make_text_pdf(pdf_path, text="Auto MD")
+    parser = PDFParser(pdf_path)
+    result = parser.to_markdown()
+    assert isinstance(result, str)
+    assert len(result) > 0
