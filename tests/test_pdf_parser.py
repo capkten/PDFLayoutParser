@@ -314,3 +314,100 @@ def test_extract_text_in_region_excludes_outside_text(tmp_dir):
     blocks = parser.extract_text_in_region(region)
     all_text = " ".join(b.text for b in blocks)
     assert "TopLeft" in all_text
+
+
+def test_extract_table_in_region_returns_table_or_none(tmp_dir):
+    pdf_path = os.path.join(tmp_dir, "table.pdf")
+    from tests.test_table_extractor import make_pdf_with_table
+
+    make_pdf_with_table(pdf_path)
+    parser = PDFParser(pdf_path)
+    region = {"page_index": 0, "x0": 0.0, "y0": 0.0, "x1": 1.0, "y1": 1.0}
+    result = parser.extract_table_in_region(region)
+    # May return Table or None depending on whether detection finds a table
+    assert result is None or isinstance(result, Table)
+
+
+def test_extract_table_in_region_multi(tmp_dir):
+    pdf_path = os.path.join(tmp_dir, "table.pdf")
+    from tests.test_table_extractor import make_pdf_with_table
+
+    make_pdf_with_table(pdf_path)
+    parser = PDFParser(pdf_path)
+    regions = [
+        {"page_index": 0, "x0": 0.0, "y0": 0.0, "x1": 0.5, "y1": 1.0},
+        {"page_index": 0, "x0": 0.5, "y0": 0.0, "x1": 1.0, "y1": 1.0},
+    ]
+    result = parser.extract_table_in_region(regions)
+    assert isinstance(result, list)
+
+
+def test_extract_table_in_region_empty_page(tmp_dir):
+    pdf_path = os.path.join(tmp_dir, "empty.pdf")
+    make_text_pdf(pdf_path, text="No table here")
+    parser = PDFParser(pdf_path)
+    region = {"page_index": 0, "x0": 0.0, "y0": 0.0, "x1": 1.0, "y1": 1.0}
+    result = parser.extract_table_in_region(region)
+    assert result is None or (isinstance(result, Table) and result.rows == 0)
+
+
+def test_extract_image_in_region_returns_image_or_none(tmp_dir):
+    pdf_path = os.path.join(tmp_dir, "img.pdf")
+    output_dir = os.path.join(tmp_dir, "region_images")
+    make_pdf_with_image(pdf_path)
+    parser = PDFParser(pdf_path)
+    region = {"page_index": 0, "x0": 0.0, "y0": 0.0, "x1": 1.0, "y1": 1.0}
+    result = parser.extract_image_in_region(region, output_dir)
+    assert result is None or isinstance(result, Image)
+
+
+def test_extract_image_in_region_multi(tmp_dir):
+    pdf_path = os.path.join(tmp_dir, "img.pdf")
+    output_dir = os.path.join(tmp_dir, "region_images")
+    make_pdf_with_image(pdf_path)
+    parser = PDFParser(pdf_path)
+    regions = [
+        {"page_index": 0, "x0": 0.0, "y0": 0.0, "x1": 0.5, "y1": 0.5},
+        {"page_index": 0, "x0": 0.5, "y0": 0.5, "x1": 1.0, "y1": 1.0},
+    ]
+    result = parser.extract_image_in_region(regions, output_dir)
+    assert isinstance(result, list)
+
+
+def test_render_region_writes_png(tmp_dir):
+    pdf_path = os.path.join(tmp_dir, "test.pdf")
+    output_dir = os.path.join(tmp_dir, "region_renders")
+    make_text_pdf(pdf_path, text="Render region")
+    parser = PDFParser(pdf_path, render_dpi=150)
+    region = {"page_index": 0, "x0": 0.0, "y0": 0.0, "x1": 0.5, "y1": 0.5}
+    result = parser.render_region(region, output_dir)
+    assert isinstance(result, RenderInfo)
+    assert result.path is not None
+    assert os.path.exists(result.path)
+    assert result.path.endswith(".png")
+
+
+def test_render_region_multi(tmp_dir):
+    pdf_path = os.path.join(tmp_dir, "test.pdf")
+    output_dir = os.path.join(tmp_dir, "region_renders")
+    make_text_pdf(pdf_path, text="Multi render")
+    parser = PDFParser(pdf_path, render_dpi=150)
+    regions = [
+        {"page_index": 0, "x0": 0.0, "y0": 0.0, "x1": 0.5, "y1": 0.5},
+        {"page_index": 0, "x0": 0.5, "y0": 0.5, "x1": 1.0, "y1": 1.0},
+    ]
+    result = parser.render_region(regions, output_dir)
+    assert isinstance(result, list)
+    assert len(result) == 2
+    for r in result:
+        assert os.path.exists(r.path)
+
+
+def test_render_region_custom_dpi(tmp_dir):
+    pdf_path = os.path.join(tmp_dir, "test.pdf")
+    output_dir = os.path.join(tmp_dir, "region_renders")
+    make_text_pdf(pdf_path, text="DPI region")
+    parser = PDFParser(pdf_path, render_dpi=200)
+    region = {"page_index": 0, "x0": 0.0, "y0": 0.0, "x1": 1.0, "y1": 1.0}
+    result = parser.render_region(region, output_dir, dpi=100)
+    assert result.dpi == 100

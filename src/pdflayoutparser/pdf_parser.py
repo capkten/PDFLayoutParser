@@ -320,3 +320,127 @@ class PDFParser:
                 if self._bbox_intersects(block.bbox, r):
                     blocks.append(block)
         return blocks
+
+    def extract_table_in_region(
+        self,
+        region: dict | list[dict],
+    ) -> Table | list[Table] | None:
+        """Extract table(s) from specified region(s).
+
+        Region coordinates are normalized 0~1 relative to page size.
+        Returns Table for single region (or None), list[Table] for multiple.
+        """
+        import fitz as _fitz
+        from pdflayoutparser.loader import Loader
+        from pdflayoutparser.table_extractor import TableExtractor
+
+        is_single = isinstance(region, dict)
+        page_sizes = self._get_page_sizes()
+        regions = self._normalize_regions(region, page_sizes)
+
+        pdf_path = self._pdf_path
+        if pdf_path is None:
+            raise ValueError("extract_table_in_region requires a PDF file path")
+        document = Loader(pdf_path).load()
+        pdf_doc = _fitz.open(pdf_path)
+        try:
+            extractor = TableExtractor(
+                use_ml=self._use_ml,
+                ml_model_path=self._ml_model_path,
+                ml_confidence=self._ml_confidence,
+            )
+            results: list[Table] = []
+            for r in regions:
+                page_idx = r["page_index"]
+                page_handle = pdf_doc[page_idx]
+                tables = extractor.extract(page_handle)
+                # Filter tables that intersect with the region
+                matched = [
+                    t for t in tables
+                    if self._bbox_intersects(t.bbox, r)
+                ]
+                if is_single:
+                    return matched[0] if matched else None
+                results.extend(matched)
+            return results
+        finally:
+            pdf_doc.close()
+
+    def extract_image_in_region(
+        self,
+        region: dict | list[dict],
+        output_dir: str,
+    ) -> Image | list[Image] | None:
+        """Extract images that intersect with the given region(s).
+
+        Region coordinates are normalized 0~1 relative to page size.
+        """
+        is_single = isinstance(region, dict)
+        page_sizes = self._get_page_sizes()
+        regions = self._normalize_regions(region, page_sizes)
+
+        # Get all images first
+        all_page_indices = list({r["page_index"] for r in regions})
+        all_images = self.extract_images(
+            output_dir, page_indices=all_page_indices
+        )
+
+        results: list[Image] = []
+        for r in regions:
+            matched = [
+                img for img in all_images
+                if img.page_index == r["page_index"]
+                and img.bbox is not None
+                and self._bbox_intersects(img.bbox, r)
+            ]
+            if is_single:
+                return matched[0] if matched else None
+            results.extend(matched)
+        return results
+
+    def render_region(
+        self,
+        region: dict | list[dict],
+        output_dir: str,
+        dpi: Optional[int] = None,
+    ) -> RenderInfo | list[RenderInfo]:
+        """Render region(s) of the PDF as PNG files.
+
+        Region coordinates are normalized 0~1 relative to page size.
+        """
+        import fitz as _fitz
+
+        is_single = isinstance(region, dict)
+        effective_dpi = dpi if dpi is not None else self._render_dpi
+        page_sizes = self._get_page_sizes()
+        regions = self._normalize_regions(region, page_sizes)
+
+        os.makedirs(output_dir, exist_ok=True)
+        pdf_path = self._pdf_path
+        if pdf_path is None:
+            raise ValueError("render_region requires a PDF file path")
+        pdf_doc = _fitz.open(pdf_path)
+        try:
+            results: list[RenderInfo] = []
+            for idx, r in enumerate(regions):
+                page_handle = pdf_doc[r["page_index"]]
+                clip = _fitz.Rect(r["x0"], r["y0"], r["x1"], r["y1"])
+                mat = _fitz.Matrix(effective_dpi / 72, effective_dpi / 72)
+                pix = page_handle.get_pixmap(matrix=mat, clip=clip)
+
+                file_name = f"region-{r['page_index']:03d}-{idx:03d}.png"
+                path = os.path.join(output_dir, file_name)
+                pix.save(path)
+
+                info = RenderInfo(
+                    path=path,
+                    width=pix.width,
+                    height=pix.height,
+                    dpi=effective_dpi,
+                )
+                if is_single:
+                    return info
+                results.append(info)
+            return results
+        finally:
+            pdf_doc.close()
