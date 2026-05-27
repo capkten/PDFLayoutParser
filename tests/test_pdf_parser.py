@@ -150,3 +150,52 @@ def test_extract_tables_from_cached_document(tmp_dir):
     parser.parse()
     tables = parser.extract_tables()
     assert isinstance(tables, list)
+
+
+from pdflayoutparser.models import Image, RenderInfo
+from tests.conftest import make_pdf_with_image
+
+
+def test_extract_images_writes_files(tmp_dir):
+    pdf_path = os.path.join(tmp_dir, "img.pdf")
+    output_dir = os.path.join(tmp_dir, "images")
+    make_pdf_with_image(pdf_path)
+    parser = PDFParser(pdf_path)
+    images = parser.extract_images(output_dir)
+    assert isinstance(images, list)
+    assert len(images) >= 1
+    assert isinstance(images[0], Image)
+    assert images[0].path is not None
+    assert os.path.exists(images[0].path)
+
+
+def test_extract_images_with_page_indices(tmp_dir):
+    pdf_path = os.path.join(tmp_dir, "img.pdf")
+    output_dir = os.path.join(tmp_dir, "images")
+    make_pdf_with_image(pdf_path)
+    parser = PDFParser(pdf_path)
+    images = parser.extract_images(output_dir, page_indices=[0])
+    assert len(images) >= 1
+
+
+def test_render_pages_writes_png(tmp_dir):
+    pdf_path = os.path.join(tmp_dir, "test.pdf")
+    output_dir = os.path.join(tmp_dir, "renders")
+    make_text_pdf(pdf_path, text="Render me")
+    parser = PDFParser(pdf_path, render_dpi=150)
+    renders = parser.render_pages(output_dir)
+    assert isinstance(renders, list)
+    assert len(renders) >= 1
+    assert isinstance(renders[0], RenderInfo)
+    assert renders[0].path is not None
+    assert os.path.exists(renders[0].path)
+    assert renders[0].path.endswith(".png")
+
+
+def test_render_pages_custom_dpi(tmp_dir):
+    pdf_path = os.path.join(tmp_dir, "test.pdf")
+    output_dir = os.path.join(tmp_dir, "renders")
+    make_text_pdf(pdf_path, text="DPI test")
+    parser = PDFParser(pdf_path, render_dpi=200)
+    renders = parser.render_pages(output_dir, dpi=100)
+    assert renders[0].dpi == 100

@@ -9,7 +9,7 @@ from __future__ import annotations
 import os
 from typing import List, Optional
 
-from pdflayoutparser.models import Block, Document, Table
+from pdflayoutparser.models import Block, Document, Image, RenderInfo, Table
 
 
 class PDFParser:
@@ -148,6 +148,52 @@ class PDFParser:
             pdf_doc.close()
         self._document = document
         return self._collect_from_document(lambda p: p.tables, page_indices)
+
+    def extract_images(
+        self,
+        output_dir: str,
+        *,
+        page_indices: Optional[List[int]] = None,
+    ) -> List[Image]:
+        """Extract embedded images from the PDF, writing to *output_dir*."""
+        from pdflayoutparser.loader import Loader
+        from pdflayoutparser.image_extractor import ImageExtractor
+
+        pdf_path = self._pdf_path
+        if pdf_path is None:
+            raise ValueError("extract_images requires a PDF file path, not a Document")
+        document = Loader(pdf_path).load()
+        extractor = ImageExtractor(output_dir)
+        images: List[Image] = []
+        for page in document.pages:
+            if page_indices is not None and page.index not in page_indices:
+                continue
+            images.extend(extractor.extract(pdf_path, page.index))
+        return images
+
+    def render_pages(
+        self,
+        output_dir: str,
+        *,
+        dpi: Optional[int] = None,
+        page_indices: Optional[List[int]] = None,
+    ) -> List[RenderInfo]:
+        """Render PDF pages as PNG files into *output_dir*."""
+        from pdflayoutparser.loader import Loader
+        from pdflayoutparser.render_engine import RenderEngine
+
+        pdf_path = self._pdf_path
+        if pdf_path is None:
+            raise ValueError("render_pages requires a PDF file path, not a Document")
+        effective_dpi = dpi if dpi is not None else self._render_dpi
+        document = Loader(pdf_path).load()
+        engine = RenderEngine(output_dir, effective_dpi)
+        renders: List[RenderInfo] = []
+        for page in document.pages:
+            if page_indices is not None and page.index not in page_indices:
+                continue
+            renders.append(engine.render(pdf_path, page.index))
+        return renders
 
     def _collect_from_document(
         self,
