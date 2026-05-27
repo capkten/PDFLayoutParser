@@ -10,33 +10,32 @@ SRV_NAME="hexai_pdf_parser"
 
 echo "CURRENT_BRANCH: $1"
 echo "CURRENT_PYTHON_VERSION: $2"
+TIMESTAMP=""
 
 echo $VER > version
 
-TIMESTAMP=""
 if [[ $1 != "refs/tags/release"* ]]; then
     TIMESTAMP="-$(date +%Y%m%d.%H%M%S)"
 fi
 
-# 更新 pyproject.toml 中的版本号
-sed -i "s/^version = .*/version = \"${VER}\"/" pyproject.toml
+PYVER="37m"
+if [ "py36" = "$2" ];then
+    PYVER="36m"
+elif [ "py37" = "$2" ]; then
+    PYVER="37m"
+elif [ "py38" = "$2" ]; then
+    PYVER="38m"
+fi
 
 RELEASE_FILE="${SRV_NAME}-${VER}-py3-none-any.whl"
-echo "Building: ${RELEASE_FILE}"
+echo $RELEASE_FILE
 
-# 清理旧构建产物
-rm -rf build dist *.egg-info src/*.egg-info
-
-# 构建 wheel
-python -m build --wheel
-
+mkdir -p dist
+VER=${VER} python setup.py sdist bdist_wheel
 cd dist
 ls -lh
 cd ..
 
-# 复制 wheel 到项目根目录（CI 产物收集用）
-cp dist/${RELEASE_FILE} .
+cp dist/${SRV_NAME}-${VER}-py3-none-any.whl .
 
 echo ${RELEASE_FILE} > "release_filename"
-
-echo "Build complete: ${RELEASE_FILE}"
