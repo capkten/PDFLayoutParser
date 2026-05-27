@@ -1,49 +1,33 @@
-# PDFLayoutParser
+# hexai_pdf_parser
 
-PDFLayoutParser parses PDF documents into structured JSON, Markdown, and page previews.
+PDF矢量文件解析器组件，将 PDF 解析为结构化 JSON、Markdown 和页面预览。
 
 ## Quick Start
 
 ```bash
+pip install dist/hexai_pdf_parser-0.1.0-py3-none-any.whl
 python -m hexai_pdf_parser.cli input.pdf -o out
 ```
 
+## Python API
+
+```python
+from hexai_pdf_parser import PDFParser
+
+with PDFParser("input.pdf") as parser:
+    doc = parser.parse()
+    json_str = parser.to_json()
+```
+
 ## Optional ML Table Detection
-
-The parser can use the bundled YOLO layout model to detect table regions first, then
-recover table structure from the text blocks inside those regions.
-
-Enable it with:
 
 ```bash
 python -m hexai_pdf_parser.cli input.pdf -o out --ml
 ```
 
-Optional flags:
-
-```bash
-python -m hexai_pdf_parser.cli input.pdf -o out --ml --ml-confidence 0.25
-```
-
-Notes:
-
-- `--ml` uses the bundled `src/models/layoutanalysis/layoutanalysis.onnx` model by default.
-- The ML path is for table-region detection only.
-- Table structure is still built from text alignment inside each detected region.
-- Line-based table extraction remains enabled and continues to handle tables with visible borders.
-
-## Python API
-
-```python
-from hexai_pdf_parser import parse_pdf
-
-document = parse_pdf("input.pdf", output_dir="out", use_ml=True)
-```
-
 ## Development
 
-Run tests with:
-
 ```bash
+pip install -e ".[dev]"
 pytest
 ```
