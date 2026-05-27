@@ -9,7 +9,7 @@ from __future__ import annotations
 import os
 from typing import List, Optional
 
-from pdflayoutparser.models import Document
+from pdflayoutparser.models import Block, Document, Table
 
 
 class PDFParser:
@@ -81,3 +81,83 @@ class PDFParser:
         )
         self._document = pipeline.run()
         return self._document
+
+    def extract_text(
+        self,
+        *,
+        page_indices: Optional[List[int]] = None,
+    ) -> List[Block]:
+        """Extract text blocks from the PDF.
+
+        If a cached Document exists, returns its blocks directly.
+        Otherwise loads the PDF and runs only the text extraction stage.
+        """
+        if self._document is not None:
+            return self._collect_from_document(
+                lambda p: p.blocks, page_indices
+            )
+
+        import fitz as _fitz
+        from pdflayoutparser.loader import Loader
+        from pdflayoutparser.text_extractor import TextExtractor
+
+        document = Loader(self._pdf_path).load()
+        pdf_doc = _fitz.open(self._pdf_path)
+        try:
+            for page in document.pages:
+                if page_indices is not None and page.index not in page_indices:
+                    continue
+                page.blocks = TextExtractor().extract_blocks(pdf_doc[page.index])
+        finally:
+            pdf_doc.close()
+        self._document = document
+        return self._collect_from_document(lambda p: p.blocks, page_indices)
+
+    def extract_tables(
+        self,
+        *,
+        page_indices: Optional[List[int]] = None,
+    ) -> List[Table]:
+        """Extract tables from the PDF.
+
+        If a cached Document exists, returns its tables directly.
+        Otherwise loads the PDF and runs only the table detection stage.
+        """
+        if self._document is not None:
+            return self._collect_from_document(
+                lambda p: p.tables, page_indices
+            )
+
+        import fitz as _fitz
+        from pdflayoutparser.loader import Loader
+        from pdflayoutparser.table_extractor import TableExtractor
+
+        document = Loader(self._pdf_path).load()
+        pdf_doc = _fitz.open(self._pdf_path)
+        try:
+            extractor = TableExtractor(
+                use_ml=self._use_ml,
+                ml_model_path=self._ml_model_path,
+                ml_confidence=self._ml_confidence,
+            )
+            for page in document.pages:
+                if page_indices is not None and page.index not in page_indices:
+                    continue
+                page.tables = extractor.extract(pdf_doc[page.index])
+        finally:
+            pdf_doc.close()
+        self._document = document
+        return self._collect_from_document(lambda p: p.tables, page_indices)
+
+    def _collect_from_document(
+        self,
+        getter,
+        page_indices: Optional[List[int]],
+    ) -> list:
+        """Collect items from all pages of the cached document."""
+        items = []
+        for page in self._document.pages:
+            if page_indices is not None and page.index not in page_indices:
+                continue
+            items.extend(getter(page))
+        return items

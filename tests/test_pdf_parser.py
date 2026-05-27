@@ -96,3 +96,57 @@ def test_parse_with_page_indices(tmp_dir):
     # But only pages 0 and 2 should have extracted content
     assert len(doc.pages[0].blocks) >= 1
     assert len(doc.pages[2].blocks) >= 1
+
+
+from pdflayoutparser.models import Block, Table
+
+
+def test_extract_text_from_path(tmp_dir):
+    pdf_path = os.path.join(tmp_dir, "test.pdf")
+    make_text_pdf(pdf_path, text="Extract me")
+    parser = PDFParser(pdf_path)
+    blocks = parser.extract_text()
+    assert isinstance(blocks, list)
+    assert len(blocks) >= 1
+    assert isinstance(blocks[0], Block)
+    assert "Extract" in blocks[0].text
+
+
+def test_extract_text_from_cached_document(tmp_dir):
+    pdf_path = os.path.join(tmp_dir, "test.pdf")
+    make_text_pdf(pdf_path, text="Cached text")
+    parser = PDFParser(pdf_path)
+    parser.parse()
+    blocks = parser.extract_text()
+    assert len(blocks) >= 1
+    assert "Cached" in blocks[0].text
+
+
+def test_extract_text_with_page_indices(tmp_dir):
+    pdf_path = os.path.join(tmp_dir, "test.pdf")
+    from tests.conftest import make_multi_page_pdf
+    make_multi_page_pdf(pdf_path, ["AAA", "BBB", "CCC"])
+    parser = PDFParser(pdf_path)
+    blocks = parser.extract_text(page_indices=[1])
+    # Only page 1 text should be returned
+    texts = " ".join(b.text for b in blocks)
+    assert "BBB" in texts
+
+
+def test_extract_tables_from_path(tmp_dir):
+    pdf_path = os.path.join(tmp_dir, "table.pdf")
+    from tests.test_table_extractor import make_pdf_with_table
+    make_pdf_with_table(pdf_path)
+    parser = PDFParser(pdf_path)
+    tables = parser.extract_tables()
+    assert isinstance(tables, list)
+
+
+def test_extract_tables_from_cached_document(tmp_dir):
+    pdf_path = os.path.join(tmp_dir, "table.pdf")
+    from tests.test_table_extractor import make_pdf_with_table
+    make_pdf_with_table(pdf_path)
+    parser = PDFParser(pdf_path)
+    parser.parse()
+    tables = parser.extract_tables()
+    assert isinstance(tables, list)
