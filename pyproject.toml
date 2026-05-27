@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hexai_pdf_parser"
+version = "0.1.0"
+description = "A Python library for parsing PDF layouts"
+requires-python = ">=3.10"
+dependencies = [
+    "PyMuPDF>=1.23.0",
+]
+
+[project.optional-dependencies]
+ml = [
+    "onnxruntime>=1.16.0",
+    "numpy>=1.24.0",
+    "opencv-python>=4.8.0",
+]
+demo = [
+    "camelot-py[cv]>=0.11.0",
+]
+dev = [
+    "pytest>=7.0",
+]
+
+[project.scripts]
+hexai_pdf_parser = "hexai_pdf_parser.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+hexai_pdf_parser = ["data/models/*.onnx"]
+
+[tool.pytest.ini_options]
+addopts = "-p no:cacheprovider"

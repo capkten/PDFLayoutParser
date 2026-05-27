@@ -1,0 +1,38 @@
+.worktrees/
+__pycache__/
+*.pyc
+*.pyo
+.tmp*
+.claude*
+.vscode*
+*.pytest_cache
+
+# Debug / diagnostic scripts (root level)
+/debug_*.py
+/diagnose_*.py
+/batch_test.py
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Pipeline output directories
+out_*/
+output/
+
+# Temporary text/data files at root
+/*.txt
+/*.json
+/*.png
+/*.jpg
+/*.pdf
+
+# IDE and index files
+.idea/
+codex-index
+codex-index.lock
+codex-objects-1/
+src/models/
+
+
