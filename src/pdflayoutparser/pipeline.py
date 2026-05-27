@@ -39,7 +39,7 @@ class Pipeline:
     def __init__(
         self,
         pdf_path: str,
-        output_dir: str,
+        output_dir: Optional[str] = None,
         render_dpi: int = 200,
         seal_coords: Optional[List[dict]] = None,
         page_indices: Optional[List[int]] = None,
@@ -172,18 +172,20 @@ class Pipeline:
         )
 
         # Prepare output directories
-        images_dir = os.path.join(self.output_dir, "images")
-        pages_dir = os.path.join(self.output_dir, "pages")
-        text_alignment_debug_dir = os.path.join(
-            self.output_dir,
-            "debug",
-            "text-alignment",
-        )
-        os.makedirs(self.output_dir, exist_ok=True)
-        os.makedirs(images_dir, exist_ok=True)
-        os.makedirs(pages_dir, exist_ok=True)
-        if self.debug:
-            os.makedirs(text_alignment_debug_dir, exist_ok=True)
+        images_dir = ""
+        if self.output_dir is not None:
+            images_dir = os.path.join(self.output_dir, "images")
+            pages_dir = os.path.join(self.output_dir, "pages")
+            text_alignment_debug_dir = os.path.join(
+                self.output_dir,
+                "debug",
+                "text-alignment",
+            )
+            os.makedirs(self.output_dir, exist_ok=True)
+            os.makedirs(images_dir, exist_ok=True)
+            os.makedirs(pages_dir, exist_ok=True)
+            if self.debug:
+                os.makedirs(text_alignment_debug_dir, exist_ok=True)
 
         # 2. Per-page processing
         pdf_doc = fitz.open(self.pdf_path)
@@ -217,7 +219,7 @@ class Pipeline:
                     "table_extract",
                     lambda: table_extractor.extract(page_handle),
                 )
-                if self.debug:
+                if self.debug and self.output_dir is not None:
                     debug_payload = table_extractor._last_text_alignment_debug
                     has_text_alignment = any(
                         table.source == "text_alignment" for table in page.tables
@@ -238,12 +240,15 @@ class Pipeline:
                         )
 
                 # d. Image extraction
-                page.images, _ = self._time_stage(
-                    "image_extract",
-                    lambda: ImageExtractor(images_dir).extract(
-                        self.pdf_path, page.index
-                    ),
-                )
+                if self.output_dir is not None:
+                    page.images, _ = self._time_stage(
+                        "image_extract",
+                        lambda: ImageExtractor(images_dir).extract(
+                            self.pdf_path, page.index
+                        ),
+                    )
+                else:
+                    page.images = []
 
                 # e. Seals
                 seals, _ = self._time_stage(
@@ -279,49 +284,53 @@ class Pipeline:
                 page.layout_elements = layout_elements
 
                 # i. Render
-                page.render, _ = self._time_stage(
-                    "render",
-                    lambda: RenderEngine(
-                        self.output_dir, self.render_dpi
-                    ).render(self.pdf_path, page.index),
-                )
+                if self.output_dir is not None:
+                    page.render, _ = self._time_stage(
+                        "render",
+                        lambda: RenderEngine(
+                            self.output_dir, self.render_dpi
+                        ).render(self.pdf_path, page.index),
+                    )
 
                 # j. Per-page output
-                page_json_path = os.path.join(
-                    pages_dir, f"page-{page.index:03d}.json"
-                )
-                page_md_path = os.path.join(
-                    pages_dir, f"page-{page.index:03d}.md"
-                )
-                self._time_stage(
-                    "write_page_json",
-                    lambda: JSONWriter().write_page(page, page_json_path),
-                )
-                self._time_stage(
-                    "write_page_md",
-                    lambda: MarkdownWriter().write_page(page, page_md_path),
-                )
+                if self.output_dir is not None:
+                    page_json_path = os.path.join(
+                        pages_dir, f"page-{page.index:03d}.json"
+                    )
+                    page_md_path = os.path.join(
+                        pages_dir, f"page-{page.index:03d}.md"
+                    )
+                    self._time_stage(
+                        "write_page_json",
+                        lambda: JSONWriter().write_page(page, page_json_path),
+                    )
+                    self._time_stage(
+                        "write_page_md",
+                        lambda: MarkdownWriter().write_page(page, page_md_path),
+                    )
                 self._record_page_total(page.index, perf_counter() - page_start)
         finally:
             pdf_doc.close()
 
         # 3. Output writers
-        self._time_stage(
-            "write_output_json",
-            lambda: JSONWriter().write(
-                document, os.path.join(self.output_dir, "output.json")
-            ),
-        )
-        self._time_stage(
-            "write_output_md",
-            lambda: MarkdownWriter().write(
-                document, os.path.join(self.output_dir, "output.md")
-            ),
-        )
+        if self.output_dir is not None:
+            self._time_stage(
+                "write_output_json",
+                lambda: JSONWriter().write(
+                    document, os.path.join(self.output_dir, "output.json")
+                ),
+            )
+            self._time_stage(
+                "write_output_md",
+                lambda: MarkdownWriter().write(
+                    document, os.path.join(self.output_dir, "output.md")
+                ),
+            )
 
         total_elapsed = perf_counter() - overall_start
         report = self._build_timing_report(document.page_count, total_elapsed)
-        self._write_timing_report(self.output_dir, report)
+        if self.output_dir is not None:
+            self._write_timing_report(self.output_dir, report)
         print(self._format_timing_report(report))
 
         return document

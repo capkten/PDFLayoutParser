@@ -36,3 +36,63 @@ def test_context_manager_with_document():
     doc = Document(file_name="test.pdf", page_count=1, pages=[])
     with PDFParser(doc) as parser:
         assert parser._document is doc
+
+
+def test_parse_returns_document(tmp_dir):
+    pdf_path = os.path.join(tmp_dir, "test.pdf")
+    make_text_pdf(pdf_path, text="Hello World")
+    parser = PDFParser(pdf_path)
+    doc = parser.parse()
+    assert isinstance(doc, Document)
+    assert doc.page_count == 1
+    assert len(doc.pages) == 1
+    assert len(doc.pages[0].blocks) >= 1
+
+
+def test_parse_caches_result(tmp_dir):
+    pdf_path = os.path.join(tmp_dir, "test.pdf")
+    make_text_pdf(pdf_path, text="Hello")
+    parser = PDFParser(pdf_path)
+    doc1 = parser.parse()
+    doc2 = parser.parse()
+    assert doc1 is doc2
+
+
+def test_parse_from_document():
+    doc = Document(file_name="test.pdf", page_count=1, pages=[])
+    parser = PDFParser(doc)
+    result = parser.parse()
+    assert result is doc
+
+
+def test_parse_with_output_dir_writes_files(tmp_dir):
+    pdf_path = os.path.join(tmp_dir, "test.pdf")
+    output_dir = os.path.join(tmp_dir, "out")
+    make_text_pdf(pdf_path, text="Hello")
+    parser = PDFParser(pdf_path, render_dpi=150)
+    doc = parser.parse(output_dir=output_dir)
+    assert os.path.exists(os.path.join(output_dir, "output.json"))
+    assert os.path.exists(os.path.join(output_dir, "output.md"))
+
+
+def test_parse_no_output_dir_does_not_write_files(tmp_dir):
+    pdf_path = os.path.join(tmp_dir, "test.pdf")
+    make_text_pdf(pdf_path, text="Hello")
+    parser = PDFParser(pdf_path)
+    doc = parser.parse()
+    assert isinstance(doc, Document)
+    # No output_dir means no files written
+    assert not os.path.exists(os.path.join(tmp_dir, "output.json"))
+
+
+def test_parse_with_page_indices(tmp_dir):
+    from tests.conftest import make_multi_page_pdf
+
+    pdf_path = os.path.join(tmp_dir, "test.pdf")
+    make_multi_page_pdf(pdf_path, ["Page 0", "Page 1", "Page 2"])
+    parser = PDFParser(pdf_path)
+    doc = parser.parse(page_indices=[0, 2])
+    assert doc.page_count == 3  # Document metadata still reports all pages
+    # But only pages 0 and 2 should have extracted content
+    assert len(doc.pages[0].blocks) >= 1
+    assert len(doc.pages[2].blocks) >= 1
