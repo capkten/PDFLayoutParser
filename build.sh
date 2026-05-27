@@ -1,6 +1,8 @@
 #!/bin/bash
 set -e
 
+ARCH=$(uname -m)
+
 # 每次提交代码,请将版本号加1
 VER="0.1.0"
 
