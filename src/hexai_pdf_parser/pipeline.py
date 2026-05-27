@@ -14,17 +14,17 @@ from typing import List, Optional
 
 import fitz
 
-from pdflayoutparser.image_extractor import ImageExtractor
-from pdflayoutparser.json_writer import JSONWriter
-from pdflayoutparser.layout_builder import LayoutBuilder
-from pdflayoutparser.layout_mapper import LayoutMapper
-from pdflayoutparser.loader import Loader
-from pdflayoutparser.markdown_writer import MarkdownWriter
-from pdflayoutparser.models import BBox, Document, LayoutElement, Seal
-from pdflayoutparser.render_engine import RenderEngine
-from pdflayoutparser.table_extractor import TableExtractor
-from pdflayoutparser.text_alignment_debug import render_text_alignment_debug_page
-from pdflayoutparser.text_extractor import TextExtractor
+from hexai_pdf_parser.image_extractor import ImageExtractor
+from hexai_pdf_parser.json_writer import JSONWriter
+from hexai_pdf_parser.layout_builder import LayoutBuilder
+from hexai_pdf_parser.layout_mapper import LayoutMapper
+from hexai_pdf_parser.loader import Loader
+from hexai_pdf_parser.markdown_writer import MarkdownWriter
+from hexai_pdf_parser.models import BBox, Document, LayoutElement, Seal
+from hexai_pdf_parser.render_engine import RenderEngine
+from hexai_pdf_parser.table_extractor import TableExtractor
+from hexai_pdf_parser.text_alignment_debug import render_text_alignment_debug_page
+from hexai_pdf_parser.text_extractor import TextExtractor
 
 
 class Pipeline:

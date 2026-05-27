@@ -1,6 +1,6 @@
-from pdflayoutparser.benchmark_utils import extract_model_profile
-from pdflayoutparser.benchmark_utils import resolve_model_dir
-from pdflayoutparser.benchmark_utils import summarize_timings
+from hexai_pdf_parser.benchmark_utils import extract_model_profile
+from hexai_pdf_parser.benchmark_utils import resolve_model_dir
+from hexai_pdf_parser.benchmark_utils import summarize_timings
 
 
 def test_summarize_timings_reports_basic_stats():

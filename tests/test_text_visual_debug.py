@@ -3,7 +3,7 @@ from pathlib import Path
 
 import fitz
 
-from pdflayoutparser.text_visual_debug import (
+from hexai_pdf_parser.text_visual_debug import (
     TextFragment,
     build_visual_rows,
     make_text_fragments,

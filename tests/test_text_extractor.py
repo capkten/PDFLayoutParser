@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from pdflayoutparser.text_extractor import TextExtractor
+from hexai_pdf_parser.text_extractor import TextExtractor
 from tests.conftest import make_text_pdf
 
 

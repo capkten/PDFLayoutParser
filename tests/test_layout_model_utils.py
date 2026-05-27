@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from pdflayoutparser.layout_model_utils import (
+from hexai_pdf_parser.layout_model_utils import (
     bbox_from_detection_row,
     save_image_with_fallback,
 )

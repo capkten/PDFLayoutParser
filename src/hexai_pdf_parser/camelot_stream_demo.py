@@ -15,7 +15,7 @@ def _load_camelot() -> Any:
     except ImportError as exc:  # pragma: no cover - exercised in manual use
         raise ImportError(
             "camelot is required for the stream demo. Install with "
-            "`pip install pdflayoutparser[demo]`."
+            "`pip install hexai_pdf_parser[demo]`."
         ) from exc
     return camelot
 

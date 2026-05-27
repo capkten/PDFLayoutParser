@@ -4,20 +4,20 @@
 
 **Goal:** 将 `text_region_detector` 接入 `_extract_via_text_alignment()`，把无线表格流程拆成“区域发现”和“区域内建格”两段，同时保持现有有线表格路径不变。
 
-**Architecture:** 改动集中在 `src/pdflayoutparser/table_extractor.py`。新增 `_detect_text_regions(rows, page)` 作为适配层，把当前 row dict 转为 detector 所需的轻量 row/fragment 视图，再把 `CandidateRegion` 映射回原始 row span，并复用现有 `_infer_column_guides()` 产出兼容的 `column_guides`。`_extract_via_text_alignment()` 只替换候选区域来源，后续 header merge、trim、guide、cell 构建逻辑不动。
+**Architecture:** 改动集中在 `src/hexai_pdf_parser/table_extractor.py`。新增 `_detect_text_regions(rows, page)` 作为适配层，把当前 row dict 转为 detector 所需的轻量 row/fragment 视图，再把 `CandidateRegion` 映射回原始 row span，并复用现有 `_infer_column_guides()` 产出兼容的 `column_guides`。`_extract_via_text_alignment()` 只替换候选区域来源，后续 header merge、trim、guide、cell 构建逻辑不动。
 
-**Tech Stack:** Python 3.10+, PyMuPDF, pytest, 现有 `pdflayoutparser` 数据模型与 `text_region_detector`。
+**Tech Stack:** Python 3.10+, PyMuPDF, pytest, 现有 `hexai_pdf_parser` 数据模型与 `text_region_detector`。
 
 ---
 
 ## File Map
 
 **Modify**
-- `src/pdflayoutparser/table_extractor.py`
+- `src/hexai_pdf_parser/table_extractor.py`
 - `tests/test_table_extractor.py`
 
 **Reference Only**
-- `src/pdflayoutparser/text_region_detector.py`
+- `src/hexai_pdf_parser/text_region_detector.py`
 - `tests/test_text_region_detector.py`
 - `docs/superpowers/specs/2026-05-15-text-region-detector-integration-design.md`
 
@@ -33,7 +33,7 @@
 
 **Files:**
 - Modify: `tests/test_table_extractor.py`
-- Modify: `src/pdflayoutparser/table_extractor.py`
+- Modify: `src/hexai_pdf_parser/table_extractor.py`
 
 - [ ] **Step 1: 写失败测试，定义 `_detect_text_regions()` 的返回契约**
 
@@ -86,7 +86,7 @@
             ]
 
         monkeypatch.setattr(
-            "pdflayoutparser.table_extractor.detect_candidate_regions",
+            "hexai_pdf_parser.table_extractor.detect_candidate_regions",
             fake_detect_candidate_regions,
         )
 
@@ -186,18 +186,18 @@ git commit -m "test: define text region integration behavior"
 ## Task 2: 实现 `_detect_text_regions()` 适配层
 
 **Files:**
-- Modify: `src/pdflayoutparser/table_extractor.py`
+- Modify: `src/hexai_pdf_parser/table_extractor.py`
 - Test: `tests/test_table_extractor.py`
 
 - [ ] **Step 1: 在 `table_extractor.py` 顶部补齐 detector 依赖和轻量视图类型**
 
-在 `src/pdflayoutparser/table_extractor.py` 的 import 区域补充：
+在 `src/hexai_pdf_parser/table_extractor.py` 的 import 区域补充：
 
 ```python
 from dataclasses import dataclass
 from types import SimpleNamespace
 
-from pdflayoutparser.text_region_detector import (
+from hexai_pdf_parser.text_region_detector import (
     CandidateRegion,
     HorizontalSeparator,
     detect_candidate_regions,
@@ -363,14 +363,14 @@ PASSED tests/test_table_extractor.py::TestTableExtractor::test_extract_via_text_
 - [ ] **Step 5: 提交适配层实现**
 
 ```bash
-git add src/pdflayoutparser/table_extractor.py tests/test_table_extractor.py
+git add src/hexai_pdf_parser/table_extractor.py tests/test_table_extractor.py
 git commit -m "feat: add text region detector adapter"
 ```
 
 ## Task 3: 切换无线表格入口并跑回归
 
 **Files:**
-- Modify: `src/pdflayoutparser/table_extractor.py`
+- Modify: `src/hexai_pdf_parser/table_extractor.py`
 - Modify: `tests/test_table_extractor.py`
 
 - [ ] **Step 1: 修改 `_extract_via_text_alignment()` 使用新入口**
@@ -459,7 +459,7 @@ all selected tests passed
 - [ ] **Step 5: 提交主链路切换**
 
 ```bash
-git add src/pdflayoutparser/table_extractor.py tests/test_table_extractor.py
+git add src/hexai_pdf_parser/table_extractor.py tests/test_table_extractor.py
 git commit -m "refactor: route text alignment through region detector"
 ```
 

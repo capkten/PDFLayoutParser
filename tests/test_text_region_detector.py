@@ -1,10 +1,10 @@
-from pdflayoutparser.text_region_detector import (
+from hexai_pdf_parser.text_region_detector import (
     CandidateRegion,
     HorizontalSeparator,
     detect_candidate_regions,
     score_row_structure,
 )
-from pdflayoutparser.text_visual_debug import TextFragment, VisualRow
+from hexai_pdf_parser.text_visual_debug import TextFragment, VisualRow
 
 
 def _row(*items):

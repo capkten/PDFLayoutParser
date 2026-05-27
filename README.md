@@ -5,7 +5,7 @@ PDFLayoutParser parses PDF documents into structured JSON, Markdown, and page pr
 ## Quick Start
 
 ```bash
-python -m pdflayoutparser.cli input.pdf -o out
+python -m hexai_pdf_parser.cli input.pdf -o out
 ```
 
 ## Optional ML Table Detection
@@ -16,13 +16,13 @@ recover table structure from the text blocks inside those regions.
 Enable it with:
 
 ```bash
-python -m pdflayoutparser.cli input.pdf -o out --ml
+python -m hexai_pdf_parser.cli input.pdf -o out --ml
 ```
 
 Optional flags:
 
 ```bash
-python -m pdflayoutparser.cli input.pdf -o out --ml --ml-confidence 0.25
+python -m hexai_pdf_parser.cli input.pdf -o out --ml --ml-confidence 0.25
 ```
 
 Notes:
@@ -35,7 +35,7 @@ Notes:
 ## Python API
 
 ```python
-from pdflayoutparser import parse_pdf
+from hexai_pdf_parser import parse_pdf
 
 document = parse_pdf("input.pdf", output_dir="out", use_ml=True)
 ```

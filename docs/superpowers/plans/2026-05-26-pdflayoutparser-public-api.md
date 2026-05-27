@@ -13,9 +13,9 @@
 ### Task 1: PDFParser class skeleton, constructor, context manager, exports
 
 **Files:**
-- Create: `src/pdflayoutparser/pdf_parser.py`
+- Create: `src/hexai_pdf_parser/pdf_parser.py`
 - Create: `tests/test_pdf_parser.py`
-- Modify: `src/pdflayoutparser/__init__.py`
+- Modify: `src/hexai_pdf_parser/__init__.py`
 
 - [ ] **Step 1: Write tests for constructor and context manager**
 
@@ -25,8 +25,8 @@ import os
 import fitz
 import pytest
 
-from pdflayoutparser.pdf_parser import PDFParser
-from pdflayoutparser.models import Document, Page, BBox
+from hexai_pdf_parser.pdf_parser import PDFParser
+from hexai_pdf_parser.models import Document, Page, BBox
 from tests.conftest import make_text_pdf
 
 
@@ -62,12 +62,12 @@ def test_context_manager_with_document():
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `pytest tests/test_pdf_parser.py -v`
-Expected: FAIL — `ModuleNotFoundError: No module named 'pdflayoutparser.pdf_parser'`
+Expected: FAIL — `ModuleNotFoundError: No module named 'hexai_pdf_parser.pdf_parser'`
 
 - [ ] **Step 3: Implement PDFParser skeleton**
 
 ```python
-# src/pdflayoutparser/pdf_parser.py
+# src/hexai_pdf_parser/pdf_parser.py
 """Public API for PDFLayoutParser.
 
 Provides the :class:`PDFParser` class that wraps the internal pipeline
@@ -78,7 +78,7 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-from pdflayoutparser.models import Document
+from hexai_pdf_parser.models import Document
 
 
 class PDFParser:
@@ -130,11 +130,11 @@ Expected: PASS
 
 - [ ] **Step 5: Update `__init__.py` exports**
 
-Modify `src/pdflayoutparser/__init__.py`:
+Modify `src/hexai_pdf_parser/__init__.py`:
 
 ```python
-from pdflayoutparser.pdf_parser import PDFParser
-from pdflayoutparser.models import (
+from hexai_pdf_parser.pdf_parser import PDFParser
+from hexai_pdf_parser.models import (
     Document, Page, Block, Line, Word, Char,
     Table, Cell, Image, Seal, RenderInfo,
     LayoutElement, BBox, Span,
@@ -150,13 +150,13 @@ __all__ = [
 
 - [ ] **Step 6: Verify import works**
 
-Run: `python -c "from pdflayoutparser import PDFParser, Document, Table; print('OK')"`
+Run: `python -c "from hexai_pdf_parser import PDFParser, Document, Table; print('OK')"`
 Expected: `OK`
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add src/pdflayoutparser/pdf_parser.py src/pdflayoutparser/__init__.py tests/test_pdf_parser.py
+git add src/hexai_pdf_parser/pdf_parser.py src/hexai_pdf_parser/__init__.py tests/test_pdf_parser.py
 git commit -m "feat: add PDFParser class skeleton with constructor and context manager"
 ```
 
@@ -165,8 +165,8 @@ git commit -m "feat: add PDFParser class skeleton with constructor and context m
 ### Task 2: `parse()` method with caching
 
 **Files:**
-- Modify: `src/pdflayoutparser/pipeline.py`
-- Modify: `src/pdflayoutparser/pdf_parser.py`
+- Modify: `src/hexai_pdf_parser/pipeline.py`
+- Modify: `src/hexai_pdf_parser/pdf_parser.py`
 - Modify: `tests/test_pdf_parser.py`
 
 - [ ] **Step 1: Write tests for parse()**
@@ -242,7 +242,7 @@ Expected: FAIL — `AttributeError: 'PDFParser' object has no attribute 'parse'`
 
 Pipeline currently requires `output_dir` and always writes files. Modify `Pipeline.run()` to skip all file I/O when `output_dir is None`.
 
-In `src/pdflayoutparser/pipeline.py`, change the `__init__` signature:
+In `src/hexai_pdf_parser/pipeline.py`, change the `__init__` signature:
 
 ```python
     def __init__(
@@ -314,7 +314,7 @@ In `Pipeline.run()`, wrap directory creation and file I/O in conditionals:
 
 - [ ] **Step 4: Implement parse() on PDFParser**
 
-Add to `PDFParser` class in `src/pdflayoutparser/pdf_parser.py`:
+Add to `PDFParser` class in `src/hexai_pdf_parser/pdf_parser.py`:
 
 ```python
     def parse(
@@ -331,7 +331,7 @@ Add to `PDFParser` class in `src/pdflayoutparser/pdf_parser.py`:
         if self._document is not None:
             return self._document
 
-        from pdflayoutparser.pipeline import Pipeline
+        from hexai_pdf_parser.pipeline import Pipeline
 
         pipeline = Pipeline(
             pdf_path=self._pdf_path,
@@ -362,7 +362,7 @@ Expected: All existing tests still PASS
 - [ ] **Step 7: Commit**
 
 ```bash
-git add src/pdflayoutparser/pipeline.py src/pdflayoutparser/pdf_parser.py tests/test_pdf_parser.py
+git add src/hexai_pdf_parser/pipeline.py src/hexai_pdf_parser/pdf_parser.py tests/test_pdf_parser.py
 git commit -m "feat: implement PDFParser.parse() with caching; Pipeline accepts output_dir=None"
 ```
 
@@ -371,7 +371,7 @@ git commit -m "feat: implement PDFParser.parse() with caching; Pipeline accepts 
 ### Task 3: `extract_text()` and `extract_tables()` methods
 
 **Files:**
-- Modify: `src/pdflayoutparser/pdf_parser.py`
+- Modify: `src/hexai_pdf_parser/pdf_parser.py`
 - Modify: `tests/test_pdf_parser.py`
 
 - [ ] **Step 1: Write tests for extract_text()**
@@ -379,7 +379,7 @@ git commit -m "feat: implement PDFParser.parse() with caching; Pipeline accepts 
 Append to `tests/test_pdf_parser.py`:
 
 ```python
-from pdflayoutparser.models import Block, Table
+from hexai_pdf_parser.models import Block, Table
 
 
 def test_extract_text_from_path(tmp_dir):
@@ -465,8 +465,8 @@ Add to `PDFParser` class:
             )
 
         import fitz as _fitz
-        from pdflayoutparser.loader import Loader
-        from pdflayoutparser.text_extractor import TextExtractor
+        from hexai_pdf_parser.loader import Loader
+        from hexai_pdf_parser.text_extractor import TextExtractor
 
         document, _ = Loader(self._pdf_path).load()
         pdf_doc = _fitz.open(self._pdf_path)
@@ -496,8 +496,8 @@ Add to `PDFParser` class:
             )
 
         import fitz as _fitz
-        from pdflayoutparser.loader import Loader
-        from pdflayoutparser.table_extractor import TableExtractor
+        from hexai_pdf_parser.loader import Loader
+        from hexai_pdf_parser.table_extractor import TableExtractor
 
         document, _ = Loader(self._pdf_path).load()
         pdf_doc = _fitz.open(self._pdf_path)
@@ -538,7 +538,7 @@ Expected: PASS
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/pdflayoutparser/pdf_parser.py tests/test_pdf_parser.py
+git add src/hexai_pdf_parser/pdf_parser.py tests/test_pdf_parser.py
 git commit -m "feat: implement PDFParser.extract_text() and extract_tables()"
 ```
 
@@ -547,7 +547,7 @@ git commit -m "feat: implement PDFParser.extract_text() and extract_tables()"
 ### Task 4: `extract_images()` and `render_pages()` methods
 
 **Files:**
-- Modify: `src/pdflayoutparser/pdf_parser.py`
+- Modify: `src/hexai_pdf_parser/pdf_parser.py`
 - Modify: `tests/test_pdf_parser.py`
 
 - [ ] **Step 1: Write tests for extract_images()**
@@ -555,7 +555,7 @@ git commit -m "feat: implement PDFParser.extract_text() and extract_tables()"
 Append to `tests/test_pdf_parser.py`:
 
 ```python
-from pdflayoutparser.models import Image, RenderInfo
+from hexai_pdf_parser.models import Image, RenderInfo
 from tests.conftest import make_pdf_with_image
 
 
@@ -626,8 +626,8 @@ Add to `PDFParser` class:
         page_indices: Optional[List[int]] = None,
     ) -> List[Image]:
         """Extract embedded images from the PDF, writing to *output_dir*."""
-        from pdflayoutparser.loader import Loader
-        from pdflayoutparser.image_extractor import ImageExtractor
+        from hexai_pdf_parser.loader import Loader
+        from hexai_pdf_parser.image_extractor import ImageExtractor
 
         document, _ = Loader(self._pdf_path or self._document.file_name).load()
         extractor = ImageExtractor(output_dir)
@@ -648,8 +648,8 @@ Add to `PDFParser` class:
         page_indices: Optional[List[int]] = None,
     ) -> List[RenderInfo]:
         """Render PDF pages as PNG files into *output_dir*."""
-        from pdflayoutparser.loader import Loader
-        from pdflayoutparser.render_engine import RenderEngine
+        from hexai_pdf_parser.loader import Loader
+        from hexai_pdf_parser.render_engine import RenderEngine
 
         effective_dpi = dpi if dpi is not None else self._render_dpi
         document, _ = Loader(self._pdf_path or self._document.file_name).load()
@@ -672,7 +672,7 @@ Expected: PASS
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/pdflayoutparser/pdf_parser.py tests/test_pdf_parser.py
+git add src/hexai_pdf_parser/pdf_parser.py tests/test_pdf_parser.py
 git commit -m "feat: implement PDFParser.extract_images() and render_pages()"
 ```
 
@@ -681,9 +681,9 @@ git commit -m "feat: implement PDFParser.extract_images() and render_pages()"
 ### Task 5: `to_json()` and `to_markdown()` methods
 
 **Files:**
-- Modify: `src/pdflayoutparser/json_writer.py`
-- Modify: `src/pdflayoutparser/markdown_writer.py`
-- Modify: `src/pdflayoutparser/pdf_parser.py`
+- Modify: `src/hexai_pdf_parser/json_writer.py`
+- Modify: `src/hexai_pdf_parser/markdown_writer.py`
+- Modify: `src/hexai_pdf_parser/pdf_parser.py`
 - Modify: `tests/test_pdf_parser.py`
 
 - [ ] **Step 1: Write tests for to_json() and to_markdown()**
@@ -750,7 +750,7 @@ Expected: FAIL — `AttributeError: 'PDFParser' object has no attribute 'to_json
 
 - [ ] **Step 3: Add in-memory methods to writers**
 
-Add to `JSONWriter` class in `src/pdflayoutparser/json_writer.py`:
+Add to `JSONWriter` class in `src/hexai_pdf_parser/json_writer.py`:
 
 ```python
     def to_dict(self, document: Document) -> Dict[str, Any]:
@@ -758,7 +758,7 @@ Add to `JSONWriter` class in `src/pdflayoutparser/json_writer.py`:
         return self._document_to_dict(document)
 ```
 
-Add to `MarkdownWriter` class in `src/pdflayoutparser/markdown_writer.py`:
+Add to `MarkdownWriter` class in `src/hexai_pdf_parser/markdown_writer.py`:
 
 ```python
     def to_string(self, document: Document) -> str:
@@ -785,7 +785,7 @@ Add to `PDFParser` class:
         if not yet parsed).
         """
         import json
-        from pdflayoutparser.json_writer import JSONWriter
+        from hexai_pdf_parser.json_writer import JSONWriter
 
         doc = document if document is not None else self.parse()
         data = JSONWriter().to_dict(doc)
@@ -800,7 +800,7 @@ Add to `PDFParser` class:
         If *document* is None, uses the cached parse result (calls :meth:`parse`
         if not yet parsed).
         """
-        from pdflayoutparser.markdown_writer import MarkdownWriter
+        from hexai_pdf_parser.markdown_writer import MarkdownWriter
 
         doc = document if document is not None else self.parse()
         return MarkdownWriter().to_string(doc)
@@ -814,7 +814,7 @@ Expected: PASS
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/pdflayoutparser/pdf_parser.py src/pdflayoutparser/json_writer.py src/pdflayoutparser/markdown_writer.py tests/test_pdf_parser.py
+git add src/hexai_pdf_parser/pdf_parser.py src/hexai_pdf_parser/json_writer.py src/hexai_pdf_parser/markdown_writer.py tests/test_pdf_parser.py
 git commit -m "feat: implement PDFParser.to_json() and to_markdown() with in-memory writers"
 ```
 
@@ -823,7 +823,7 @@ git commit -m "feat: implement PDFParser.to_json() and to_markdown() with in-mem
 ### Task 6: Region coordinate helper + `extract_text_in_region()`
 
 **Files:**
-- Modify: `src/pdflayoutparser/pdf_parser.py`
+- Modify: `src/hexai_pdf_parser/pdf_parser.py`
 - Modify: `tests/test_pdf_parser.py`
 
 - [ ] **Step 1: Write tests for region coordinate normalization**
@@ -831,7 +831,7 @@ git commit -m "feat: implement PDFParser.to_json() and to_markdown() with in-mem
 Append to `tests/test_pdf_parser.py`:
 
 ```python
-from pdflayoutparser.pdf_parser import PDFParser
+from hexai_pdf_parser.pdf_parser import PDFParser
 
 
 def test_normalize_region_single(tmp_dir):
@@ -970,7 +970,7 @@ Add to `PDFParser` class:
 
         Region coordinates are normalized 0~1 relative to page size.
         """
-        from pdflayoutparser.models import BBox
+        from hexai_pdf_parser.models import BBox
 
         page_sizes = self._get_page_sizes()
         regions = self._normalize_regions(region, page_sizes)
@@ -1003,7 +1003,7 @@ Expected: PASS
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/pdflayoutparser/pdf_parser.py tests/test_pdf_parser.py
+git add src/hexai_pdf_parser/pdf_parser.py tests/test_pdf_parser.py
 git commit -m "feat: implement PDFParser.extract_text_in_region() with coordinate normalization"
 ```
 
@@ -1012,7 +1012,7 @@ git commit -m "feat: implement PDFParser.extract_text_in_region() with coordinat
 ### Task 7: `extract_table_in_region()`
 
 **Files:**
-- Modify: `src/pdflayoutparser/pdf_parser.py`
+- Modify: `src/hexai_pdf_parser/pdf_parser.py`
 - Modify: `tests/test_pdf_parser.py`
 
 - [ ] **Step 1: Write tests for extract_table_in_region()**
@@ -1073,8 +1073,8 @@ Add to `PDFParser` class:
         Returns Table for single region (or None), list[Table] for multiple.
         """
         import fitz as _fitz
-        from pdflayoutparser.loader import Loader
-        from pdflayoutparser.table_extractor import TableExtractor
+        from hexai_pdf_parser.loader import Loader
+        from hexai_pdf_parser.table_extractor import TableExtractor
 
         is_single = isinstance(region, dict)
         page_sizes = self._get_page_sizes()
@@ -1115,7 +1115,7 @@ Expected: PASS
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/pdflayoutparser/pdf_parser.py tests/test_pdf_parser.py
+git add src/hexai_pdf_parser/pdf_parser.py tests/test_pdf_parser.py
 git commit -m "feat: implement PDFParser.extract_table_in_region()"
 ```
 
@@ -1124,7 +1124,7 @@ git commit -m "feat: implement PDFParser.extract_table_in_region()"
 ### Task 8: `extract_image_in_region()` and `render_region()`
 
 **Files:**
-- Modify: `src/pdflayoutparser/pdf_parser.py`
+- Modify: `src/hexai_pdf_parser/pdf_parser.py`
 - Modify: `tests/test_pdf_parser.py`
 
 - [ ] **Step 1: Write tests for extract_image_in_region()**
@@ -1296,7 +1296,7 @@ Expected: PASS
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/pdflayoutparser/pdf_parser.py tests/test_pdf_parser.py
+git add src/hexai_pdf_parser/pdf_parser.py tests/test_pdf_parser.py
 git commit -m "feat: implement PDFParser.extract_image_in_region() and render_region()"
 ```
 
@@ -1310,11 +1310,11 @@ git commit -m "feat: implement PDFParser.extract_image_in_region() and render_re
 - [ ] **Step 1: Build the wheel**
 
 Run: `cd D:/codes/PDFLayoutParser && python -m build --wheel`
-Expected: `Successfully built pdflayoutparser-0.1.0-py3-none-any.whl` in `dist/`
+Expected: `Successfully built hexai_pdf_parser-0.1.0-py3-none-any.whl` in `dist/`
 
 - [ ] **Step 2: Install the wheel in a test and verify imports**
 
-Run: `pip install dist/pdflayoutparser-0.1.0-py3-none-any.whl --force-reinstall --no-deps && python -c "from pdflayoutparser import PDFParser, Document, Table, Block, Image, RenderInfo, BBox; print('All imports OK')"`
+Run: `pip install dist/hexai_pdf_parser-0.1.0-py3-none-any.whl --force-reinstall --no-deps && python -c "from hexai_pdf_parser import PDFParser, Document, Table, Block, Image, RenderInfo, BBox; print('All imports OK')"`
 Expected: `All imports OK`
 
 - [ ] **Step 3: Run the full test suite**

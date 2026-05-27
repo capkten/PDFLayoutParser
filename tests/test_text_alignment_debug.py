@@ -2,7 +2,7 @@ from pathlib import Path
 
 import fitz
 
-from pdflayoutparser.text_alignment_debug import render_text_alignment_debug_page
+from hexai_pdf_parser.text_alignment_debug import render_text_alignment_debug_page
 
 
 def test_render_text_alignment_debug_page_creates_png(tmp_dir):

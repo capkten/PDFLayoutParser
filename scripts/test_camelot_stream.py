@@ -4,7 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
-from pdflayoutparser.camelot_stream_demo import run_camelot_stream_demo
+from hexai_pdf_parser.camelot_stream_demo import run_camelot_stream_demo
 
 
 def main() -> None:

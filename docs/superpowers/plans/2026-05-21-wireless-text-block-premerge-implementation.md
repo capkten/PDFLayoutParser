@@ -6,7 +6,7 @@
 
 **Architecture:** Keep the change scoped to the wireless table text-alignment path inside `TableExtractor`. Normalize raw `page.get_text("words")` output into token dicts, run a conservative premerge pass that only merges clearly adjacent fragments, and then feed the merged tokens into the existing row-band and column-guide logic. The main line-based table path remains unchanged.
 
-**Tech Stack:** Python 3.10+, PyMuPDF, pytest, existing `pdflayoutparser` dataclasses and table extraction helpers.
+**Tech Stack:** Python 3.10+, PyMuPDF, pytest, existing `hexai_pdf_parser` dataclasses and table extraction helpers.
 
 ---
 
@@ -22,7 +22,7 @@ Add unit coverage for two behaviors:
 - fragments from different rows do not merge, even if their x positions overlap
 
 ```python
-from pdflayoutparser.table_extractor import TableExtractor
+from hexai_pdf_parser.table_extractor import TableExtractor
 
 
 def test_collect_text_rows_merges_close_fragments_into_one_token():
@@ -77,8 +77,8 @@ git commit -m "test: lock wireless text block premerge behavior"
 ### Task 2: Implement conservative premerge inside the wireless text row collector
 
 **Files:**
-- Modify: `src/pdflayoutparser/table_extractor.py:2431-2495`
-- Modify: `src/pdflayoutparser/table_extractor.py:1677-1872`
+- Modify: `src/hexai_pdf_parser/table_extractor.py:2431-2495`
+- Modify: `src/hexai_pdf_parser/table_extractor.py:1677-1872`
 
 - [ ] **Step 1: Write the minimal implementation**
 
@@ -143,7 +143,7 @@ Expected: both tests pass, and the merged token text becomes `人民币` in the 
 - [ ] **Step 3: Commit the implementation**
 
 ```bash
-git add src/pdflayoutparser/table_extractor.py tests/test_table_extractor.py
+git add src/hexai_pdf_parser/table_extractor.py tests/test_table_extractor.py
 git commit -m "feat: premerge fragmented wireless text blocks"
 ```
 

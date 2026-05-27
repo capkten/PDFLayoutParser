@@ -539,7 +539,7 @@ col_guides = [g0, g1, g2, ...]
 - 现有有线表格区域构建逻辑；
 - 现有表格输出 schema。
 
-新增逻辑首版建议仍放在 `src/pdflayoutparser/table_extractor.py` 内，以多个小型辅助函数形式接入，保持阶段边界清晰。
+新增逻辑首版建议仍放在 `src/hexai_pdf_parser/table_extractor.py` 内，以多个小型辅助函数形式接入，保持阶段边界清晰。
 
 如果实现后文件体积明显增长，再考虑把文本对齐型表格辅助逻辑拆到独立模块。该拆分不属于首版必需项。
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from pdflayoutparser.models import BBox
+from hexai_pdf_parser.models import BBox
 
 
 @dataclass

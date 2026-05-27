@@ -4,7 +4,7 @@ set -e
 # 每次提交代码,请将版本号加1
 VER="0.1.0"
 
-SRV_NAME="pdflayoutparser"
+SRV_NAME="hexai_pdf_parser"
 
 echo "CURRENT_BRANCH: $1"
 echo "CURRENT_PYTHON_VERSION: $2"

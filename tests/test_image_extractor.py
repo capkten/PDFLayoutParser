@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from pdflayoutparser.image_extractor import ImageExtractor
+from hexai_pdf_parser.image_extractor import ImageExtractor
 from tests.conftest import make_pdf_with_image
 
 

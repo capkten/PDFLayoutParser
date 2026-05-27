@@ -7,7 +7,7 @@ from pathlib import Path
 import fitz
 import pytest
 
-from pdflayoutparser.pipeline import Pipeline
+from hexai_pdf_parser.pipeline import Pipeline
 from tests.conftest import make_text_pdf
 from tests.test_table_extractor import make_pdf_with_table, make_synthetic_text_alignment_pdf
 

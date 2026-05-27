@@ -22,8 +22,8 @@ from typing import Any, Iterable
 
 import fitz
 
-from pdflayoutparser.models import BBox
-from pdflayoutparser.table_extractor import TableExtractor
+from hexai_pdf_parser.models import BBox
+from hexai_pdf_parser.table_extractor import TableExtractor
 
 
 @dataclass

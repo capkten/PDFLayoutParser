@@ -7,9 +7,9 @@ from types import SimpleNamespace
 import fitz
 import pytest
 
-from pdflayoutparser.models import BBox, Cell, Table
-from pdflayoutparser.text_region_detector import CandidateRegion
-from pdflayoutparser.table_extractor import TableExtractor
+from hexai_pdf_parser.models import BBox, Cell, Table
+from hexai_pdf_parser.text_region_detector import CandidateRegion
+from hexai_pdf_parser.table_extractor import TableExtractor
 
 
 def make_pdf_with_table(path: str | Path) -> None:
@@ -92,7 +92,7 @@ class TestTableExtractor:
             ]
 
         monkeypatch.setattr(
-            "pdflayoutparser.table_extractor.detect_candidate_regions",
+            "hexai_pdf_parser.table_extractor.detect_candidate_regions",
             fake_detect_candidate_regions,
         )
 
@@ -1006,7 +1006,7 @@ class TestTableExtractor:
         assert extractor.use_ml is False
 
     def test_ml_detector_defaults_to_layoutanalysis_model(self):
-        from pdflayoutparser.ml_table_detector import MLTableDetector
+        from hexai_pdf_parser.ml_table_detector import MLTableDetector
 
         detector = MLTableDetector()
         assert detector._model_path.as_posix().endswith(
@@ -1080,7 +1080,7 @@ class TestTableExtractor:
                 return [BBox(10, 10, 250, 100)]
 
         monkeypatch.setattr(
-            "pdflayoutparser.ml_table_detector.MLTableDetector",
+            "hexai_pdf_parser.ml_table_detector.MLTableDetector",
             FakeDetector,
         )
 
@@ -1296,7 +1296,7 @@ class TestNMS:
 
     def test_nms_removes_overlapping_boxes(self):
         import numpy as np
-        from pdflayoutparser.ml_table_detector import MLTableDetector
+        from hexai_pdf_parser.ml_table_detector import MLTableDetector
 
         boxes = np.array([[10, 10, 50, 50], [12, 12, 52, 52], [200, 200, 250, 250]], dtype=np.float32)
         scores = np.array([0.9, 0.8, 0.7], dtype=np.float32)
@@ -1307,7 +1307,7 @@ class TestNMS:
 
     def test_nms_keeps_non_overlapping_boxes(self):
         import numpy as np
-        from pdflayoutparser.ml_table_detector import MLTableDetector
+        from hexai_pdf_parser.ml_table_detector import MLTableDetector
 
         boxes = np.array([[10, 10, 50, 50], [200, 200, 250, 250]], dtype=np.float32)
         scores = np.array([0.9, 0.8], dtype=np.float32)
@@ -1316,7 +1316,7 @@ class TestNMS:
 
     def test_nms_empty_input(self):
         import numpy as np
-        from pdflayoutparser.ml_table_detector import MLTableDetector
+        from hexai_pdf_parser.ml_table_detector import MLTableDetector
 
         boxes = np.empty((0, 4), dtype=np.float32)
         scores = np.empty((0,), dtype=np.float32)

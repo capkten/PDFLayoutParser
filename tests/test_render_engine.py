@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from pdflayoutparser.render_engine import RenderEngine
+from hexai_pdf_parser.render_engine import RenderEngine
 from tests.conftest import make_text_pdf
 
 

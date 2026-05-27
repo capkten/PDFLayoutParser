@@ -8,7 +8,7 @@ from typing import List
 
 import fitz
 
-from pdflayoutparser.models import Block, BBox, Char, Line, Word
+from hexai_pdf_parser.models import Block, BBox, Char, Line, Word
 
 
 class TextExtractor:

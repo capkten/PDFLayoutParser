@@ -35,7 +35,7 @@ Expected: fail because the demo script and helper do not exist yet.
 - [ ] **Step 3: Write minimal implementation**
 
 Implement the smallest reusable entry point needed by the demo, likely in:
-`src/pdflayoutparser/camelot_stream_demo.py`
+`src/hexai_pdf_parser/camelot_stream_demo.py`
 
 The helper should:
 ```python
@@ -56,7 +56,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add tests/test_camelot_stream_demo.py src/pdflayoutparser/camelot_stream_demo.py
+git add tests/test_camelot_stream_demo.py src/hexai_pdf_parser/camelot_stream_demo.py
 git commit -m "feat: add camelot stream demo helper"
 ```
 
@@ -107,7 +107,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add scripts/test_camelot_stream.py pyproject.toml src/pdflayoutparser/camelot_stream_demo.py tests/test_camelot_stream_demo.py
+git add scripts/test_camelot_stream.py pyproject.toml src/hexai_pdf_parser/camelot_stream_demo.py tests/test_camelot_stream_demo.py
 git commit -m "feat: add camelot stream demo script"
 ```
 

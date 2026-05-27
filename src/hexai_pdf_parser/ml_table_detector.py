@@ -14,8 +14,8 @@ from typing import List, Tuple
 import fitz
 import numpy as np
 
-from pdflayoutparser.models import BBox
-from pdflayoutparser.yolo_layout_utils import (
+from hexai_pdf_parser.models import BBox
+from hexai_pdf_parser.yolo_layout_utils import (
     YOLO_LAYOUT_LABELS,
     postprocess_yolo_layout,
     preprocess_yolo_image,
@@ -31,7 +31,7 @@ def _require_onnxruntime():
     except ImportError:
         raise ImportError(
             "onnxruntime is required for ML table detection. "
-            "Install it with: pip install pdflayoutparser[ml]"
+            "Install it with: pip install hexai_pdf_parser[ml]"
         )
 
 
@@ -50,7 +50,7 @@ def _resolve_default_model_path() -> Path:
     try:
         import importlib.resources
 
-        data_ref = importlib.resources.files("pdflayoutparser") / "data" / "models"
+        data_ref = importlib.resources.files("hexai_pdf_parser") / "data" / "models"
         packaged_model = Path(str(data_ref)) / "layoutanalysis.onnx"
         if packaged_model.exists():
             return packaged_model

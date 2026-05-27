@@ -1,8 +1,8 @@
 import json
 import os
 
-from pdflayoutparser.json_writer import JSONWriter
-from pdflayoutparser.models import Block, BBox, Document, Page
+from hexai_pdf_parser.json_writer import JSONWriter
+from hexai_pdf_parser.models import Block, BBox, Document, Page
 
 
 def test_write_document_json(tmp_dir):

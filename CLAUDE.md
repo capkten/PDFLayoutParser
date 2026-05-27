@@ -22,15 +22,15 @@ pytest tests/test_table_extractor.py
 pytest -v
 
 # 运行 CLI
-python -m pdflayoutparser.cli <pdf路径> -o <输出目录> --dpi 200
+python -m hexai_pdf_parser.cli <pdf路径> -o <输出目录> --dpi 200
 
 # 或使用安装后的入口命令（pip install 后）
-pdflayoutparser <pdf路径> -o <输出目录> --dpi 200
+hexai_pdf_parser <pdf路径> -o <输出目录> --dpi 200
 ```
 
 ## 架构
 
-代码采用流水线（pipeline）架构，每个模块职责单一。`Pipeline` 类（位于 `src/pdflayoutparser/pipeline.py`）负责编排完整的逐页处理流程。
+代码采用流水线（pipeline）架构，每个模块职责单一。`Pipeline` 类（位于 `src/hexai_pdf_parser/pipeline.py`）负责编排完整的逐页处理流程。
 
 ### 处理流程
 
@@ -51,7 +51,7 @@ pdflayoutparser <pdf路径> -o <输出目录> --dpi 200
 
 ### 核心数据模型
 
-所有模型定义位于 `src/pdflayoutparser/models.py`：
+所有模型定义位于 `src/hexai_pdf_parser/models.py`：
 
 - `Document` → `Page` → `Block` → `Line` → `Word` → `Char`
 - `Table` → `Cell`（含 `rowspan`/`colspan`）
@@ -83,4 +83,4 @@ JSON 输出格式：顶层键为 `document`（元数据）和 `pages`（页面�
 
 ## 设计规格
 
-完整设计规格见 `docs/superpowers/specs/2026-04-28-pdflayoutparser-design.md`（中文）。v1.0 明确不做：OCR、图像语义识别、印章自动检测、多栏阅读顺序优化、页眉页脚自动剔除。
+完整设计规格见 `docs/superpowers/specs/2026-04-28-hexai_pdf_parser-design.md`（中文）。v1.0 明确不做：OCR、图像语义识别、印章自动检测、多栏阅读顺序优化、页眉页脚自动剔除。

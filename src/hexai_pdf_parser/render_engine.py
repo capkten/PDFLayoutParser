@@ -7,7 +7,7 @@ import os
 
 import fitz
 
-from pdflayoutparser.models import RenderInfo
+from hexai_pdf_parser.models import RenderInfo
 
 
 class RenderEngine:

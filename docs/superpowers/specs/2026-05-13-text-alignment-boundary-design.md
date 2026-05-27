@@ -2,7 +2,7 @@
 
 ## 背景
 
-当前表格提取主要有两条分支，均位于 `src/pdflayoutparser/table_extractor.py`：
+当前表格提取主要有两条分支，均位于 `src/hexai_pdf_parser/table_extractor.py`：
 
 - `line_projection`：处理有明确线框的表格
 - `text_alignment`：处理无线框或弱线框、主要依赖文本对齐的表格
@@ -151,7 +151,7 @@ span 不应仅仅因为“存在重复 guide”就被接受，还应额外要求
 
 主要修改文件：
 
-- `src/pdflayoutparser/table_extractor.py`
+- `src/hexai_pdf_parser/table_extractor.py`
 
 主要测试文件：
 
@@ -159,9 +159,9 @@ span 不应仅仅因为“存在重复 guide”就被接受，还应额外要求
 
 本次预期不修改：
 
-- `src/pdflayoutparser/layout_builder.py`
-- `src/pdflayoutparser/json_writer.py`
-- `src/pdflayoutparser/markdown_writer.py`
+- `src/hexai_pdf_parser/layout_builder.py`
+- `src/hexai_pdf_parser/json_writer.py`
+- `src/hexai_pdf_parser/markdown_writer.py`
 
 ## 推荐的内部重构边界
 

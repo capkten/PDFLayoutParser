@@ -48,7 +48,7 @@
 
 ### 触发方式
 
-在 [`cli.py`](</D:/codes/PDFLayoutParser/src/pdflayoutparser/cli.py>) 增加 `--debug` 参数，并透传到 [`Pipeline`](</D:/codes/PDFLayoutParser/src/pdflayoutparser/pipeline.py>)。
+在 [`cli.py`](</D:/codes/PDFLayoutParser/src/hexai_pdf_parser/cli.py>) 增加 `--debug` 参数，并透传到 [`Pipeline`](</D:/codes/PDFLayoutParser/src/hexai_pdf_parser/pipeline.py>)。
 
 `Pipeline` 内部保存一个布尔开关，例如：
 
@@ -134,9 +134,9 @@ page-058.png
 
 ### CLI / Pipeline
 
-[`cli.py`](</D:/codes/PDFLayoutParser/src/pdflayoutparser/cli.py>) 负责解析 `--debug` 参数。
+[`cli.py`](</D:/codes/PDFLayoutParser/src/hexai_pdf_parser/cli.py>) 负责解析 `--debug` 参数。
 
-[`pipeline.py`](</D:/codes/PDFLayoutParser/src/pdflayoutparser/pipeline.py>) 负责：
+[`pipeline.py`](</D:/codes/PDFLayoutParser/src/hexai_pdf_parser/pipeline.py>) 负责：
 
 - 接收 `debug` 参数
 - 创建 debug 输出目录
@@ -145,7 +145,7 @@ page-058.png
 
 ### TableExtractor
 
-[`table_extractor.py`](</D:/codes/PDFLayoutParser/src/pdflayoutparser/table_extractor.py>) 负责在无线表格链路内部收集调试所需数据，但仍然保持对外主职责是“返回表格结果”。
+[`table_extractor.py`](</D:/codes/PDFLayoutParser/src/hexai_pdf_parser/table_extractor.py>) 负责在无线表格链路内部收集调试所需数据，但仍然保持对外主职责是“返回表格结果”。
 
 建议不要把 `extract()` 的公开返回值改成 `(tables, debug_payload)`。第一步更稳妥的方式是：
 

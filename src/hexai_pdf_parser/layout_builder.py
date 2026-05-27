@@ -7,7 +7,7 @@ LayoutElements per page.
 
 from typing import List
 
-from pdflayoutparser.models import Image, LayoutElement, Table
+from hexai_pdf_parser.models import Image, LayoutElement, Table
 
 
 class LayoutBuilder:

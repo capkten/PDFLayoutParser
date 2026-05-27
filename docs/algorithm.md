@@ -2,13 +2,13 @@
 
 > 基于 PyMuPDF (`fitz`) 的矢量 PDF 解析器：将 PDF 转为结构化 JSON / Markdown，包含文本层级、表格、图片、印章和页面预览。
 >
-> 本文档对应 `src/pdflayoutparser/` 当前实现，按"整体流水线 → 各模块算法细节"组织。
+> 本文档对应 `src/hexai_pdf_parser/` 当前实现，按"整体流水线 → 各模块算法细节"组织。
 
 ---
 
 ## 1. 整体流水线
 
-入口为 `Pipeline.run()`（`src/pdflayoutparser/pipeline.py`）。流程分两阶段：先做文档级元数据加载，再逐页执行 9 步处理；处理完所有页后输出整文档级 JSON / Markdown。
+入口为 `Pipeline.run()`（`src/hexai_pdf_parser/pipeline.py`）。流程分两阶段：先做文档级元数据加载，再逐页执行 9 步处理；处理完所有页后输出整文档级 JSON / Markdown。
 
 ```
                          Pipeline.run
@@ -464,7 +464,7 @@ pix.save(f"page-{page_index:03d}.png")
 
 调用 `Pipeline(pdf_path, output_dir, render_dpi).run()`，打印 `Success!` 后返回 0。
 
-`pyproject.toml` 注册了入口，安装后可以直接 `pdflayoutparser <pdf>` 使用。
+`pyproject.toml` 注册了入口，安装后可以直接 `hexai_pdf_parser <pdf>` 使用。
 
 ---
 

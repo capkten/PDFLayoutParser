@@ -6,25 +6,25 @@
 
 **Architecture:** 在 `cli.py` 与 `pipeline.py` 增加 `debug` 开关和输出目录管理；在 `table_extractor.py` 内部维护每页 `_last_text_alignment_debug` 快照；新增一个轻量级调试渲染器模块，只消费页对象、调试快照和输出路径，绘制区域框、行框与列导线。主 `extract()` 仍只返回 `List[Table]`。
 
-**Tech Stack:** Python 3.10+, PyMuPDF, pytest, 现有 `pdflayoutparser` 模块。
+**Tech Stack:** Python 3.10+, PyMuPDF, pytest, 现有 `hexai_pdf_parser` 模块。
 
 ---
 
 ## File Map
 
 **Create**
-- `src/pdflayoutparser/text_alignment_debug.py`
+- `src/hexai_pdf_parser/text_alignment_debug.py`
 - `tests/test_text_alignment_debug.py`
 
 **Modify**
-- `src/pdflayoutparser/cli.py`
-- `src/pdflayoutparser/pipeline.py`
-- `src/pdflayoutparser/table_extractor.py`
+- `src/hexai_pdf_parser/cli.py`
+- `src/hexai_pdf_parser/pipeline.py`
+- `src/hexai_pdf_parser/table_extractor.py`
 - `tests/test_table_extractor.py`
 - `tests/test_pipeline.py`
 
 **Reference Only**
-- `src/pdflayoutparser/text_visual_debug.py`
+- `src/hexai_pdf_parser/text_visual_debug.py`
 - `docs/superpowers/specs/2026-05-15-borderless-table-debug-visualization-design.md`
 
 ## 实施约束
@@ -40,8 +40,8 @@
 
 **Files:**
 - Modify: `tests/test_pipeline.py`
-- Modify: `src/pdflayoutparser/cli.py`
-- Modify: `src/pdflayoutparser/pipeline.py`
+- Modify: `src/hexai_pdf_parser/cli.py`
+- Modify: `src/hexai_pdf_parser/pipeline.py`
 
 - [ ] **Step 1: 写失败测试，定义 Pipeline 在 `debug=False` 时不产出调试目录**
 
@@ -146,7 +146,7 @@ git commit -m "test: define text alignment debug pipeline behavior"
 ## Task 2: 实现页面级无线表格调试渲染器
 
 **Files:**
-- Create: `src/pdflayoutparser/text_alignment_debug.py`
+- Create: `src/hexai_pdf_parser/text_alignment_debug.py`
 - Create: `tests/test_text_alignment_debug.py`
 
 - [ ] **Step 1: 写失败测试，定义 renderer 最小 API**
@@ -158,7 +158,7 @@ from pathlib import Path
 
 import fitz
 
-from pdflayoutparser.text_alignment_debug import render_text_alignment_debug_page
+from hexai_pdf_parser.text_alignment_debug import render_text_alignment_debug_page
 
 
 def test_render_text_alignment_debug_page_creates_png(tmp_dir):
@@ -219,7 +219,7 @@ FAILED tests/test_text_alignment_debug.py::test_render_text_alignment_debug_page
 
 - [ ] **Step 3: 实现最小 renderer**
 
-创建 `src/pdflayoutparser/text_alignment_debug.py`，先写一个最小实现：
+创建 `src/hexai_pdf_parser/text_alignment_debug.py`，先写一个最小实现：
 
 ```python
 import os
@@ -282,14 +282,14 @@ PASSED tests/test_text_alignment_debug.py::test_render_text_alignment_debug_page
 - [ ] **Step 5: 提交 renderer**
 
 ```bash
-git add src/pdflayoutparser/text_alignment_debug.py tests/test_text_alignment_debug.py
+git add src/hexai_pdf_parser/text_alignment_debug.py tests/test_text_alignment_debug.py
 git commit -m "feat: add text alignment debug renderer"
 ```
 
 ## Task 3: 在 `TableExtractor` 记录调试快照
 
 **Files:**
-- Modify: `src/pdflayoutparser/table_extractor.py`
+- Modify: `src/hexai_pdf_parser/table_extractor.py`
 - Modify: `tests/test_table_extractor.py`
 
 - [ ] **Step 1: 写失败测试，定义 `_last_text_alignment_debug` 快照结构**
@@ -407,20 +407,20 @@ PASSED tests/test_table_extractor.py::TestTableExtractor::test_extract_via_text_
 - [ ] **Step 5: 提交快照支持**
 
 ```bash
-git add src/pdflayoutparser/table_extractor.py tests/test_table_extractor.py
+git add src/hexai_pdf_parser/table_extractor.py tests/test_table_extractor.py
 git commit -m "feat: record text alignment debug snapshot"
 ```
 
 ## Task 4: 在 Pipeline 中接入 `--debug` 输出
 
 **Files:**
-- Modify: `src/pdflayoutparser/cli.py`
-- Modify: `src/pdflayoutparser/pipeline.py`
+- Modify: `src/hexai_pdf_parser/cli.py`
+- Modify: `src/hexai_pdf_parser/pipeline.py`
 - Modify: `tests/test_pipeline.py`
 
 - [ ] **Step 1: 在 CLI 中增加 `--debug` 参数**
 
-在 `src/pdflayoutparser/cli.py` 中增加：
+在 `src/hexai_pdf_parser/cli.py` 中增加：
 
 ```python
     parser.add_argument(
@@ -439,7 +439,7 @@ git commit -m "feat: record text alignment debug snapshot"
 
 - [ ] **Step 2: 在 Pipeline 构造函数中接收并保存 `debug`**
 
-在 `src/pdflayoutparser/pipeline.py` 的 `__init__()` 参数中加入：
+在 `src/hexai_pdf_parser/pipeline.py` 的 `__init__()` 参数中加入：
 
 ```python
         debug: bool = False,
@@ -506,7 +506,7 @@ git commit -m "feat: record text alignment debug snapshot"
 同时在文件顶部补上：
 
 ```python
-from pdflayoutparser.text_alignment_debug import render_text_alignment_debug_page
+from hexai_pdf_parser.text_alignment_debug import render_text_alignment_debug_page
 ```
 
 - [ ] **Step 4: 运行 Pipeline 相关测试**
@@ -526,7 +526,7 @@ all selected tests passed
 - [ ] **Step 5: 提交主流程接入**
 
 ```bash
-git add src/pdflayoutparser/cli.py src/pdflayoutparser/pipeline.py src/pdflayoutparser/table_extractor.py tests/test_pipeline.py
+git add src/hexai_pdf_parser/cli.py src/hexai_pdf_parser/pipeline.py src/hexai_pdf_parser/table_extractor.py tests/test_pipeline.py
 git commit -m "feat: export text alignment debug overlays"
 ```
 
@@ -594,7 +594,7 @@ all selected tests passed
 Run:
 
 ```bash
-python -m pdflayoutparser.cli 152590_20230428_N7ZK_0.pdf -o out_debug_demo --dpi 120 --debug
+python -m hexai_pdf_parser.cli 152590_20230428_N7ZK_0.pdf -o out_debug_demo --dpi 120 --debug
 ```
 
 Expected:

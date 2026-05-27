@@ -1,7 +1,7 @@
 import pytest
 
-from pdflayoutparser.markdown_writer import MarkdownWriter
-from pdflayoutparser.models import (
+from hexai_pdf_parser.markdown_writer import MarkdownWriter
+from hexai_pdf_parser.models import (
     BBox,
     Cell,
     Document,

@@ -10,8 +10,8 @@ from typing import Iterable, Sequence
 
 import fitz
 
-from pdflayoutparser.models import BBox
-from pdflayoutparser.text_region_detector import (
+from hexai_pdf_parser.models import BBox
+from hexai_pdf_parser.text_region_detector import (
     CandidateRegion,
     HorizontalSeparator,
     detect_candidate_regions,

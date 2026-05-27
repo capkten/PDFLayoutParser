@@ -1,7 +1,7 @@
 # Repository Guidelines
 
 ## 项目结构与模块组织
-核心库代码位于 `src/pdflayoutparser/`。整体采用流水线拆分，`loader.py`、`text_extractor.py`、`table_extractor.py`、`layout_mapper.py`、`layout_builder.py`、`json_writer.py`、`markdown_writer.py` 和 `render_engine.py` 各自负责单一阶段；CLI 入口在 `src/pdflayoutparser/cli.py`。
+核心库代码位于 `src/hexai_pdf_parser/`。整体采用流水线拆分，`loader.py`、`text_extractor.py`、`table_extractor.py`、`layout_mapper.py`、`layout_builder.py`、`json_writer.py`、`markdown_writer.py` 和 `render_engine.py` 各自负责单一阶段；CLI 入口在 `src/hexai_pdf_parser/cli.py`。
 
 测试位于 `tests/`，按功能镜像主包结构，例如 `tests/test_table_extractor.py`、`tests/test_pipeline.py`。`out/`、`out_test/`、`out_test2/`、`out_debug/`、`visualization/` 属于运行或调试产物，不应作为源代码修改目标。
 
@@ -149,7 +149,7 @@ pytest tests/test_table_extractor.py -v
 本地运行 CLI：
 
 ```bash
-python -m pdflayoutparser.cli input.pdf -o out --dpi 200
+python -m hexai_pdf_parser.cli input.pdf -o out --dpi 200
 ```
 
 ## 编码风格与命名约定

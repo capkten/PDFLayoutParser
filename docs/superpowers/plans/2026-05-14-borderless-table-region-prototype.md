@@ -6,18 +6,18 @@
 
 **Architecture:** Keep the prototype isolated from `Pipeline` and `TableExtractor`. Reuse the existing `text_visual_debug.py` layer for `words/fragments/rows`, then add `CandidateRegion` modeling, row-level feature extraction, region scoring, and overlay/JSON export. Treat region detection and structure reconstruction as separate systems: this plan only builds the former.
 
-**Tech Stack:** Python 3.10+, PyMuPDF, pytest, existing `pdflayoutparser` models/utilities.
+**Tech Stack:** Python 3.10+, PyMuPDF, pytest, existing `hexai_pdf_parser` models/utilities.
 
 ---
 
 ## File Map
 
 **Create**
-- `src/pdflayoutparser/text_region_detector.py`
+- `src/hexai_pdf_parser/text_region_detector.py`
 - `tests/test_text_region_detector.py`
 
 **Modify**
-- `src/pdflayoutparser/text_visual_debug.py`
+- `src/hexai_pdf_parser/text_visual_debug.py`
 - `debug_text_visual.py`
 
 **Reference Only**
@@ -36,7 +36,7 @@
 
 These audit rules exist to avoid non-code ambiguity:
 
-1. **Scope audit:** No task may modify `src/pdflayoutparser/table_extractor.py`, `pipeline.py`, or CLI behavior.
+1. **Scope audit:** No task may modify `src/hexai_pdf_parser/table_extractor.py`, `pipeline.py`, or CLI behavior.
 2. **Behavior audit:** Candidate regions are allowed to be imperfect, but they must be inspectable via JSON and PNG without reading code.
 3. **Page audit:** The sample pages `27, 34, 46, 47, 51, 52, 58` are the required review set.
 4. **Failure audit:** If the prototype finds zero candidate regions on all review pages, stop and report instead of continuing refinement blindly.
@@ -46,19 +46,19 @@ These audit rules exist to avoid non-code ambiguity:
 
 **Files:**
 - Create: `tests/test_text_region_detector.py`
-- Create: `src/pdflayoutparser/text_region_detector.py`
+- Create: `src/hexai_pdf_parser/text_region_detector.py`
 
 - [ ] **Step 1: Write the failing test**
 
 Add tests that define the minimum standalone API and expected behavior:
 
 ```python
-from pdflayoutparser.text_region_detector import (
+from hexai_pdf_parser.text_region_detector import (
     CandidateRegion,
     detect_candidate_regions,
     score_row_structure,
 )
-from pdflayoutparser.text_visual_debug import TextFragment, VisualRow
+from hexai_pdf_parser.text_visual_debug import TextFragment, VisualRow
 
 
 def _row(*items):
@@ -111,14 +111,14 @@ Expected: FAIL with import or missing symbol errors for `CandidateRegion`, `scor
 
 - [ ] **Step 3: Write minimal implementation**
 
-Create a first-pass API in `src/pdflayoutparser/text_region_detector.py`:
+Create a first-pass API in `src/hexai_pdf_parser/text_region_detector.py`:
 
 ```python
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from pdflayoutparser.models import BBox
+from hexai_pdf_parser.models import BBox
 
 
 @dataclass
@@ -181,7 +181,7 @@ Evidence required:
 - [ ] **Step 6: Commit**
 
 ```bash
-git add tests/test_text_region_detector.py src/pdflayoutparser/text_region_detector.py
+git add tests/test_text_region_detector.py src/hexai_pdf_parser/text_region_detector.py
 git commit -m "feat: add borderless table region detector skeleton"
 ```
 
@@ -189,7 +189,7 @@ git commit -m "feat: add borderless table region detector skeleton"
 
 **Files:**
 - Modify: `tests/test_text_region_detector.py`
-- Modify: `src/pdflayoutparser/text_region_detector.py`
+- Modify: `src/hexai_pdf_parser/text_region_detector.py`
 
 - [ ] **Step 1: Write the failing test**
 
@@ -294,7 +294,7 @@ Evidence required:
 - [ ] **Step 6: Commit**
 
 ```bash
-git add tests/test_text_region_detector.py src/pdflayoutparser/text_region_detector.py
+git add tests/test_text_region_detector.py src/hexai_pdf_parser/text_region_detector.py
 git commit -m "feat: score repeated row alignment for region detection"
 ```
 
@@ -302,7 +302,7 @@ git commit -m "feat: score repeated row alignment for region detection"
 
 **Files:**
 - Modify: `tests/test_text_region_detector.py`
-- Modify: `src/pdflayoutparser/text_region_detector.py`
+- Modify: `src/hexai_pdf_parser/text_region_detector.py`
 
 - [ ] **Step 1: Write the failing test**
 
@@ -394,7 +394,7 @@ Evidence required:
 - [ ] **Step 6: Commit**
 
 ```bash
-git add tests/test_text_region_detector.py src/pdflayoutparser/text_region_detector.py
+git add tests/test_text_region_detector.py src/hexai_pdf_parser/text_region_detector.py
 git commit -m "feat: detect contiguous borderless table regions"
 ```
 
@@ -402,8 +402,8 @@ git commit -m "feat: detect contiguous borderless table regions"
 
 **Files:**
 - Modify: `tests/test_text_visual_debug.py`
-- Modify: `src/pdflayoutparser/text_visual_debug.py`
-- Modify: `src/pdflayoutparser/text_region_detector.py`
+- Modify: `src/hexai_pdf_parser/text_visual_debug.py`
+- Modify: `src/hexai_pdf_parser/text_region_detector.py`
 
 - [ ] **Step 1: Write the failing test**
 
@@ -450,7 +450,7 @@ Expected: FAIL because the debug JSON does not yet include candidate region data
 Import the detector and include region export/drawing:
 
 ```python
-from pdflayoutparser.text_region_detector import detect_candidate_regions
+from hexai_pdf_parser.text_region_detector import detect_candidate_regions
 
 
 def render_text_debug_pages(...):
@@ -509,7 +509,7 @@ Evidence required:
 - [ ] **Step 6: Commit**
 
 ```bash
-git add tests/test_text_visual_debug.py src/pdflayoutparser/text_visual_debug.py src/pdflayoutparser/text_region_detector.py
+git add tests/test_text_visual_debug.py src/hexai_pdf_parser/text_visual_debug.py src/hexai_pdf_parser/text_region_detector.py
 git commit -m "feat: visualize candidate table regions"
 ```
 

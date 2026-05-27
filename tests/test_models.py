@@ -2,7 +2,7 @@
 
 import pytest
 
-from pdflayoutparser.models import (
+from hexai_pdf_parser.models import (
     BBox,
     Block,
     Cell,

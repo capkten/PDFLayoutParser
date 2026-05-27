@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from pdflayoutparser.yolo_layout_utils import (
+from hexai_pdf_parser.yolo_layout_utils import (
     YOLO_LAYOUT_LABELS,
     postprocess_yolo_layout,
     preprocess_yolo_image,

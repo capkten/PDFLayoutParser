@@ -15,7 +15,7 @@ def test_cli_runs_pipeline(tmp_dir):
         [
             sys.executable,
             "-m",
-            "pdflayoutparser.cli",
+            "hexai_pdf_parser.cli",
             pdf_path,
             "--output",
             tmp_dir,

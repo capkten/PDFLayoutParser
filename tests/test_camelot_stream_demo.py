@@ -39,7 +39,7 @@ def test_camelot_stream_demo_writes_preview_and_summary(tmp_dir, monkeypatch):
     )
     monkeypatch.setitem(__import__("sys").modules, "camelot", fake_camelot)
 
-    from pdflayoutparser.camelot_stream_demo import run_camelot_stream_demo
+    from hexai_pdf_parser.camelot_stream_demo import run_camelot_stream_demo
 
     result = run_camelot_stream_demo(str(pdf_path), page=1, output_dir=str(out_dir))
 

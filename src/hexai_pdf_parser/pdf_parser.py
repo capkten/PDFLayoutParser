@@ -9,7 +9,7 @@ from __future__ import annotations
 import os
 from typing import List, Optional
 
-from pdflayoutparser.models import Block, Document, Image, RenderInfo, Table
+from hexai_pdf_parser.models import Block, Document, Image, RenderInfo, Table
 
 
 class PDFParser:
@@ -67,7 +67,7 @@ class PDFParser:
         if self._document is not None:
             return self._document
 
-        from pdflayoutparser.pipeline import Pipeline
+        from hexai_pdf_parser.pipeline import Pipeline
 
         pipeline = Pipeline(
             pdf_path=self._pdf_path,
@@ -98,8 +98,8 @@ class PDFParser:
             )
 
         import fitz as _fitz
-        from pdflayoutparser.loader import Loader
-        from pdflayoutparser.text_extractor import TextExtractor
+        from hexai_pdf_parser.loader import Loader
+        from hexai_pdf_parser.text_extractor import TextExtractor
 
         document = Loader(self._pdf_path).load()
         pdf_doc = _fitz.open(self._pdf_path)
@@ -129,8 +129,8 @@ class PDFParser:
             )
 
         import fitz as _fitz
-        from pdflayoutparser.loader import Loader
-        from pdflayoutparser.table_extractor import TableExtractor
+        from hexai_pdf_parser.loader import Loader
+        from hexai_pdf_parser.table_extractor import TableExtractor
 
         document = Loader(self._pdf_path).load()
         pdf_doc = _fitz.open(self._pdf_path)
@@ -156,8 +156,8 @@ class PDFParser:
         page_indices: Optional[List[int]] = None,
     ) -> List[Image]:
         """Extract embedded images from the PDF, writing to *output_dir*."""
-        from pdflayoutparser.loader import Loader
-        from pdflayoutparser.image_extractor import ImageExtractor
+        from hexai_pdf_parser.loader import Loader
+        from hexai_pdf_parser.image_extractor import ImageExtractor
 
         pdf_path = self._pdf_path
         if pdf_path is None:
@@ -179,8 +179,8 @@ class PDFParser:
         page_indices: Optional[List[int]] = None,
     ) -> List[RenderInfo]:
         """Render PDF pages as PNG files into *output_dir*."""
-        from pdflayoutparser.loader import Loader
-        from pdflayoutparser.render_engine import RenderEngine
+        from hexai_pdf_parser.loader import Loader
+        from hexai_pdf_parser.render_engine import RenderEngine
 
         pdf_path = self._pdf_path
         if pdf_path is None:
@@ -205,7 +205,7 @@ class PDFParser:
         if not yet parsed).
         """
         import json
-        from pdflayoutparser.json_writer import JSONWriter
+        from hexai_pdf_parser.json_writer import JSONWriter
 
         doc = document if document is not None else self.parse()
         data = JSONWriter().to_dict(doc)
@@ -220,7 +220,7 @@ class PDFParser:
         If *document* is None, uses the cached parse result (calls :meth:`parse`
         if not yet parsed).
         """
-        from pdflayoutparser.markdown_writer import MarkdownWriter
+        from hexai_pdf_parser.markdown_writer import MarkdownWriter
 
         doc = document if document is not None else self.parse()
         return MarkdownWriter().to_string(doc)
@@ -331,8 +331,8 @@ class PDFParser:
         Returns Table for single region (or None), list[Table] for multiple.
         """
         import fitz as _fitz
-        from pdflayoutparser.loader import Loader
-        from pdflayoutparser.table_extractor import TableExtractor
+        from hexai_pdf_parser.loader import Loader
+        from hexai_pdf_parser.table_extractor import TableExtractor
 
         is_single = isinstance(region, dict)
         page_sizes = self._get_page_sizes()

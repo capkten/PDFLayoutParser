@@ -4,8 +4,8 @@ import os
 
 import pytest
 
-from pdflayoutparser.pdf_parser import PDFParser
-from pdflayoutparser.models import Document
+from hexai_pdf_parser.pdf_parser import PDFParser
+from hexai_pdf_parser.models import Document
 from tests.conftest import make_text_pdf
 
 
@@ -98,7 +98,7 @@ def test_parse_with_page_indices(tmp_dir):
     assert len(doc.pages[2].blocks) >= 1
 
 
-from pdflayoutparser.models import Block, Table
+from hexai_pdf_parser.models import Block, Table
 
 
 def test_extract_text_from_path(tmp_dir):
@@ -152,7 +152,7 @@ def test_extract_tables_from_cached_document(tmp_dir):
     assert isinstance(tables, list)
 
 
-from pdflayoutparser.models import Image, RenderInfo
+from hexai_pdf_parser.models import Image, RenderInfo
 from tests.conftest import make_pdf_with_image
 
 

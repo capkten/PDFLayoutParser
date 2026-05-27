@@ -9,7 +9,7 @@ from typing import List
 
 import fitz
 
-from pdflayoutparser.models import BBox, Image
+from hexai_pdf_parser.models import BBox, Image
 
 
 class ImageExtractor:

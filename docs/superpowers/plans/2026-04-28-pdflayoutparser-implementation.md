@@ -13,7 +13,7 @@
 ## File Structure
 
 ```
-src/pdflayoutparser/
+src/hexai_pdf_parser/
   __init__.py
   models.py
   loader.py
@@ -48,7 +48,7 @@ tests/
 ---
 
 ### Task 1: Project Scaffolding
-Create pyproject.toml, src/pdflayoutparser/__init__.py, tests/__init__.py, tests/conftest.py with PDF creation helpers.
+Create pyproject.toml, src/hexai_pdf_parser/__init__.py, tests/__init__.py, tests/conftest.py with PDF creation helpers.
 
 ### Task 2: Data Models
 Implement dataclasses: BBox, Char, Word, Line, Block, Span, Cell, Table, Image, Seal, RenderInfo, LayoutElement, Page, Document.
@@ -84,4 +84,4 @@ class MarkdownWriter with write(document, output_path) for text/table/image/seal
 class Pipeline(pdf_path, output_dir, render_dpi=200, seal_coords=[]) orchestrating all modules.
 
 ### Task 13: CLI Entry Point
-argparse CLI: python -m pdflayoutparser.cli <pdf_path> --output <dir> --dpi <int>.
+argparse CLI: python -m hexai_pdf_parser.cli <pdf_path> --output <dir> --dpi <int>.

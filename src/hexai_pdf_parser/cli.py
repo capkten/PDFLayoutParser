@@ -3,13 +3,13 @@
 import argparse
 import sys
 
-from pdflayoutparser.pipeline import Pipeline
+from hexai_pdf_parser.pipeline import Pipeline
 
 
 def main() -> int:
     """Run the PDFLayoutParser CLI."""
     parser = argparse.ArgumentParser(
-        prog="pdflayoutparser",
+        prog="hexai_pdf_parser",
         description="Parse PDF layouts into structured JSON and Markdown.",
     )
     parser.add_argument(
@@ -38,7 +38,7 @@ def main() -> int:
         "--ml",
         action="store_true",
         default=False,
-        help="Enable ML-based table region detection with the bundled YOLO model (requires pdflayoutparser[ml])",
+        help="Enable ML-based table region detection with the bundled YOLO model (requires hexai_pdf_parser[ml])",
     )
     parser.add_argument(
         "--ml-model",

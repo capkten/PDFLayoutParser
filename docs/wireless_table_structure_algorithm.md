@@ -25,7 +25,7 @@
 
 无线表格结构恢复主要在这里：
 
-- [`src/pdflayoutparser/table_extractor.py`](../src/pdflayoutparser/table_extractor.py)
+- [`src/hexai_pdf_parser/table_extractor.py`](../src/hexai_pdf_parser/table_extractor.py)
 
 关键函数是：
 

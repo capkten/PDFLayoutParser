@@ -2,8 +2,8 @@
 
 import pytest
 
-from pdflayoutparser.layout_builder import LayoutBuilder
-from pdflayoutparser.models import BBox, Image, LayoutElement, Table
+from hexai_pdf_parser.layout_builder import LayoutBuilder
+from hexai_pdf_parser.models import BBox, Image, LayoutElement, Table
 
 
 class TestLayoutBuilder:

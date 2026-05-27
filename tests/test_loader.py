@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from pdflayoutparser.loader import Loader
+from hexai_pdf_parser.loader import Loader
 from tests.conftest import make_multi_page_pdf, make_text_pdf
 
 

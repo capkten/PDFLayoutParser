@@ -23,8 +23,8 @@ from typing import List, Tuple
 
 import fitz
 
-from pdflayoutparser.models import BBox, Cell, Table
-from pdflayoutparser.text_region_detector import (
+from hexai_pdf_parser.models import BBox, Cell, Table
+from hexai_pdf_parser.text_region_detector import (
     HorizontalSeparator,
     detect_candidate_regions,
 )
@@ -2113,7 +2113,7 @@ class TableExtractor:
         """Detect table regions using ML model and build cells via text alignment."""
         try:
             if self._ml_detector is None:
-                from pdflayoutparser.ml_table_detector import MLTableDetector
+                from hexai_pdf_parser.ml_table_detector import MLTableDetector
                 self._ml_detector = MLTableDetector(
                     model_path=self._ml_model_path,
                     confidence_threshold=self._ml_confidence,
@@ -2123,7 +2123,7 @@ class TableExtractor:
             import warnings
             warnings.warn(
                 "ML table detection unavailable (onnxruntime not installed). "
-                "Install with: pip install pdflayoutparser[ml]",
+                "Install with: pip install hexai_pdf_parser[ml]",
                 stacklevel=2,
             )
             return []

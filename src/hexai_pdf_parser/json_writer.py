@@ -3,7 +3,7 @@
 import json
 from typing import Any, Dict, List
 
-from pdflayoutparser.models import (
+from hexai_pdf_parser.models import (
     BBox,
     Block,
     Cell,

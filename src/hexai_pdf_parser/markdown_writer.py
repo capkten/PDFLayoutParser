@@ -3,7 +3,7 @@
 from html import escape
 import re
 
-from pdflayoutparser.models import Document, LayoutElement, Table, Image, Seal
+from hexai_pdf_parser.models import Document, LayoutElement, Table, Image, Seal
 
 
 class MarkdownWriter:

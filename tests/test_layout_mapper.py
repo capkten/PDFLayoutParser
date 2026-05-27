@@ -2,8 +2,8 @@
 
 import pytest
 
-from pdflayoutparser.layout_mapper import LayoutMapper
-from pdflayoutparser.models import BBox, Block, Char, Line, Word
+from hexai_pdf_parser.layout_mapper import LayoutMapper
+from hexai_pdf_parser.models import BBox, Block, Char, Line, Word
 
 
 class TestLayoutMapper:

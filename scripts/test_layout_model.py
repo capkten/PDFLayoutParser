@@ -19,14 +19,14 @@ import paddle
 import yaml
 from paddle.inference import Config, create_predictor
 
-from pdflayoutparser.benchmark_utils import extract_model_profile
-from pdflayoutparser.benchmark_utils import resolve_model_dir
-from pdflayoutparser.benchmark_utils import summarize_timings
-from pdflayoutparser.layout_model_utils import (
+from hexai_pdf_parser.benchmark_utils import extract_model_profile
+from hexai_pdf_parser.benchmark_utils import resolve_model_dir
+from hexai_pdf_parser.benchmark_utils import summarize_timings
+from hexai_pdf_parser.layout_model_utils import (
     bbox_from_detection_row,
     save_image_with_fallback,
 )
-from pdflayoutparser.yolo_layout_utils import (
+from hexai_pdf_parser.yolo_layout_utils import (
     YOLO_LAYOUT_LABELS,
     postprocess_yolo_layout,
     preprocess_yolo_image,

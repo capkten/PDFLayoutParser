@@ -8,7 +8,7 @@ from pathlib import Path
 
 import fitz
 
-from pdflayoutparser.models import Document, Page
+from hexai_pdf_parser.models import Document, Page
 
 
 class Loader:

@@ -4,7 +4,7 @@
 
 **Goal:** 修正 `text_alignment` 分支的候选误判、结构区间边界错误和表头丢失问题，同时保持线框表格链路稳定。
 
-**Architecture:** 以 `src/pdflayoutparser/table_extractor.py` 为唯一主改动点，按“回归测试锁定 -> 候选发现收紧 -> 结构区间裁剪 -> 表头回并 -> 全量验证”顺序实施。所有行为变更优先用 `tests/test_table_extractor.py` 的 synthetic PDF 用例覆盖，避免直接依赖生产 PDF 做自动化断言。
+**Architecture:** 以 `src/hexai_pdf_parser/table_extractor.py` 为唯一主改动点，按“回归测试锁定 -> 候选发现收紧 -> 结构区间裁剪 -> 表头回并 -> 全量验证”顺序实施。所有行为变更优先用 `tests/test_table_extractor.py` 的 synthetic PDF 用例覆盖，避免直接依赖生产 PDF 做自动化断言。
 
 **Tech Stack:** Python 3.10+, PyMuPDF (`fitz`), pytest
 
@@ -19,7 +19,7 @@
 
 ## 文件结构
 
-- 修改：`src/pdflayoutparser/table_extractor.py`
+- 修改：`src/hexai_pdf_parser/table_extractor.py`
 - 修改：`tests/test_table_extractor.py`
 - 只读参考：`docs/superpowers/specs/2026-05-13-text-alignment-boundary-design.md`
 
@@ -36,7 +36,7 @@
 
 **Files:**
 - Modify: `tests/test_table_extractor.py`
-- Read: `src/pdflayoutparser/table_extractor.py`
+- Read: `src/hexai_pdf_parser/table_extractor.py`
 
 - [ ] **Step 1: 新增 synthetic PDF 构造辅助函数**
 
@@ -229,12 +229,12 @@ Expected:
 ### Task 2: 实现按行结构打分和候选收紧
 
 **Files:**
-- Modify: `src/pdflayoutparser/table_extractor.py`
+- Modify: `src/hexai_pdf_parser/table_extractor.py`
 - Test: `tests/test_table_extractor.py`
 
 - [ ] **Step 1: 在 `TableExtractor` 中新增行级结构打分辅助函数**
 
-在 `src/pdflayoutparser/table_extractor.py` 中、`_collect_text_candidate_regions()` 之前加入：
+在 `src/hexai_pdf_parser/table_extractor.py` 中、`_collect_text_candidate_regions()` 之前加入：
 
 ```python
 def _score_row_against_guides(self, row: dict, guides: List[float]) -> dict:
@@ -344,7 +344,7 @@ Expected:
 ### Task 3: 实现结构区间裁剪，并接入 `text_alignment` 输出链路
 
 **Files:**
-- Modify: `src/pdflayoutparser/table_extractor.py`
+- Modify: `src/hexai_pdf_parser/table_extractor.py`
 - Test: `tests/test_table_extractor.py`
 
 - [ ] **Step 1: 新增结构区间裁剪辅助函数**
@@ -462,7 +462,7 @@ Expected:
 ### Task 4: 实现表头回并，并完成全量回归验证
 
 **Files:**
-- Modify: `src/pdflayoutparser/table_extractor.py`
+- Modify: `src/hexai_pdf_parser/table_extractor.py`
 - Test: `tests/test_table_extractor.py`
 
 - [ ] **Step 1: 新增表头回并辅助函数**
@@ -586,7 +586,7 @@ Expected:
 ### Task 5: 交付审阅材料
 
 **Files:**
-- Read: `src/pdflayoutparser/table_extractor.py`
+- Read: `src/hexai_pdf_parser/table_extractor.py`
 - Read: `tests/test_table_extractor.py`
 
 - [x] **Step 1: 整理变更摘要**

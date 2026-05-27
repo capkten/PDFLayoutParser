@@ -2,7 +2,7 @@
 
 ## 概述
 
-将 PDFLayoutParser 打包为 `.whl` 分发包，对外暴露一个 `PDFParser` 类，封装全部解析功能。外部调用者通过 `pip install` 安装后，使用 `from pdflayoutparser import PDFParser` 即可调用。
+将 PDFLayoutParser 打包为 `.whl` 分发包，对外暴露一个 `PDFParser` 类，封装全部解析功能。外部调用者通过 `pip install` 安装后，使用 `from hexai_pdf_parser import PDFParser` 即可调用。
 
 ### 核心设计决策
 
@@ -40,7 +40,7 @@ class PDFParser:
 | `source` | `str \| Document` | 必填 | PDF 文件路径，或已解析的 `Document` 对象 |
 | `render_dpi` | `int` | `200` | 渲染 PNG 的分辨率 |
 | `seal_coords` | `list[dict] \| None` | `None` | 印章坐标列表，格式：`[{"page_index": 0, "x0": ..., "y0": ..., "x1": ..., "y1": ...}]` |
-| `use_ml` | `bool` | `False` | 是否启用 ML 模型辅助表格检测（需要 `pdflayoutparser[ml]`） |
+| `use_ml` | `bool` | `False` | 是否启用 ML 模型辅助表格检测（需要 `hexai_pdf_parser[ml]`） |
 | `ml_model_path` | `str \| None` | `None` | 自定义 ONNX 模型路径，`None` 使用内置模型 |
 | `ml_confidence` | `float` | `0.25` | ML 模型置信度阈值 |
 
@@ -268,9 +268,9 @@ def render_region(
 ## 导出定义
 
 ```python
-# pdflayoutparser/__init__.py
-from pdflayoutparser.pdf_parser import PDFParser
-from pdflayoutparser.models import (
+# hexai_pdf_parser/__init__.py
+from hexai_pdf_parser.pdf_parser import PDFParser
+from hexai_pdf_parser.models import (
     Document, Page, Block, Line, Word, Char,
     Table, Cell, Image, Seal, RenderInfo,
     LayoutElement, BBox, Span,
@@ -296,13 +296,13 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "pdflayoutparser"
+name = "hexai_pdf_parser"
 version = "0.1.0"
 requires-python = ">=3.10"
 dependencies = ["PyMuPDF>=1.23.0"]
 
 [project.scripts]
-pdflayoutparser = "pdflayoutparser.cli:main"
+hexai_pdf_parser = "hexai_pdf_parser.cli:main"
 ```
 
 构建命令：`python -m build`，产物在 `dist/` 目录。
@@ -312,7 +312,7 @@ pdflayoutparser = "pdflayoutparser.cli:main"
 ## 文件结构变更
 
 ```
-src/pdflayoutparser/
+src/hexai_pdf_parser/
     __init__.py          # 修改：导出 PDFParser + 所有数据模型
     pdf_parser.py        # 新增：PDFParser 类
     pipeline.py          # 现有：内部使用，不对外暴露
@@ -329,7 +329,7 @@ src/pdflayoutparser/
 ### 基础用法
 
 ```python
-from pdflayoutparser import PDFParser
+from hexai_pdf_parser import PDFParser
 
 # 完整解析
 with PDFParser("report.pdf") as parser:
@@ -346,7 +346,7 @@ with PDFParser("report.pdf") as parser:
 ### 按需提取
 
 ```python
-from pdflayoutparser import PDFParser
+from hexai_pdf_parser import PDFParser
 
 parser = PDFParser("report.pdf")
 
@@ -362,7 +362,7 @@ blocks = parser.extract_text(page_indices=[0])
 ### 区域提取
 
 ```python
-from pdflayoutparser import PDFParser
+from hexai_pdf_parser import PDFParser
 
 parser = PDFParser("report.pdf")
 
@@ -385,7 +385,7 @@ all_blocks = parser.extract_text_in_region(regions)
 ### 输出到文件
 
 ```python
-from pdflayoutparser import PDFParser
+from hexai_pdf_parser import PDFParser
 
 with PDFParser("report.pdf") as parser:
     # 完整解析并写文件（兼容现有行为）

@@ -32,7 +32,7 @@ This is the main adjustment from the previous plan.
 ### Task 1: Add token classification and visual row collection helpers
 
 **Files:**
-- Modify: `src/pdflayoutparser/table_extractor.py`
+- Modify: `src/hexai_pdf_parser/table_extractor.py`
 - Test: `tests/test_table_extractor.py`
 
 - [x] **Step 1: Write failing helper tests**
@@ -86,7 +86,7 @@ Expected: PASS
 ### Task 2: Add candidate-region helpers with hard gates, but keep them internal
 
 **Files:**
-- Modify: `src/pdflayoutparser/table_extractor.py`
+- Modify: `src/hexai_pdf_parser/table_extractor.py`
 - Test: `tests/test_table_extractor.py`
 
 - [x] **Step 1: Write failing tests for candidate-region acceptance and rejection**
@@ -149,7 +149,7 @@ Expected: PASS
 ### Task 3: Add weighted column-guide inference with numeric anchor weighting
 
 **Files:**
-- Modify: `src/pdflayoutparser/table_extractor.py`
+- Modify: `src/hexai_pdf_parser/table_extractor.py`
 - Test: `tests/test_table_extractor.py`
 
 - [x] **Step 1: Write failing tests for guide inference**
@@ -208,7 +208,7 @@ Expected: PASS
 ### Task 4: Add an internal `_extract_via_text_alignment()` and test it directly
 
 **Files:**
-- Modify: `src/pdflayoutparser/table_extractor.py`
+- Modify: `src/hexai_pdf_parser/table_extractor.py`
 - Test: `tests/test_table_extractor.py`
 
 - [x] **Step 1: Write failing direct tests for the internal path**
@@ -256,7 +256,7 @@ Expected: PASS
 ### Task 5: Add matrix skeleton generation
 
 **Files:**
-- Modify: `src/pdflayoutparser/table_extractor.py`
+- Modify: `src/hexai_pdf_parser/table_extractor.py`
 - Test: `tests/test_table_extractor.py`
 
 - [x] **Step 1: Write failing tests for matrix skeleton**
@@ -297,7 +297,7 @@ Expected: PASS
 ### Task 6: Fill matrix cells and recover bottom-up headers
 
 **Files:**
-- Modify: `src/pdflayoutparser/table_extractor.py`
+- Modify: `src/hexai_pdf_parser/table_extractor.py`
 - Test: `tests/test_table_extractor.py`
 
 - [x] **Step 1: Write failing tests for matrix fill and bottom-up header recovery**
@@ -349,7 +349,7 @@ Implementation note:
 ### Task 7: Add mixed-page merge logic and only then integrate into `extract()`
 
 **Files:**
-- Modify: `src/pdflayoutparser/table_extractor.py`
+- Modify: `src/hexai_pdf_parser/table_extractor.py`
 - Test: `tests/test_table_extractor.py`
 
 - [x] **Step 1: Write failing integration tests for mixed pages and fallback preservation**
