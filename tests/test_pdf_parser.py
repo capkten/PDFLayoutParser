@@ -251,3 +251,66 @@ def test_to_markdown_without_parse_auto_parses(tmp_dir):
     result = parser.to_markdown()
     assert isinstance(result, str)
     assert len(result) > 0
+
+
+def test_normalize_region_single(tmp_dir):
+    pdf_path = os.path.join(tmp_dir, "test.pdf")
+    make_text_pdf(pdf_path, text="Region test")
+    parser = PDFParser(pdf_path)
+    # A4 page: 595.276 x 841.89 points
+    page_sizes = parser._get_page_sizes()
+    region = {"page_index": 0, "x0": 0.0, "y0": 0.0, "x1": 0.5, "y1": 0.5}
+    result = PDFParser._normalize_regions(region, page_sizes)
+    assert len(result) == 1
+    assert result[0]["page_index"] == 0
+    assert abs(result[0]["x0"] - 0.0) < 0.01
+    assert abs(result[0]["x1"] - 297.638) < 1.0  # 595.276 * 0.5
+
+
+def test_normalize_region_list():
+    regions = [
+        {"page_index": 0, "x0": 0.0, "y0": 0.0, "x1": 1.0, "y1": 1.0},
+        {"page_index": 1, "x0": 0.1, "y0": 0.2, "x1": 0.9, "y1": 0.8},
+    ]
+    result = PDFParser._normalize_regions(regions)
+    assert len(result) == 2
+
+
+def test_extract_text_in_region_single(tmp_dir):
+    pdf_path = os.path.join(tmp_dir, "test.pdf")
+    make_text_pdf(pdf_path, text="Hello Region")
+    parser = PDFParser(pdf_path)
+    region = {"page_index": 0, "x0": 0.0, "y0": 0.0, "x1": 1.0, "y1": 1.0}
+    blocks = parser.extract_text_in_region(region)
+    assert isinstance(blocks, list)
+    assert len(blocks) >= 1
+
+
+def test_extract_text_in_region_multi(tmp_dir):
+    pdf_path = os.path.join(tmp_dir, "test.pdf")
+    make_text_pdf(pdf_path, text="Multi Region")
+    parser = PDFParser(pdf_path)
+    regions = [
+        {"page_index": 0, "x0": 0.0, "y0": 0.0, "x1": 0.5, "y1": 1.0},
+        {"page_index": 0, "x0": 0.5, "y0": 0.0, "x1": 1.0, "y1": 1.0},
+    ]
+    blocks = parser.extract_text_in_region(regions)
+    assert isinstance(blocks, list)
+
+
+def test_extract_text_in_region_excludes_outside_text(tmp_dir):
+    pdf_path = os.path.join(tmp_dir, "test.pdf")
+    import fitz
+    doc = fitz.open()
+    page = doc.new_page()  # A4: 595 x 842
+    page.insert_text((50, 50), "TopLeft")
+    page.insert_text((400, 700), "BottomRight")
+    doc.save(pdf_path)
+    doc.close()
+
+    parser = PDFParser(pdf_path)
+    # Only top-left quadrant
+    region = {"page_index": 0, "x0": 0.0, "y0": 0.0, "x1": 0.5, "y1": 0.5}
+    blocks = parser.extract_text_in_region(region)
+    all_text = " ".join(b.text for b in blocks)
+    assert "TopLeft" in all_text

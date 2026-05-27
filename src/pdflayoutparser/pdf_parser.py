@@ -237,3 +237,86 @@ class PDFParser:
                 continue
             items.extend(getter(page))
         return items
+
+    @staticmethod
+    def _normalize_regions(
+        region: dict | list[dict],
+        page_sizes: dict[int, tuple[float, float]] | None = None,
+    ) -> list[dict]:
+        """Convert normalized 0~1 region coords to PDF point coords.
+
+        If *page_sizes* is provided, multiplies normalized coords by page
+        dimensions. Otherwise returns coords as-is.
+        """
+        regions = region if isinstance(region, list) else [region]
+        result = []
+        for r in regions:
+            if page_sizes and r["page_index"] in page_sizes:
+                w, h = page_sizes[r["page_index"]]
+                result.append({
+                    "page_index": r["page_index"],
+                    "x0": r["x0"] * w,
+                    "y0": r["y0"] * h,
+                    "x1": r["x1"] * w,
+                    "y1": r["y1"] * h,
+                })
+            else:
+                result.append(dict(r))
+        return result
+
+    def _get_page_sizes(self) -> dict[int, tuple[float, float]]:
+        """Return {page_index: (width, height)} from cached doc or PDF."""
+        if self._document is not None:
+            return {
+                p.index: (p.size["width"], p.size["height"])
+                for p in self._document.pages
+            }
+        import fitz as _fitz
+        doc = _fitz.open(self._pdf_path)
+        try:
+            return {
+                i: (doc[i].rect.width, doc[i].rect.height)
+                for i in range(len(doc))
+            }
+        finally:
+            doc.close()
+
+    @staticmethod
+    def _bbox_intersects(block_bbox, region_bbox: dict) -> bool:
+        """Check if block_bbox overlaps with region_bbox."""
+        return not (
+            block_bbox.x1 < region_bbox["x0"]
+            or block_bbox.x0 > region_bbox["x1"]
+            or block_bbox.y1 < region_bbox["y0"]
+            or block_bbox.y0 > region_bbox["y1"]
+        )
+
+    def extract_text_in_region(
+        self,
+        region: dict | list[dict],
+    ) -> List[Block]:
+        """Extract text blocks that intersect with the given region(s).
+
+        Region coordinates are normalized 0~1 relative to page size.
+        """
+        page_sizes = self._get_page_sizes()
+        regions = self._normalize_regions(region, page_sizes)
+
+        # Ensure text is extracted
+        if self._document is None:
+            self.extract_text()
+
+        blocks: List[Block] = []
+        for r in regions:
+            page_idx = r["page_index"]
+            target_page = None
+            for p in self._document.pages:
+                if p.index == page_idx:
+                    target_page = p
+                    break
+            if target_page is None:
+                continue
+            for block in target_page.blocks:
+                if self._bbox_intersects(block.bbox, r):
+                    blocks.append(block)
+        return blocks
