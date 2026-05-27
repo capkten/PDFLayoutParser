@@ -1,0 +1,15 @@
+{
+  "groupId": "cn.hexai",
+  "options": {
+    "deployOnRelease": false,
+    "waitForSonarQualityGate": true, 
+    "pythonVersion":"37",
+    "agent": "ext"
+  },
+  "attrs": {
+    "pypiDevRepoKey": "ai-pypi",
+    "pypiReleaseRepoKey": "ai-pypi"
+  },
+  "steps": {
+  }
+}
