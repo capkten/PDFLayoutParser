@@ -8,6 +8,78 @@ from hexai_pdf_parser.pdf_parser import PDFParser
 from hexai_pdf_parser.models import Document
 from tests.conftest import make_text_pdf
 
+# ---------------------------------------------------------------------------
+# Real-PDF fixtures and region catalog
+# ---------------------------------------------------------------------------
+
+REAL_PDF_PATH = os.path.abspath("万马股份2024财报.pdf")
+
+REAL_TEXT_PAGE_INDEX = 0
+REAL_TEXT_REGION = {
+    "page_index": 0,
+    "x0": 0.08,
+    "y0": 0.08,
+    "x1": 0.92,
+    "y1": 0.22,
+}
+
+REAL_TABLE_REGION = {
+    "page_index": 12,
+    "x0": 0.08,
+    "y0": 0.18,
+    "x1": 0.92,
+    "y1": 0.78,
+}
+
+REAL_IMAGE_REGION = {
+    "page_index": 5,
+    "x0": 0.08,
+    "y0": 0.08,
+    "x1": 0.92,
+    "y1": 0.40,
+}
+
+REAL_EMPTY_REGION = {
+    "page_index": 0,
+    "x0": 0.01,
+    "y0": 0.01,
+    "x1": 0.04,
+    "y1": 0.03,
+}
+
+
+@pytest.fixture
+def real_pdf_path() -> str:
+    if not os.path.exists(REAL_PDF_PATH):
+        pytest.skip("real sample PDF not found: 万马股份2024财报.pdf")
+    return REAL_PDF_PATH
+
+
+# ---------------------------------------------------------------------------
+# Shared response assertions
+# ---------------------------------------------------------------------------
+
+
+def assert_success_result(result):
+    assert result.code == 1
+    assert isinstance(result.message, str)
+    assert result.message
+    assert result.data is not None
+
+
+def assert_empty_result(result):
+    assert result.code == 0
+    assert isinstance(result.message, str)
+    assert result.message
+
+
+def assert_error_result(result, expected_substring: str | None = None):
+    assert result.code == -1
+    assert isinstance(result.message, str)
+    assert result.data is None
+    if expected_substring is not None:
+        assert expected_substring in result.message
+
 
 def test_constructor_from_path(tmp_dir):
     pdf_path = os.path.join(tmp_dir, "test.pdf")
