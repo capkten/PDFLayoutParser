@@ -53,12 +53,23 @@ hexai_pdf_parser <pdf路径> -o <输出目录> --dpi 200
 
 所有模型定义位于 `src/hexai_pdf_parser/models.py`：
 
+- `ApiResult` — 统一的 API 响应包装，含 `code`（1=成功有内容、0=成功无内容、-1=异常）、`message`、`data`
 - `Document` → `Page` → `Block` → `Line` → `Word` → `Char`
 - `Table` → `Cell`（含 `rowspan`/`colspan`）
 - `Image`、`Seal`、`RenderInfo`
-- `LayoutElement` — 统一的页面元素，含 `type`、`bbox`、`order`、`content`
+- `LayoutElement` — 统一的页面元素，含 `type`、`bbox`、`order`、content`
 
 JSON 输出格式：顶层键为 `document`（元数据）和 `pages`（页面数组）。每页包含 `blocks`、`tables`、`images`、`seals`、`render`、`layout_elements`。
+
+### 公共 API 响应契约
+
+所有 `PDFParser` 公共方法返回 `ApiResult`（定义于 `models.py`），而非裸数据类型：
+
+- `code=1`：成功且有内容，`data` 包含结果
+- `code=0`：成功但无内容，`data` 仍包含空值（空列表/None/空字符串）
+- `code=-1`：异常，`data` 为 `None`，`message` 包含异常信息
+
+辅助方法位于 `pdf_parser.py`：`_has_content`、`_build_result`、`_execute_result`。
 
 ### 表格提取细节
 
@@ -79,7 +90,9 @@ JSON 输出格式：顶层键为 `document`（元数据）和 `pages`（页面�
 
 ## 测试
 
-测试位于 `tests/` 目录，使用 pytest。`tests/conftest.py` 提供 fixture（`tmp_dir`）和辅助函数（`make_text_pdf`、`make_multi_page_pdf`、`make_pdf_with_image`），这些函数使用 PyMuPDF 创建临时 PDF。无需外部 PDF 测试文件。
+测试位于 `tests/` 目录，使用 pytest。`tests/conftest.py` 提供 fixture（`tmp_dir`）和辅助函数（`make_text_pdf`、`make_multi_page_pdf`、`make_pdf_with_image`），这些函数使用 PyMuPDF 创建临时 PDF。
+
+`tests/test_pdf_parser.py` 同时使用真实 PDF `万马股份2024财报.pdf` 作为集成测试素材，验证所有 11 个公共 `PDFParser` 方法的 `ApiResult` 状态码（code=1/0/-1）。该 PDF 需放在仓库根目录。
 
 ## 设计规格
 
