@@ -9,7 +9,7 @@ from __future__ import annotations
 import os
 from typing import List, Optional
 
-from hexai_pdf_parser.models import Block, Document, Image, RenderInfo, Table
+from hexai_pdf_parser.models import ApiResult, Block, Document, Image, RenderInfo, Table
 
 
 class PDFParser:
@@ -53,123 +53,168 @@ class PDFParser:
     def __exit__(self, *exc) -> None:
         pass
 
+    # ------------------------------------------------------------------
+    # Response helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _has_content(data) -> bool:
+        if data is None:
+            return False
+        if isinstance(data, str):
+            return bool(data.strip())
+        if isinstance(data, (list, tuple, dict, set)):
+            return len(data) > 0
+        if isinstance(data, Document):
+            return any(
+                page.blocks or page.tables or page.images or page.layout_elements
+                for page in data.pages
+            )
+        return True
+
+    @staticmethod
+    def _build_result(data, success_message: str, empty_message: str) -> ApiResult:
+        if PDFParser._has_content(data):
+            return ApiResult(code=1, message=success_message, data=data)
+        return ApiResult(code=0, message=empty_message, data=data)
+
+    @staticmethod
+    def _execute_result(action, success_message: str, empty_message: str) -> ApiResult:
+        try:
+            data = action()
+            return PDFParser._build_result(data, success_message, empty_message)
+        except Exception as exc:
+            return ApiResult(code=-1, message=str(exc), data=None)
+
     def parse(
         self,
         *,
         page_indices: Optional[List[int]] = None,
         output_dir: Optional[str] = None,
-    ) -> Document:
-        """Run the full parsing pipeline and return a Document.
+    ) -> ApiResult:
+        """Run the full parsing pipeline and return an ApiResult wrapping a Document.
 
         Results are cached — subsequent calls return the same object.
         Pass *output_dir* to also write JSON, Markdown, images, and renders.
         """
-        if self._document is not None:
+        def _do_parse():
+            if self._document is not None:
+                return self._document
+
+            from hexai_pdf_parser.pipeline import Pipeline
+
+            pipeline = Pipeline(
+                pdf_path=self._pdf_path,
+                output_dir=output_dir,
+                render_dpi=self._render_dpi,
+                seal_coords=self._seal_coords,
+                page_indices=page_indices,
+                use_ml=self._use_ml,
+                ml_model_path=self._ml_model_path,
+                ml_confidence=self._ml_confidence,
+            )
+            self._document = pipeline.run()
             return self._document
 
-        from hexai_pdf_parser.pipeline import Pipeline
-
-        pipeline = Pipeline(
-            pdf_path=self._pdf_path,
-            output_dir=output_dir,
-            render_dpi=self._render_dpi,
-            seal_coords=self._seal_coords,
-            page_indices=page_indices,
-            use_ml=self._use_ml,
-            ml_model_path=self._ml_model_path,
-            ml_confidence=self._ml_confidence,
-        )
-        self._document = pipeline.run()
-        return self._document
+        return self._execute_result(_do_parse, "document parsed", "document parsed but empty")
 
     def extract_text(
         self,
         *,
         page_indices: Optional[List[int]] = None,
-    ) -> List[Block]:
-        """Extract text blocks from the PDF.
+    ) -> ApiResult:
+        """Extract text blocks from the PDF, returning an ApiResult wrapping List[Block].
 
         If a cached Document exists, returns its blocks directly.
         Otherwise loads the PDF and runs only the text extraction stage.
         """
-        if self._document is not None:
-            return self._collect_from_document(
-                lambda p: p.blocks, page_indices
-            )
+        def _do():
+            if self._document is not None:
+                return self._collect_from_document(
+                    lambda p: p.blocks, page_indices
+                )
 
-        import fitz as _fitz
-        from hexai_pdf_parser.loader import Loader
-        from hexai_pdf_parser.text_extractor import TextExtractor
+            import fitz as _fitz
+            from hexai_pdf_parser.loader import Loader
+            from hexai_pdf_parser.text_extractor import TextExtractor
 
-        document = Loader(self._pdf_path).load()
-        pdf_doc = _fitz.open(self._pdf_path)
-        try:
-            for page in document.pages:
-                if page_indices is not None and page.index not in page_indices:
-                    continue
-                page.blocks = TextExtractor().extract_blocks(pdf_doc[page.index])
-        finally:
-            pdf_doc.close()
-        self._document = document
-        return self._collect_from_document(lambda p: p.blocks, page_indices)
+            document = Loader(self._pdf_path).load()
+            pdf_doc = _fitz.open(self._pdf_path)
+            try:
+                for page in document.pages:
+                    if page_indices is not None and page.index not in page_indices:
+                        continue
+                    page.blocks = TextExtractor().extract_blocks(pdf_doc[page.index])
+            finally:
+                pdf_doc.close()
+            self._document = document
+            return self._collect_from_document(lambda p: p.blocks, page_indices)
+
+        return self._execute_result(_do, "text extracted", "no text extracted")
 
     def extract_tables(
         self,
         *,
         page_indices: Optional[List[int]] = None,
-    ) -> List[Table]:
-        """Extract tables from the PDF.
+    ) -> ApiResult:
+        """Extract tables from the PDF, returning an ApiResult wrapping List[Table].
 
         If a cached Document exists, returns its tables directly.
         Otherwise loads the PDF and runs only the table detection stage.
         """
-        if self._document is not None:
-            return self._collect_from_document(
-                lambda p: p.tables, page_indices
-            )
+        def _do():
+            if self._document is not None:
+                return self._collect_from_document(
+                    lambda p: p.tables, page_indices
+                )
 
-        import fitz as _fitz
-        from hexai_pdf_parser.loader import Loader
-        from hexai_pdf_parser.table_extractor import TableExtractor
+            import fitz as _fitz
+            from hexai_pdf_parser.loader import Loader
+            from hexai_pdf_parser.table_extractor import TableExtractor
 
-        document = Loader(self._pdf_path).load()
-        pdf_doc = _fitz.open(self._pdf_path)
-        try:
-            extractor = TableExtractor(
-                use_ml=self._use_ml,
-                ml_model_path=self._ml_model_path,
-                ml_confidence=self._ml_confidence,
-            )
-            for page in document.pages:
-                if page_indices is not None and page.index not in page_indices:
-                    continue
-                page.tables = extractor.extract(pdf_doc[page.index])
-        finally:
-            pdf_doc.close()
-        self._document = document
-        return self._collect_from_document(lambda p: p.tables, page_indices)
+            document = Loader(self._pdf_path).load()
+            pdf_doc = _fitz.open(self._pdf_path)
+            try:
+                extractor = TableExtractor(
+                    use_ml=self._use_ml,
+                    ml_model_path=self._ml_model_path,
+                    ml_confidence=self._ml_confidence,
+                )
+                for page in document.pages:
+                    if page_indices is not None and page.index not in page_indices:
+                        continue
+                    page.tables = extractor.extract(pdf_doc[page.index])
+            finally:
+                pdf_doc.close()
+            self._document = document
+            return self._collect_from_document(lambda p: p.tables, page_indices)
+
+        return self._execute_result(_do, "tables extracted", "no tables extracted")
 
     def extract_images(
         self,
         output_dir: str,
         *,
         page_indices: Optional[List[int]] = None,
-    ) -> List[Image]:
+    ) -> ApiResult:
         """Extract embedded images from the PDF, writing to *output_dir*."""
-        from hexai_pdf_parser.loader import Loader
-        from hexai_pdf_parser.image_extractor import ImageExtractor
+        def _do():
+            from hexai_pdf_parser.loader import Loader
+            from hexai_pdf_parser.image_extractor import ImageExtractor
 
-        pdf_path = self._pdf_path
-        if pdf_path is None:
-            raise ValueError("extract_images requires a PDF file path, not a Document")
-        document = Loader(pdf_path).load()
-        extractor = ImageExtractor(output_dir)
-        images: List[Image] = []
-        for page in document.pages:
-            if page_indices is not None and page.index not in page_indices:
-                continue
-            images.extend(extractor.extract(pdf_path, page.index))
-        return images
+            pdf_path = self._pdf_path
+            if pdf_path is None:
+                raise ValueError("extract_images requires a PDF file path, not a Document")
+            document = Loader(pdf_path).load()
+            extractor = ImageExtractor(output_dir)
+            images: List[Image] = []
+            for page in document.pages:
+                if page_indices is not None and page.index not in page_indices:
+                    continue
+                images.extend(extractor.extract(pdf_path, page.index))
+            return images
+
+        return self._execute_result(_do, "images extracted", "no images extracted")
 
     def render_pages(
         self,
@@ -177,53 +222,82 @@ class PDFParser:
         *,
         dpi: Optional[int] = None,
         page_indices: Optional[List[int]] = None,
-    ) -> List[RenderInfo]:
+    ) -> ApiResult:
         """Render PDF pages as PNG files into *output_dir*."""
-        from hexai_pdf_parser.loader import Loader
-        from hexai_pdf_parser.render_engine import RenderEngine
+        def _do():
+            from hexai_pdf_parser.loader import Loader
+            from hexai_pdf_parser.render_engine import RenderEngine
 
-        pdf_path = self._pdf_path
-        if pdf_path is None:
-            raise ValueError("render_pages requires a PDF file path, not a Document")
-        effective_dpi = dpi if dpi is not None else self._render_dpi
-        document = Loader(pdf_path).load()
-        engine = RenderEngine(output_dir, effective_dpi)
-        renders: List[RenderInfo] = []
-        for page in document.pages:
-            if page_indices is not None and page.index not in page_indices:
-                continue
-            renders.append(engine.render(pdf_path, page.index))
-        return renders
+            pdf_path = self._pdf_path
+            if pdf_path is None:
+                raise ValueError("render_pages requires a PDF file path, not a Document")
+            effective_dpi = dpi if dpi is not None else self._render_dpi
+            document = Loader(pdf_path).load()
+            engine = RenderEngine(output_dir, effective_dpi)
+            renders: List[RenderInfo] = []
+            for page in document.pages:
+                if page_indices is not None and page.index not in page_indices:
+                    continue
+                renders.append(engine.render(pdf_path, page.index))
+            return renders
+
+        return self._execute_result(_do, "pages rendered", "no pages rendered")
 
     def to_json(
         self,
         document: Optional[Document] = None,
-    ) -> str:
+    ) -> ApiResult:
         """Serialize a Document to a JSON string (in-memory, no file I/O).
 
         If *document* is None, uses the cached parse result (calls :meth:`parse`
         if not yet parsed).
         """
-        import json
-        from hexai_pdf_parser.json_writer import JSONWriter
+        try:
+            if document is not None:
+                doc = document
+            else:
+                parse_result = self.parse()
+                if parse_result.code == -1:
+                    return parse_result
+                doc = parse_result.data
 
-        doc = document if document is not None else self.parse()
-        data = JSONWriter().to_dict(doc)
-        return json.dumps(data, ensure_ascii=False)
+            import json
+            from hexai_pdf_parser.json_writer import JSONWriter
+
+            data = JSONWriter().to_dict(doc)
+            result_str = json.dumps(data, ensure_ascii=False)
+            if self._has_content(doc):
+                return ApiResult(code=1, message="json generated", data=result_str)
+            return ApiResult(code=0, message="json generated but empty", data=result_str)
+        except Exception as exc:
+            return ApiResult(code=-1, message=str(exc), data=None)
 
     def to_markdown(
         self,
         document: Optional[Document] = None,
-    ) -> str:
+    ) -> ApiResult:
         """Serialize a Document to a Markdown string (in-memory, no file I/O).
 
         If *document* is None, uses the cached parse result (calls :meth:`parse`
         if not yet parsed).
         """
-        from hexai_pdf_parser.markdown_writer import MarkdownWriter
+        try:
+            if document is not None:
+                doc = document
+            else:
+                parse_result = self.parse()
+                if parse_result.code == -1:
+                    return parse_result
+                doc = parse_result.data
 
-        doc = document if document is not None else self.parse()
-        return MarkdownWriter().to_string(doc)
+            from hexai_pdf_parser.markdown_writer import MarkdownWriter
+
+            md = MarkdownWriter().to_string(doc)
+            if self._has_content(doc):
+                return ApiResult(code=1, message="markdown generated", data=md)
+            return ApiResult(code=0, message="markdown generated but empty", data=md)
+        except Exception as exc:
+            return ApiResult(code=-1, message=str(exc), data=None)
 
     def _collect_from_document(
         self,
@@ -294,153 +368,168 @@ class PDFParser:
     def extract_text_in_region(
         self,
         region: dict | list[dict],
-    ) -> List[Block]:
+    ) -> ApiResult:
         """Extract text blocks that intersect with the given region(s).
 
         Region coordinates are normalized 0~1 relative to page size.
         """
-        page_sizes = self._get_page_sizes()
-        regions = self._normalize_regions(region, page_sizes)
+        def _do():
+            page_sizes = self._get_page_sizes()
+            regions = self._normalize_regions(region, page_sizes)
 
-        # Ensure text is extracted
-        if self._document is None:
-            self.extract_text()
+            # Ensure text is extracted
+            if self._document is None:
+                self.extract_text()
 
-        blocks: List[Block] = []
-        for r in regions:
-            page_idx = r["page_index"]
-            target_page = None
-            for p in self._document.pages:
-                if p.index == page_idx:
-                    target_page = p
-                    break
-            if target_page is None:
-                continue
-            for block in target_page.blocks:
-                if self._bbox_intersects(block.bbox, r):
-                    blocks.append(block)
-        return blocks
+            blocks: List[Block] = []
+            for r in regions:
+                page_idx = r["page_index"]
+                target_page = None
+                for p in self._document.pages:
+                    if p.index == page_idx:
+                        target_page = p
+                        break
+                if target_page is None:
+                    continue
+                for block in target_page.blocks:
+                    if self._bbox_intersects(block.bbox, r):
+                        blocks.append(block)
+            return blocks
+
+        return self._execute_result(_do, "region text extracted", "no text found in region")
 
     def extract_table_in_region(
         self,
         region: dict | list[dict],
-    ) -> Table | list[Table] | None:
+    ) -> ApiResult:
         """Extract table(s) from specified region(s).
 
         Region coordinates are normalized 0~1 relative to page size.
-        Returns Table for single region (or None), list[Table] for multiple.
+        Returns ApiResult wrapping Table for single region (or None), list[Table] for multiple.
         """
-        import fitz as _fitz
-        from hexai_pdf_parser.loader import Loader
-        from hexai_pdf_parser.table_extractor import TableExtractor
+        def _do():
+            import fitz as _fitz
+            from hexai_pdf_parser.loader import Loader
+            from hexai_pdf_parser.table_extractor import TableExtractor
 
-        is_single = isinstance(region, dict)
-        page_sizes = self._get_page_sizes()
-        regions = self._normalize_regions(region, page_sizes)
+            is_single = isinstance(region, dict)
+            page_sizes = self._get_page_sizes()
+            regions = self._normalize_regions(region, page_sizes)
 
-        pdf_path = self._pdf_path
-        if pdf_path is None:
-            raise ValueError("extract_table_in_region requires a PDF file path")
-        document = Loader(pdf_path).load()
-        pdf_doc = _fitz.open(pdf_path)
-        try:
-            extractor = TableExtractor(
-                use_ml=self._use_ml,
-                ml_model_path=self._ml_model_path,
-                ml_confidence=self._ml_confidence,
-            )
-            results: list[Table] = []
-            for r in regions:
-                page_idx = r["page_index"]
-                page_handle = pdf_doc[page_idx]
-                tables = extractor.extract(page_handle)
-                # Filter tables that intersect with the region
-                matched = [
-                    t for t in tables
-                    if self._bbox_intersects(t.bbox, r)
-                ]
-                if is_single:
-                    return matched[0] if matched else None
-                results.extend(matched)
-            return results
-        finally:
-            pdf_doc.close()
+            pdf_path = self._pdf_path
+            if pdf_path is None:
+                raise ValueError("extract_table_in_region requires a PDF file path")
+            document = Loader(pdf_path).load()
+            pdf_doc = _fitz.open(pdf_path)
+            try:
+                extractor = TableExtractor(
+                    use_ml=self._use_ml,
+                    ml_model_path=self._ml_model_path,
+                    ml_confidence=self._ml_confidence,
+                )
+                results: list[Table] = []
+                for r in regions:
+                    page_idx = r["page_index"]
+                    page_handle = pdf_doc[page_idx]
+                    tables = extractor.extract(page_handle)
+                    # Filter tables that intersect with the region
+                    matched = [
+                        t for t in tables
+                        if self._bbox_intersects(t.bbox, r)
+                    ]
+                    if is_single:
+                        return matched[0] if matched else None
+                    results.extend(matched)
+                return results
+            finally:
+                pdf_doc.close()
+
+        return self._execute_result(_do, "region table extracted", "no table found in region")
 
     def extract_image_in_region(
         self,
         region: dict | list[dict],
         output_dir: str,
-    ) -> Image | list[Image] | None:
+    ) -> ApiResult:
         """Extract images that intersect with the given region(s).
 
         Region coordinates are normalized 0~1 relative to page size.
         """
-        is_single = isinstance(region, dict)
-        page_sizes = self._get_page_sizes()
-        regions = self._normalize_regions(region, page_sizes)
+        def _do():
+            is_single = isinstance(region, dict)
+            page_sizes = self._get_page_sizes()
+            regions = self._normalize_regions(region, page_sizes)
 
-        # Get all images first
-        all_page_indices = list({r["page_index"] for r in regions})
-        all_images = self.extract_images(
-            output_dir, page_indices=all_page_indices
-        )
+            # Get all images first
+            all_page_indices = list({r["page_index"] for r in regions})
+            images_result = self.extract_images(
+                output_dir, page_indices=all_page_indices
+            )
+            if images_result.code == -1:
+                raise RuntimeError(images_result.message)
+            all_images = images_result.data or []
 
-        results: list[Image] = []
-        for r in regions:
-            matched = [
-                img for img in all_images
-                if img.page_index == r["page_index"]
-                and img.bbox is not None
-                and self._bbox_intersects(img.bbox, r)
-            ]
-            if is_single:
-                return matched[0] if matched else None
-            results.extend(matched)
-        return results
+            results: list[Image] = []
+            for r in regions:
+                matched = [
+                    img for img in all_images
+                    if img.page_index == r["page_index"]
+                    and img.bbox is not None
+                    and self._bbox_intersects(img.bbox, r)
+                ]
+                if is_single:
+                    return matched[0] if matched else None
+                results.extend(matched)
+            return results
+
+        return self._execute_result(_do, "region image extracted", "no image found in region")
 
     def render_region(
         self,
         region: dict | list[dict],
         output_dir: str,
         dpi: Optional[int] = None,
-    ) -> RenderInfo | list[RenderInfo]:
+    ) -> ApiResult:
         """Render region(s) of the PDF as PNG files.
 
         Region coordinates are normalized 0~1 relative to page size.
         """
-        import fitz as _fitz
+        def _do():
+            import fitz as _fitz
 
-        is_single = isinstance(region, dict)
-        effective_dpi = dpi if dpi is not None else self._render_dpi
-        page_sizes = self._get_page_sizes()
-        regions = self._normalize_regions(region, page_sizes)
+            is_single = isinstance(region, dict)
+            effective_dpi = dpi if dpi is not None else self._render_dpi
+            page_sizes = self._get_page_sizes()
+            regions = self._normalize_regions(region, page_sizes)
 
-        os.makedirs(output_dir, exist_ok=True)
-        pdf_path = self._pdf_path
-        if pdf_path is None:
-            raise ValueError("render_region requires a PDF file path")
-        pdf_doc = _fitz.open(pdf_path)
-        try:
-            results: list[RenderInfo] = []
-            for idx, r in enumerate(regions):
-                page_handle = pdf_doc[r["page_index"]]
-                clip = _fitz.Rect(r["x0"], r["y0"], r["x1"], r["y1"])
-                mat = _fitz.Matrix(effective_dpi / 72, effective_dpi / 72)
-                pix = page_handle.get_pixmap(matrix=mat, clip=clip)
+            os.makedirs(output_dir, exist_ok=True)
+            pdf_path = self._pdf_path
+            if pdf_path is None:
+                raise ValueError("render_region requires a PDF file path")
+            pdf_doc = _fitz.open(pdf_path)
+            try:
+                results: list[RenderInfo] = []
+                for idx, r in enumerate(regions):
+                    page_handle = pdf_doc[r["page_index"]]
+                    clip = _fitz.Rect(r["x0"], r["y0"], r["x1"], r["y1"])
+                    mat = _fitz.Matrix(effective_dpi / 72, effective_dpi / 72)
+                    pix = page_handle.get_pixmap(matrix=mat, clip=clip)
 
-                file_name = f"region-{r['page_index']:03d}-{idx:03d}.png"
-                path = os.path.join(output_dir, file_name)
-                pix.save(path)
+                    file_name = f"region-{r['page_index']:03d}-{idx:03d}.png"
+                    path = os.path.join(output_dir, file_name)
+                    pix.save(path)
 
-                info = RenderInfo(
-                    path=path,
-                    width=pix.width,
-                    height=pix.height,
-                    dpi=effective_dpi,
-                )
-                if is_single:
-                    return info
-                results.append(info)
-            return results
-        finally:
-            pdf_doc.close()
+                    info = RenderInfo(
+                        path=path,
+                        width=pix.width,
+                        height=pix.height,
+                        dpi=effective_dpi,
+                    )
+                    if is_single:
+                        return info
+                    results.append(info)
+                return results
+            finally:
+                pdf_doc.close()
+
+        return self._execute_result(_do, "region rendered", "region rendered but empty")
