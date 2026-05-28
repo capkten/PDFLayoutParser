@@ -81,6 +81,16 @@ def assert_error_result(result, expected_substring: str | None = None):
         assert expected_substring in result.message
 
 
+from hexai_pdf_parser import ApiResult
+
+
+def test_api_result_model_is_exported():
+    result = ApiResult(code=1, message="ok", data=["x"])
+    assert result.code == 1
+    assert result.message == "ok"
+    assert result.data == ["x"]
+
+
 def test_constructor_from_path(tmp_dir):
     pdf_path = os.path.join(tmp_dir, "test.pdf")
     make_text_pdf(pdf_path, text="Hello")

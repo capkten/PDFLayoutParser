@@ -9,6 +9,19 @@ from typing import Any, Dict, List, Optional
 
 
 @dataclass
+class ApiResult:
+    """Unified API response wrapper.
+
+    ``code`` is ``1`` for success with content, ``0`` for success with no
+    content, and ``-1`` for exceptions.
+    """
+
+    code: int
+    message: str
+    data: Any | None = None
+
+
+@dataclass
 class BBox:
     """Axis-aligned bounding box."""
 
