@@ -15,8 +15,11 @@ python -m hexai_pdf_parser.cli input.pdf -o out
 from hexai_pdf_parser import PDFParser
 
 with PDFParser("input.pdf") as parser:
-    doc = parser.parse()
-    json_str = parser.to_json()
+    result = parser.to_json()
+    if result.code == 1:
+        print(result.data)
+    else:
+        print(result.message)
 ```
 
 ## Optional ML Table Detection

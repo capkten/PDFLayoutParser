@@ -13,8 +13,37 @@ from hexai_pdf_parser import PDFParser
 
 # 最简用法：解析 PDF，获取 Document 对象
 with PDFParser("report.pdf") as parser:
-    doc = parser.parse()
-    print(f"共 {doc.page_count} 页")
+    result = parser.parse()
+    if result.code == 1:
+        print(f"共 {result.data.page_count} 页")
+    else:
+        print(result.message)
+```
+
+---
+
+## 统一响应契约
+
+所有公共 `PDFParser` 方法返回 `ApiResult`：
+
+```python
+@dataclass
+class ApiResult:
+    code: int       # 1=成功有内容, 0=成功无内容, -1=异常
+    message: str    # 人类可读状态
+    data: Any       # 原始数据
+```
+
+**使用模式：**
+
+```python
+result = parser.extract_text_in_region(region)
+if result.code == 1:
+    blocks = result.data
+elif result.code == 0:
+    print(result.message)  # 无内容
+else:
+    raise RuntimeError(result.message)  # 异常
 ```
 
 ---
@@ -57,14 +86,14 @@ with PDFParser("report.pdf") as parser:
 
 ### parse — 完整解析
 
-运行完整 pipeline（文本提取 + 表格检测 + 图片提取 + 布局构建），返回 `Document` 对象。结果会缓存，重复调用直接返回。
+运行完整 pipeline（文本提取 + 表格检测 + 图片提取 + 布局构建），返回 `ApiResult` 包装的 `Document` 对象。结果会缓存，重复调用直接返回。
 
 ```python
 def parse(
     *,
     page_indices: list[int] | None = None,  # 只解析指定页（0-indexed），None=全部
     output_dir: str | None = None,           # 输出目录，None=不写磁盘
-) -> Document
+) -> ApiResult  # data: Document
 ```
 
 **示例：**
@@ -73,26 +102,28 @@ def parse(
 parser = PDFParser("report.pdf")
 
 # 纯内存，不写文件
-doc = parser.parse()
+result = parser.parse()
+if result.code == 1:
+    doc = result.data
 
 # 同时输出文件（JSON、Markdown、图片、渲染 PNG）
-doc = parser.parse(output_dir="./out")
+result = parser.parse(output_dir="./out")
 
 # 只解析前两页
-doc = parser.parse(page_indices=[0, 1])
+result = parser.parse(page_indices=[0, 1])
 ```
 
 ---
 
 ### extract_text — 提取文本
 
-只运行文本提取阶段，返回 `Block` 列表。若已有缓存的 Document，直接从缓存返回。
+只运行文本提取阶段，返回 `ApiResult` 包装的 `Block` 列表。若已有缓存的 Document，直接从缓存返回。
 
 ```python
 def extract_text(
     *,
     page_indices: list[int] | None = None,
-) -> list[Block]
+) -> ApiResult  # data: list[Block]
 ```
 
 **示例：**
@@ -101,12 +132,13 @@ def extract_text(
 parser = PDFParser("report.pdf")
 
 # 提取所有页的文本
-blocks = parser.extract_text()
-for block in blocks:
-    print(block.text)
+result = parser.extract_text()
+if result.code == 1:
+    for block in result.data:
+        print(block.text)
 
 # 只提取第 2 页
-blocks = parser.extract_text(page_indices=[1])
+result = parser.extract_text(page_indices=[1])
 ```
 
 **Block 结构：**
@@ -118,24 +150,25 @@ blocks = parser.extract_text(page_indices=[1])
 
 ### extract_tables — 提取表格
 
-只运行表格检测阶段，返回 `Table` 列表。
+只运行表格检测阶段，返回 `ApiResult` 包装的 `Table` 列表。
 
 ```python
 def extract_tables(
     *,
     page_indices: list[int] | None = None,
-) -> list[Table]
+) -> ApiResult  # data: list[Table]
 ```
 
 **示例：**
 
 ```python
 parser = PDFParser("report.pdf")
-tables = parser.extract_tables()
-for table in tables:
-    print(f"表格: {table.rows}行 x {table.cols}列")
-    for cell in table.cells:
-        print(f"  [{cell.row_index},{cell.col_index}] = {cell.text}")
+result = parser.extract_tables()
+if result.code == 1:
+    for table in result.data:
+        print(f"表格: {table.rows}行 x {table.cols}列")
+        for cell in table.cells:
+            print(f"  [{cell.row_index},{cell.col_index}] = {cell.text}")
 ```
 
 **Table 结构：**
@@ -156,16 +189,17 @@ def extract_images(
     output_dir: str,                       # 图片保存目录（必填）
     *,
     page_indices: list[int] | None = None,
-) -> list[Image]
+) -> ApiResult  # data: list[Image]
 ```
 
 **示例：**
 
 ```python
 parser = PDFParser("report.pdf")
-images = parser.extract_images("./images")
-for img in images:
-    print(f"图片: {img.width}x{img.height}, 保存到 {img.path}")
+result = parser.extract_images("./images")
+if result.code == 1:
+    for img in result.data:
+        print(f"图片: {img.width}x{img.height}, 保存到 {img.path}")
 ```
 
 ---
@@ -180,7 +214,7 @@ def render_pages(
     *,
     dpi: int | None = None,                # 渲染 DPI，默认用构造时的 render_dpi
     page_indices: list[int] | None = None,
-) -> list[RenderInfo]
+) -> ApiResult  # data: list[RenderInfo]
 ```
 
 **示例：**
@@ -189,10 +223,10 @@ def render_pages(
 parser = PDFParser("report.pdf", render_dpi=200)
 
 # 使用默认 DPI
-renders = parser.render_pages("./renders")
+result = parser.render_pages("./renders")
 
 # 指定 DPI
-renders = parser.render_pages("./renders", dpi=150)
+result = parser.render_pages("./renders", dpi=150)
 ```
 
 ---
@@ -204,7 +238,7 @@ renders = parser.render_pages("./renders", dpi=150)
 ```python
 def to_json(
     document: Document | None = None,  # None 时自动调用 parse()
-) -> str
+) -> ApiResult  # data: str
 ```
 
 **示例：**
@@ -213,15 +247,17 @@ def to_json(
 parser = PDFParser("report.pdf")
 
 # 自动解析 + 转 JSON
-json_str = parser.to_json()
+result = parser.to_json()
+if result.code == 1:
+    json_str = result.data
 
 # 已有 Document 时直接传入
-doc = parser.parse()
-json_str = parser.to_json(doc)
+result = parser.parse()
+json_result = parser.to_json(result.data)
 
 # 可以直接存数据库、发 HTTP 响应等
 import json
-data = json.loads(json_str)
+data = json.loads(json_result.data)
 ```
 
 ---
@@ -233,15 +269,16 @@ data = json.loads(json_str)
 ```python
 def to_markdown(
     document: Document | None = None,  # None 时自动调用 parse()
-) -> str
+) -> ApiResult  # data: str
 ```
 
 **示例：**
 
 ```python
 parser = PDFParser("report.pdf")
-md_str = parser.to_markdown()
-print(md_str)
+result = parser.to_markdown()
+if result.code == 1:
+    print(result.data)
 ```
 
 ---
@@ -271,7 +308,7 @@ region = {
 ```python
 def extract_text_in_region(
     region: dict | list[dict],
-) -> list[Block]
+) -> ApiResult  # data: list[Block]
 ```
 
 **示例：**
@@ -281,26 +318,28 @@ parser = PDFParser("report.pdf")
 
 # 单区域
 region = {"page_index": 0, "x0": 0.05, "y0": 0.1, "x1": 0.95, "y1": 0.3}
-blocks = parser.extract_text_in_region(region)
+result = parser.extract_text_in_region(region)
+if result.code == 1:
+    blocks = result.data
 
 # 多区域
 regions = [
     {"page_index": 0, "x0": 0.0, "y0": 0.0, "x1": 0.5, "y1": 0.5},
     {"page_index": 1, "x0": 0.5, "y0": 0.5, "x1": 1.0, "y1": 1.0},
 ]
-blocks = parser.extract_text_in_region(regions)
+result = parser.extract_text_in_region(regions)
 ```
 
 ---
 
 ### extract_table_in_region — 区域内表格提取
 
-将指定区域当作表格来解析。单区域返回 `Table | None`，多区域返回 `list[Table]`。
+将指定区域当作表格来解析。`data` 为 `Table`（单区域有表格）、`None`（单区域无表格）或 `list[Table]`（多区域）。
 
 ```python
 def extract_table_in_region(
     region: dict | list[dict],
-) -> Table | list[Table] | None
+) -> ApiResult  # data: Table | list[Table] | None
 ```
 
 **示例：**
@@ -310,24 +349,25 @@ parser = PDFParser("report.pdf")
 
 # 单区域
 region = {"page_index": 0, "x0": 0.0, "y0": 0.4, "x1": 1.0, "y1": 0.8}
-table = parser.extract_table_in_region(region)
-if table:
+result = parser.extract_table_in_region(region)
+if result.code == 1:
+    table = result.data
     print(f"检测到 {table.rows}x{table.cols} 表格")
 else:
-    print("该区域未检测到表格")
+    print(result.message)
 ```
 
 ---
 
 ### extract_image_in_region — 区域内图片提取
 
-提取与指定区域相交的图片。单区域返回 `Image | None`，多区域返回 `list[Image]`。
+提取与指定区域相交的图片。`data` 为 `Image`（单区域有图片）、`None`（单区域无图片）或 `list[Image]`（多区域）。
 
 ```python
 def extract_image_in_region(
     region: dict | list[dict],
     output_dir: str,                   # 图片保存目录（必填）
-) -> Image | list[Image] | None
+) -> ApiResult  # data: Image | list[Image] | None
 ```
 
 **示例：**
@@ -335,21 +375,23 @@ def extract_image_in_region(
 ```python
 parser = PDFParser("report.pdf")
 region = {"page_index": 0, "x0": 0.2, "y0": 0.3, "x1": 0.8, "y1": 0.7}
-img = parser.extract_image_in_region(region, "./images")
+result = parser.extract_image_in_region(region, "./images")
+if result.code == 1:
+    img = result.data
 ```
 
 ---
 
 ### render_region — 区域渲染
 
-将指定区域渲染为 PNG。单区域返回 `RenderInfo`，多区域返回 `list[RenderInfo]`。
+将指定区域渲染为 PNG。`data` 为 `RenderInfo`（单区域）或 `list[RenderInfo]`（多区域）。
 
 ```python
 def render_region(
     region: dict | list[dict],
     output_dir: str,                   # PNG 保存目录（必填）
     dpi: int | None = None,            # 渲染 DPI，默认用构造时的 render_dpi
-) -> RenderInfo | list[RenderInfo]
+) -> ApiResult  # data: RenderInfo | list[RenderInfo]
 ```
 
 **示例：**
@@ -359,8 +401,10 @@ parser = PDFParser("report.pdf", render_dpi=200)
 
 # 裁剪页面左上角 50% 区域
 region = {"page_index": 0, "x0": 0.0, "y0": 0.0, "x1": 0.5, "y1": 0.5}
-info = parser.render_region(region, "./crops")
-print(f"裁剪图: {info.width}x{info.height}, 保存到 {info.path}")
+result = parser.render_region(region, "./crops")
+if result.code == 1:
+    info = result.data
+    print(f"裁剪图: {info.width}x{info.height}, 保存到 {info.path}")
 ```
 
 ---
@@ -371,6 +415,7 @@ print(f"裁剪图: {info.width}x{info.height}, 保存到 {info.path}")
 
 | 模型 | 说明 |
 |------|------|
+| `ApiResult` | 统一响应包装，含 `code`（1/0/-1）、`message`、`data` |
 | `Document` | 顶层容器，含 `file_name`、`page_count`、`pages` |
 | `Page` | 单页，含 `index`、`size`、`blocks`、`tables`、`images`、`layout_elements` |
 | `Block` | 文本块，含 `text`、`bbox`、`lines` |
@@ -394,33 +439,35 @@ from hexai_pdf_parser import PDFParser
 
 with PDFParser("financial_report.pdf") as parser:
     # 1. 完整解析
-    doc = parser.parse()
+    result = parser.parse()
+    if result.code == 1:
+        doc = result.data
 
     # 2. 导出为 JSON 字符串
-    json_str = parser.to_json()
+    json_result = parser.to_json()
 
     # 3. 导出为 Markdown
-    md_str = parser.to_markdown()
+    md_result = parser.to_markdown()
 
     # 4. 只提取表格
-    tables = parser.extract_tables(page_indices=[0])
+    tables_result = parser.extract_tables(page_indices=[0])
 
     # 5. 提取指定区域的文本
-    header = parser.extract_text_in_region({
+    header_result = parser.extract_text_in_region({
         "page_index": 0,
         "x0": 0.0, "y0": 0.0,
         "x1": 1.0, "y1": 0.15,
     })
 
     # 6. 将页面中间区域当作表格解析
-    table = parser.extract_table_in_region({
+    table_result = parser.extract_table_in_region({
         "page_index": 0,
         "x0": 0.0, "y0": 0.3,
         "x1": 1.0, "y1": 0.8,
     })
 
     # 7. 裁剪并渲染页面局部
-    parser.render_region(
+    crop_result = parser.render_region(
         {"page_index": 0, "x0": 0.1, "y0": 0.1, "x1": 0.9, "y1": 0.9},
         "./output/crops",
     )
