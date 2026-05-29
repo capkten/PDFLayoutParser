@@ -16,6 +16,7 @@ __pycache__/
 build/
 dist/
 *.egg-info/
+*.whl
 
 # Pipeline output directories
 out_*/
