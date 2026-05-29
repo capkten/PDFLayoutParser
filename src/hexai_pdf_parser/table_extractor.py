@@ -123,8 +123,19 @@ class TableExtractor:
         if text_tables:
             existing_bboxes = [t.bbox for t in tables]
             for tt in text_tables:
-                if not self._bbox_overlaps_any(tt.bbox, existing_bboxes):
+                overlap_idx = self._bbox_overlaps_any_index(tt.bbox, existing_bboxes)
+                if overlap_idx is None:
                     tables.append(tt)
+                else:
+                    # Overlaps with an existing table — keep the one with fewer
+                    # empty cells (less fragmentation / better structure).
+                    existing = tables[overlap_idx]
+                    existing_empty = sum(
+                        1 for c in existing.cells if not c.text.strip()
+                    )
+                    tt_empty = sum(1 for c in tt.cells if not c.text.strip())
+                    if tt_empty < existing_empty:
+                        tables[overlap_idx] = tt
 
         # Apply layout rule system when a config with profiles is provided.
         if self._table_config and self._table_config.profiles:
@@ -253,7 +264,17 @@ class TableExtractor:
     @staticmethod
     def _bbox_overlaps_any(bbox: BBox, others: List[BBox], threshold: float = 0.5) -> bool:
         """Return True if *bbox* overlaps significantly with any box in *others*."""
-        for other in others:
+        return (
+            TableExtractor._bbox_overlaps_any_index(bbox, others, threshold)
+            is not None
+        )
+
+    @staticmethod
+    def _bbox_overlaps_any_index(
+        bbox: BBox, others: List[BBox], threshold: float = 0.5
+    ) -> int | None:
+        """Return the index of the first overlapping box, or None."""
+        for idx, other in enumerate(others):
             ix0 = max(bbox.x0, other.x0)
             iy0 = max(bbox.y0, other.y0)
             ix1 = min(bbox.x1, other.x1)
@@ -263,8 +284,8 @@ class TableExtractor:
             inter = (ix1 - ix0) * (iy1 - iy0)
             area = (bbox.x1 - bbox.x0) * (bbox.y1 - bbox.y0)
             if area > 0 and inter / area >= threshold:
-                return True
-        return False
+                return idx
+        return None
 
     def _should_fallback(self, tables: List[Table]) -> bool:
         """Return True if line_projection results look unreliable."""
@@ -1075,6 +1096,9 @@ class TableExtractor:
     def _score_row_against_guides(self, row: dict, guides: List[float]) -> dict:
         """Score a row against the inferred column guides."""
         token_count = len(row["tokens"])
+        original_token_count = sum(
+            1 for t in row["tokens"] if not t.get("_continuation")
+        )
         tolerance = max(8.0, self.line_tolerance * 4)
         hits: set[int] = set()
         for token in row["tokens"]:
@@ -1107,6 +1131,7 @@ class TableExtractor:
             "hit_count": len(hits),
             "separated_hit_count": separated_hit_count,
             "token_count": token_count,
+            "original_token_count": original_token_count,
             "numeric_tokens": numeric_tokens,
             "long_text_tokens": long_text_tokens,
             "full_width": full_width,
@@ -1158,7 +1183,7 @@ class TableExtractor:
 
         if structured_rows < 2:
             return True
-        if len(rows) >= 4 and structured_rows < max(2, len(rows) // 2):
+        if len(rows) >= 4 and structured_rows < max(2, len(rows) // 3):
             return True
         if len(guides) >= 3 and strong_rows == 0:
             return True
@@ -1228,7 +1253,54 @@ class TableExtractor:
 
         if best_end < best_start:
             return []
-        return rows[best_start : best_end + 1]
+
+        # Collect all qualifying intervals (>= 2 structured rows)
+        intervals = []
+        start = None
+        sc = 0
+        wc = 0
+        for idx, label in enumerate(labels):
+            if label == "prose":
+                if start is not None and sc >= 2:
+                    intervals.append((start, idx - 1, sc * 3 + wc))
+                start = None
+                sc = 0
+                wc = 0
+                continue
+            if start is None:
+                start = idx
+            if label == "structured":
+                sc += 1
+            else:
+                wc += 1
+        if start is not None and sc >= 2:
+            intervals.append((start, len(labels) - 1, sc * 3 + wc))
+
+        if not intervals:
+            return rows[best_start : best_end + 1]
+
+        # Merge adjacent intervals separated by <= 1 prose row
+        merged_any = True
+        while merged_any:
+            merged_any = False
+            new_intervals = []
+            i = 0
+            while i < len(intervals):
+                if i + 1 < len(intervals):
+                    s1, e1, score1 = intervals[i]
+                    s2, e2, score2 = intervals[i + 1]
+                    gap = s2 - e1 - 1
+                    if gap <= 1:
+                        new_intervals.append((s1, e2, score1 + score2))
+                        i += 2
+                        merged_any = True
+                        continue
+                new_intervals.append(intervals[i])
+                i += 1
+            intervals = new_intervals
+
+        best = max(intervals, key=lambda x: x[2])
+        return rows[best[0] : best[1] + 1]
 
     def _classify_rows_for_trimming(
         self, rows: List[dict], guides: List[float]
@@ -1256,14 +1328,15 @@ class TableExtractor:
                     guide_hit_rows[guide_idx].add(row_idx)
         guide_weights = [len(r) for r in guide_hit_rows]
 
-        # Filter out minority guides (supported by < 50% of the
-        # strongest guide).  A spurious guide created by a few prose
-        # tokens can inflate prose row scores above data rows.
+        # Filter out minority guides (supported by < 30% of the
+        # strongest guide, with a minimum of 4).  A spurious guide
+        # created by a few prose tokens can inflate prose row scores
+        # above data rows.
         max_guide_weight = max(guide_weights) if guide_weights else 0
         majority_guides: set[int] = set()
         if max_guide_weight > 0:
             for gi, w in enumerate(guide_weights):
-                if w >= max_guide_weight * 0.5:
+                if w >= max(4, max_guide_weight * 0.3):
                     majority_guides.add(gi)
 
         row_guide_scores: List[float] = []
@@ -1298,10 +1371,21 @@ class TableExtractor:
             # We only apply this signal when the gap is both relatively large
             # (>30% of range) AND absolutely significant (>3pt) to avoid
             # false positives on tightly-clustered widths.
-            mean_widths = [
-                sum(t["x1"] - t["x0"] for t in row["tokens"]) / max(len(row["tokens"]), 1)
-                for row in rows
-            ]
+            # Use original (non-continuation) tokens for width
+            # calculation so that merged continuation tokens don't
+            # inflate the mean width.
+            mean_widths = []
+            for idx, row in enumerate(rows):
+                orig = [t for t in row["tokens"] if not t.get("_continuation")]
+                if orig:
+                    mean_widths.append(
+                        sum(t["x1"] - t["x0"] for t in orig) / len(orig)
+                    )
+                else:
+                    mean_widths.append(
+                        sum(t["x1"] - t["x0"] for t in row["tokens"])
+                        / max(len(row["tokens"]), 1)
+                    )
             sorted_widths = sorted(mean_widths)
             gaps = [
                 sorted_widths[i + 1] - sorted_widths[i]
@@ -1320,7 +1404,12 @@ class TableExtractor:
                     ) / 2.0
                     # Token count heuristic: prose rows usually have more
                     # tokens per row than actual table data rows.
-                    tokens_per_row = [len(r["tokens"]) for r in rows]
+                    # Use original_token_count to ignore continuation tokens
+                    # merged from multi-line cells.
+                    tokens_per_row = [
+                        score_detail.get("original_token_count", len(r["tokens"]))
+                        for r, score_detail in zip(rows, row_details)
+                    ]
                     min_tokens = min(tokens_per_row)
 
                     labels = []
@@ -1336,7 +1425,7 @@ class TableExtractor:
                         is_prose_like = (
                             score_detail.get("looks_prose_with_fragments", False)
                             or (is_wide_non_numeric and score_detail.get("hit_count", 0) <= 2)
-                            or (is_wide_non_numeric and len(row["tokens"]) > min_tokens)
+                            or (is_wide_non_numeric and score_detail.get("original_token_count", len(row["tokens"])) > min_tokens)
                         )
                         if mean_widths[idx] > width_threshold and is_prose_like:
                             labels.append("prose")
@@ -1766,11 +1855,11 @@ class TableExtractor:
         page: fitz.Page,
     ) -> list[HorizontalSeparator]:
         """Detect horizontal separators from page drawings (rectangles, lines)."""
-        separators: list[HorizontalSeparator] = []
+        raw_separators: list[HorizontalSeparator] = []
         try:
             drawings = page.get_drawings()
         except Exception:
-            return separators
+            return []
 
         # Use a larger threshold for line stroke width to catch thicker separators
         # The _separator_max_height is typically 1.5, but real PDFs often have
@@ -1784,9 +1873,9 @@ class TableExtractor:
                     rect = item[1]
                     width = rect.x1 - rect.x0
                     height = rect.y1 - rect.y0
-                    if width < self._separator_min_width or height > self._separator_max_height:
+                    if height > self._separator_max_height:
                         continue
-                    separators.append(
+                    raw_separators.append(
                         HorizontalSeparator(
                             x0=float(rect.x0),
                             x1=float(rect.x1),
@@ -1799,13 +1888,11 @@ class TableExtractor:
                     line_height = abs(p2.y - p1.y)
                     # Accept near-horizontal lines that are long enough
                     # Use larger stroke width threshold to catch thicker lines
-                    if line_width < self._separator_min_width:
-                        continue
                     if line_height > max_line_stroke:
                         continue
                     if stroke_width > max_line_stroke:
                         continue
-                    separators.append(
+                    raw_separators.append(
                         HorizontalSeparator(
                             x0=float(min(p1.x, p2.x)),
                             x1=float(max(p1.x, p2.x)),
@@ -1813,7 +1900,29 @@ class TableExtractor:
                         )
                     )
 
-        return separators
+        # Merge adjacent/co-linear segments before filtering by width.
+        # PDFs often draw a single long line as multiple small rectangles.
+        if not raw_separators:
+            return []
+
+        raw_separators.sort(key=lambda s: (s.y, s.x0))
+        separators: list[HorizontalSeparator] = []
+        for sep in raw_separators:
+            if (
+                separators
+                and abs(sep.y - separators[-1].y) <= 1.0
+                and sep.x0 <= separators[-1].x1 + 2.0
+            ):
+                prev = separators[-1]
+                separators[-1] = HorizontalSeparator(
+                    x0=min(prev.x0, sep.x0),
+                    x1=max(prev.x1, sep.x1),
+                    y=(prev.y + sep.y) / 2.0,
+                )
+            else:
+                separators.append(sep)
+
+        return [s for s in separators if s.x1 - s.x0 >= self._separator_min_width]
 
     def _detect_text_regions(
         self,
@@ -1826,6 +1935,10 @@ class TableExtractor:
         visual_rows: list[_RegionRowView] = []
         original_rows_by_view_id: dict[int, dict] = {}
         for row in rows:
+            # Exclude continuation tokens from the visual row so that
+            # the region detector sees the original fragment structure.
+            # Continuation tokens share x-positions with other tokens
+            # and would inflate fragment count / coverage.
             fragments = [
                 _RegionFragmentView(
                     text=token["text"],
@@ -1837,6 +1950,7 @@ class TableExtractor:
                     ),
                 )
                 for token in row["tokens"]
+                if not token.get("_continuation")
             ]
             visual_row = _RegionRowView(
                 fragments=fragments,
@@ -1939,6 +2053,8 @@ class TableExtractor:
         if not rows:
             return []
 
+        rows = self._merge_continuation_rows(rows)
+
         candidate_regions = self._detect_text_regions(rows, page)
         if not candidate_regions:
             return []
@@ -2003,6 +2119,7 @@ class TableExtractor:
                     # Re-infer guides from trimmed rows so that columns
                     # created only by prose tokens are removed.
                     guides = self._infer_column_guides(region_rows)
+                    guides = self._compact_column_guides(region_rows, guides)
                     if len(guides) < 2:
                         continue
                     # Merge a single leading row as header if it looks like
@@ -2068,7 +2185,7 @@ class TableExtractor:
                                         header_row["_is_merged_header"] = True
                                     region_rows = merged_rows
 
-                region_bbox = self._rows_bbox(region_rows)
+            region_bbox = self._rows_bbox(region_rows)
 
             row_count, col_count, cells = self._build_text_alignment_table(
                 region_rows, guides, region_bbox
@@ -2077,16 +2194,32 @@ class TableExtractor:
             if row_count < 1 or col_count < 1 or not cells:
                 continue
 
-            tables.append(
-                Table(
-                    bbox=region_bbox,
-                    rows=row_count,
-                    cols=col_count,
-                    cells=cells,
-                    confidence=0.75,
-                    source="text_alignment",
-                )
+            table = Table(
+                bbox=region_bbox,
+                rows=row_count,
+                cols=col_count,
+                cells=cells,
+                confidence=0.75,
+                source="text_alignment",
             )
+
+            # Try span-level header recovery for line-bounded tables.
+            header_cells = self._try_recover_header_via_spans(
+                table, page, guides
+            )
+            if header_cells:
+                for c in cells:
+                    c.row_index += 1
+                table.rows += 1
+                table.bbox = BBox(
+                    min(region_bbox.x0, min(c.bbox.x0 for c in header_cells)),
+                    min(region_bbox.y0, min(c.bbox.y0 for c in header_cells)),
+                    max(region_bbox.x1, max(c.bbox.x1 for c in header_cells)),
+                    max(region_bbox.y1, max(c.bbox.y1 for c in header_cells)),
+                )
+                table.cells = header_cells + cells
+
+            tables.append(table)
             debug_regions.append(
                 {
                     "bbox": {
@@ -2280,11 +2413,25 @@ class TableExtractor:
                 support_rows[guide_idx].add(row_idx)
 
         target_max = max(4, min(12, len(rows) // 2 + 4))
+        support = [len(rows_hit) for rows_hit in support_rows]
+
+        # Even when total guides are within target_max, filter out guides
+        # with very low support (e.g. spurious guides from token splitting).
+        # A guide should be supported by at least ~35% of rows (min 2).
+        min_support = max(2, int(len(rows) * 0.35) + 1)
+        strong_guides = [
+            gi for gi, s in enumerate(support) if s >= min_support
+        ]
+        if len(strong_guides) >= 2:
+            guides = [guides[gi] for gi in strong_guides]
+            support_rows = [support_rows[gi] for gi in strong_guides]
+            support = [support[gi] for gi in strong_guides]
+            numeric_weight = [numeric_weight[gi] for gi in strong_guides]
+
         if len(guides) <= target_max:
             return sorted(guides)
 
         active = list(range(len(guides)))
-        support = [len(rows_hit) for rows_hit in support_rows]
 
         def guide_gap(left_idx: int, right_idx: int) -> float:
             return abs(guides[right_idx] - guides[left_idx])
@@ -2825,6 +2972,168 @@ class TableExtractor:
             rows.append({k: v for k, v in current_row.items() if k != "_y_center"})
 
         return rows
+
+    def _merge_continuation_rows(self, rows: List[dict]) -> List[dict]:
+        """Merge single-token continuation rows into adjacent rows.
+
+        Multi-line table cells produce separate visual rows for each text
+        line.  Continuation rows typically contain a single non-numeric
+        token from a wrapped cell.  We merge them into the best-matching
+        adjacent row: if the continuation's x-position does NOT overlap
+        with the next row's tokens (different column), it merges forward;
+        otherwise it merges backward.
+
+        This handles the common case where a wrapped middle-column cell
+        produces a continuation line that sits between two complete rows.
+        """
+        if len(rows) < 2:
+            return rows
+
+        heights = [r["y1"] - r["y0"] for r in rows if r["y1"] > r["y0"]]
+        median_h = sorted(heights)[len(heights) // 2] if heights else 12.0
+        gap_limit = max(12.0, median_h * 1.5)
+
+        # First pass: mark rows that are continuation candidates.
+        is_cont = [False] * len(rows)
+        for i in range(1, len(rows)):
+            row = rows[i]
+            # Use a larger gap limit when the previous row has multiple
+            # tokens (table context) to handle wider row spacing in
+            # financial tables.
+            prev_is_table_row = len(rows[i - 1]["tokens"]) >= 2
+            effective_limit = gap_limit if not prev_is_table_row else max(gap_limit, 22.0)
+            gap = row["y0"] - rows[i - 1]["y1"]
+            if (
+                len(row["tokens"]) == 1
+                and not row["tokens"][0].get("is_numeric", False)
+                and 0 <= gap < effective_limit
+                and prev_is_table_row
+            ):
+                is_cont[i] = True
+
+        # Second pass: decide merge direction for each continuation.
+        # If the continuation token's x-position does NOT overlap with
+        # any token in the next row, merge forward (into next row).
+        # Otherwise, merge backward (into previous row).
+        merged: List[dict] = []
+        skip_next = False
+        for i in range(len(rows)):
+            if skip_next:
+                skip_next = False
+                continue
+
+            if not is_cont[i]:
+                merged.append(rows[i])
+                continue
+
+            row = rows[i]
+            cont_x = row["tokens"][0]["x0"]
+
+            # Try forward merge: does the next row have a token at cont_x?
+            if i + 1 < len(rows):
+                next_row = rows[i + 1]
+                next_has_token_at_x = any(
+                    t["x0"] <= cont_x <= t["x1"] for t in next_row["tokens"]
+                )
+                if not next_has_token_at_x:
+                    # Merge forward: prepend continuation to next row.
+                    cont_token = row["tokens"][0]
+                    cont_token["_continuation"] = True
+                    next_row["tokens"].insert(0, cont_token)
+                    next_row["tokens"].sort(key=lambda t: t["x0"])
+                    next_row["x0"] = min(next_row["x0"], row["x0"])
+                    next_row["x1"] = max(next_row["x1"], row["x1"])
+                    next_row["y0"] = min(next_row["y0"], row["y0"])
+                    next_row["y1"] = max(next_row["y1"], row["y1"])
+                    continue
+
+            # Fall back to backward merge.
+            prev = merged[-1] if merged else None
+            if prev is not None:
+                cont_token = row["tokens"][0]
+                cont_token["_continuation"] = True
+                prev["tokens"].append(cont_token)
+                prev["x0"] = min(prev["x0"], row["x0"])
+                prev["x1"] = max(prev["x1"], row["x1"])
+                prev["y0"] = min(prev["y0"], row["y0"])
+                prev["y1"] = max(prev["y1"], row["y1"])
+                prev["tokens"].sort(key=lambda t: t["x0"])
+            else:
+                merged.append(row)
+
+        return merged
+
+    def _try_recover_header_via_spans(
+        self,
+        table: "Table",
+        page: fitz.Page,
+        guides: List[float],
+    ) -> List[Cell] | None:
+        """Recover a header row using span-level text extraction.
+
+        When word-level extraction splits header characters into
+        individual tokens, span-level extraction (dict mode) preserves
+        the original grouping.  This method checks if the page has
+        visible horizontal lines above the table and, if so, uses
+        spans to build a header row that aligns with the body columns.
+        """
+        table_top = table.bbox.y0
+
+        # Check for a horizontal line within 15pt above the table top.
+        has_line_above = False
+        line_y = table_top
+        for drawing in page.get_drawings():
+            rect = drawing.get("rect")
+            if rect and rect.height < 2 and rect.width > 4:
+                y_mid = (rect.y0 + rect.y1) / 2
+                if table_top - 15 <= y_mid <= table_top:
+                    has_line_above = True
+                    line_y = min(line_y, y_mid)
+                    break
+
+        if not has_line_above:
+            return None
+
+        # Extract spans from the area above the line (the header area).
+        td = page.get_text("dict", flags=fitz.TEXT_PRESERVE_WHITESPACE)
+        header_tokens = []
+        for block in td["blocks"]:
+            if block["type"] != 0:
+                continue
+            for line in block["lines"]:
+                for span in line["spans"]:
+                    sy = (span["bbox"][1] + span["bbox"][3]) / 2
+                    if line_y - 20 <= sy <= line_y + 2:
+                        text = span["text"].strip()
+                        if text:
+                            header_tokens.append({
+                                "text": text,
+                                "x0": span["bbox"][0],
+                                "y0": span["bbox"][1],
+                                "x1": span["bbox"][2],
+                                "y1": span["bbox"][3],
+                                "is_numeric": False,
+                            })
+
+        if len(header_tokens) < 2:
+            return None
+
+        # Validate: header span count should roughly match table columns.
+        # Spans often have different x-positions than body guides (centered
+        # vs. left-aligned), so we check count instead of alignment.
+        if not (2 <= len(header_tokens) <= table.cols + 2):
+            return None
+
+        # Build header cells.
+        cells = []
+        for i, token in enumerate(header_tokens):
+            cells.append(Cell(
+                text=token["text"],
+                row_index=0,
+                col_index=i,
+                bbox=BBox(token["x0"], token["y0"], token["x1"], token["y1"]),
+            ))
+        return cells
 
     def _assign_text_to_cells(
         self, cells: List[Cell], page: fitz.Page

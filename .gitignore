@@ -35,5 +35,5 @@ codex-index
 codex-index.lock
 codex-objects-1/
 src/models/
-
+output*
 
