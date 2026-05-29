@@ -28,6 +28,31 @@ with PDFParser("input.pdf") as parser:
 python -m hexai_pdf_parser.cli input.pdf -o out --ml
 ```
 
+## Table Layout Rules
+
+通过 JSON 配置文件定制表格提取行为：
+
+```bash
+python -m hexai_pdf_parser.cli input.pdf -o out --table-config config.json
+```
+
+配置文件示例：
+
+```json
+{
+  "profiles": [
+    {
+      "name": "financial",
+      "priority": 10,
+      "matcher": {"required_keywords": ["资产负债表"]},
+      "structure_rules": {"trim_trailing_summary": true}
+    }
+  ]
+}
+```
+
+详见 `docs/algorithm.md` 第 6 节。
+
 ## Development
 
 ```bash

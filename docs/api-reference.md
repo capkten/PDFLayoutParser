@@ -475,3 +475,26 @@ with PDFParser("financial_report.pdf") as parser:
     # 8. 完整解析并输出所有文件
     parser.parse(output_dir="./output/full")
 ```
+
+---
+
+## 表格布局配置
+
+`Pipeline` 和 CLI 均支持通过 JSON 配置文件定制表格提取行为：
+
+```python
+from hexai_pdf_parser import TableConfig
+from hexai_pdf_parser.pipeline import Pipeline
+
+config = TableConfig.load("config.json")
+pipeline = Pipeline("input.pdf", output_dir="out", table_config=config)
+pipeline.run()
+```
+
+或通过 CLI：
+
+```bash
+python -m hexai_pdf_parser.cli input.pdf -o out --table-config config.json
+```
+
+配置文件格式和规则说明详见 `docs/algorithm.md` 第 6 节。

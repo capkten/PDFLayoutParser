@@ -492,3 +492,101 @@ pix.save(f"page-{page_index:03d}.png")
    - 兜底分支：`_should_fallback` → `_extract_via_pymupdf`。
 4. 输出层：`json_writer.py` 与 `markdown_writer.py` 更像格式适配器，独立看即可。
 5. `tests/test_table_extractor.py` 覆盖了线段法 vs PyMuPDF 兜底的关键分支，是修改前必读的回归用例。
+
+---
+
+## 6. 表格布局规则系统（Table Layout Rule System）
+
+表格布局规则系统允许通过 JSON 配置文件对表格提取流程进行定制。它在基础提取（线段投影 / PyMuPDF / 文本对齐）完成后执行，通过 profile 匹配确定当前页面适用哪组规则，再依次应用 region 规则和 structure 规则。
+
+### 6.1 执行顺序
+
+```
+TableExtractor.extract(page)
+  │
+  ├─ 基础提取：_extract_via_lines → _extract_via_pymupdf（兜底）
+  ├─ ML 检测（可选）
+  ├─ 文本对齐检测（_extract_via_text_alignment）
+  │
+  └─ _apply_layout_rules（仅当 table_config 含 profiles 时）
+       ├─ 1. Profile 匹配（keyword 评分 + priority 排序）
+       ├─ 2. Region 规则（锚点扩展、停止词截断、区域合并）
+       ├─ 3. Structure 规则（表头行标注、主列选择、末尾汇总行修剪）
+       └─ 4. Handler 调用（注册的 Python 函数，用于复杂布局）
+```
+
+无 `table_config` 时行为与旧版完全兼容。
+
+### 6.2 配置文件格式
+
+配置文件为 UTF-8 JSON，结构如下：
+
+```json
+{
+  "settings": {
+    "line_tolerance": 2.0,
+    "merge_group_tol": 0.3,
+    "separator_min_width": 200.0,
+    "separator_max_height": 1.5
+  },
+  "profiles": [
+    {
+      "name": "financial_balance_sheet",
+      "priority": 10,
+      "matcher": {
+        "required_keywords": ["资产负债表"],
+        "optional_keywords": ["合计", "总计"],
+        "min_match_score": 0.5
+      },
+      "region_rules": {
+        "expand_anchors": ["资产负债表"],
+        "stop_keywords": ["注", "说明"],
+        "min_row_window": 3
+      },
+      "structure_rules": {
+        "header_rows": 2,
+        "trim_trailing_summary": true
+      }
+    }
+  ]
+}
+```
+
+- **settings**: 全局阈值，覆盖 `TableExtractor` 的默认值。
+- **profiles**: 命名规则集，按 `priority` 和匹配得分排序。
+- **matcher**: 通过 `required_keywords`（必须全部出现）、`optional_keywords`（加分项）、`forbidden_keywords`（出现即排除）进行页面匹配。
+- **region_rules**: 参数化的区域修正规则。
+- **structure_rules**: 参数化的结构修正规则。
+
+### 6.3 Parameter 规则 vs Handler 规则
+
+- **Parameter 规则**：通过 JSON 字段配置（如 `stop_keywords`、`header_rows`），适合常见布局。
+- **Handler 规则**：通过 `handler` 字段指定已注册的 Python 函数名，适合复杂布局（如跨页合并、多级表头）。
+
+注册自定义 handler：
+
+```python
+from hexai_pdf_parser.table_rule_handlers import register_structure_handler
+from hexai_pdf_parser.table_structure_rules import TableStructureCandidate
+
+@register_structure_handler("my_custom_handler")
+def my_handler(candidate: TableStructureCandidate, params: dict):
+    # 自定义逻辑
+    return candidate
+```
+
+### 6.4 CLI 使用
+
+```bash
+python -m hexai_pdf_parser.cli input.pdf -o out --table-config config.json
+```
+
+### 6.5 相关文件
+
+| 文件 | 职责 |
+| ---- | ---- |
+| `table_config.py` | 配置数据模型、JSON 加载 |
+| `table_profile_matcher.py` | Profile 匹配评分 |
+| `table_region_rules.py` | Region 规则引擎 |
+| `table_structure_rules.py` | Structure 规则引擎 |
+| `table_rule_handlers.py` | Handler 注册表 |
