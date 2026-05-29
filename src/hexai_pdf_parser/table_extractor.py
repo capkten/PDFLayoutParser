@@ -19,14 +19,26 @@ Special handling for WPS/Office financial tables:
 
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import fitz
 
 from hexai_pdf_parser.models import BBox, Cell, Table
+from hexai_pdf_parser.table_config import TableConfig, LayoutProfile
+from hexai_pdf_parser.table_profile_matcher import PageFeatures, match_profiles
+from hexai_pdf_parser.table_region_rules import (
+    TableRegionCandidate,
+    apply_region_rules as apply_region_rules_fn,
+)
+from hexai_pdf_parser.table_structure_rules import apply_structure_rules
+from hexai_pdf_parser.table_rule_handlers import (
+    get_region_handler,
+    get_structure_handler,
+)
 from hexai_pdf_parser.text_region_detector import (
     HorizontalSeparator,
     detect_candidate_regions,
+    detect_separator_driven_regions,
 )
 
 
@@ -55,6 +67,7 @@ class TableExtractor:
         use_ml: bool = False,
         ml_model_path: str | None = None,
         ml_confidence: float = 0.25,
+        table_config: TableConfig | None = None,
         ):
         self.line_tolerance = line_tolerance
         self.merge_group_tol = merge_group_tol
@@ -66,6 +79,21 @@ class TableExtractor:
         self._ml_confidence = ml_confidence
         self._ml_detector = None  # Lazy initialization
         self._last_text_alignment_debug: dict | None = None
+        self._table_config = table_config
+
+        # Override scalar args from config when provided
+        if table_config is not None:
+            settings = table_config.settings
+            self.line_tolerance = settings.line_tolerance
+            self.merge_group_tol = settings.merge_group_tol
+            self.row_gap_threshold = settings.row_gap_threshold
+            self.fallback_max_cols = settings.fallback_max_cols
+            self.fallback_max_tables = settings.fallback_max_tables
+            self._separator_min_width = settings.separator_min_width
+            self._separator_max_height = settings.separator_max_height
+        else:
+            self._separator_min_width = 200.0
+            self._separator_max_height = 1.5
 
     def extract(self, page: fitz.Page) -> List[Table]:
         """Return a list of :class:`Table` objects detected on *page*."""
@@ -97,6 +125,128 @@ class TableExtractor:
             for tt in text_tables:
                 if not self._bbox_overlaps_any(tt.bbox, existing_bboxes):
                     tables.append(tt)
+
+        # Apply layout rule system when a config with profiles is provided.
+        if self._table_config and self._table_config.profiles:
+            tables = self._apply_layout_rules(page, tables)
+
+        return tables
+
+    def _collect_page_text_lines(self, page: fitz.Page) -> List[str]:
+        """Collect normalized text lines from a page for profile matching."""
+        try:
+            blocks = page.get_text("dict", flags=fitz.TEXT_PRESERVE_WHITESPACE)["blocks"]
+        except Exception:
+            return []
+        lines: List[str] = []
+        for block in blocks:
+            for line in block.get("lines", []):
+                text = "".join(span.get("text", "") for span in line.get("spans", []))
+                stripped = text.strip()
+                if stripped:
+                    lines.append(stripped)
+        return lines
+
+    def _apply_layout_rules(
+        self, page: fitz.Page, tables: List[Table]
+    ) -> List[Table]:
+        """Run profile matching and apply region/structure rules."""
+        assert self._table_config is not None
+
+        # 1. Profile matching
+        text_lines = self._collect_page_text_lines(page)
+        features = PageFeatures(text_lines=text_lines)
+        profile = match_profiles(self._table_config.profiles, features)
+        if profile is None:
+            return tables
+
+        # 2. Apply region rules
+        if profile.region_rules.enabled:
+            raw_rows = self._collect_text_rows(page.get_text("words"))
+
+            # Build an initial candidate list: anchor-driven if anchors are
+            # configured, otherwise derive from existing tables so that a
+            # handler-only profile still receives candidates to refine.
+            if profile.region_rules.expand_anchors:
+                region_candidates = apply_region_rules_fn(
+                    profile.region_rules, raw_rows
+                )
+            else:
+                region_candidates = [
+                    TableRegionCandidate(
+                        bbox=t.bbox,
+                        rows=[],
+                        diagnostics={"source": t.source},
+                    )
+                    for t in tables
+                ]
+
+            # Let a registered handler refine the candidates regardless of
+            # whether they came from anchors or from existing tables.
+            if profile.region_rules.handler:
+                try:
+                    handler = get_region_handler(profile.region_rules.handler)
+                    region_candidates = handler(region_candidates, raw_rows, {})
+                except KeyError:
+                    pass
+
+            # Merge anchor-driven regions into the table list: add a
+            # region as a new table only if it doesn't overlap existing
+            # tables and contains enough rows to be plausible.
+            if profile.region_rules.expand_anchors:
+                existing_bboxes = [t.bbox for t in tables]
+                for candidate in region_candidates:
+                    if len(candidate.rows) < profile.region_rules.min_row_window:
+                        continue
+                    if not self._bbox_overlaps_any(
+                        candidate.bbox, existing_bboxes
+                    ):
+                        row_count, col_count, cells = self._extract_cells_from_region(
+                            page, candidate.bbox
+                        )
+                        if row_count >= profile.region_rules.min_row_window:
+                            tables.append(
+                                Table(
+                                    bbox=candidate.bbox,
+                                    rows=row_count,
+                                    cols=col_count,
+                                    cells=cells,
+                                    confidence=0.7,
+                                    source="region_rule",
+                                )
+                            )
+                            existing_bboxes.append(candidate.bbox)
+
+        # 3. Apply structure rules to each table
+        if profile.structure_rules.enabled:
+            corrected: List[Table] = []
+            for table in tables:
+                corrected.append(apply_structure_rules(profile.structure_rules, table))
+            tables = corrected
+
+            # Apply structure handler if specified — always write back so
+            # cell-level corrections (text, bbox, col_index) take effect.
+            if profile.structure_rules.handler:
+                try:
+                    handler = get_structure_handler(profile.structure_rules.handler)
+                    from hexai_pdf_parser.table_structure_rules import TableStructureCandidate
+                    for i, table in enumerate(tables):
+                        candidate = TableStructureCandidate(
+                            rows=table.rows,
+                            cols=table.cols,
+                            cells=list(table.cells),
+                        )
+                        result = handler(candidate, {})
+                        tables[i] = Table(
+                            bbox=table.bbox,
+                            rows=result.rows,
+                            cols=result.cols,
+                            cells=result.cells,
+                            confidence=table.confidence,
+                            source=table.source,
+                        )
+                except KeyError:
+                    pass
 
         return tables
 
@@ -1532,27 +1682,17 @@ class TableExtractor:
         page: fitz.Page,
     ) -> list[HorizontalSeparator]:
         separators: list[HorizontalSeparator] = []
-        try:
-            drawings = page.get_drawings()
-        except Exception:
-            return separators
 
-        for drawing in drawings:
-            for item in drawing.get("items", []):
-                if item[0] != "re":
-                    continue
-                rect = item[1]
-                width = rect.x1 - rect.x0
-                height = rect.y1 - rect.y0
-                if width < 200 or height > 1.5:
-                    continue
-                separators.append(
-                    HorizontalSeparator(
-                        x0=float(rect.x0),
-                        x1=float(rect.x1),
-                        y=float((rect.y0 + rect.y1) / 2.0),
-                    )
-                )
+        # First, try to detect text-based separators (lines of dashes/underscores)
+        text_separators = self._extract_text_based_separators(page)
+        separators.extend(text_separators)
+
+        # Then, try to detect drawing-based separators
+        drawing_separators = self._extract_drawing_separators(page)
+        separators.extend(drawing_separators)
+
+        if not separators:
+            return []
 
         separators.sort(key=lambda item: (item.y, item.x0))
         deduped: list[HorizontalSeparator] = []
@@ -1571,6 +1711,109 @@ class TableExtractor:
             else:
                 deduped.append(separator)
         return deduped
+
+    def _extract_text_based_separators(
+        self,
+        page: fitz.Page,
+    ) -> list[HorizontalSeparator]:
+        """Detect horizontal separators made of text characters (dashes, underscores, etc.)."""
+        separators: list[HorizontalSeparator] = []
+        try:
+            words = page.get_text("words")
+        except Exception:
+            return separators
+
+        # Patterns that indicate a text-based separator line
+        separator_chars = {"-", "_", "—", "–", "─", "━", "＝", "□", "■", "▪", "▫"}
+
+        # Group words by y position
+        words_by_y: dict[float, list] = defaultdict(list)
+        for word in words:
+            x0, y0, x1, y1 = word[0], word[1], word[2], word[3]
+            text = word[4].strip()
+            y_center = (y0 + y1) / 2.0
+            words_by_y[y_center].append((x0, x1, text))
+
+        # Check each y position for separator patterns
+        page_width = page.rect.width
+        for y, word_list in words_by_y.items():
+            # Check if all words at this y are separator characters
+            separator_words = [w for w in word_list if len(w[2]) > 0 and all(c in separator_chars for c in w[2])]
+            if not separator_words:
+                continue
+
+            # Check if combined width is substantial
+            min_x = min(w[0] for w in separator_words)
+            max_x = max(w[1] for w in separator_words)
+            total_width = max_x - min_x
+
+            # Require separator to span at least 100 pixels
+            # (This catches typical dash/underscore separator lines)
+            min_separator_width = 100.0
+            if total_width >= min_separator_width:
+                separators.append(
+                    HorizontalSeparator(
+                        x0=float(min_x),
+                        x1=float(max_x),
+                        y=float(y),
+                    )
+                )
+
+        return separators
+
+    def _extract_drawing_separators(
+        self,
+        page: fitz.Page,
+    ) -> list[HorizontalSeparator]:
+        """Detect horizontal separators from page drawings (rectangles, lines)."""
+        separators: list[HorizontalSeparator] = []
+        try:
+            drawings = page.get_drawings()
+        except Exception:
+            return separators
+
+        # Use a larger threshold for line stroke width to catch thicker separators
+        # The _separator_max_height is typically 1.5, but real PDFs often have
+        # stroke widths of 2.0-3.0 for visible separator lines
+        max_line_stroke = max(self._separator_max_height, 3.0)
+
+        for drawing in drawings:
+            stroke_width = drawing.get("width", 1.0)
+            for item in drawing.get("items", []):
+                if item[0] == "re":
+                    rect = item[1]
+                    width = rect.x1 - rect.x0
+                    height = rect.y1 - rect.y0
+                    if width < self._separator_min_width or height > self._separator_max_height:
+                        continue
+                    separators.append(
+                        HorizontalSeparator(
+                            x0=float(rect.x0),
+                            x1=float(rect.x1),
+                            y=float((rect.y0 + rect.y1) / 2.0),
+                        )
+                    )
+                elif item[0] == "l":
+                    p1, p2 = item[1], item[2]
+                    line_width = abs(p2.x - p1.x)
+                    line_height = abs(p2.y - p1.y)
+                    # Accept near-horizontal lines that are long enough
+                    # Use larger stroke width threshold to catch thicker lines
+                    if line_width < self._separator_min_width:
+                        continue
+                    if line_height > max_line_stroke:
+                        continue
+                    if stroke_width > max_line_stroke:
+                        continue
+                    separators.append(
+                        HorizontalSeparator(
+                            x0=float(min(p1.x, p2.x)),
+                            x1=float(max(p1.x, p2.x)),
+                            y=float((p1.y + p2.y) / 2.0),
+                        )
+                    )
+
+        return separators
 
     def _detect_text_regions(
         self,
@@ -1607,6 +1850,16 @@ class TableExtractor:
             visual_rows,
             horizontal_separators=separators,
         )
+
+        # If no candidate regions found, try separator-driven detection
+        # This handles dense prose pages where _group_contiguous_runs filters everything
+        if not candidate_regions and separators:
+            separator_regions = detect_separator_driven_regions(
+                visual_rows,
+                separators,
+                page.rect.width,
+            )
+            candidate_regions.extend(separator_regions)
 
         mapped_regions: List[dict] = []
         for region in candidate_regions:
@@ -1752,21 +2005,70 @@ class TableExtractor:
                     guides = self._infer_column_guides(region_rows)
                     if len(guides) < 2:
                         continue
-                    if (
-                        len(leading_rows) == 1
-                        and region_rows[0]["y0"] - leading_rows[-1]["y1"] >= 16.0
-                    ):
-                        merged_rows = self._merge_header_like_span(
-                            leading_rows,
-                            region_rows,
-                            guides,
+                    # Merge a single leading row as header if it looks like
+                    # a table header. We check two conditions:
+                    # 1. Token count matches column count (len(guides)) —
+                    #    this handles header rows with different alignment
+                    #    (e.g., centered) from the body rows.
+                    # 2. Vertical gap is reasonable (>= 16px for a table title).
+                    if leading_rows:
+                        is_header_by_column_count = len(leading_rows[-1]["tokens"]) == len(guides)
+                        is_header_by_gap = (
+                            region_rows[0]["y0"] - leading_rows[-1]["y1"] >= 16.0
                         )
-                        if merged_rows is not region_rows:
-                            for header_row in leading_rows:
-                                header_row["_is_merged_header"] = True
-                            region_rows = merged_rows
+                        # Check if there's a separator between header and body.
+                        # Separator presence strongly indicates a table structure
+                        # where the header row should be included.
+                        has_separator = False
+                        header_bottom = leading_rows[-1]["y1"]
+                        body_top = region_rows[0]["y0"]
+                        for sep in self._extract_text_region_separators(page):
+                            if header_bottom <= sep.y <= body_top:
+                                has_separator = True
+                                break
 
-            region_bbox = self._rows_bbox(region_rows)
+                        if len(leading_rows) == 1 and (
+                            is_header_by_gap or (is_header_by_column_count and has_separator)
+                        ):
+                            if is_header_by_column_count:
+                                # Direct merge: header row has same number of tokens
+                                # as columns. Only bypass the alignment check when:
+                                # 1. The header row has NO tokens aligned with guides
+                                #    (hit_count == 0) — handles centered/offset headers
+                                # 2. There's a visible separator between header and body
+                                #    OR the vertical gap is large enough (>= 16px)
+                                header_score = self._score_row_against_guides(
+                                    leading_rows[-1], guides
+                                )
+                                if (
+                                    header_score["hit_count"] == 0
+                                    and (has_separator or is_header_by_gap)
+                                ):
+                                    for header_row in leading_rows:
+                                        header_row["_is_merged_header"] = True
+                                    region_rows = leading_rows + region_rows
+                                else:
+                                    merged_rows = self._merge_header_like_span(
+                                        leading_rows,
+                                        region_rows,
+                                        guides,
+                                    )
+                                    if merged_rows is not region_rows:
+                                        for header_row in leading_rows:
+                                            header_row["_is_merged_header"] = True
+                                        region_rows = merged_rows
+                            else:
+                                merged_rows = self._merge_header_like_span(
+                                    leading_rows,
+                                    region_rows,
+                                    guides,
+                                )
+                                if merged_rows is not region_rows:
+                                    for header_row in leading_rows:
+                                        header_row["_is_merged_header"] = True
+                                    region_rows = merged_rows
+
+                region_bbox = self._rows_bbox(region_rows)
 
             row_count, col_count, cells = self._build_text_alignment_table(
                 region_rows, guides, region_bbox

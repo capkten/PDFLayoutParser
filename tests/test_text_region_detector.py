@@ -190,3 +190,23 @@ def test_detect_candidate_regions_expands_upward_for_dense_multi_fragment_header
     regions = detect_candidate_regions(rows, horizontal_separators=separators)
     assert len(regions) == 1
     assert regions[0].bbox.y0 <= 12
+
+
+def test_detect_candidate_regions_merges_header_and_body_across_long_separator():
+    """A long separator spanning the page width merges header rows above
+    with the stable multi-row body below into a single candidate region."""
+    rows = [
+        # Header span above separator
+        _row(("项目", 20, 30, 70, 42), ("本期金额", 180, 30, 240, 42), ("上期金额", 300, 30, 360, 42)),
+        # Multi-row body below separator with aligned numeric columns
+        _row(("营业收入", 20, 66, 80, 78), ("1,234,567.89", 180, 66, 280, 78), ("987,654.32", 300, 66, 390, 78)),
+        _row(("营业成本", 20, 84, 80, 96), ("2,345,678.90", 180, 84, 280, 96), ("876,543.21", 300, 84, 390, 96)),
+        _row(("净利润", 20, 102, 70, 114), ("3,456,789.01", 180, 102, 280, 114), ("765,432.10", 300, 102, 390, 114)),
+    ]
+    # Long separator spanning from x=20 to x=400 (page content width)
+    separators = [HorizontalSeparator(x0=20, x1=400, y=52)]
+    regions = detect_candidate_regions(rows, horizontal_separators=separators)
+    assert len(regions) == 1
+    # Region must include both header (y<=30) and body (y>=102)
+    assert regions[0].bbox.y0 <= 30
+    assert regions[0].bbox.y1 >= 114
