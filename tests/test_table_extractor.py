@@ -1362,3 +1362,59 @@ def test_plain_grid_table_is_not_changed_by_header_normalization(tmp_dir):
     assert table.cols == 2
     assert all(cell.rowspan == 1 for cell in table.cells)
     assert all(cell.colspan == 1 for cell in table.cells)
+
+
+def test_promote_grouped_financial_header_sets_rowspan_and_colspan():
+    from hexai_pdf_parser.table_header_normalizer import normalize_table_headers
+
+    # Build a table that mimics the page-46 financial header structure:
+    #   Row 0: [empty, "本年金额", empty, empty, empty, empty, empty, empty]
+    #   Row 1: ["项目", "年初资产总额", "年初负债总额", "年初资本公积",
+    #           "年初盈余公积", "年初未分配利润", "年初少数股东权益", "年初归属于母公司"]
+    #   Row 2+: body rows (omitted for brevity; not needed for header detection)
+    cells: list[Cell] = [
+        Cell(text="",            row_index=0, col_index=0, bbox=BBox(0,  0, 10, 10)),
+        Cell(text="本年金额",     row_index=0, col_index=1, bbox=BBox(10, 0, 20, 10)),
+        Cell(text="",            row_index=0, col_index=2, bbox=BBox(20, 0, 30, 10)),
+        Cell(text="",            row_index=0, col_index=3, bbox=BBox(30, 0, 40, 10)),
+        Cell(text="",            row_index=0, col_index=4, bbox=BBox(40, 0, 50, 10)),
+        Cell(text="",            row_index=0, col_index=5, bbox=BBox(50, 0, 60, 10)),
+        Cell(text="",            row_index=0, col_index=6, bbox=BBox(60, 0, 70, 10)),
+        Cell(text="",            row_index=0, col_index=7, bbox=BBox(70, 0, 80, 10)),
+        Cell(text="项目",        row_index=1, col_index=0, bbox=BBox(0,  10, 10, 20)),
+        Cell(text="年初资产总额", row_index=1, col_index=1, bbox=BBox(10, 10, 20, 20)),
+        Cell(text="年初负债总额", row_index=1, col_index=2, bbox=BBox(20, 10, 30, 20)),
+        Cell(text="年初资本公积", row_index=1, col_index=3, bbox=BBox(30, 10, 40, 20)),
+        Cell(text="年初盈余公积", row_index=1, col_index=4, bbox=BBox(40, 10, 50, 20)),
+        Cell(text="年初未分配利润", row_index=1, col_index=5, bbox=BBox(50, 10, 60, 20)),
+        Cell(text="年初少数股东权益", row_index=1, col_index=6, bbox=BBox(60, 10, 70, 20)),
+        Cell(text="年初归属于母公司", row_index=1, col_index=7, bbox=BBox(70, 10, 80, 20)),
+    ]
+
+    table = Table(
+        bbox=BBox(0, 0, 80, 30),
+        rows=3,
+        cols=8,
+        cells=cells,
+        confidence=0.9,
+        source="PyMuPDF.find_tables",
+    )
+
+    # page argument is only used for page-text scanning; not needed for
+    # the pattern detected via table-internal cells, but the API requires it.
+    mock_page = SimpleNamespace()
+
+    result = normalize_table_headers(table, mock_page)
+
+    # Group label "本年金额" should span all columns except the left anchor.
+    group_label = next(c for c in result.cells if "本年金额" in c.text)
+    assert group_label.colspan == 7
+
+    # Left anchor "项目" should span both header rows.
+    left_anchor = next(c for c in result.cells if c.text == "项目")
+    assert left_anchor.rowspan == 2
+
+    # Body cells are unchanged.
+    body_cell = next(c for c in result.cells if c.text == "年初资产总额")
+    assert body_cell.rowspan == 1
+    assert body_cell.colspan == 1

@@ -24,6 +24,7 @@ from typing import List, Tuple
 import fitz
 
 from hexai_pdf_parser.models import BBox, Cell, Table
+from hexai_pdf_parser.table_header_normalizer import normalize_table_headers
 from hexai_pdf_parser.text_region_detector import (
     HorizontalSeparator,
     detect_candidate_regions,
@@ -97,6 +98,9 @@ class TableExtractor:
             for tt in text_tables:
                 if not self._bbox_overlaps_any(tt.bbox, existing_bboxes):
                     tables.append(tt)
+
+        # Normalise grouped financial headers (e.g. rowspan/colspan).
+        tables = [normalize_table_headers(t, page) for t in tables]
 
         return tables
 
