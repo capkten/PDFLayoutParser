@@ -142,7 +142,7 @@ class TableExtractor:
         if self._table_config and self._table_config.profiles:
             tables = self._apply_layout_rules(page, tables)
 
-        # Normalise grouped financial headers (e.g. rowspan/colspan).
+        # Normalize grouped financial headers once, after all table rules.
         tables = [normalize_table_headers(t, page) for t in tables]
 
         return tables
@@ -262,9 +262,6 @@ class TableExtractor:
                         )
                 except KeyError:
                     pass
-
-        # Normalise grouped financial headers (e.g. rowspan/colspan).
-        tables = [normalize_table_headers(t, page) for t in tables]
 
         return tables
 
