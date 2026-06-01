@@ -97,3 +97,6 @@ JSON 输出格式：顶层键为 `document`（元数据）和 `pages`（页面�
 ## 设计规格
 
 完整设计规格见 `docs/superpowers/specs/2026-04-28-hexai_pdf_parser-design.md`（中文）。v1.0 明确不做：OCR、图像语义识别、印章自动检测、多栏阅读顺序优化、页眉页脚自动剔除。
+
+## 读图规范
+当需要读取图片的时候，派发subagent出去，使用haiku或者mimo-v2.5模型进行读取

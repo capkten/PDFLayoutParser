@@ -3007,9 +3007,10 @@ class TableExtractor:
                 len(row["tokens"]) == 1
                 and not row["tokens"][0].get("is_numeric", False)
                 and 0 <= gap < effective_limit
-                and prev_is_table_row
             ):
-                is_cont[i] = True
+                # Classic case: continuation after a multi-token row.
+                if prev_is_table_row:
+                    is_cont[i] = True
 
         # Second pass: decide merge direction for each continuation.
         # If the continuation token's x-position does NOT overlap with
@@ -3017,6 +3018,7 @@ class TableExtractor:
         # Otherwise, merge backward (into previous row).
         merged: List[dict] = []
         skip_next = False
+        backward_merged_indices: set[int] = set()
         for i in range(len(rows)):
             if skip_next:
                 skip_next = False
@@ -3029,13 +3031,21 @@ class TableExtractor:
             row = rows[i]
             cont_x = row["tokens"][0]["x0"]
 
-            # Try forward merge: does the next row have a token at cont_x?
+            # Try forward merge: does the next row cover cont_x?
+            # Check for a column gap: if the continuation sits between
+            # two tokens of the next row, it belongs in that row's gap
+            # column and should merge forward rather than backward.
             if i + 1 < len(rows):
                 next_row = rows[i + 1]
-                next_has_token_at_x = any(
-                    t["x0"] <= cont_x <= t["x1"] for t in next_row["tokens"]
-                )
-                if not next_has_token_at_x:
+                next_covers_cont_x = next_row["x0"] <= cont_x <= next_row["x1"]
+                is_in_column_gap = False
+                if next_covers_cont_x:
+                    xs = sorted(t["x0"] for t in next_row["tokens"])
+                    for ti in range(len(xs) - 1):
+                        if xs[ti] < cont_x < xs[ti + 1]:
+                            is_in_column_gap = True
+                            break
+                if not next_covers_cont_x or is_in_column_gap:
                     # Merge forward: prepend continuation to next row.
                     cont_token = row["tokens"][0]
                     cont_token["_continuation"] = True
@@ -3058,8 +3068,55 @@ class TableExtractor:
                 prev["y0"] = min(prev["y0"], row["y0"])
                 prev["y1"] = max(prev["y1"], row["y1"])
                 prev["tokens"].sort(key=lambda t: t["x0"])
+                backward_merged_indices.add(i)
             else:
                 merged.append(row)
+
+        # Third pass: re-check continuations after backward merges.
+        # A backward merge can turn a single-token row into a multi-token
+        # row, making its successor a valid continuation candidate.
+        # Only forward-merge these new continuations when they sit in a
+        # column gap of the *next* row to avoid regressions.
+        new_cont_indices = []
+        for i in range(1, len(rows)):
+            if is_cont[i]:
+                continue
+            row = rows[i]
+            if len(row["tokens"]) != 1 or row["tokens"][0].get("is_numeric"):
+                continue
+            # Check if the previous row was backward-merged.
+            if (i - 1) not in backward_merged_indices:
+                continue
+            gap = row["y0"] - rows[i - 1]["y1"]
+            if not (0 <= gap < max(gap_limit, 22.0)):
+                continue
+            # Only forward-merge if token sits in column gap of NEXT row.
+            if i + 1 < len(rows):
+                next_row = rows[i + 1]
+                cx = (row["tokens"][0]["x0"] + row["tokens"][0]["x1"]) / 2.0
+                if next_row["x0"] <= cx <= next_row["x1"]:
+                    xs = sorted(t["x0"] for t in next_row["tokens"])
+                    for ti in range(len(xs) - 1):
+                        if xs[ti] < cx < xs[ti + 1]:
+                            new_cont_indices.append(i)
+                            break
+
+        # Process new continuations: always forward-merge into next row.
+        for idx in new_cont_indices:
+            row = rows[idx]
+            if idx + 1 >= len(rows):
+                continue
+            next_row = rows[idx + 1]
+            cont_token = row["tokens"][0]
+            cont_token["_continuation"] = True
+            next_row["tokens"].insert(0, cont_token)
+            next_row["tokens"].sort(key=lambda t: t["x0"])
+            next_row["x0"] = min(next_row["x0"], row["x0"])
+            next_row["x1"] = max(next_row["x1"], row["x1"])
+            next_row["y0"] = min(next_row["y0"], row["y0"])
+            next_row["y1"] = max(next_row["y1"], row["y1"])
+            # Remove the now-merged row from the output.
+            merged = [r for r in merged if r is not row]
 
         return merged
 
