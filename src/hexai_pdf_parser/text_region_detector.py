@@ -231,6 +231,101 @@ def score_row_structure(row: Any) -> dict[str, Any]:
     }
 
 
+def detect_separator_driven_regions(
+    all_rows: list[Any],
+    horizontal_separators: list[HorizontalSeparator] | None,
+    page_width: float,
+) -> list[CandidateRegion]:
+    """Detect candidate regions driven by horizontal separators.
+
+    This function handles the case where:
+    1. A visible separator line exists on the page
+    2. The rows below the separator are dense prose (not sparse/structured)
+    3. The rows still have repeated alignment patterns indicating table structure
+
+    Unlike `detect_candidate_regions()` which first filters rows through
+    `_group_contiguous_runs()`, this function examines ALL rows near a separator.
+    """
+    if not horizontal_separators or not all_rows:
+        return []
+
+    regions: list[CandidateRegion] = []
+
+    for separator in horizontal_separators:
+        # Find rows below the separator
+        rows_below: list[Any] = []
+        for row in all_rows:
+            if row.bbox.y0 > separator.y:
+                rows_below.append(row)
+
+        if len(rows_below) < 2:
+            continue
+
+        # Check if rows below have repeated alignment patterns
+        # Use relaxed criteria: look for ANY repeated column alignments
+        alignment_count = _count_repeated_alignments(rows_below)
+        if alignment_count < 1:
+            continue
+
+        # Count how many rows have multiple fragments (indicating columns)
+        multi_fragment_count = sum(
+            1 for row in rows_below if len(row.fragments) >= 2
+        )
+
+        # Require at least 2 rows with multiple fragments
+        if multi_fragment_count < 2:
+            continue
+
+        # Try to include a header row above the separator
+        rows_above: list[Any] = []
+        for row in all_rows:
+            if row.bbox.y1 < separator.y:
+                rows_above.append(row)
+
+        # Find the row immediately above the separator
+        header_row = None
+        if rows_above:
+            # Sort by y1 (bottom of row), take the one closest to separator
+            sorted_above = sorted(rows_above, key=lambda r: r.bbox.y1, reverse=True)
+            header_row = sorted_above[0] if sorted_above else None
+
+        # Build the candidate region
+        region_rows = list(rows_below)
+        if header_row and len(header_row.fragments) >= 2:
+            # Check if header row has aligned columns with body rows
+            header_signatures = set(
+                tuple(sorted([round(f.bbox.x0 / 10.0) * 10.0 for f in header_row.fragments]))
+            )
+            body_signatures = set()
+            for row in rows_below[:5]:  # Check first 5 body rows
+                body_signatures.add(
+                    tuple(sorted([round(f.bbox.x0 / 10.0) * 10.0 for f in row.fragments]))
+                )
+            # If there's overlap in column positions, include header
+            if header_signatures & body_signatures:
+                region_rows = [header_row] + region_rows
+
+        if len(region_rows) < 2:
+            continue
+
+        regions.append(
+            CandidateRegion(
+                rows=region_rows,
+                bbox=CandidateRegion.bbox_union([row.bbox for row in region_rows]),
+                features={
+                    "source": "separator_driven",
+                    "separator_y": separator.y,
+                    "repeated_alignment_count": alignment_count,
+                    "multi_fragment_count": multi_fragment_count,
+                    "has_header": header_row is not None and len(header_row.fragments) >= 2,
+                },
+                score=float(alignment_count + multi_fragment_count * 0.5),
+            )
+        )
+
+    return regions
+
+
 def detect_candidate_regions(
     rows: list[Any],
     horizontal_separators: list[HorizontalSeparator] | None = None,

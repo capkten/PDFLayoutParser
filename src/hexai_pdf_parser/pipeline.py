@@ -23,6 +23,7 @@ from hexai_pdf_parser.markdown_writer import MarkdownWriter
 from hexai_pdf_parser.models import BBox, Document, LayoutElement, Seal
 from hexai_pdf_parser.render_engine import RenderEngine
 from hexai_pdf_parser.table_extractor import TableExtractor
+from hexai_pdf_parser.table_config import TableConfig
 from hexai_pdf_parser.text_alignment_debug import render_text_alignment_debug_page
 from hexai_pdf_parser.text_extractor import TextExtractor
 
@@ -47,6 +48,7 @@ class Pipeline:
         ml_model_path: Optional[str] = None,
         ml_confidence: float = 0.25,
         debug: bool = False,
+        table_config: Optional[TableConfig] = None,
     ):
         self.pdf_path = pdf_path
         self.output_dir = output_dir
@@ -57,6 +59,7 @@ class Pipeline:
         self._ml_model_path = ml_model_path
         self._ml_confidence = ml_confidence
         self.debug = debug
+        self._table_config = table_config
         self._stage_totals: dict[str, float] = {}
         self._page_totals: list[dict[str, float]] = []
 
@@ -214,6 +217,7 @@ class Pipeline:
                     use_ml=self.use_ml,
                     ml_model_path=self._ml_model_path,
                     ml_confidence=self._ml_confidence,
+                    table_config=self._table_config,
                 )
                 page.tables, _ = self._time_stage(
                     "table_extract",

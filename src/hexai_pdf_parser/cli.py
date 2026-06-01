@@ -1,9 +1,11 @@
 """Command-line interface for PDFLayoutParser."""
 
 import argparse
+import json
 import sys
 
 from hexai_pdf_parser.pipeline import Pipeline
+from hexai_pdf_parser.table_config import TableConfig
 
 
 def main() -> int:
@@ -52,6 +54,11 @@ def main() -> int:
         help="Confidence threshold for ML table detection (default: 0.25)",
     )
     parser.add_argument(
+        "--table-config",
+        default=None,
+        help="Path to JSON table layout config file",
+    )
+    parser.add_argument(
         "--debug",
         action="store_true",
         default=False,
@@ -59,6 +66,10 @@ def main() -> int:
     )
 
     args = parser.parse_args()
+
+    table_config = None
+    if args.table_config:
+        table_config = TableConfig.load(args.table_config)
 
     pipeline = Pipeline(
         pdf_path=args.pdf_path,
@@ -69,6 +80,7 @@ def main() -> int:
         ml_model_path=args.ml_model,
         ml_confidence=args.ml_confidence,
         debug=args.debug,
+        table_config=table_config,
     )
     pipeline.run()
 

@@ -167,21 +167,36 @@ def extract_horizontal_separators(page: fitz.Page) -> list[HorizontalSeparator]:
         return separators
 
     for drawing in drawings:
+        stroke_width = drawing.get("width", 1.0)
         for item in drawing.get("items", []):
-            if item[0] != "re":
-                continue
-            rect = item[1]
-            width = rect.x1 - rect.x0
-            height = rect.y1 - rect.y0
-            if width < 5 or height > 1.5:
-                continue
-            separators.append(
-                HorizontalSeparator(
-                    x0=float(rect.x0),
-                    x1=float(rect.x1),
-                    y=float((rect.y0 + rect.y1) / 2.0),
+            if item[0] == "re":
+                rect = item[1]
+                width = rect.x1 - rect.x0
+                height = rect.y1 - rect.y0
+                if width < 5 or height > 1.5:
+                    continue
+                separators.append(
+                    HorizontalSeparator(
+                        x0=float(rect.x0),
+                        x1=float(rect.x1),
+                        y=float((rect.y0 + rect.y1) / 2.0),
+                    )
                 )
-            )
+            elif item[0] == "l":
+                p1, p2 = item[1], item[2]
+                line_width = abs(p2.x - p1.x)
+                line_height = abs(p2.y - p1.y)
+                if line_width < 5 or line_height > 1.5:
+                    continue
+                if stroke_width > 1.5:
+                    continue
+                separators.append(
+                    HorizontalSeparator(
+                        x0=float(min(p1.x, p2.x)),
+                        x1=float(max(p1.x, p2.x)),
+                        y=float((p1.y + p2.y) / 2.0),
+                    )
+                )
 
     separators.sort(key=lambda item: (item.y, item.x0))
     deduped: list[HorizontalSeparator] = []

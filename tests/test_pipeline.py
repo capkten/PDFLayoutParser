@@ -8,6 +8,14 @@ import fitz
 import pytest
 
 from hexai_pdf_parser.pipeline import Pipeline
+from hexai_pdf_parser.table_config import (
+    GlobalTableSettings,
+    LayoutProfile,
+    MatcherConfig,
+    StructureRuleSet,
+    TableConfig,
+)
+from hexai_pdf_parser.table_extractor import TableExtractor
 from tests.conftest import make_text_pdf
 from tests.test_table_extractor import make_pdf_with_table, make_synthetic_text_alignment_pdf
 
@@ -175,3 +183,55 @@ def test_pipeline_debug_does_not_change_text_alignment_table_sources(tmp_dir):
     plain_sources = [table.source for table in doc_plain.pages[0].tables]
     debug_sources = [table.source for table in doc_debug.pages[0].tables]
     assert plain_sources == debug_sources
+
+
+def test_pipeline_passes_table_config_to_extractor(tmp_dir, monkeypatch):
+    """Pipeline forwards table_config to TableExtractor."""
+    pdf_path = Path(tmp_dir) / "config_test.pdf"
+    make_synthetic_text_alignment_pdf(
+        pdf_path,
+        [
+            (30.0, [(20.0, "A"), (150.0, "10")]),
+            (48.0, [(20.0, "B"), (150.0, "20")]),
+        ],
+    )
+
+    config = TableConfig(
+        settings=GlobalTableSettings(line_tolerance=5.0),
+    )
+
+    captured_configs = []
+
+    original_init = TableExtractor.__init__
+
+    def capturing_init(self, *args, **kwargs):
+        captured_configs.append(kwargs.get("table_config"))
+        original_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(TableExtractor, "__init__", capturing_init)
+
+    output_dir = Path(tmp_dir) / "out"
+    Pipeline(
+        pdf_path=str(pdf_path),
+        output_dir=str(output_dir),
+        render_dpi=120,
+        table_config=config,
+    ).run()
+
+    # TableExtractor was instantiated at least once with the config
+    assert any(c is config for c in captured_configs), (
+        f"table_config was not passed through — captured: {captured_configs}"
+    )
+
+
+def test_pipeline_without_table_config_works(tmp_dir):
+    """Pipeline works without table_config (backward compatibility)."""
+    pdf_path = Path(tmp_dir) / "no_config.pdf"
+    make_text_pdf(pdf_path, text="No config")
+
+    doc = Pipeline(
+        pdf_path=pdf_path,
+        output_dir=tmp_dir,
+        render_dpi=150,
+    ).run()
+    assert doc.page_count == 1

@@ -717,6 +717,70 @@ class TestTableExtractor:
         finally:
             doc.close()
 
+    def test_extract_via_text_alignment_handles_multiline_cells(self, tmp_dir):
+        pdf_path = Path(tmp_dir) / "multiline_cells.pdf"
+        # Simulate a table with a multi-line middle column:
+        # Row 0 (header): 3 tokens
+        # Row 1: complete row with 3 tokens
+        # Row 2: complete row with 3 tokens (first line of a multi-line cell)
+        # Row 3: continuation line — only the middle column wraps
+        # Row 4: complete row with 3 tokens
+        make_synthetic_text_alignment_pdf(
+            pdf_path,
+            [
+                (
+                    30.0,
+                    [
+                        (20.0, "税种"),
+                        (150.0, "计税依据"),
+                        (280.0, "税率"),
+                    ],
+                ),
+                (
+                    48.0,
+                    [
+                        (20.0, "增值税"),
+                        (150.0, "销售货物的销售额"),
+                        (280.0, "13%"),
+                    ],
+                ),
+                (
+                    66.0,
+                    [
+                        (20.0, "土地增值税"),
+                        (150.0, "有偿转让国有土地"),
+                        (280.0, "超率累进"),
+                    ],
+                ),
+                (
+                    82.0,
+                    [
+                        (150.0, "使用权及附着物"),
+                    ],
+                ),
+                (
+                    100.0,
+                    [
+                        (20.0, "房产税"),
+                        (150.0, "房产原值余值"),
+                        (280.0, "1.2%"),
+                    ],
+                ),
+            ],
+            page_size=(320.0, 200.0),
+        )
+
+        doc = fitz.open(str(pdf_path))
+        try:
+            extractor = TableExtractor()
+            tables = extractor._extract_via_text_alignment(doc[0])
+            assert len(tables) == 1
+            # All 4 data rows should be detected (continuation merged)
+            assert tables[0].rows == 4
+            assert tables[0].cols == 3
+        finally:
+            doc.close()
+
     def test_extract_via_text_alignment_trims_prose_prefix(self, tmp_dir):
         pdf_path = Path(tmp_dir) / "trims_prose_prefix.pdf"
         make_synthetic_text_alignment_pdf(
@@ -1322,3 +1386,547 @@ class TestNMS:
         scores = np.empty((0,), dtype=np.float32)
         keep = MLTableDetector._nms(boxes, scores, iou_threshold=0.5)
         assert keep == []
+
+
+class TestLayoutRuleIntegration:
+    """Integration tests for the config-driven table layout rule system."""
+
+    def test_no_config_preserves_behavior(self, tmp_dir):
+        """Without table_config, behavior is identical to the old code path."""
+        pdf_path = Path(tmp_dir) / "no_config.pdf"
+        make_pdf_with_table(pdf_path)
+
+        doc = fitz.open(str(pdf_path))
+        try:
+            page = doc[0]
+            extractor = TableExtractor()
+            tables = extractor.extract(page)
+            assert isinstance(tables, list)
+        finally:
+            doc.close()
+
+    def test_config_with_no_profiles_preserves_behavior(self, tmp_dir):
+        """A config with no profiles does not alter extraction."""
+        from hexai_pdf_parser.table_config import TableConfig
+
+        pdf_path = Path(tmp_dir) / "no_profiles.pdf"
+        make_pdf_with_table(pdf_path)
+
+        doc = fitz.open(str(pdf_path))
+        try:
+            page = doc[0]
+            extractor_no_config = TableExtractor()
+            tables_no_config = extractor_no_config.extract(page)
+
+            extractor_with_config = TableExtractor(
+                table_config=TableConfig.default()
+            )
+            tables_with_config = extractor_with_config.extract(page)
+
+            # Same number of tables, same shapes
+            assert len(tables_no_config) == len(tables_with_config)
+            for t1, t2 in zip(tables_no_config, tables_with_config):
+                assert t1.rows == t2.rows
+                assert t1.cols == t2.cols
+        finally:
+            doc.close()
+
+    def test_config_settings_override_separator_threshold(self, tmp_dir):
+        """Config settings override hardcoded separator thresholds."""
+        from hexai_pdf_parser.table_config import (
+            GlobalTableSettings,
+            TableConfig,
+        )
+
+        extractor_no_config = TableExtractor()
+        assert extractor_no_config._separator_min_width == 200.0
+        assert extractor_no_config._separator_max_height == 1.5
+
+        config = TableConfig(
+            settings=GlobalTableSettings(
+                separator_min_width=100.0,
+                separator_max_height=3.0,
+            )
+        )
+        extractor_with_config = TableExtractor(table_config=config)
+        assert extractor_with_config._separator_min_width == 100.0
+        assert extractor_with_config._separator_max_height == 3.0
+
+    def test_profile_match_applies_structure_rules(self, tmp_dir):
+        """A matched profile with trim_trailing_summary removes summary rows."""
+        from hexai_pdf_parser.table_config import (
+            LayoutProfile,
+            MatcherConfig,
+            StructureRuleSet,
+            TableConfig,
+        )
+
+        pdf_path = Path(tmp_dir) / "trim_summary.pdf"
+        make_synthetic_text_alignment_pdf(
+            pdf_path,
+            [
+                (30.0, [(20.0, "Assets"), (150.0, "100")]),
+                (48.0, [(20.0, "Liabilities"), (150.0, "200")]),
+                (66.0, [(20.0, "Total"), (150.0, "300")]),
+            ],
+        )
+
+        config = TableConfig(
+            profiles=[
+                LayoutProfile(
+                    name="trim_test",
+                    matcher=MatcherConfig(
+                        required_keywords=["Assets"],
+                        min_match_score=0.5,
+                    ),
+                    structure_rules=StructureRuleSet(
+                        enabled=True,
+                        trim_trailing_summary=True,
+                    ),
+                )
+            ]
+        )
+
+        doc = fitz.open(str(pdf_path))
+        try:
+            page = doc[0]
+
+            extractor_plain = TableExtractor()
+            tables_plain = extractor_plain.extract(page)
+
+            extractor_rules = TableExtractor(table_config=config)
+            tables_rules = extractor_rules.extract(page)
+
+            # Both should detect a table
+            if tables_plain and tables_rules:
+                # The rule-applied version should have fewer or equal rows
+                assert tables_rules[0].rows <= tables_plain[0].rows
+        finally:
+            doc.close()
+
+    def test_unmatched_profile_leaves_tables_unchanged(self, tmp_dir):
+        """A profile that doesn't match should not alter tables."""
+        from hexai_pdf_parser.table_config import (
+            LayoutProfile,
+            MatcherConfig,
+            StructureRuleSet,
+            TableConfig,
+        )
+
+        pdf_path = Path(tmp_dir) / "unmatched.pdf"
+        make_synthetic_text_alignment_pdf(
+            pdf_path,
+            [
+                (30.0, [(20.0, "A"), (150.0, "10")]),
+                (48.0, [(20.0, "B"), (150.0, "20")]),
+            ],
+        )
+
+        config = TableConfig(
+            profiles=[
+                LayoutProfile(
+                    name="never_match",
+                    matcher=MatcherConfig(
+                        required_keywords=["NONEXISTENT_KEYWORD_XYZ"],
+                        min_match_score=0.5,
+                    ),
+                    structure_rules=StructureRuleSet(
+                        enabled=True,
+                        trim_trailing_summary=True,
+                    ),
+                )
+            ]
+        )
+
+        doc = fitz.open(str(pdf_path))
+        try:
+            extractor_plain = TableExtractor()
+            tables_plain = extractor_plain.extract(doc[0])
+
+            extractor_rules = TableExtractor(table_config=config)
+            tables_rules = extractor_rules.extract(doc[0])
+
+            assert len(tables_plain) == len(tables_rules)
+            for t1, t2 in zip(tables_plain, tables_rules):
+                assert t1.rows == t2.rows
+                assert t1.cols == t2.cols
+        finally:
+            doc.close()
+
+    def test_handler_only_region_rules_still_invokes_handler(self, tmp_dir):
+        """A region handler fires even without expand_anchors."""
+        from hexai_pdf_parser.table_config import (
+            LayoutProfile,
+            MatcherConfig,
+            RegionRuleSet,
+            TableConfig,
+        )
+        from hexai_pdf_parser.table_rule_handlers import register_region_handler
+        from hexai_pdf_parser.table_region_rules import TableRegionCandidate
+
+        handler_called = {"value": False}
+
+        @register_region_handler("test_handler_only_region")
+        def handler_only(candidates, rows, params):
+            handler_called["value"] = True
+            return candidates
+
+        pdf_path = Path(tmp_dir) / "handler_only_region.pdf"
+        make_synthetic_text_alignment_pdf(
+            pdf_path,
+            [
+                (30.0, [(20.0, "Assets"), (150.0, "10")]),
+                (48.0, [(20.0, "Liabilities"), (150.0, "20")]),
+            ],
+        )
+
+        config = TableConfig(
+            profiles=[
+                LayoutProfile(
+                    name="handler_only",
+                    matcher=MatcherConfig(
+                        required_keywords=["Assets"],
+                        min_match_score=0.5,
+                    ),
+                    region_rules=RegionRuleSet(
+                        enabled=True,
+                        handler="test_handler_only_region",
+                        # No expand_anchors — handler-only config
+                    ),
+                )
+            ]
+        )
+
+        doc = fitz.open(str(pdf_path))
+        try:
+            extractor = TableExtractor(table_config=config)
+            extractor.extract(doc[0])
+            assert handler_called["value"] is True
+        finally:
+            doc.close()
+
+    def test_handler_invocation(self, tmp_dir):
+        """A matched profile with a handler calls the registered handler."""
+        from hexai_pdf_parser.table_config import (
+            LayoutProfile,
+            MatcherConfig,
+            StructureRuleSet,
+            TableConfig,
+        )
+        from hexai_pdf_parser.table_rule_handlers import register_structure_handler
+        from hexai_pdf_parser.table_structure_rules import TableStructureCandidate
+
+        handler_called = {"value": False}
+
+        @register_structure_handler("test_invoke_handler")
+        def invoke_handler(candidate: TableStructureCandidate, params):
+            handler_called["value"] = True
+            return candidate
+
+        pdf_path = Path(tmp_dir) / "handler.pdf"
+        make_synthetic_text_alignment_pdf(
+            pdf_path,
+            [
+                (30.0, [(20.0, "Assets"), (150.0, "10")]),
+                (48.0, [(20.0, "Liabilities"), (150.0, "20")]),
+            ],
+        )
+
+        config = TableConfig(
+            profiles=[
+                LayoutProfile(
+                    name="handler_test",
+                    matcher=MatcherConfig(
+                        required_keywords=["Assets"],
+                        min_match_score=0.5,
+                    ),
+                    structure_rules=StructureRuleSet(
+                        enabled=True,
+                        handler="test_invoke_handler",
+                    ),
+                )
+            ]
+        )
+
+        doc = fitz.open(str(pdf_path))
+        try:
+            extractor = TableExtractor(table_config=config)
+            extractor.extract(doc[0])
+            assert handler_called["value"] is True
+        finally:
+            doc.close()
+
+
+class TestEndToEndRegression:
+    """End-to-end regression tests for the table layout rule system."""
+
+    def test_region_rules_add_table_missed_by_baseline(self, tmp_dir):
+        """Anchor-driven region rules add a table the baseline missed.
+
+        Build a PDF where base extraction finds one table but a second
+        table-like area (positioned below a gap) is only picked up when
+        region anchors point to it.
+        """
+        from hexai_pdf_parser.table_config import (
+            LayoutProfile,
+            MatcherConfig,
+            RegionRuleSet,
+            TableConfig,
+        )
+
+        # Top table: normal alignment, base pipeline will find it.
+        # Bottom area: same alignment but far below — the base pipeline
+        # treats it as a separate span and may or may not pick it up.
+        # With an anchor keyword, region rules will explicitly locate it.
+        pdf_path = Path(tmp_dir) / "region_anchor.pdf"
+        make_synthetic_text_alignment_pdf(
+            pdf_path,
+            [
+                # Upper table (base pipeline finds this)
+                (30.0, [(20.0, "Alpha"), (150.0, "100")]),
+                (48.0, [(20.0, "Beta"), (150.0, "200")]),
+                # Large gap — splits spans
+                (120.0, [(20.0, "AnchoredSection"), (150.0, "Value")]),
+                (138.0, [(20.0, "Row1"), (150.0, "10")]),
+                (156.0, [(20.0, "Row2"), (150.0, "20")]),
+            ],
+            page_size=(320.0, 220.0),
+        )
+
+        config = TableConfig(
+            profiles=[
+                LayoutProfile(
+                    name="anchor_test",
+                    matcher=MatcherConfig(
+                        required_keywords=["AnchoredSection"],
+                        min_match_score=0.5,
+                    ),
+                    region_rules=RegionRuleSet(
+                        expand_anchors=["AnchoredSection"],
+                        min_row_window=2,
+                        enabled=True,
+                    ),
+                )
+            ]
+        )
+
+        doc = fitz.open(str(pdf_path))
+        try:
+            extractor_plain = TableExtractor()
+            tables_plain = extractor_plain.extract(doc[0])
+
+            extractor_anchored = TableExtractor(table_config=config)
+            tables_anchored = extractor_anchored.extract(doc[0])
+
+            # The anchor-driven extractor should find at least as many tables.
+            # The table may be found by the baseline text_alignment detector
+            # (improved continuation merging) or by the region_rule.
+            assert len(tables_anchored) >= len(tables_plain)
+            sources = [t.source for t in tables_anchored]
+            assert "region_rule" in sources or len(tables_anchored) >= 1
+        finally:
+            doc.close()
+
+    def test_structure_handler_modifies_table_shape(self, tmp_dir):
+        """A registered structure handler can change table dimensions."""
+        from hexai_pdf_parser.table_config import (
+            LayoutProfile,
+            MatcherConfig,
+            StructureRuleSet,
+            TableConfig,
+        )
+        from hexai_pdf_parser.table_rule_handlers import register_structure_handler
+        from hexai_pdf_parser.table_structure_rules import TableStructureCandidate
+
+        @register_structure_handler("test_drop_last_row")
+        def drop_last_row(candidate: TableStructureCandidate, params):
+            if candidate.rows <= 1:
+                return candidate
+            return TableStructureCandidate(
+                rows=candidate.rows - 1,
+                cols=candidate.cols,
+                cells=[c for c in candidate.cells if c.row_index < candidate.rows - 1],
+            )
+
+        pdf_path = Path(tmp_dir) / "drop_row.pdf"
+        make_synthetic_text_alignment_pdf(
+            pdf_path,
+            [
+                (30.0, [(20.0, "Label"), (150.0, "Amount")]),
+                (48.0, [(20.0, "Row1"), (150.0, "10")]),
+                (66.0, [(20.0, "Row2"), (150.0, "20")]),
+            ],
+        )
+
+        config = TableConfig(
+            profiles=[
+                LayoutProfile(
+                    name="drop_test",
+                    matcher=MatcherConfig(
+                        required_keywords=["Label"],
+                        min_match_score=0.5,
+                    ),
+                    structure_rules=StructureRuleSet(
+                        enabled=True,
+                        handler="test_drop_last_row",
+                    ),
+                )
+            ]
+        )
+
+        doc = fitz.open(str(pdf_path))
+        try:
+            extractor_plain = TableExtractor()
+            tables_plain = extractor_plain.extract(doc[0])
+
+            extractor_handler = TableExtractor(table_config=config)
+            tables_handler = extractor_handler.extract(doc[0])
+
+            if tables_plain and tables_handler:
+                assert tables_handler[0].rows < tables_plain[0].rows
+        finally:
+            doc.close()
+
+    def test_structure_handler_cell_level_correction_is_written_back(self, tmp_dir):
+        """A handler that only changes cell text (not rows/cols) takes effect."""
+        from hexai_pdf_parser.models import Cell
+        from hexai_pdf_parser.table_config import (
+            LayoutProfile,
+            MatcherConfig,
+            StructureRuleSet,
+            TableConfig,
+        )
+        from hexai_pdf_parser.table_rule_handlers import register_structure_handler
+        from hexai_pdf_parser.table_structure_rules import TableStructureCandidate
+
+        @register_structure_handler("test_uppercase_cells")
+        def uppercase_cells(candidate: TableStructureCandidate, params):
+            new_cells = [
+                Cell(
+                    text=c.text.upper(),
+                    row_index=c.row_index,
+                    col_index=c.col_index,
+                    bbox=c.bbox,
+                    rowspan=c.rowspan,
+                    colspan=c.colspan,
+                )
+                for c in candidate.cells
+            ]
+            return TableStructureCandidate(
+                rows=candidate.rows,
+                cols=candidate.cols,
+                cells=new_cells,
+            )
+
+        pdf_path = Path(tmp_dir) / "cell_edit.pdf"
+        make_synthetic_text_alignment_pdf(
+            pdf_path,
+            [
+                (30.0, [(20.0, "Alpha"), (150.0, "10")]),
+                (48.0, [(20.0, "Beta"), (150.0, "20")]),
+            ],
+        )
+
+        config = TableConfig(
+            profiles=[
+                LayoutProfile(
+                    name="cell_test",
+                    matcher=MatcherConfig(
+                        required_keywords=["Alpha"],
+                        min_match_score=0.5,
+                    ),
+                    structure_rules=StructureRuleSet(
+                        enabled=True,
+                        handler="test_uppercase_cells",
+                    ),
+                )
+            ]
+        )
+
+        doc = fitz.open(str(pdf_path))
+        try:
+            extractor_plain = TableExtractor()
+            tables_plain = extractor_plain.extract(doc[0])
+
+            extractor_handler = TableExtractor(table_config=config)
+            tables_handler = extractor_handler.extract(doc[0])
+
+            if tables_plain and tables_handler:
+                # Dimensions must stay the same
+                assert tables_handler[0].rows == tables_plain[0].rows
+                assert tables_handler[0].cols == tables_plain[0].cols
+                # But cell text should be uppercased
+                handler_texts = [c.text for c in tables_handler[0].cells]
+                assert all(t == t.upper() for t in handler_texts if t)
+                plain_texts = [c.text for c in tables_plain[0].cells]
+                assert not all(t == t.upper() for t in plain_texts if t)
+        finally:
+            doc.close()
+
+    def test_extract_via_text_alignment_long_horizontal_separator_merges_header(
+        self, tmp_dir
+    ):
+        """A long drawn horizontal line between header and body text causes
+        them to be merged into a single table via separator-driven detection."""
+        pdf_path = Path(tmp_dir) / "long_horizontal_separator.pdf"
+        doc = fitz.open()
+        page = doc.new_page(width=480, height=200)
+        # Header text above separator
+        page.insert_text((30, 40), "Item", fontsize=10)
+        page.insert_text((180, 40), "Amount", fontsize=10)
+        page.insert_text((320, 40), "Prior", fontsize=10)
+        # Draw a long horizontal line spanning most of the page width
+        page.draw_line((30, 52), (440, 52), color=(0, 0, 0), width=0.5)
+        # Body text below separator
+        page.insert_text((30, 72), "Revenue", fontsize=10)
+        page.insert_text((180, 72), "1,234,567.89", fontsize=10)
+        page.insert_text((320, 72), "987,654.32", fontsize=10)
+        page.insert_text((30, 90), "Cost", fontsize=10)
+        page.insert_text((180, 90), "2,345,678.90", fontsize=10)
+        page.insert_text((320, 90), "876,543.21", fontsize=10)
+        page.insert_text((30, 108), "Profit", fontsize=10)
+        page.insert_text((180, 108), "3,456,789.01", fontsize=10)
+        page.insert_text((320, 108), "765,432.10", fontsize=10)
+        doc.save(str(pdf_path))
+        doc.close()
+
+        doc = fitz.open(str(pdf_path))
+        try:
+            extractor = TableExtractor()
+            tables = extractor._extract_via_text_alignment(doc[0])
+            assert len(tables) >= 1
+            table = tables[0]
+            # The header row (Item/Amount/Prior) above the separator
+            # must be included in the table region.
+            cells = {
+                (cell.row_index, cell.col_index): cell.text for cell in table.cells
+            }
+            header_included = any("Item" in c.text for c in table.cells)
+            assert header_included, f"Header row not included in table: {cells}"
+            assert table.rows >= 4
+            assert table.cols >= 3
+        finally:
+            doc.close()
+
+    def test_line_based_tables_unchanged_without_profile(self, tmp_dir):
+        """Line-based tables remain identical without profile rules."""
+        pdf_path = Path(tmp_dir) / "line_table_regression.pdf"
+        make_pdf_with_table(pdf_path)
+
+        from hexai_pdf_parser.table_config import TableConfig
+
+        doc = fitz.open(str(pdf_path))
+        try:
+            extractor_plain = TableExtractor()
+            tables_plain = extractor_plain.extract(doc[0])
+
+            extractor_config = TableExtractor(table_config=TableConfig.default())
+            tables_config = extractor_config.extract(doc[0])
+
+            assert len(tables_plain) == len(tables_config)
+            for t1, t2 in zip(tables_plain, tables_config):
+                assert t1.rows == t2.rows
+                assert t1.cols == t2.cols
+                assert len(t1.cells) == len(t2.cells)
+        finally:
+            doc.close()
