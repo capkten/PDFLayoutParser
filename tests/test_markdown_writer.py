@@ -174,3 +174,23 @@ def test_render_table_uses_html_and_preserves_spans():
     assert "B &amp; C" in content
     assert "&lt;D&gt;" in content
     assert "| A | B |" not in content
+
+
+def test_render_table_keeps_grouped_header_spans():
+    table = Table(
+        bbox=BBox(0, 0, 200, 100),
+        rows=2,
+        cols=3,
+        cells=[
+            Cell(text="项目", row_index=0, col_index=0, bbox=BBox(0, 0, 20, 20), rowspan=2),
+            Cell(text="本年金额", row_index=0, col_index=1, bbox=BBox(20, 0, 180, 20), colspan=2),
+            Cell(text="年初资产总额", row_index=1, col_index=1, bbox=BBox(20, 20, 100, 40)),
+            Cell(text="年初负债总额", row_index=1, col_index=2, bbox=BBox(100, 20, 180, 40)),
+        ],
+    )
+
+    lines = MarkdownWriter()._render_table(table)
+    content = "\n".join(lines)
+
+    assert '<td rowspan="2">项目</td>' in content
+    assert '<td colspan="2">本年金额</td>' in content
