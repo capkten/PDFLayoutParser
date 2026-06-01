@@ -2007,6 +2007,27 @@ def test_complex_financial_header_handler_normalizes_grouped_header():
     assert left_anchor.rowspan == 2
 
 
+def test_page_046_lower_table_matches_label_structure():
+    pdf_path = Path(r"D:\codes\PDFLayoutParser\152590_20230428_N7ZK_0.pdf")
+
+    with fitz.open(str(pdf_path)) as doc:
+        extractor = TableExtractor()
+        tables = extractor.extract(doc[46])
+
+    lower = next(t for t in tables if t.bbox.y0 >= 300.0)
+
+    assert lower.rows == 5
+    assert lower.cols == 8
+    cell_map = {(cell.row_index, cell.col_index): cell for cell in lower.cells}
+    assert cell_map[(0, 0)].rowspan == 2
+    assert cell_map[(0, 1)].colspan == 7
+    assert not any(ch.isdigit() for ch in cell_map[(1, 3)].text)
+    assert cell_map[(2, 3)].text == "244,583,302,593.81"
+    assert cell_map[(3, 6)].text == "20,136,924.05"
+    assert cell_map[(4, 3)].text == "244,603,439,517.86"
+    assert cell_map[(4, 6)].text == "14,558,725,540.92"
+
+
 def test_plain_grid_table_is_not_changed_by_header_normalization(tmp_dir):
     pdf_path = Path(tmp_dir) / "plain_grid.pdf"
     make_pdf_with_table(pdf_path)
