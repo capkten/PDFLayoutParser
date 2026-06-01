@@ -25,6 +25,7 @@ import fitz
 
 from hexai_pdf_parser.models import BBox, Cell, Table
 from hexai_pdf_parser.table_config import TableConfig, LayoutProfile
+from hexai_pdf_parser.table_header_normalizer import normalize_table_headers
 from hexai_pdf_parser.table_profile_matcher import PageFeatures, match_profiles
 from hexai_pdf_parser.table_region_rules import (
     TableRegionCandidate,
@@ -140,6 +141,9 @@ class TableExtractor:
         # Apply layout rule system when a config with profiles is provided.
         if self._table_config and self._table_config.profiles:
             tables = self._apply_layout_rules(page, tables)
+
+        # Normalize grouped financial headers once, after all table rules.
+        tables = [normalize_table_headers(t, page) for t in tables]
 
         return tables
 

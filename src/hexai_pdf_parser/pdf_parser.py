@@ -9,7 +9,7 @@ from __future__ import annotations
 import os
 from typing import List, Optional
 
-from hexai_pdf_parser.models import ApiResult, Block, Document, Image, RenderInfo, Table
+from hexai_pdf_parser.models import ApiResult, BBox, Block, Document, Image, Line, RenderInfo, Table
 
 
 class PDFParser:
@@ -369,31 +369,71 @@ class PDFParser:
         self,
         region: dict | list[dict],
     ) -> ApiResult:
-        """Extract text blocks that intersect with the given region(s).
+        """Extract text from the given region(s) using word-level matching.
 
         Region coordinates are normalized 0~1 relative to page size.
+        Uses PyMuPDF word-level extraction for precise region clipping.
         """
         def _do():
+            import fitz as _fitz
+
             page_sizes = self._get_page_sizes()
             regions = self._normalize_regions(region, page_sizes)
 
-            # Ensure text is extracted
-            if self._document is None:
-                self.extract_text()
+            pdf_path = self._pdf_path
+            if pdf_path is None:
+                raise ValueError("extract_text_in_region requires a PDF file path")
 
             blocks: List[Block] = []
-            for r in regions:
-                page_idx = r["page_index"]
-                target_page = None
-                for p in self._document.pages:
-                    if p.index == page_idx:
-                        target_page = p
-                        break
-                if target_page is None:
-                    continue
-                for block in target_page.blocks:
-                    if self._bbox_intersects(block.bbox, r):
-                        blocks.append(block)
+            pdf_doc = _fitz.open(pdf_path)
+            try:
+                for r in regions:
+                    page_idx = r["page_index"]
+                    page = pdf_doc[page_idx]
+                    words = page.get_text("words")  # (x0, y0, x1, y1, text, block_no, line_no, word_no)
+
+                    matched = [
+                        w for w in words
+                        if self._bbox_intersects(
+                            BBox(w[0], w[1], w[2], w[3]), r
+                        )
+                    ]
+                    if not matched:
+                        continue
+
+                    # Group by (block_no, line_no) to preserve line structure
+                    from collections import OrderedDict
+                    lines_map: dict[tuple[int, int], list] = OrderedDict()
+                    for w in matched:
+                        key = (w[5], w[6])
+                        lines_map.setdefault(key, []).append(w)
+
+                    lines: List[Line] = []
+                    for words_in_line in lines_map.values():
+                        words_in_line.sort(key=lambda w: w[0])  # sort by x
+                        line_text = " ".join(w[4] for w in words_in_line)
+                        lx0 = min(w[0] for w in words_in_line)
+                        ly0 = min(w[1] for w in words_in_line)
+                        lx1 = max(w[2] for w in words_in_line)
+                        ly1 = max(w[3] for w in words_in_line)
+                        lines.append(Line(
+                            text=line_text,
+                            bbox=BBox(lx0, ly0, lx1, ly1),
+                        ))
+
+                    block_text = "\n".join(l.text for l in lines)
+                    bx0 = min(l.bbox.x0 for l in lines)
+                    by0 = min(l.bbox.y0 for l in lines)
+                    bx1 = max(l.bbox.x1 for l in lines)
+                    by1 = max(l.bbox.y1 for l in lines)
+                    blocks.append(Block(
+                        text=block_text,
+                        bbox=BBox(bx0, by0, bx1, by1),
+                        lines=lines,
+                    ))
+            finally:
+                pdf_doc.close()
+
             return blocks
 
         return self._execute_result(_do, "region text extracted", "no text found in region")
