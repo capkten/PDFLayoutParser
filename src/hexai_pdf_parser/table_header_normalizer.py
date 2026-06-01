@@ -13,9 +13,6 @@ module detects that pattern and corrects the spans.
 
 from __future__ import annotations
 
-import re
-from typing import List
-
 import fitz
 
 from hexai_pdf_parser.models import BBox, Cell, Table
@@ -38,6 +35,7 @@ def normalize_table_headers(table: Table, page: fitz.Page) -> Table:
 
     Applies generic normalisation first, then detects and promotes
     grouped financial headers when the pattern is recognised.
+    *page* is reserved for future page-text-based detection.
     """
     table = _normalize_generic_table(table)
     if _looks_like_grouped_financial_header(table, page):
@@ -75,10 +73,11 @@ def _looks_like_grouped_financial_header(table: Table, page: fitz.Page) -> bool:
         text = cell.text.strip()
         if text == "项目" and cell.col_index == 0:
             has_left_anchor = True
-        for pattern in _GROUP_LABEL_PATTERNS:
-            if pattern in text:
-                has_group_label = True
-                break
+        if cell.row_index == 0:
+            for pattern in _GROUP_LABEL_PATTERNS:
+                if pattern in text:
+                    has_group_label = True
+                    break
 
     return has_group_label and has_left_anchor
 
@@ -92,7 +91,7 @@ def _promote_grouped_header(table: Table, page: fitz.Page) -> Table:
     - The left-anchor cell ("项目") in column 0 has its rowspan set to 2.
     - All body cells are left unchanged.
     """
-    promoted_cells: List[Cell] = []
+    promoted_cells: list[Cell] = []
 
     for cell in table.cells:
         text = cell.text.strip()
