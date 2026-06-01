@@ -1322,3 +1322,43 @@ class TestNMS:
         scores = np.empty((0,), dtype=np.float32)
         keep = MLTableDetector._nms(boxes, scores, iou_threshold=0.5)
         assert keep == []
+
+
+def test_financial_grouped_header_is_promoted_on_page_046():
+    pdf_path = Path(r"D:\codes\PDFLayoutParser\152590_20230428_N7ZK_0.pdf")
+
+    with fitz.open(str(pdf_path)) as doc:
+        extractor = TableExtractor()
+        tables = extractor.extract(doc[46])
+
+    financial = next(
+        t for t in tables
+        if any("本年金额" in cell.text for cell in t.cells)
+        or (t.rows >= 3 and t.cols >= 8)
+    )
+
+    assert financial.bbox.y0 < 310.0
+    assert any(
+        cell.text == "本年金额" and cell.colspan == 7
+        for cell in financial.cells
+    )
+    assert any(
+        cell.text == "项目" and cell.rowspan == 2
+        for cell in financial.cells
+    )
+
+
+def test_plain_grid_table_is_not_changed_by_header_normalization(tmp_dir):
+    pdf_path = Path(tmp_dir) / "plain_grid.pdf"
+    make_pdf_with_table(pdf_path)
+
+    with fitz.open(str(pdf_path)) as doc:
+        extractor = TableExtractor()
+        tables = extractor.extract(doc[0])
+
+    assert len(tables) == 1
+    table = tables[0]
+    assert table.rows == 2
+    assert table.cols == 2
+    assert all(cell.rowspan == 1 for cell in table.cells)
+    assert all(cell.colspan == 1 for cell in table.cells)
