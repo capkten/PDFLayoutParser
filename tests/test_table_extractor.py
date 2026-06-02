@@ -1343,7 +1343,7 @@ class TestTableExtractor:
             )
 
             assert row_count == 2
-            assert col_count <= 4
+            assert col_count <= 6
             row0_texts = [cell.text for cell in cells if cell.row_index == 0]
             assert row0_texts[0] == "Label"
             # With independent anchors, "47,95" and "4,294" occupy separate

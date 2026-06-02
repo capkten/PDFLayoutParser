@@ -1729,20 +1729,49 @@ class TableExtractor:
         )
 
         if len(numeric_xs) >= 2:
-            # 1. Remove text-only guides that sit between two numeric
-            #    guides — they are header labels, not column boundaries.
-            filtered: List[dict] = []
-            for cluster in guides:
-                if cluster["numeric_weight"] >= 2.0:
-                    filtered.append(cluster)
-                    continue
-                x = cluster["x"]
-                between = any(
-                    numeric_xs[i] < x < numeric_xs[i + 1]
+            # 1. Remove text-only guides between two numeric guides ONLY
+            #    if they are at character-level spacing (header label fragments).
+            #    Column-level spacing indicates a real data column — keep it.
+            between_text = [
+                c for c in guides
+                if c["numeric_weight"] < 2.0
+                and any(
+                    numeric_xs[i] < c["x"] < numeric_xs[i + 1]
                     for i in range(len(numeric_xs) - 1)
                 )
-                if not between:
-                    filtered.append(cluster)
+            ]
+
+            # Compute average character width from cluster tokens
+            def _avg_char_width(cluster: dict) -> float:
+                idx = clusters.index(cluster) if cluster in clusters else -1
+                tokens = cluster_tokens[idx] if 0 <= idx < len(cluster_tokens) else []
+                widths = []
+                for t in tokens:
+                    text = (t.get("text") or "").strip()
+                    if text and t["x1"] > t["x0"]:
+                        widths.append((t["x1"] - t["x0"]) / len(text))
+                return sum(widths) / len(widths) if widths else 8.0
+
+            # For each between-text guide, check spacing to nearest neighbor
+            between_xs = sorted(c["x"] for c in between_text)
+            char_width_threshold = 3.0  # gap < 3 * char_width → header fragment
+
+            remove_ids = set()
+            for bt in between_text:
+                cw = _avg_char_width(bt)
+                x = bt["x"]
+                # Find gap to nearest between-text neighbor
+                neighbors = [abs(nx - x) for nx in between_xs if nx != x]
+                if not neighbors:
+                    # Isolated text guide — keep (conservative)
+                    continue
+                min_gap = min(neighbors)
+                if min_gap < cw * char_width_threshold:
+                    remove_ids.add(id(bt))
+
+            filtered: List[dict] = [
+                c for c in guides if id(c) not in remove_ids
+            ]
 
             # 2. Merge label-area text guides (left of first numeric) with
             #    wider tolerance.  Different text tokens in the same label
