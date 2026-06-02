@@ -1932,30 +1932,6 @@ class TestEndToEndRegression:
             doc.close()
 
 
-def test_financial_grouped_header_is_promoted_on_page_046():
-    pdf_path = Path(r"D:\codes\PDFLayoutParser\152590_20230428_N7ZK_0.pdf")
-
-    with fitz.open(str(pdf_path)) as doc:
-        extractor = TableExtractor()
-        tables = extractor.extract(doc[46])
-
-    financial = next(
-        t for t in tables
-        if any("本年金额" in cell.text for cell in t.cells)
-        or (t.rows >= 3 and t.cols >= 8)
-    )
-
-    assert financial.bbox.y0 < 310.0
-    assert any(
-        cell.text == "本年金额" and cell.colspan == 7
-        for cell in financial.cells
-    )
-    assert any(
-        cell.text == "项目" and cell.rowspan == 2
-        for cell in financial.cells
-    )
-
-
 def test_plain_grid_table_is_not_changed_by_header_normalization(tmp_dir):
     pdf_path = Path(tmp_dir) / "plain_grid.pdf"
     make_pdf_with_table(pdf_path)
@@ -1970,6 +1946,109 @@ def test_plain_grid_table_is_not_changed_by_header_normalization(tmp_dir):
     assert table.cols == 2
     assert all(cell.rowspan == 1 for cell in table.cells)
     assert all(cell.colspan == 1 for cell in table.cells)
+
+
+def test_complex_financial_handler_does_not_touch_plain_grid_table(tmp_dir):
+    pdf_path = Path(tmp_dir) / "plain_grid.pdf"
+    make_pdf_with_table(pdf_path)
+
+    with fitz.open(str(pdf_path)) as doc:
+        extractor = TableExtractor()
+        tables = extractor.extract(doc[0])
+
+    assert len(tables) == 1
+    table = tables[0]
+    assert table.rows == 2
+    assert table.cols == 2
+    assert all(cell.rowspan == 1 for cell in table.cells)
+    assert all(cell.colspan == 1 for cell in table.cells)
+
+
+def test_page_046_lower_table_uses_complex_financial_header():
+    pdf_path = Path(r"D:\codes\PDFLayoutParser\152590_20230428_N7ZK_0.pdf")
+
+    with fitz.open(str(pdf_path)) as doc:
+        extractor = TableExtractor()
+        tables = extractor.extract(doc[46])
+
+    lower = next(t for t in tables if t.bbox.y0 >= 300.0)
+
+    assert lower.rows == 5
+    assert lower.cols == 8
+    assert any(
+        cell.text == "项目"
+        and cell.row_index == 0
+        and cell.col_index == 0
+        and cell.rowspan == 2
+        for cell in lower.cells
+    )
+    assert any(
+        cell.text == "本年金额"
+        and cell.row_index == 0
+        and cell.col_index == 1
+        and cell.colspan == 7
+        for cell in lower.cells
+    )
+    assert any(
+        cell.text == "追溯调整前余额"
+        and cell.row_index == 2
+        and cell.col_index == 0
+        for cell in lower.cells
+    )
+    assert any(
+        cell.text == "追溯调整"
+        and cell.row_index == 3
+        and cell.col_index == 0
+        for cell in lower.cells
+    )
+    assert any(
+        cell.text == "追溯调整后余额"
+        and cell.row_index == 4
+        and cell.col_index == 0
+        for cell in lower.cells
+    )
+
+
+def test_text_aligned_page_046_tables_are_reconstructed():
+    pdf_path = Path(r"D:\codes\PDFLayoutParser\152590_20230428_N7ZK_0.pdf")
+
+    with fitz.open(str(pdf_path)) as doc:
+        extractor = TableExtractor()
+        tables = extractor.extract(doc[46])
+
+    upper = next(t for t in tables if t.bbox.y0 < 300.0)
+    lower = next(t for t in tables if t.bbox.y0 >= 300.0)
+
+    assert upper.rows == 3
+    assert upper.cols == 7
+    assert any(cell.text == "所属单位" and cell.row_index == 0 for cell in upper.cells)
+    assert any(
+        cell.text == "受影响的各个比较期间报表项目名称" and cell.row_index == 0
+        for cell in upper.cells
+    )
+    assert any(
+        "北京市地铁运" in cell.text and "营有限公司" in cell.text
+        for cell in upper.cells
+    )
+    assert any(
+        cell.text.startswith("本公司") and "合并报表" in cell.text
+        for cell in upper.cells
+    )
+
+    assert lower.rows == 5
+    assert lower.cols == 8
+    assert any(cell.text == "本年金额" and cell.col_index == 1 and cell.colspan == 7 for cell in lower.cells)
+    assert any(cell.text == "项目" and cell.row_index == 0 and cell.rowspan == 2 for cell in lower.cells)
+    assert any(
+        "年初归属于母公司" in cell.text and "所有者权益总额" in cell.text
+        and cell.row_index == 1
+        and cell.col_index == 3
+        for cell in lower.cells
+    )
+    assert any(
+        cell.text == "追溯调整前余额" and cell.row_index == 2 and cell.col_index == 0
+        for cell in lower.cells
+    )
 
 
 def test_promote_grouped_financial_header_sets_rowspan_and_colspan():
@@ -2026,3 +2105,70 @@ def test_promote_grouped_financial_header_sets_rowspan_and_colspan():
     body_cell = next(c for c in result.cells if c.text == "年初资产总额")
     assert body_cell.rowspan == 1
     assert body_cell.colspan == 1
+
+
+def test_promote_grouped_financial_header_inserts_external_header_band():
+    from hexai_pdf_parser.table_header_normalizer import normalize_table_headers
+
+    table = Table(
+        bbox=BBox(38.0, 320.0, 804.0, 408.0),
+        rows=3,
+        cols=8,
+        cells=[
+            Cell(
+                text="项目",
+                row_index=0,
+                col_index=0,
+                bbox=BBox(66.0, 320.0, 84.0, 339.0),
+                rowspan=2,
+            ),
+            Cell(
+                text="年初资产总额",
+                row_index=1,
+                col_index=1,
+                bbox=BBox(136.0, 330.0, 191.0, 339.0),
+            ),
+            Cell(
+                text="年初负债总额",
+                row_index=1,
+                col_index=2,
+                bbox=BBox(240.0, 330.0, 295.0, 339.0),
+            ),
+        ],
+    )
+
+    mock_page = SimpleNamespace(
+        get_text=lambda *args, **kwargs: {
+            "blocks": [
+                {
+                    "type": 0,
+                    "lines": [
+                        {
+                            "spans": [
+                                {
+                                    "text": "本年金额",
+                                    "bbox": [460.0, 302.0, 530.0, 312.0],
+                                }
+                            ]
+                        }
+                    ],
+                }
+            ]
+        }
+    )
+
+    result = normalize_table_headers(table, mock_page)
+
+    assert result.bbox.y0 == 302.0
+    assert result.rows == 3
+    assert any(
+        cell.text == "本年金额"
+        and cell.row_index == 0
+        and cell.col_index == 1
+        and cell.colspan == 7
+        for cell in result.cells
+    )
+    assert any(
+        cell.text == "项目" and cell.row_index == 0 and cell.rowspan == 2
+        for cell in result.cells
+    )
