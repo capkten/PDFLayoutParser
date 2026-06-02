@@ -2148,6 +2148,21 @@ def test_page_046_lower_table_uses_complex_financial_header():
     )
 
 
+def test_page_052_subsidiary_table_has_full_columns():
+    pdf_path = Path(r"D:\codes\PDFLayoutParser\152590_20230428_N7ZK_0.pdf")
+
+    with fitz.open(str(pdf_path)) as doc:
+        extractor = TableExtractor()
+        tables = extractor.extract(doc[51])
+
+    # The subsidiary table should have ~13 columns, not 8.
+    # Pick the widest table (most columns) as the subsidiary table.
+    subsidiary = max(tables, key=lambda t: t.cols)
+    assert subsidiary.cols >= 11, (
+        f"Expected >= 11 columns for subsidiary table, got {subsidiary.cols}"
+    )
+
+
 def test_text_aligned_page_046_tables_are_reconstructed():
     pdf_path = Path(r"D:\codes\PDFLayoutParser\152590_20230428_N7ZK_0.pdf")
 

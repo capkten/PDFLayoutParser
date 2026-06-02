@@ -164,7 +164,26 @@ def _rebuild_text_aligned_table(
     if len(row_clusters) < 2:
         return None
 
+    # Use adaptive column tolerance when the default (60px) produces fewer
+    # clusters than the original table has columns.  This prevents merging
+    # adjacent columns in tables with tight spacing (e.g. 12-column
+    # subsidiary tables where adjacent columns are only 25-50 px apart).
+    # Only tighten when the default result already collapsed columns, to
+    # avoid splitting clusters that the original tolerance correctly merged.
     col_clusters = _cluster_tokens(words, axis="x", tolerance=60.0)
+    if (
+        len(col_clusters) >= 2
+        and len(col_clusters) < table.cols
+    ):
+        sorted_centers = sorted(c.x_center for c in col_clusters)
+        gaps = [
+            sorted_centers[i + 1] - sorted_centers[i]
+            for i in range(len(sorted_centers) - 1)
+        ]
+        min_gap = min(gaps)
+        adaptive_tol = max(8.0, min(min_gap / 2.0, 60.0))
+        if adaptive_tol < 60.0:
+            col_clusters = _cluster_tokens(words, axis="x", tolerance=adaptive_tol)
     if len(col_clusters) < 2:
         return None
 
