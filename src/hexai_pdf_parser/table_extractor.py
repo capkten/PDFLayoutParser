@@ -1609,6 +1609,43 @@ class TableExtractor:
         repeated_guides = sum(1 for row_ids in guide_rows if len(row_ids) >= 2)
         return supporting_rows >= 2 and repeated_guides >= 2
 
+    @staticmethod
+    def _best_edge_position(tokens: List[dict]) -> float | None:
+        """Return the best guide position for a group of tokens.
+
+        Computes variance of x0, x1, and center across *tokens* and
+        returns the mean of the edge with the lowest variance.  Returns
+        ``None`` when fewer than three tokens are provided or when no
+        edge is significantly better than the others.
+        """
+        if len(tokens) < 3:
+            return None
+
+        import statistics
+
+        x0_vals = [t["x0"] for t in tokens]
+        x1_vals = [t["x1"] for t in tokens]
+        ctr_vals = [(t["x0"] + t["x1"]) / 2 for t in tokens]
+
+        x0_var = statistics.variance(x0_vals)
+        x1_var = statistics.variance(x1_vals)
+        ctr_var = statistics.variance(ctr_vals)
+
+        best_var, best_mean = min(
+            (x0_var, statistics.mean(x0_vals)),
+            (x1_var, statistics.mean(x1_vals)),
+            (ctr_var, statistics.mean(ctr_vals)),
+            key=lambda pair: pair[0],
+        )
+        worst_var = max(x0_var, x1_var, ctr_var)
+
+        # Only adjust when one edge is clearly better than the others.
+        # - Perfect alignment (variance ≈ 0): always adjust
+        # - Otherwise: require the worst/best ratio to be large
+        if best_var > 0.5 and worst_var / best_var < 4.0:
+            return None
+        return best_mean
+
     def _infer_column_guides(
         self, rows: List[dict], region_bbox: BBox | None = None
     ) -> List[float]:
@@ -1625,39 +1662,9 @@ class TableExtractor:
         if not rows:
             return []
 
-        anchors: List[Tuple[float, float, int, bool]] = []
+        anchors: List[Tuple[float, float, int, bool, dict]] = []
         for row_idx, row in enumerate(rows):
             row_tokens = row["tokens"]
-            numeric_positions = [
-                idx for idx, token in enumerate(row_tokens) if token["is_numeric"]
-            ]
-
-            if numeric_positions:
-                first_numeric_idx = numeric_positions[0]
-                left_tokens = row_tokens[:first_numeric_idx]
-                if left_tokens:
-                    anchor_x = min(token["x0"] for token in left_tokens)
-                    weight = sum(
-                        self._token_alignment_anchor(token)[1]
-                        for token in left_tokens
-                    )
-                    if (
-                        region_bbox is None
-                        or region_bbox.x0 - 5 <= anchor_x <= region_bbox.x1 + 5
-                    ):
-                        anchors.append((anchor_x, weight, row_idx, False))
-
-                for token in row_tokens[first_numeric_idx:]:
-                    anchor_x, weight = self._token_alignment_anchor(token)
-                    if region_bbox is not None and not (
-                        region_bbox.x0 - 5 <= anchor_x <= region_bbox.x1 + 5
-                    ):
-                        continue
-                    anchors.append(
-                        (anchor_x, weight, row_idx, token["is_numeric"])
-                    )
-                continue
-
             for token in row_tokens:
                 anchor_x, weight = self._token_alignment_anchor(token)
                 if region_bbox is not None and not (
@@ -1665,7 +1672,7 @@ class TableExtractor:
                 ):
                     continue
                 anchors.append(
-                    (anchor_x, weight, row_idx, token["is_numeric"])
+                    (anchor_x, weight, row_idx, token["is_numeric"], token)
                 )
 
         if not anchors:
@@ -1673,7 +1680,8 @@ class TableExtractor:
 
         tolerance = max(8.0, self.line_tolerance * 4)
         clusters: List[dict] = []
-        for anchor_x, weight, row_idx, is_num in sorted(
+        cluster_tokens: List[List[dict]] = []  # tokens per cluster
+        for anchor_x, weight, row_idx, is_num, token in sorted(
             anchors, key=lambda item: item[0]
         ):
             target = None
@@ -1691,8 +1699,10 @@ class TableExtractor:
                         "numeric_weight": weight if is_num else 0.0,
                     }
                 )
+                cluster_tokens.append([token] if is_num else [])
                 continue
 
+            idx = clusters.index(target)
             total_weight = target["weight"] + weight
             target["x"] = (
                 target["x"] * target["weight"] + anchor_x * weight
@@ -1701,6 +1711,7 @@ class TableExtractor:
             target["rows"].add(row_idx)
             if is_num:
                 target["numeric_weight"] += weight
+                cluster_tokens[idx].append(token)
 
         guides = [
             cluster
@@ -1771,8 +1782,23 @@ class TableExtractor:
             else:
                 guides = other_clusters + label_clusters
 
-        result = sorted(c["x"] for c in guides)
-        return result
+        # --- Triple-edge adjustment: refine guide positions ---
+        # For each guide cluster, compute the best alignment edge (x0, x1,
+        # or center) using variance analysis and update the guide position.
+        result = []
+        for c in guides:
+            if c in clusters:
+                idx = clusters.index(c)
+                tokens_in = cluster_tokens[idx] if idx < len(cluster_tokens) else []
+                best = self._best_edge_position(tokens_in)
+                if best is not None:
+                    result.append(best)
+                else:
+                    result.append(c["x"])
+            else:
+                # Merged label cluster — keep as-is
+                result.append(c["x"])
+        return sorted(result)
 
     def _extract_text_region_separators(
         self,
@@ -2409,14 +2435,30 @@ class TableExtractor:
             row_hits: set[int] = set()
             for token in row["tokens"]:
                 anchor_x, weight = self._token_alignment_anchor(token)
-                guide_idx = min(
-                    range(len(guides)),
-                    key=lambda idx: abs(guides[idx] - anchor_x),
-                )
-                if abs(guides[guide_idx] - anchor_x) <= tolerance:
-                    row_hits.add(guide_idx)
-                    if token["is_numeric"]:
-                        numeric_weight[guide_idx] += weight
+                # Try all edges to find the best guide match.
+                edges = [anchor_x, token["x1"], (token["x0"] + token["x1"]) / 2]
+                matched = False
+                for edge_x in edges:
+                    guide_idx = min(
+                        range(len(guides)),
+                        key=lambda idx: abs(guides[idx] - edge_x),
+                    )
+                    if abs(guides[guide_idx] - edge_x) <= tolerance:
+                        row_hits.add(guide_idx)
+                        if token["is_numeric"]:
+                            numeric_weight[guide_idx] += weight
+                        matched = True
+                        break
+                if not matched:
+                    # Fallback: use original anchor
+                    guide_idx = min(
+                        range(len(guides)),
+                        key=lambda idx: abs(guides[idx] - anchor_x),
+                    )
+                    if abs(guides[guide_idx] - anchor_x) <= tolerance:
+                        row_hits.add(guide_idx)
+                        if token["is_numeric"]:
+                            numeric_weight[guide_idx] += weight
             for guide_idx in row_hits:
                 support_rows[guide_idx].add(row_idx)
 
