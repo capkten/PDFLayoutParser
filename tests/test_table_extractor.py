@@ -740,6 +740,28 @@ class TestTableExtractor:
         finally:
             doc.close()
 
+    def test_between_filter_keeps_text_columns_at_column_spacing(self, tmp_dir):
+        pdf_path = Path(tmp_dir) / "between_spacing.pdf"
+        make_synthetic_text_alignment_pdf(
+            pdf_path,
+            [
+                (30.0, [(20.0, "序号"), (80.0, "金额"), (120.0, "备注"), (300.0, "合计")]),
+                (48.0, [(20.0, "1"), (80.0, "100.00"), (120.0, "正常"), (300.0, "100.00")]),
+                (66.0, [(20.0, "2"), (80.0, "200.00"), (120.0, "异常"), (300.0, "300.00")]),
+                (84.0, [(20.0, "3"), (80.0, "50.00"), (120.0, "正常"), (300.0, "350.00")]),
+            ],
+            page_size=(400.0, 120.0),
+        )
+
+        doc = fitz.open(str(pdf_path))
+        try:
+            extractor = TableExtractor()
+            tables = extractor._extract_via_text_alignment(doc[0])
+            assert len(tables) == 1
+            assert tables[0].cols == 4
+        finally:
+            doc.close()
+
     def test_extract_via_text_alignment_handles_multiline_cells(self, tmp_dir):
         pdf_path = Path(tmp_dir) / "multiline_cells.pdf"
         # Simulate a table with a multi-line middle column:
