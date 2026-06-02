@@ -25,6 +25,9 @@ import fitz
 
 from hexai_pdf_parser.models import BBox, Cell, Table
 from hexai_pdf_parser.table_config import TableConfig, LayoutProfile
+from hexai_pdf_parser.financial_header_handler import (
+    normalize_complex_financial_header,
+)
 from hexai_pdf_parser.table_header_normalizer import normalize_table_headers
 from hexai_pdf_parser.table_profile_matcher import PageFeatures, match_profiles
 from hexai_pdf_parser.table_region_rules import (
@@ -144,6 +147,7 @@ class TableExtractor:
 
         # Normalize grouped financial headers once, after all table rules.
         tables = [normalize_table_headers(t, page) for t in tables]
+        tables = [normalize_complex_financial_header(t, page) for t in tables]
 
         return tables
 

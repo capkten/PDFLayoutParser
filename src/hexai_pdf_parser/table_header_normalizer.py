@@ -20,6 +20,9 @@ import re
 import fitz
 
 from hexai_pdf_parser.models import BBox, Cell, Table
+from hexai_pdf_parser.financial_header_handler import (
+    normalize_complex_financial_header,
+)
 
 _LEFT_ANCHOR_VARIANTS = {"椤圭洰", "项目"}
 
@@ -106,9 +109,7 @@ def normalize_table_headers(table: Table, page: fitz.Page) -> Table:
     rebuilt = _rebuild_text_aligned_table(table, page)
     if rebuilt is not None:
         table = rebuilt
-    if _looks_like_grouped_financial_header(table, page):
-        return _promote_grouped_header(table, page)
-    return table
+    return normalize_complex_financial_header(table, page)
 
 
 def _normalize_generic_table(table: Table) -> Table:
@@ -650,7 +651,6 @@ def _merge_header_fragment_with_lower_line(
         rowspan=1,
         colspan=cell.colspan,
     )
-
 
 
 
