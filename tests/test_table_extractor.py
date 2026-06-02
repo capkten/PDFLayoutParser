@@ -717,6 +717,29 @@ class TestTableExtractor:
         finally:
             doc.close()
 
+    def test_extract_via_text_alignment_preserves_multiple_text_columns(self, tmp_dir):
+        pdf_path = Path(tmp_dir) / "multi_text_cols.pdf"
+        make_synthetic_text_alignment_pdf(
+            pdf_path,
+            [
+                (30.0, [(20.0, "名称"), (120.0, "简称"), (220.0, "类型"), (320.0, "金额"), (420.0, "比例")]),
+                (48.0, [(20.0, "甲公司"), (120.0, "甲"), (220.0, "子公司"), (320.0, "100.00"), (420.0, "50%")]),
+                (66.0, [(20.0, "乙公司"), (120.0, "乙"), (220.0, "联营"), (320.0, "200.00"), (420.0, "30%")]),
+                (84.0, [(20.0, "丙公司"), (120.0, "丙"), (220.0, "合营"), (320.0, "300.00"), (420.0, "20%")]),
+            ],
+            page_size=(500.0, 120.0),
+        )
+
+        doc = fitz.open(str(pdf_path))
+        try:
+            extractor = TableExtractor()
+            tables = extractor._extract_via_text_alignment(doc[0])
+            assert len(tables) == 1
+            assert tables[0].rows == 4
+            assert tables[0].cols == 5
+        finally:
+            doc.close()
+
     def test_extract_via_text_alignment_handles_multiline_cells(self, tmp_dir):
         pdf_path = Path(tmp_dir) / "multiline_cells.pdf"
         # Simulate a table with a multi-line middle column:
