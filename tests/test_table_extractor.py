@@ -2326,3 +2326,284 @@ def test_promote_grouped_financial_header_inserts_external_header_band():
         cell.text == "项目" and cell.row_index == 0 and cell.rowspan == 2
         for cell in result.cells
     )
+
+
+def test_normalize_table_headers_rebuild_keeps_short_text_in_second_column():
+    from hexai_pdf_parser.table_header_normalizer import normalize_table_headers
+
+    header_y = 100.0
+    row1_y = 120.0
+    row2_y = 140.0
+
+    words = [
+        (32.0, header_y, 40.0, header_y + 8.0, "序号"),
+        (54.0, header_y, 90.0, header_y + 8.0, "企业名称"),
+        (245.0, header_y, 269.0, header_y + 8.0, "简称"),
+        (316.0, header_y, 352.0, header_y + 8.0, "级次"),
+        (377.0, header_y, 401.0, header_y + 8.0, "注册地"),
+        (420.0, header_y, 444.0, header_y + 8.0, "经营地"),
+        (490.0, header_y, 538.0, header_y + 8.0, "业务性质"),
+        (600.0, header_y, 632.0, header_y + 8.0, "实收资本"),
+        (650.0, header_y, 674.0, header_y + 8.0, "持股"),
+        (700.0, header_y, 724.0, header_y + 8.0, "表决权"),
+        (756.0, header_y, 788.0, header_y + 8.0, "投资额"),
+        (806.0, header_y, 810.0, header_y + 8.0, "方式"),
+        (32.0, row1_y, 40.0, row1_y + 8.0, "23"),
+        (54.0, row1_y, 182.0, row1_y + 8.0, "北京地铁十九号线投资有限责任公司"),
+        (245.0, row1_y, 289.0, row1_y + 8.0, "十九号线公司"),
+        (316.0, row1_y, 320.0, row1_y + 8.0, "2"),
+        (348.0, row1_y, 352.0, row1_y + 8.0, "1"),
+        (377.0, row1_y, 401.0, row1_y + 8.0, "北京市"),
+        (420.0, row1_y, 444.0, row1_y + 8.0, "北京市"),
+        (489.0, row1_y, 537.0, row1_y + 8.0, "轨道交通建设"),
+        (592.0, row1_y, 632.0, row1_y + 8.0, "830,302.00"),
+        (654.0, row1_y, 674.0, row1_y + 8.0, "85.55"),
+        (700.0, row1_y, 724.0, row1_y + 8.0, "100.00"),
+        (748.0, row1_y, 788.0, row1_y + 8.0, "670,302.00"),
+        (806.0, row1_y, 810.0, row1_y + 8.0, "1"),
+        (32.0, row2_y, 40.0, row2_y + 8.0, "24"),
+        (54.0, row2_y, 86.0, row2_y + 8.0, "咨询公司"),
+        (249.0, row2_y, 281.0, row2_y + 8.0, "咨询公司"),
+        (316.0, row2_y, 320.0, row2_y + 8.0, "2"),
+        (348.0, row2_y, 352.0, row2_y + 8.0, "1"),
+        (377.0, row2_y, 401.0, row2_y + 8.0, "北京市"),
+        (420.0, row2_y, 444.0, row2_y + 8.0, "北京市"),
+        (481.0, row2_y, 545.0, row2_y + 8.0, "轨道交通咨询服务"),
+        (600.0, row2_y, 632.0, row2_y + 8.0, "1,500.00"),
+        (654.0, row2_y, 674.0, row2_y + 8.0, "98.00"),
+        (704.0, row2_y, 724.0, row2_y + 8.0, "98.00"),
+        (756.0, row2_y, 788.0, row2_y + 8.0, "1,816.99"),
+        (806.0, row2_y, 810.0, row2_y + 8.0, "2"),
+    ]
+
+    cells = [
+        Cell(text="序号", row_index=0, col_index=0, bbox=BBox(32.0, header_y, 40.0, header_y + 8.0)),
+        Cell(text="企业名称", row_index=0, col_index=1, bbox=BBox(54.0, header_y, 90.0, header_y + 8.0)),
+        Cell(text="简称", row_index=0, col_index=2, bbox=BBox(245.0, header_y, 269.0, header_y + 8.0)),
+        Cell(text="级次", row_index=0, col_index=3, bbox=BBox(316.0, header_y, 352.0, header_y + 8.0)),
+        Cell(text="注册地", row_index=0, col_index=4, bbox=BBox(377.0, header_y, 401.0, header_y + 8.0)),
+        Cell(text="经营地", row_index=0, col_index=5, bbox=BBox(420.0, header_y, 444.0, header_y + 8.0)),
+        Cell(text="业务性质", row_index=0, col_index=6, bbox=BBox(490.0, header_y, 538.0, header_y + 8.0)),
+        Cell(text="实收资本", row_index=0, col_index=7, bbox=BBox(600.0, header_y, 632.0, header_y + 8.0)),
+        Cell(text="持股", row_index=0, col_index=8, bbox=BBox(650.0, header_y, 674.0, header_y + 8.0)),
+        Cell(text="表决权", row_index=0, col_index=9, bbox=BBox(700.0, header_y, 724.0, header_y + 8.0)),
+        Cell(text="投资额", row_index=0, col_index=10, bbox=BBox(756.0, header_y, 788.0, header_y + 8.0)),
+        Cell(text="方式", row_index=0, col_index=11, bbox=BBox(806.0, header_y, 810.0, header_y + 8.0)),
+        Cell(text="23", row_index=1, col_index=0, bbox=BBox(32.0, row1_y, 40.0, row1_y + 8.0)),
+        Cell(text="北京地铁十九号线投资有限责任公司", row_index=1, col_index=1, bbox=BBox(54.0, row1_y, 182.0, row1_y + 8.0)),
+        Cell(text="十九号线公司", row_index=1, col_index=2, bbox=BBox(245.0, row1_y, 289.0, row1_y + 8.0)),
+        Cell(text="2 1", row_index=1, col_index=3, bbox=BBox(316.0, row1_y, 352.0, row1_y + 8.0)),
+        Cell(text="北京市", row_index=1, col_index=4, bbox=BBox(377.0, row1_y, 401.0, row1_y + 8.0)),
+        Cell(text="北京市", row_index=1, col_index=5, bbox=BBox(420.0, row1_y, 444.0, row1_y + 8.0)),
+        Cell(text="轨道交通建设", row_index=1, col_index=6, bbox=BBox(489.0, row1_y, 537.0, row1_y + 8.0)),
+        Cell(text="830,302.00", row_index=1, col_index=7, bbox=BBox(592.0, row1_y, 632.0, row1_y + 8.0)),
+        Cell(text="85.55", row_index=1, col_index=8, bbox=BBox(654.0, row1_y, 674.0, row1_y + 8.0)),
+        Cell(text="100.00", row_index=1, col_index=9, bbox=BBox(700.0, row1_y, 724.0, row1_y + 8.0)),
+        Cell(text="670,302.00", row_index=1, col_index=10, bbox=BBox(748.0, row1_y, 788.0, row1_y + 8.0)),
+        Cell(text="1", row_index=1, col_index=11, bbox=BBox(806.0, row1_y, 810.0, row1_y + 8.0)),
+        Cell(text="24", row_index=2, col_index=0, bbox=BBox(32.0, row2_y, 40.0, row2_y + 8.0)),
+        Cell(text="咨询公司", row_index=2, col_index=1, bbox=BBox(54.0, row2_y, 86.0, row2_y + 8.0)),
+        Cell(text="咨询公司", row_index=2, col_index=2, bbox=BBox(249.0, row2_y, 281.0, row2_y + 8.0)),
+        Cell(text="2 1", row_index=2, col_index=3, bbox=BBox(316.0, row2_y, 352.0, row2_y + 8.0)),
+        Cell(text="北京市", row_index=2, col_index=4, bbox=BBox(377.0, row2_y, 401.0, row2_y + 8.0)),
+        Cell(text="北京市", row_index=2, col_index=5, bbox=BBox(420.0, row2_y, 444.0, row2_y + 8.0)),
+        Cell(text="轨道交通咨询服务", row_index=2, col_index=6, bbox=BBox(481.0, row2_y, 545.0, row2_y + 8.0)),
+        Cell(text="1,500.00", row_index=2, col_index=7, bbox=BBox(600.0, row2_y, 632.0, row2_y + 8.0)),
+        Cell(text="98.00", row_index=2, col_index=8, bbox=BBox(654.0, row2_y, 674.0, row2_y + 8.0)),
+        Cell(text="98.00", row_index=2, col_index=9, bbox=BBox(704.0, row2_y, 724.0, row2_y + 8.0)),
+        Cell(text="1,816.99", row_index=2, col_index=10, bbox=BBox(756.0, row2_y, 788.0, row2_y + 8.0)),
+        Cell(text="2", row_index=2, col_index=11, bbox=BBox(806.0, row2_y, 810.0, row2_y + 8.0)),
+    ]
+
+    table = Table(
+        bbox=BBox(32.0, header_y, 810.0, row2_y + 8.0),
+        rows=3,
+        cols=12,
+        cells=cells,
+        confidence=0.9,
+        source="text_alignment",
+    )
+
+    mock_page = SimpleNamespace(
+        get_text=lambda mode, **kwargs: words if mode == "words" else {"blocks": []}
+    )
+
+    result = normalize_table_headers(table, mock_page)
+
+    rebuilt_row = {
+        cell.col_index: cell.text
+        for cell in result.cells
+        if cell.row_index == 2
+    }
+    assert rebuilt_row[0] == "24"
+    assert rebuilt_row[1] == "咨询公司"
+    assert rebuilt_row[2] == "咨询公司"
+
+
+def test_text_alignment_recovers_multiline_header_above_separator_on_page_054():
+    pdf_path = Path(r"D:\codes\PDFLayoutParser\152590_20230428_N7ZK_0.pdf")
+
+    with fitz.open(str(pdf_path)) as doc:
+        extractor = TableExtractor()
+        tables = extractor._extract_via_text_alignment(doc[54])
+
+    assert tables, "expected at least one text-alignment table on page 054"
+    table = tables[0]
+
+    assert table.bbox.y0 < 100.0
+    assert any(cell.text == "企业" for cell in table.cells)
+    assert any(cell.text == "主要经" for cell in table.cells)
+    assert any(cell.text == "实收资本" for cell in table.cells)
+
+
+def test_text_alignment_keeps_adjacent_body_text_columns_on_page_052():
+    pdf_path = Path(r"D:\codes\PDFLayoutParser\152590_20230428_N7ZK_0.pdf")
+
+    with fitz.open(str(pdf_path)) as doc:
+        extractor = TableExtractor()
+        tables = extractor._extract_via_text_alignment(doc[52])
+
+    assert tables, "expected at least one text-alignment table on page 052"
+    table = tables[0]
+
+    rows = {}
+    for cell in table.cells:
+        rows.setdefault(cell.row_index, {})[cell.col_index] = cell.text
+
+    header_rows = [
+        [rows[r].get(i, "") for i in range(max(rows[r]) + 1)]
+        for r in range(3)
+    ]
+    body_row = [rows[3].get(i, "") for i in range(max(rows[3]) + 1)]
+
+    assert any("业务性质" in text for text in header_rows[1]), header_rows
+    assert any("营地" in text for text in header_rows[2]), header_rows
+    assert "北京市" in body_row, body_row
+    assert "轨道交通建设" in body_row, body_row
+    assert "北京市 轨道交通建设" not in body_row, body_row
+
+
+def test_text_alignment_keeps_adjacent_body_text_columns_on_page_053():
+    pdf_path = Path(r"D:\codes\PDFLayoutParser\152590_20230428_N7ZK_0.pdf")
+
+    with fitz.open(str(pdf_path)) as doc:
+        extractor = TableExtractor()
+        tables = extractor._extract_via_text_alignment(doc[53])
+
+    assert tables, "expected at least one text-alignment table on page 053"
+    table = tables[0]
+
+    rows = {}
+    for cell in table.cells:
+        rows.setdefault(cell.row_index, {})[cell.col_index] = cell.text
+
+    header_rows = [
+        [rows[r].get(i, "") for i in range(max(rows[r]) + 1)]
+        for r in range(3)
+    ]
+    body_row = [rows[3].get(i, "") for i in range(max(rows[3]) + 1)]
+
+    assert any("业务性质" in text for text in header_rows[1]), header_rows
+    assert any("营地" in text for text in header_rows[2]), header_rows
+    assert "北京市" in body_row, body_row
+    assert "公共交通服务" in body_row, body_row
+    assert "北京市 公共交通服务" not in body_row, body_row
+
+
+def test_equity_change_header_template_keeps_page_148_amount_columns_separate():
+    pdf_path = Path(r"D:\codes\PDFLayoutParser\152590_20230428_N7ZK_0.pdf")
+
+    with fitz.open(str(pdf_path)) as doc:
+        extractor = TableExtractor()
+        tables = extractor.extract(doc[148])
+
+    assert tables, "expected at least one table on page 148"
+    table = tables[0]
+
+    rows = {}
+    for cell in table.cells:
+        rows.setdefault(cell.row_index, {})[cell.col_index] = cell.text
+
+    top_header_row = [rows[0].get(i, "") for i in range(max(rows[0]) + 1)]
+    lower_header_row = [rows[1].get(i, "") for i in range(max(rows[1]) + 1)]
+    subtotal_row = [rows[max(rows)].get(i, "") for i in range(max(rows[max(rows)]) + 1)]
+
+    assert top_header_row[0] == "被投资单位"
+    assert top_header_row[1] == "本期增减变动"
+    assert top_header_row[6] == "期末余额"
+    assert top_header_row[7] == "期末减值准备"
+
+    assert lower_header_row[1] == "其他综合收益调整"
+    assert lower_header_row[2] == "其他权益变动"
+    assert lower_header_row[3] == "宣告发放现金股利或利润"
+    assert lower_header_row[4] == "计提减值准备"
+    assert lower_header_row[5] == "其他"
+
+    assert "5,219,987.71" in subtotal_row, subtotal_row
+    assert "3,759,244.70" in subtotal_row, subtotal_row
+    assert "571,316,422.40" in subtotal_row, subtotal_row
+    assert "191,274,358.68" in subtotal_row, subtotal_row
+    assert "5,219,987.71 3,759,244.70" not in subtotal_row, subtotal_row
+    assert "571,316,422.40 191,274,358.68" not in subtotal_row, subtotal_row
+
+
+def test_build_special_template_table_falls_back_when_equity_template_zone_check_fails(
+    monkeypatch,
+):
+    extractor = TableExtractor()
+    region_rows = [
+        {
+            "tokens": [{"text": "被投资单位", "x0": 40.0, "y0": 100.0, "x1": 90.0, "y1": 110.0}],
+            "x0": 40.0,
+            "y0": 100.0,
+            "x1": 90.0,
+            "y1": 110.0,
+        },
+        {
+            "tokens": [
+                {"text": "其他综合收益调整", "x0": 180.0, "y0": 112.0, "x1": 250.0, "y1": 122.0},
+                {"text": "其他权益变动", "x0": 260.0, "y0": 112.0, "x1": 320.0, "y1": 122.0},
+                {"text": "宣告发放现金股", "x0": 330.0, "y0": 112.0, "x1": 390.0, "y1": 122.0},
+                {"text": "计提减值", "x0": 410.0, "y0": 112.0, "x1": 460.0, "y1": 122.0},
+                {"text": "期末余额", "x0": 620.0, "y0": 112.0, "x1": 680.0, "y1": 122.0},
+                {"text": "期末减值准备", "x0": 720.0, "y0": 112.0, "x1": 790.0, "y1": 122.0},
+            ],
+            "x0": 180.0,
+            "y0": 112.0,
+            "x1": 790.0,
+            "y1": 122.0,
+        },
+        {
+            "tokens": [
+                {"text": "其他", "x0": 520.0, "y0": 124.0, "x1": 550.0, "y1": 134.0},
+            ],
+            "x0": 520.0,
+            "y0": 124.0,
+            "x1": 550.0,
+            "y1": 134.0,
+        },
+        {
+            "tokens": [
+                {"text": "小计", "x0": 40.0, "y0": 150.0, "x1": 65.0, "y1": 160.0},
+                {"text": "5,219,987.71", "x0": 190.0, "y0": 150.0, "x1": 250.0, "y1": 160.0},
+            ],
+            "x0": 40.0,
+            "y0": 150.0,
+            "x1": 250.0,
+            "y1": 160.0,
+        },
+    ]
+    page = SimpleNamespace()
+
+    monkeypatch.setattr(
+        extractor,
+        "_collect_equity_change_header_rows",
+        lambda page, bbox, rows: rows[:3],
+    )
+    monkeypatch.setattr(
+        extractor,
+        "_match_equity_change_template_zones",
+        lambda header_rows, table_bbox, zone_ranges: False,
+    )
+
+    assert extractor._build_special_template_table(page, region_rows) is None

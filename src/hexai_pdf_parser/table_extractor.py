@@ -1729,6 +1729,7 @@ class TableExtractor:
         )
 
         if len(numeric_xs) >= 2:
+            body_boundaries = self._infer_body_column_boundaries(rows)
             # 1. Remove text-only guides between two numeric guides ONLY
             #    if they are at character-level spacing (header label fragments).
             #    Column-level spacing indicates a real data column — keep it.
@@ -1761,7 +1762,18 @@ class TableExtractor:
                 cw = _avg_char_width(bt)
                 x = bt["x"]
                 # Find gap to nearest between-text neighbor
-                neighbors = [abs(nx - x) for nx in between_xs if nx != x]
+                neighbors = []
+                x_interval = self._column_interval_index(x, body_boundaries)
+                for nx in between_xs:
+                    if nx == x:
+                        continue
+                    if (
+                        body_boundaries
+                        and self._column_interval_index(nx, body_boundaries)
+                        != x_interval
+                    ):
+                        continue
+                    neighbors.append(abs(nx - x))
                 if not neighbors:
                     # Isolated text guide — keep (conservative)
                     continue
@@ -1828,6 +1840,73 @@ class TableExtractor:
                 # Merged label cluster — keep as-is
                 result.append(c["x"])
         return sorted(result)
+
+    @staticmethod
+    def _column_interval_index(x: float, boundaries: List[float]) -> int:
+        """Return the interval index for x relative to sorted boundaries."""
+        idx = 0
+        while idx < len(boundaries) and x > boundaries[idx]:
+            idx += 1
+        return idx
+
+    def _infer_body_column_boundaries(self, rows: List[dict]) -> List[float]:
+        """Infer coarse body-column boundaries from numeric-bearing rows.
+
+        Body rows are typically more reliable than multi-line headers, so these
+        boundaries are used as guardrails for deciding whether nearby text-only
+        header guides can be treated as fragments of the same column.
+        """
+        body_rows = [
+            row
+            for row in rows
+            if any(token.get("is_numeric") for token in row.get("tokens", []))
+        ]
+        if len(body_rows) < 2:
+            return []
+
+        tolerance = max(8.0, self.line_tolerance * 4)
+        anchors: List[Tuple[float, float, int]] = []
+        for row_idx, row in enumerate(body_rows):
+            for token in row["tokens"]:
+                anchor_x, weight = self._token_alignment_anchor(token)
+                anchors.append((anchor_x, weight, row_idx))
+
+        if not anchors:
+            return []
+
+        clusters: List[dict] = []
+        for anchor_x, weight, row_idx in sorted(anchors, key=lambda item: item[0]):
+            target = None
+            for cluster in clusters:
+                if abs(anchor_x - cluster["x"]) <= tolerance:
+                    target = cluster
+                    break
+
+            if target is None:
+                clusters.append(
+                    {"x": anchor_x, "weight": weight, "rows": {row_idx}}
+                )
+                continue
+
+            total_weight = target["weight"] + weight
+            target["x"] = (
+                target["x"] * target["weight"] + anchor_x * weight
+            ) / total_weight
+            target["weight"] = total_weight
+            target["rows"].add(row_idx)
+
+        guides = sorted(
+            cluster["x"]
+            for cluster in clusters
+            if cluster["weight"] >= 2.0 and len(cluster["rows"]) >= 2
+        )
+        if len(guides) < 2:
+            return []
+
+        return [
+            (guides[i] + guides[i + 1]) / 2.0
+            for i in range(len(guides) - 1)
+        ]
 
     def _extract_text_region_separators(
         self,
@@ -2161,6 +2240,31 @@ class TableExtractor:
             if len(guides) < 2:
                 continue
 
+            specialized = self._build_special_template_table(page, region_rows)
+            if specialized is not None:
+                tables.append(specialized)
+                debug_regions.append(
+                    {
+                        "bbox": {
+                            "x0": specialized.bbox.x0,
+                            "y0": specialized.bbox.y0,
+                            "x1": specialized.bbox.x1,
+                            "y1": specialized.bbox.y1,
+                        },
+                        "rows": [
+                            {
+                                "x0": row["x0"],
+                                "y0": row["y0"],
+                                "x1": row["x1"],
+                                "y1": row["y1"],
+                            }
+                            for row in region_rows
+                        ],
+                        "column_guides": list(guides),
+                    }
+                )
+                continue
+
             # Trim prose prefix/suffix rows that don't align with the
             # column structure.  Only applies to short spans to avoid
             # accidentally removing rows from multi-section financial
@@ -2271,9 +2375,16 @@ class TableExtractor:
                 table, page, guides
             )
             if header_cells:
+                header_row_count = max(
+                    (
+                        c.row_index + max(1, c.rowspan)
+                        for c in header_cells
+                    ),
+                    default=0,
+                )
                 for c in cells:
-                    c.row_index += 1
-                table.rows += 1
+                    c.row_index += header_row_count
+                table.rows += header_row_count
                 table.bbox = BBox(
                     min(region_bbox.x0, min(c.bbox.x0 for c in header_cells)),
                     min(region_bbox.y0, min(c.bbox.y0 for c in header_cells)),
@@ -2311,6 +2422,279 @@ class TableExtractor:
             }
 
         return tables
+
+    def _build_special_template_table(
+        self, page: fitz.Page, region_rows: List[dict]
+    ) -> Table | None:
+        """Build a specialized table when header keywords match a known template."""
+        template = self._classify_special_text_table_template(region_rows)
+        if template == "equity_change_header":
+            return self._build_equity_change_template_table(page, region_rows)
+        return None
+
+    def _classify_special_text_table_template(
+        self, region_rows: List[dict]
+    ) -> str | None:
+        """Classify a text-alignment region using header keywords."""
+        if len(region_rows) < 4:
+            return None
+
+        header_text = " ".join(
+            token["text"]
+            for row in region_rows[:3]
+            for token in row.get("tokens", [])
+            if token.get("text")
+        )
+        required = [
+            "被投资单位",
+            "其他综合收益调整",
+            "其他权益变动",
+            "宣告发放现金股",
+            "计提减值",
+            "期末余额",
+            "期末减值准备",
+        ]
+        hits = sum(1 for keyword in required if keyword in header_text)
+        if "被投资单位" in header_text and hits >= 5:
+            return "equity_change_header"
+        return None
+
+    def _build_equity_change_template_table(
+        self, page: fitz.Page, region_rows: List[dict]
+    ) -> Table | None:
+        """Rebuild the page-148 style equity-change table from fixed zones.
+
+        The template is content-driven (keyword match), but once matched we
+        place header/body content into pre-defined normalized x-zones instead of
+        relying on generic guide inference.
+        """
+        top_header_labels = {
+            0: "被投资单位",
+            1: "本期增减变动",
+            6: "期末余额",
+            7: "期末减值准备",
+        }
+        lower_header_labels = {
+            1: "其他综合收益调整",
+            2: "其他权益变动",
+            3: "宣告发放现金股利或利润",
+            4: "计提减值准备",
+            5: "其他",
+        }
+        # Normalized [left, right) zones observed from this equity-change layout.
+        # They are stable enough across the same report family and avoid pushing
+        # this special structure back into generic guide inference.
+        zone_ranges = [
+            (0.00, 0.215),
+            (0.215, 0.358),
+            (0.358, 0.452),
+            (0.452, 0.548),
+            (0.548, 0.654),
+            (0.654, 0.781),
+            (0.781, 0.905),
+            (0.905, 1.0001),
+        ]
+        table_bbox = self._rows_bbox(region_rows)
+        width = max(table_bbox.x1 - table_bbox.x0, 1.0)
+        header_rows = self._collect_equity_change_header_rows(page, table_bbox, region_rows)
+        if not self._match_equity_change_template_zones(
+            header_rows, table_bbox, zone_ranges
+        ):
+            return None
+
+        cells: List[Cell] = []
+        header_top = min(row["y0"] for row in header_rows)
+        header_bottom = max(row["y1"] for row in header_rows)
+        top_group_row = min(
+            header_rows,
+            key=lambda row: min(token["y0"] for token in row["tokens"]),
+        )
+        top_group_bottom = top_group_row["y1"]
+        lower_header_top = min(
+            row["y0"] for row in header_rows if row is not top_group_row
+        )
+
+        for col_index, label in top_header_labels.items():
+            left_norm, right_norm = zone_ranges[col_index]
+            left = table_bbox.x0 + width * left_norm
+            right = table_bbox.x0 + width * right_norm
+            colspan = 1
+            rowspan = 2
+            if col_index == 1:
+                right = table_bbox.x0 + width * zone_ranges[5][1]
+                colspan = 5
+                rowspan = 1
+            cells.append(
+                Cell(
+                    text=label,
+                    row_index=0,
+                    col_index=col_index,
+                    bbox=BBox(left, header_top, right, header_bottom),
+                    rowspan=rowspan,
+                    colspan=colspan,
+                )
+            )
+
+        for col_index, label in lower_header_labels.items():
+            left_norm, right_norm = zone_ranges[col_index]
+            left = table_bbox.x0 + width * left_norm
+            right = table_bbox.x0 + width * right_norm
+            cells.append(
+                Cell(
+                    text=label,
+                    row_index=1,
+                    col_index=col_index,
+                    bbox=BBox(left, lower_header_top, right, header_bottom),
+                )
+            )
+
+        for row_offset, row in enumerate(region_rows[3:], start=2):
+            if not row.get("tokens"):
+                continue
+            label_token = min(row["tokens"], key=lambda token: token["x0"])
+            label_col = 0
+            label_text = label_token["text"].strip()
+            if label_text:
+                cells.append(
+                    Cell(
+                        text=label_text,
+                        row_index=row_offset,
+                        col_index=label_col,
+                        bbox=BBox(
+                            label_token["x0"],
+                            label_token["y0"],
+                            label_token["x1"],
+                            label_token["y1"],
+                        ),
+                    )
+                )
+
+            zone_tokens: dict[int, list[dict]] = defaultdict(list)
+            value_tokens = [
+                token
+                for token in sorted(row["tokens"], key=lambda token: token["x0"])
+                if token is not label_token and token.get("text", "").strip()
+            ]
+            for token in value_tokens:
+                x_center = (token["x0"] + token["x1"]) / 2.0
+                normalized_x = (x_center - table_bbox.x0) / width
+                col_index = next(
+                    (
+                        idx
+                        for idx, (left_norm, right_norm) in enumerate(zone_ranges)
+                        if left_norm <= normalized_x < right_norm
+                    ),
+                    len(zone_ranges) - 1,
+                )
+                if col_index == 0:
+                    col_index = 1
+                zone_tokens[col_index].append(token)
+
+            for col_index, tokens_in_zone in sorted(zone_tokens.items()):
+                text = " ".join(
+                    token["text"].strip()
+                    for token in tokens_in_zone
+                    if token["text"].strip()
+                )
+                if not text:
+                    continue
+                cells.append(
+                    Cell(
+                        text=text,
+                        row_index=row_offset,
+                        col_index=col_index,
+                        bbox=BBox(
+                            min(token["x0"] for token in tokens_in_zone),
+                            min(token["y0"] for token in tokens_in_zone),
+                            max(token["x1"] for token in tokens_in_zone),
+                            max(token["y1"] for token in tokens_in_zone),
+                        ),
+                    )
+                )
+
+        return Table(
+            bbox=table_bbox,
+            rows=max((cell.row_index for cell in cells), default=0) + 1,
+            cols=len(zone_ranges),
+            cells=cells,
+            confidence=0.8,
+            source="text_alignment:equity_change_template",
+        )
+
+    def _collect_equity_change_header_rows(
+        self,
+        page: fitz.Page,
+        table_bbox: BBox,
+        region_rows: List[dict],
+    ) -> List[dict]:
+        """Collect the full header band for the equity-change template."""
+        header_bottom = max(row["y1"] for row in region_rows[:3])
+        clip = fitz.Rect(
+            table_bbox.x0 - 10.0,
+            max(0.0, region_rows[0]["y0"] - 40.0),
+            table_bbox.x1 + 10.0,
+            header_bottom + 2.0,
+        )
+        words = page.get_text("words", clip=clip)
+        rows = self._collect_text_rows(words)
+        return [row for row in rows if row["y1"] <= header_bottom + 2.0]
+
+    def _match_equity_change_template_zones(
+        self,
+        header_rows: List[dict],
+        table_bbox: BBox,
+        zone_ranges: List[tuple[float, float]],
+    ) -> bool:
+        """Validate template A using strict zone-level keyword matching."""
+        if len(header_rows) < 3:
+            return False
+
+        width = max(table_bbox.x1 - table_bbox.x0, 1.0)
+        zone_texts: dict[int, list[str]] = defaultdict(list)
+        group_texts: list[str] = []
+        for row in header_rows:
+            for token in row.get("tokens", []):
+                text = token.get("text", "").strip()
+                if not text:
+                    continue
+                x_center = (token["x0"] + token["x1"]) / 2.0
+                normalized_x = (x_center - table_bbox.x0) / width
+                zone_index = next(
+                    (
+                        idx
+                        for idx, (left_norm, right_norm) in enumerate(zone_ranges)
+                        if left_norm <= normalized_x < right_norm
+                    ),
+                    len(zone_ranges) - 1,
+                )
+                zone_texts[zone_index].append(text)
+                if zone_ranges[1][0] <= normalized_x < zone_ranges[5][1]:
+                    group_texts.append(text)
+
+        zone_joined = {
+            idx: "".join(texts).replace(" ", "")
+            for idx, texts in zone_texts.items()
+        }
+        group_joined = "".join(group_texts).replace(" ", "")
+
+        checks = [
+            "被投资单位" in zone_joined.get(0, ""),
+            "本期增减变动" in group_joined,
+            "期末余额" in zone_joined.get(6, ""),
+            "期末减值准备" in zone_joined.get(7, ""),
+            "其他综合收益调整" in zone_joined.get(1, ""),
+            "其他权益变动" in zone_joined.get(2, ""),
+            (
+                "宣告发放现金股" in zone_joined.get(3, "")
+                and "利或利润" in zone_joined.get(3, "")
+            ),
+            (
+                "计提减值" in zone_joined.get(4, "")
+                and "准备" in zone_joined.get(4, "")
+            ),
+            zone_joined.get(5, "") == "其他",
+        ]
+        return all(checks)
 
     def capture_text_alignment_snapshot(
         self, page: fitz.Page, region_bbox: BBox
@@ -2491,7 +2875,6 @@ class TableExtractor:
             for guide_idx in row_hits:
                 support_rows[guide_idx].add(row_idx)
 
-        target_max = max(4, min(12, len(rows) // 2 + 4))
         support = [len(rows_hit) for rows_hit in support_rows]
 
         # Even when total guides are within target_max, filter out guides
@@ -2507,47 +2890,7 @@ class TableExtractor:
             support = [support[gi] for gi in strong_guides]
             numeric_weight = [numeric_weight[gi] for gi in strong_guides]
 
-        if len(guides) <= target_max:
-            return sorted(guides)
-
-        active = list(range(len(guides)))
-
-        def guide_gap(left_idx: int, right_idx: int) -> float:
-            return abs(guides[right_idx] - guides[left_idx])
-
-        while len(active) > target_max:
-            best_pos = None
-            best_score = None
-
-            for pos, guide_idx in enumerate(active):
-                if pos == 0 or pos == len(active) - 1:
-                    continue
-
-                left_idx = active[pos - 1]
-                right_idx = active[pos + 1]
-                left_gap = guide_gap(left_idx, guide_idx)
-                right_gap = guide_gap(guide_idx, right_idx)
-                closeness = min(left_gap, right_gap)
-                if closeness > max(22.0, self.line_tolerance * 6):
-                    continue
-
-                score = (
-                    support[guide_idx] * 3.0
-                    + numeric_weight[guide_idx] * 0.5
-                    + closeness
-                )
-
-                if best_score is None or score < best_score:
-                    best_score = score
-                    best_pos = pos
-
-            if best_pos is None:
-                break
-
-            active.pop(best_pos)
-
-        compacted = [guides[idx] for idx in active]
-        return sorted(compacted) if len(compacted) >= 2 else sorted(guides)
+        return sorted(guides)
 
     def _merge_numeric_fragment_columns(self, cells: List[Cell]) -> List[Cell]:
         """Merge short numeric fragments that were split into adjacent columns."""
@@ -3215,61 +3558,126 @@ class TableExtractor:
         """
         table_top = table.bbox.y0
 
-        # Check for a horizontal line within 15pt above the table top.
-        has_line_above = False
-        line_y = table_top
-        for drawing in page.get_drawings():
-            rect = drawing.get("rect")
-            if rect and rect.height < 2 and rect.width > 4:
-                y_mid = (rect.y0 + rect.y1) / 2
-                if table_top - 15 <= y_mid <= table_top:
-                    has_line_above = True
-                    line_y = min(line_y, y_mid)
-                    break
+        line_y: float | None = None
+        for separator in self._extract_text_region_separators(page):
+            if table_top - 15 <= separator.y <= table_top:
+                if line_y is None or separator.y < line_y:
+                    line_y = separator.y
 
-        if not has_line_above:
+        if line_y is None:
             return None
 
-        # Extract spans from the area above the line (the header area).
+        header_rows = self._collect_header_rows_via_spans(
+            page, line_y, table, guides
+        )
+        if not header_rows:
+            return None
+
+        cells = self._build_text_grid_cells(header_rows, guides)
+        if len(cells) < 2:
+            return None
+        return cells
+
+    def _collect_header_rows_via_spans(
+        self,
+        page: fitz.Page,
+        line_y: float,
+        table: "Table",
+        guides: List[float],
+    ) -> List[dict]:
+        """Collect up to three header-like span rows above a separator line."""
         td = page.get_text("dict", flags=fitz.TEXT_PRESERVE_WHITESPACE)
-        header_tokens = []
+        header_words: List[tuple] = []
+        clip_left = table.bbox.x0 - 5.0
+        clip_right = table.bbox.x1 + 5.0
+        min_y = line_y - 40.0
+        max_y = line_y + 2.0
+
         for block in td["blocks"]:
             if block["type"] != 0:
                 continue
             for line in block["lines"]:
                 for span in line["spans"]:
-                    sy = (span["bbox"][1] + span["bbox"][3]) / 2
-                    if line_y - 20 <= sy <= line_y + 2:
-                        text = span["text"].strip()
-                        if text:
-                            header_tokens.append({
-                                "text": text,
-                                "x0": span["bbox"][0],
-                                "y0": span["bbox"][1],
-                                "x1": span["bbox"][2],
-                                "y1": span["bbox"][3],
-                                "is_numeric": False,
-                            })
+                    text = span["text"].strip()
+                    if not text:
+                        continue
+                    x0, y0, x1, y1 = span["bbox"]
+                    sy = (y0 + y1) / 2.0
+                    if not (min_y <= sy <= max_y):
+                        continue
+                    if x1 < clip_left or x0 > clip_right:
+                        continue
+                    header_words.append(
+                        (
+                            x0,
+                            y0,
+                            x1,
+                            y1,
+                            text,
+                            0,
+                            0,
+                            0,
+                        )
+                    )
 
-        if len(header_tokens) < 2:
+        if not header_words:
             return None
 
-        # Validate: header span count should roughly match table columns.
-        # Spans often have different x-positions than body guides (centered
-        # vs. left-aligned), so we check count instead of alignment.
-        if not (2 <= len(header_tokens) <= table.cols + 2):
+        candidate_rows = self._collect_text_rows(header_words)
+        if not candidate_rows:
             return None
 
-        # Build header cells.
-        cells = []
-        for i, token in enumerate(header_tokens):
-            cells.append(Cell(
-                text=token["text"],
-                row_index=0,
-                col_index=i,
-                bbox=BBox(token["x0"], token["y0"], token["x1"], token["y1"]),
-            ))
-        return cells
+        candidate_rows.sort(key=lambda row: (row["y0"], row["x0"]))
+
+        selected: List[dict] = []
+        previous_row: dict | None = None
+        for row in reversed(candidate_rows):
+            if not self._is_header_like_span_row(row, table.cols, guides):
+                if selected:
+                    break
+                continue
+
+            if previous_row is not None:
+                gap = previous_row["y0"] - row["y1"]
+                max_gap = max(
+                    12.0,
+                    (previous_row["y1"] - previous_row["y0"]) * 1.5,
+                )
+                if gap < 0 or gap > max_gap:
+                    break
+
+            selected.append(row)
+            previous_row = row
+            if len(selected) >= 3:
+                break
+
+        if not selected:
+            return None
+
+        selected.reverse()
+        return selected
+
+    def _is_header_like_span_row(
+        self,
+        row: dict,
+        col_count: int,
+        guides: List[float],
+    ) -> bool:
+        """Return True when a span row looks like part of a table header."""
+        tokens = row.get("tokens") or []
+        if len(tokens) < 2:
+            return False
+        if all(token.get("is_numeric") for token in tokens):
+            return False
+
+        score = self._score_row_against_guides(row, guides)
+        if score["separated_hit_count"] >= 2:
+            return True
+        if score["hit_count"] >= 2:
+            return True
+
+        token_count = len(tokens)
+        return 2 <= token_count <= max(4, min(col_count, 8))
 
     def _assign_text_to_cells(
         self, cells: List[Cell], page: fitz.Page
