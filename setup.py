@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 import os
 
 NAME = "hexai_pdf_parser"
-VERSION = os.getenv("VER", "1.0.1")
+VERSION = os.getenv("VER", "1.0.2")
 
 setup(
     name=NAME,
@@ -30,7 +30,7 @@ setup(
     packages=find_packages(where="src"),
     package_dir={"": "src"},
     package_data={
-        "hexai_pdf_parser": ["data/models/*.onnx"],
+        "hexai_pdf_parser": ["data/models/*.onnx", "table_templates/*.json"],
     },
     entry_points={
         "console_scripts": [

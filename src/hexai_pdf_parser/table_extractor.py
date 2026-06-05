@@ -44,6 +44,12 @@ from hexai_pdf_parser.text_region_detector import (
     detect_candidate_regions,
     detect_separator_driven_regions,
 )
+from hexai_pdf_parser.table_template_engine import (
+    TemplateEngine,
+    TableTemplateConfig,
+    load_templates,
+)
+from hexai_pdf_parser.table_templates import TEMPLATES_DIR
 
 
 @dataclass
@@ -84,6 +90,8 @@ class TableExtractor:
         self._ml_detector = None  # Lazy initialization
         self._last_text_alignment_debug: dict | None = None
         self._table_config = table_config
+        self._templates = load_templates(TEMPLATES_DIR)
+        self._template_engine = TemplateEngine(self)
 
         # Override scalar args from config when provided
         if table_config is not None:
@@ -2427,274 +2435,10 @@ class TableExtractor:
         self, page: fitz.Page, region_rows: List[dict]
     ) -> Table | None:
         """Build a specialized table when header keywords match a known template."""
-        template = self._classify_special_text_table_template(region_rows)
-        if template == "equity_change_header":
-            return self._build_equity_change_template_table(page, region_rows)
-        return None
-
-    def _classify_special_text_table_template(
-        self, region_rows: List[dict]
-    ) -> str | None:
-        """Classify a text-alignment region using header keywords."""
-        if len(region_rows) < 4:
+        template = self._template_engine.classify(region_rows, self._templates)
+        if template is None:
             return None
-
-        header_text = " ".join(
-            token["text"]
-            for row in region_rows[:3]
-            for token in row.get("tokens", [])
-            if token.get("text")
-        )
-        required = [
-            "被投资单位",
-            "其他综合收益调整",
-            "其他权益变动",
-            "宣告发放现金股",
-            "计提减值",
-            "期末余额",
-            "期末减值准备",
-        ]
-        hits = sum(1 for keyword in required if keyword in header_text)
-        if "被投资单位" in header_text and hits >= 5:
-            return "equity_change_header"
-        return None
-
-    def _build_equity_change_template_table(
-        self, page: fitz.Page, region_rows: List[dict]
-    ) -> Table | None:
-        """Rebuild the page-148 style equity-change table from fixed zones.
-
-        The template is content-driven (keyword match), but once matched we
-        place header/body content into pre-defined normalized x-zones instead of
-        relying on generic guide inference.
-        """
-        top_header_labels = {
-            0: "被投资单位",
-            1: "本期增减变动",
-            6: "期末余额",
-            7: "期末减值准备",
-        }
-        lower_header_labels = {
-            1: "其他综合收益调整",
-            2: "其他权益变动",
-            3: "宣告发放现金股利或利润",
-            4: "计提减值准备",
-            5: "其他",
-        }
-        # Normalized [left, right) zones observed from this equity-change layout.
-        # They are stable enough across the same report family and avoid pushing
-        # this special structure back into generic guide inference.
-        zone_ranges = [
-            (0.00, 0.215),
-            (0.215, 0.358),
-            (0.358, 0.452),
-            (0.452, 0.548),
-            (0.548, 0.654),
-            (0.654, 0.781),
-            (0.781, 0.905),
-            (0.905, 1.0001),
-        ]
-        table_bbox = self._rows_bbox(region_rows)
-        width = max(table_bbox.x1 - table_bbox.x0, 1.0)
-        header_rows = self._collect_equity_change_header_rows(page, table_bbox, region_rows)
-        if not self._match_equity_change_template_zones(
-            header_rows, table_bbox, zone_ranges
-        ):
-            return None
-
-        cells: List[Cell] = []
-        header_top = min(row["y0"] for row in header_rows)
-        header_bottom = max(row["y1"] for row in header_rows)
-        top_group_row = min(
-            header_rows,
-            key=lambda row: min(token["y0"] for token in row["tokens"]),
-        )
-        top_group_bottom = top_group_row["y1"]
-        lower_header_top = min(
-            row["y0"] for row in header_rows if row is not top_group_row
-        )
-
-        for col_index, label in top_header_labels.items():
-            left_norm, right_norm = zone_ranges[col_index]
-            left = table_bbox.x0 + width * left_norm
-            right = table_bbox.x0 + width * right_norm
-            colspan = 1
-            rowspan = 2
-            if col_index == 1:
-                right = table_bbox.x0 + width * zone_ranges[5][1]
-                colspan = 5
-                rowspan = 1
-            cells.append(
-                Cell(
-                    text=label,
-                    row_index=0,
-                    col_index=col_index,
-                    bbox=BBox(left, header_top, right, header_bottom),
-                    rowspan=rowspan,
-                    colspan=colspan,
-                )
-            )
-
-        for col_index, label in lower_header_labels.items():
-            left_norm, right_norm = zone_ranges[col_index]
-            left = table_bbox.x0 + width * left_norm
-            right = table_bbox.x0 + width * right_norm
-            cells.append(
-                Cell(
-                    text=label,
-                    row_index=1,
-                    col_index=col_index,
-                    bbox=BBox(left, lower_header_top, right, header_bottom),
-                )
-            )
-
-        for row_offset, row in enumerate(region_rows[3:], start=2):
-            if not row.get("tokens"):
-                continue
-            label_token = min(row["tokens"], key=lambda token: token["x0"])
-            label_col = 0
-            label_text = label_token["text"].strip()
-            if label_text:
-                cells.append(
-                    Cell(
-                        text=label_text,
-                        row_index=row_offset,
-                        col_index=label_col,
-                        bbox=BBox(
-                            label_token["x0"],
-                            label_token["y0"],
-                            label_token["x1"],
-                            label_token["y1"],
-                        ),
-                    )
-                )
-
-            zone_tokens: dict[int, list[dict]] = defaultdict(list)
-            value_tokens = [
-                token
-                for token in sorted(row["tokens"], key=lambda token: token["x0"])
-                if token is not label_token and token.get("text", "").strip()
-            ]
-            for token in value_tokens:
-                x_center = (token["x0"] + token["x1"]) / 2.0
-                normalized_x = (x_center - table_bbox.x0) / width
-                col_index = next(
-                    (
-                        idx
-                        for idx, (left_norm, right_norm) in enumerate(zone_ranges)
-                        if left_norm <= normalized_x < right_norm
-                    ),
-                    len(zone_ranges) - 1,
-                )
-                if col_index == 0:
-                    col_index = 1
-                zone_tokens[col_index].append(token)
-
-            for col_index, tokens_in_zone in sorted(zone_tokens.items()):
-                text = " ".join(
-                    token["text"].strip()
-                    for token in tokens_in_zone
-                    if token["text"].strip()
-                )
-                if not text:
-                    continue
-                cells.append(
-                    Cell(
-                        text=text,
-                        row_index=row_offset,
-                        col_index=col_index,
-                        bbox=BBox(
-                            min(token["x0"] for token in tokens_in_zone),
-                            min(token["y0"] for token in tokens_in_zone),
-                            max(token["x1"] for token in tokens_in_zone),
-                            max(token["y1"] for token in tokens_in_zone),
-                        ),
-                    )
-                )
-
-        return Table(
-            bbox=table_bbox,
-            rows=max((cell.row_index for cell in cells), default=0) + 1,
-            cols=len(zone_ranges),
-            cells=cells,
-            confidence=0.8,
-            source="text_alignment:equity_change_template",
-        )
-
-    def _collect_equity_change_header_rows(
-        self,
-        page: fitz.Page,
-        table_bbox: BBox,
-        region_rows: List[dict],
-    ) -> List[dict]:
-        """Collect the full header band for the equity-change template."""
-        header_bottom = max(row["y1"] for row in region_rows[:3])
-        clip = fitz.Rect(
-            table_bbox.x0 - 10.0,
-            max(0.0, region_rows[0]["y0"] - 40.0),
-            table_bbox.x1 + 10.0,
-            header_bottom + 2.0,
-        )
-        words = page.get_text("words", clip=clip)
-        rows = self._collect_text_rows(words)
-        return [row for row in rows if row["y1"] <= header_bottom + 2.0]
-
-    def _match_equity_change_template_zones(
-        self,
-        header_rows: List[dict],
-        table_bbox: BBox,
-        zone_ranges: List[tuple[float, float]],
-    ) -> bool:
-        """Validate template A using strict zone-level keyword matching."""
-        if len(header_rows) < 3:
-            return False
-
-        width = max(table_bbox.x1 - table_bbox.x0, 1.0)
-        zone_texts: dict[int, list[str]] = defaultdict(list)
-        group_texts: list[str] = []
-        for row in header_rows:
-            for token in row.get("tokens", []):
-                text = token.get("text", "").strip()
-                if not text:
-                    continue
-                x_center = (token["x0"] + token["x1"]) / 2.0
-                normalized_x = (x_center - table_bbox.x0) / width
-                zone_index = next(
-                    (
-                        idx
-                        for idx, (left_norm, right_norm) in enumerate(zone_ranges)
-                        if left_norm <= normalized_x < right_norm
-                    ),
-                    len(zone_ranges) - 1,
-                )
-                zone_texts[zone_index].append(text)
-                if zone_ranges[1][0] <= normalized_x < zone_ranges[5][1]:
-                    group_texts.append(text)
-
-        zone_joined = {
-            idx: "".join(texts).replace(" ", "")
-            for idx, texts in zone_texts.items()
-        }
-        group_joined = "".join(group_texts).replace(" ", "")
-
-        checks = [
-            "被投资单位" in zone_joined.get(0, ""),
-            "本期增减变动" in group_joined,
-            "期末余额" in zone_joined.get(6, ""),
-            "期末减值准备" in zone_joined.get(7, ""),
-            "其他综合收益调整" in zone_joined.get(1, ""),
-            "其他权益变动" in zone_joined.get(2, ""),
-            (
-                "宣告发放现金股" in zone_joined.get(3, "")
-                and "利或利润" in zone_joined.get(3, "")
-            ),
-            (
-                "计提减值" in zone_joined.get(4, "")
-                and "准备" in zone_joined.get(4, "")
-            ),
-            zone_joined.get(5, "") == "其他",
-        ]
-        return all(checks)
+        return self._template_engine.build_table(page, region_rows, template)
 
     def capture_text_alignment_snapshot(
         self, page: fitz.Page, region_bbox: BBox
