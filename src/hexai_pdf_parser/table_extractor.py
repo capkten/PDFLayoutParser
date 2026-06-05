@@ -25,6 +25,9 @@ import fitz
 
 from hexai_pdf_parser.models import BBox, Cell, Table
 from hexai_pdf_parser.table_config import TableConfig, LayoutProfile
+from hexai_pdf_parser.financial_header_handler import (
+    normalize_complex_financial_header,
+)
 from hexai_pdf_parser.table_header_normalizer import normalize_table_headers
 from hexai_pdf_parser.table_profile_matcher import PageFeatures, match_profiles
 from hexai_pdf_parser.table_region_rules import (
@@ -41,6 +44,12 @@ from hexai_pdf_parser.text_region_detector import (
     detect_candidate_regions,
     detect_separator_driven_regions,
 )
+from hexai_pdf_parser.table_template_engine import (
+    TemplateEngine,
+    TableTemplateConfig,
+    load_templates,
+)
+from hexai_pdf_parser.table_templates import TEMPLATES_DIR
 
 
 @dataclass
@@ -81,6 +90,8 @@ class TableExtractor:
         self._ml_detector = None  # Lazy initialization
         self._last_text_alignment_debug: dict | None = None
         self._table_config = table_config
+        self._templates = load_templates(TEMPLATES_DIR)
+        self._template_engine = TemplateEngine(self)
 
         # Override scalar args from config when provided
         if table_config is not None:
@@ -144,6 +155,7 @@ class TableExtractor:
 
         # Normalize grouped financial headers once, after all table rules.
         tables = [normalize_table_headers(t, page) for t in tables]
+        tables = [normalize_complex_financial_header(t, page) for t in tables]
 
         return tables
 
@@ -1605,6 +1617,43 @@ class TableExtractor:
         repeated_guides = sum(1 for row_ids in guide_rows if len(row_ids) >= 2)
         return supporting_rows >= 2 and repeated_guides >= 2
 
+    @staticmethod
+    def _best_edge_position(tokens: List[dict]) -> float | None:
+        """Return the best guide position for a group of tokens.
+
+        Computes variance of x0, x1, and center across *tokens* and
+        returns the mean of the edge with the lowest variance.  Returns
+        ``None`` when fewer than three tokens are provided or when no
+        edge is significantly better than the others.
+        """
+        if len(tokens) < 3:
+            return None
+
+        import statistics
+
+        x0_vals = [t["x0"] for t in tokens]
+        x1_vals = [t["x1"] for t in tokens]
+        ctr_vals = [(t["x0"] + t["x1"]) / 2 for t in tokens]
+
+        x0_var = statistics.variance(x0_vals)
+        x1_var = statistics.variance(x1_vals)
+        ctr_var = statistics.variance(ctr_vals)
+
+        best_var, best_mean = min(
+            (x0_var, statistics.mean(x0_vals)),
+            (x1_var, statistics.mean(x1_vals)),
+            (ctr_var, statistics.mean(ctr_vals)),
+            key=lambda pair: pair[0],
+        )
+        worst_var = max(x0_var, x1_var, ctr_var)
+
+        # Only adjust when one edge is clearly better than the others.
+        # - Perfect alignment (variance ≈ 0): always adjust
+        # - Otherwise: require the worst/best ratio to be large
+        if best_var > 0.5 and worst_var / best_var < 4.0:
+            return None
+        return best_mean
+
     def _infer_column_guides(
         self, rows: List[dict], region_bbox: BBox | None = None
     ) -> List[float]:
@@ -1621,39 +1670,9 @@ class TableExtractor:
         if not rows:
             return []
 
-        anchors: List[Tuple[float, float, int, bool]] = []
+        anchors: List[Tuple[float, float, int, bool, dict]] = []
         for row_idx, row in enumerate(rows):
             row_tokens = row["tokens"]
-            numeric_positions = [
-                idx for idx, token in enumerate(row_tokens) if token["is_numeric"]
-            ]
-
-            if numeric_positions:
-                first_numeric_idx = numeric_positions[0]
-                left_tokens = row_tokens[:first_numeric_idx]
-                if left_tokens:
-                    anchor_x = min(token["x0"] for token in left_tokens)
-                    weight = sum(
-                        self._token_alignment_anchor(token)[1]
-                        for token in left_tokens
-                    )
-                    if (
-                        region_bbox is None
-                        or region_bbox.x0 - 5 <= anchor_x <= region_bbox.x1 + 5
-                    ):
-                        anchors.append((anchor_x, weight, row_idx, False))
-
-                for token in row_tokens[first_numeric_idx:]:
-                    anchor_x, weight = self._token_alignment_anchor(token)
-                    if region_bbox is not None and not (
-                        region_bbox.x0 - 5 <= anchor_x <= region_bbox.x1 + 5
-                    ):
-                        continue
-                    anchors.append(
-                        (anchor_x, weight, row_idx, token["is_numeric"])
-                    )
-                continue
-
             for token in row_tokens:
                 anchor_x, weight = self._token_alignment_anchor(token)
                 if region_bbox is not None and not (
@@ -1661,7 +1680,7 @@ class TableExtractor:
                 ):
                     continue
                 anchors.append(
-                    (anchor_x, weight, row_idx, token["is_numeric"])
+                    (anchor_x, weight, row_idx, token["is_numeric"], token)
                 )
 
         if not anchors:
@@ -1669,7 +1688,8 @@ class TableExtractor:
 
         tolerance = max(8.0, self.line_tolerance * 4)
         clusters: List[dict] = []
-        for anchor_x, weight, row_idx, is_num in sorted(
+        cluster_tokens: List[List[dict]] = []  # tokens per cluster
+        for anchor_x, weight, row_idx, is_num, token in sorted(
             anchors, key=lambda item: item[0]
         ):
             target = None
@@ -1687,8 +1707,10 @@ class TableExtractor:
                         "numeric_weight": weight if is_num else 0.0,
                     }
                 )
+                cluster_tokens.append([token] if is_num else [])
                 continue
 
+            idx = clusters.index(target)
             total_weight = target["weight"] + weight
             target["x"] = (
                 target["x"] * target["weight"] + anchor_x * weight
@@ -1697,6 +1719,7 @@ class TableExtractor:
             target["rows"].add(row_idx)
             if is_num:
                 target["numeric_weight"] += weight
+                cluster_tokens[idx].append(token)
 
         guides = [
             cluster
@@ -1714,20 +1737,61 @@ class TableExtractor:
         )
 
         if len(numeric_xs) >= 2:
-            # 1. Remove text-only guides that sit between two numeric
-            #    guides — they are header labels, not column boundaries.
-            filtered: List[dict] = []
-            for cluster in guides:
-                if cluster["numeric_weight"] >= 2.0:
-                    filtered.append(cluster)
-                    continue
-                x = cluster["x"]
-                between = any(
-                    numeric_xs[i] < x < numeric_xs[i + 1]
+            body_boundaries = self._infer_body_column_boundaries(rows)
+            # 1. Remove text-only guides between two numeric guides ONLY
+            #    if they are at character-level spacing (header label fragments).
+            #    Column-level spacing indicates a real data column — keep it.
+            between_text = [
+                c for c in guides
+                if c["numeric_weight"] < 2.0
+                and any(
+                    numeric_xs[i] < c["x"] < numeric_xs[i + 1]
                     for i in range(len(numeric_xs) - 1)
                 )
-                if not between:
-                    filtered.append(cluster)
+            ]
+
+            # Compute average character width from cluster tokens
+            def _avg_char_width(cluster: dict) -> float:
+                idx = clusters.index(cluster) if cluster in clusters else -1
+                tokens = cluster_tokens[idx] if 0 <= idx < len(cluster_tokens) else []
+                widths = []
+                for t in tokens:
+                    text = (t.get("text") or "").strip()
+                    if text and t["x1"] > t["x0"]:
+                        widths.append((t["x1"] - t["x0"]) / len(text))
+                return sum(widths) / len(widths) if widths else 8.0
+
+            # For each between-text guide, check spacing to nearest neighbor
+            between_xs = sorted(c["x"] for c in between_text)
+            char_width_threshold = 3.0  # gap < 3 * char_width → header fragment
+
+            remove_ids = set()
+            for bt in between_text:
+                cw = _avg_char_width(bt)
+                x = bt["x"]
+                # Find gap to nearest between-text neighbor
+                neighbors = []
+                x_interval = self._column_interval_index(x, body_boundaries)
+                for nx in between_xs:
+                    if nx == x:
+                        continue
+                    if (
+                        body_boundaries
+                        and self._column_interval_index(nx, body_boundaries)
+                        != x_interval
+                    ):
+                        continue
+                    neighbors.append(abs(nx - x))
+                if not neighbors:
+                    # Isolated text guide — keep (conservative)
+                    continue
+                min_gap = min(neighbors)
+                if min_gap < cw * char_width_threshold:
+                    remove_ids.add(id(bt))
+
+            filtered: List[dict] = [
+                c for c in guides if id(c) not in remove_ids
+            ]
 
             # 2. Merge label-area text guides (left of first numeric) with
             #    wider tolerance.  Different text tokens in the same label
@@ -1767,8 +1831,90 @@ class TableExtractor:
             else:
                 guides = other_clusters + label_clusters
 
-        result = sorted(c["x"] for c in guides)
-        return result
+        # --- Triple-edge adjustment: refine guide positions ---
+        # For each guide cluster, compute the best alignment edge (x0, x1,
+        # or center) using variance analysis and update the guide position.
+        result = []
+        for c in guides:
+            if c in clusters:
+                idx = clusters.index(c)
+                tokens_in = cluster_tokens[idx] if idx < len(cluster_tokens) else []
+                best = self._best_edge_position(tokens_in)
+                if best is not None:
+                    result.append(best)
+                else:
+                    result.append(c["x"])
+            else:
+                # Merged label cluster — keep as-is
+                result.append(c["x"])
+        return sorted(result)
+
+    @staticmethod
+    def _column_interval_index(x: float, boundaries: List[float]) -> int:
+        """Return the interval index for x relative to sorted boundaries."""
+        idx = 0
+        while idx < len(boundaries) and x > boundaries[idx]:
+            idx += 1
+        return idx
+
+    def _infer_body_column_boundaries(self, rows: List[dict]) -> List[float]:
+        """Infer coarse body-column boundaries from numeric-bearing rows.
+
+        Body rows are typically more reliable than multi-line headers, so these
+        boundaries are used as guardrails for deciding whether nearby text-only
+        header guides can be treated as fragments of the same column.
+        """
+        body_rows = [
+            row
+            for row in rows
+            if any(token.get("is_numeric") for token in row.get("tokens", []))
+        ]
+        if len(body_rows) < 2:
+            return []
+
+        tolerance = max(8.0, self.line_tolerance * 4)
+        anchors: List[Tuple[float, float, int]] = []
+        for row_idx, row in enumerate(body_rows):
+            for token in row["tokens"]:
+                anchor_x, weight = self._token_alignment_anchor(token)
+                anchors.append((anchor_x, weight, row_idx))
+
+        if not anchors:
+            return []
+
+        clusters: List[dict] = []
+        for anchor_x, weight, row_idx in sorted(anchors, key=lambda item: item[0]):
+            target = None
+            for cluster in clusters:
+                if abs(anchor_x - cluster["x"]) <= tolerance:
+                    target = cluster
+                    break
+
+            if target is None:
+                clusters.append(
+                    {"x": anchor_x, "weight": weight, "rows": {row_idx}}
+                )
+                continue
+
+            total_weight = target["weight"] + weight
+            target["x"] = (
+                target["x"] * target["weight"] + anchor_x * weight
+            ) / total_weight
+            target["weight"] = total_weight
+            target["rows"].add(row_idx)
+
+        guides = sorted(
+            cluster["x"]
+            for cluster in clusters
+            if cluster["weight"] >= 2.0 and len(cluster["rows"]) >= 2
+        )
+        if len(guides) < 2:
+            return []
+
+        return [
+            (guides[i] + guides[i + 1]) / 2.0
+            for i in range(len(guides) - 1)
+        ]
 
     def _extract_text_region_separators(
         self,
@@ -2102,6 +2248,31 @@ class TableExtractor:
             if len(guides) < 2:
                 continue
 
+            specialized = self._build_special_template_table(page, region_rows)
+            if specialized is not None:
+                tables.append(specialized)
+                debug_regions.append(
+                    {
+                        "bbox": {
+                            "x0": specialized.bbox.x0,
+                            "y0": specialized.bbox.y0,
+                            "x1": specialized.bbox.x1,
+                            "y1": specialized.bbox.y1,
+                        },
+                        "rows": [
+                            {
+                                "x0": row["x0"],
+                                "y0": row["y0"],
+                                "x1": row["x1"],
+                                "y1": row["y1"],
+                            }
+                            for row in region_rows
+                        ],
+                        "column_guides": list(guides),
+                    }
+                )
+                continue
+
             # Trim prose prefix/suffix rows that don't align with the
             # column structure.  Only applies to short spans to avoid
             # accidentally removing rows from multi-section financial
@@ -2212,9 +2383,16 @@ class TableExtractor:
                 table, page, guides
             )
             if header_cells:
+                header_row_count = max(
+                    (
+                        c.row_index + max(1, c.rowspan)
+                        for c in header_cells
+                    ),
+                    default=0,
+                )
                 for c in cells:
-                    c.row_index += 1
-                table.rows += 1
+                    c.row_index += header_row_count
+                table.rows += header_row_count
                 table.bbox = BBox(
                     min(region_bbox.x0, min(c.bbox.x0 for c in header_cells)),
                     min(region_bbox.y0, min(c.bbox.y0 for c in header_cells)),
@@ -2252,6 +2430,15 @@ class TableExtractor:
             }
 
         return tables
+
+    def _build_special_template_table(
+        self, page: fitz.Page, region_rows: List[dict]
+    ) -> Table | None:
+        """Build a specialized table when header keywords match a known template."""
+        template = self._template_engine.classify(region_rows, self._templates)
+        if template is None:
+            return None
+        return self._template_engine.build_table(page, region_rows, template)
 
     def capture_text_alignment_snapshot(
         self, page: fitz.Page, region_bbox: BBox
@@ -2405,18 +2592,33 @@ class TableExtractor:
             row_hits: set[int] = set()
             for token in row["tokens"]:
                 anchor_x, weight = self._token_alignment_anchor(token)
-                guide_idx = min(
-                    range(len(guides)),
-                    key=lambda idx: abs(guides[idx] - anchor_x),
-                )
-                if abs(guides[guide_idx] - anchor_x) <= tolerance:
-                    row_hits.add(guide_idx)
-                    if token["is_numeric"]:
-                        numeric_weight[guide_idx] += weight
+                # Try all edges to find the best guide match.
+                edges = [anchor_x, token["x1"], (token["x0"] + token["x1"]) / 2]
+                matched = False
+                for edge_x in edges:
+                    guide_idx = min(
+                        range(len(guides)),
+                        key=lambda idx: abs(guides[idx] - edge_x),
+                    )
+                    if abs(guides[guide_idx] - edge_x) <= tolerance:
+                        row_hits.add(guide_idx)
+                        if token["is_numeric"]:
+                            numeric_weight[guide_idx] += weight
+                        matched = True
+                        break
+                if not matched:
+                    # Fallback: use original anchor
+                    guide_idx = min(
+                        range(len(guides)),
+                        key=lambda idx: abs(guides[idx] - anchor_x),
+                    )
+                    if abs(guides[guide_idx] - anchor_x) <= tolerance:
+                        row_hits.add(guide_idx)
+                        if token["is_numeric"]:
+                            numeric_weight[guide_idx] += weight
             for guide_idx in row_hits:
                 support_rows[guide_idx].add(row_idx)
 
-        target_max = max(4, min(12, len(rows) // 2 + 4))
         support = [len(rows_hit) for rows_hit in support_rows]
 
         # Even when total guides are within target_max, filter out guides
@@ -2432,47 +2634,7 @@ class TableExtractor:
             support = [support[gi] for gi in strong_guides]
             numeric_weight = [numeric_weight[gi] for gi in strong_guides]
 
-        if len(guides) <= target_max:
-            return sorted(guides)
-
-        active = list(range(len(guides)))
-
-        def guide_gap(left_idx: int, right_idx: int) -> float:
-            return abs(guides[right_idx] - guides[left_idx])
-
-        while len(active) > target_max:
-            best_pos = None
-            best_score = None
-
-            for pos, guide_idx in enumerate(active):
-                if pos == 0 or pos == len(active) - 1:
-                    continue
-
-                left_idx = active[pos - 1]
-                right_idx = active[pos + 1]
-                left_gap = guide_gap(left_idx, guide_idx)
-                right_gap = guide_gap(guide_idx, right_idx)
-                closeness = min(left_gap, right_gap)
-                if closeness > max(22.0, self.line_tolerance * 6):
-                    continue
-
-                score = (
-                    support[guide_idx] * 3.0
-                    + numeric_weight[guide_idx] * 0.5
-                    + closeness
-                )
-
-                if best_score is None or score < best_score:
-                    best_score = score
-                    best_pos = pos
-
-            if best_pos is None:
-                break
-
-            active.pop(best_pos)
-
-        compacted = [guides[idx] for idx in active]
-        return sorted(compacted) if len(compacted) >= 2 else sorted(guides)
+        return sorted(guides)
 
     def _merge_numeric_fragment_columns(self, cells: List[Cell]) -> List[Cell]:
         """Merge short numeric fragments that were split into adjacent columns."""
@@ -3140,61 +3302,126 @@ class TableExtractor:
         """
         table_top = table.bbox.y0
 
-        # Check for a horizontal line within 15pt above the table top.
-        has_line_above = False
-        line_y = table_top
-        for drawing in page.get_drawings():
-            rect = drawing.get("rect")
-            if rect and rect.height < 2 and rect.width > 4:
-                y_mid = (rect.y0 + rect.y1) / 2
-                if table_top - 15 <= y_mid <= table_top:
-                    has_line_above = True
-                    line_y = min(line_y, y_mid)
-                    break
+        line_y: float | None = None
+        for separator in self._extract_text_region_separators(page):
+            if table_top - 15 <= separator.y <= table_top:
+                if line_y is None or separator.y < line_y:
+                    line_y = separator.y
 
-        if not has_line_above:
+        if line_y is None:
             return None
 
-        # Extract spans from the area above the line (the header area).
+        header_rows = self._collect_header_rows_via_spans(
+            page, line_y, table, guides
+        )
+        if not header_rows:
+            return None
+
+        cells = self._build_text_grid_cells(header_rows, guides)
+        if len(cells) < 2:
+            return None
+        return cells
+
+    def _collect_header_rows_via_spans(
+        self,
+        page: fitz.Page,
+        line_y: float,
+        table: "Table",
+        guides: List[float],
+    ) -> List[dict]:
+        """Collect up to three header-like span rows above a separator line."""
         td = page.get_text("dict", flags=fitz.TEXT_PRESERVE_WHITESPACE)
-        header_tokens = []
+        header_words: List[tuple] = []
+        clip_left = table.bbox.x0 - 5.0
+        clip_right = table.bbox.x1 + 5.0
+        min_y = line_y - 40.0
+        max_y = line_y + 2.0
+
         for block in td["blocks"]:
             if block["type"] != 0:
                 continue
             for line in block["lines"]:
                 for span in line["spans"]:
-                    sy = (span["bbox"][1] + span["bbox"][3]) / 2
-                    if line_y - 20 <= sy <= line_y + 2:
-                        text = span["text"].strip()
-                        if text:
-                            header_tokens.append({
-                                "text": text,
-                                "x0": span["bbox"][0],
-                                "y0": span["bbox"][1],
-                                "x1": span["bbox"][2],
-                                "y1": span["bbox"][3],
-                                "is_numeric": False,
-                            })
+                    text = span["text"].strip()
+                    if not text:
+                        continue
+                    x0, y0, x1, y1 = span["bbox"]
+                    sy = (y0 + y1) / 2.0
+                    if not (min_y <= sy <= max_y):
+                        continue
+                    if x1 < clip_left or x0 > clip_right:
+                        continue
+                    header_words.append(
+                        (
+                            x0,
+                            y0,
+                            x1,
+                            y1,
+                            text,
+                            0,
+                            0,
+                            0,
+                        )
+                    )
 
-        if len(header_tokens) < 2:
+        if not header_words:
             return None
 
-        # Validate: header span count should roughly match table columns.
-        # Spans often have different x-positions than body guides (centered
-        # vs. left-aligned), so we check count instead of alignment.
-        if not (2 <= len(header_tokens) <= table.cols + 2):
+        candidate_rows = self._collect_text_rows(header_words)
+        if not candidate_rows:
             return None
 
-        # Build header cells.
-        cells = []
-        for i, token in enumerate(header_tokens):
-            cells.append(Cell(
-                text=token["text"],
-                row_index=0,
-                col_index=i,
-                bbox=BBox(token["x0"], token["y0"], token["x1"], token["y1"]),
-            ))
-        return cells
+        candidate_rows.sort(key=lambda row: (row["y0"], row["x0"]))
+
+        selected: List[dict] = []
+        previous_row: dict | None = None
+        for row in reversed(candidate_rows):
+            if not self._is_header_like_span_row(row, table.cols, guides):
+                if selected:
+                    break
+                continue
+
+            if previous_row is not None:
+                gap = previous_row["y0"] - row["y1"]
+                max_gap = max(
+                    12.0,
+                    (previous_row["y1"] - previous_row["y0"]) * 1.5,
+                )
+                if gap < 0 or gap > max_gap:
+                    break
+
+            selected.append(row)
+            previous_row = row
+            if len(selected) >= 3:
+                break
+
+        if not selected:
+            return None
+
+        selected.reverse()
+        return selected
+
+    def _is_header_like_span_row(
+        self,
+        row: dict,
+        col_count: int,
+        guides: List[float],
+    ) -> bool:
+        """Return True when a span row looks like part of a table header."""
+        tokens = row.get("tokens") or []
+        if len(tokens) < 2:
+            return False
+        if all(token.get("is_numeric") for token in tokens):
+            return False
+
+        score = self._score_row_against_guides(row, guides)
+        if score["separated_hit_count"] >= 2:
+            return True
+        if score["hit_count"] >= 2:
+            return True
+
+        token_count = len(tokens)
+        return 2 <= token_count <= max(4, min(col_count, 8))
 
     def _assign_text_to_cells(
         self, cells: List[Cell], page: fitz.Page

@@ -1,0 +1,54 @@
+{
+  "name": "cumulative_error_impact",
+  "description": "会计差错更正累计影响数 (Cumulative Impact of Error Corrections)",
+  "confidence": 0.8,
+
+  "match": {
+    "min_rows": 4,
+    "header_scan_rows": 3,
+    "required_keyword": "追溯调整",
+    "required_keywords": [
+      "年初资产总额"
+    ],
+    "min_keyword_hits": 1
+  },
+
+  "zones": [
+    [0.000, 0.125],
+    [0.125, 0.260],
+    [0.260, 0.390],
+    [0.390, 0.530],
+    [0.530, 0.640],
+    [0.640, 0.745],
+    [0.745, 0.855],
+    [0.855, 1.0001]
+  ],
+
+  "header_rows": [
+    {
+      "row": 0,
+      "cells": [
+        {"col": 0, "text": "项目", "rowspan": 2},
+        {"col": 1, "text": "本年金额", "colspan": 7}
+      ]
+    },
+    {
+      "row": 1,
+      "cells": [
+        {"col": 1, "text": "年初资产总额"},
+        {"col": 2, "text": "年初负债总额"},
+        {"col": 3, "text": "年初归属于母公司所有者权益总额"},
+        {"col": 4, "text": "年初资本公积"},
+        {"col": 5, "text": "年初盈余公积"},
+        {"col": 6, "text": "年初未分配利润"},
+        {"col": 7, "text": "年初少数股东权益"}
+      ]
+    }
+  ],
+
+  "body": {
+    "label_col": 0,
+    "skip_first_token": true,
+    "column0_remap_to": null
+  }
+}

@@ -20,6 +20,9 @@ import re
 import fitz
 
 from hexai_pdf_parser.models import BBox, Cell, Table
+from hexai_pdf_parser.financial_header_handler import (
+    normalize_complex_financial_header,
+)
 
 _LEFT_ANCHOR_VARIANTS = {"椤圭洰", "项目"}
 
@@ -106,9 +109,7 @@ def normalize_table_headers(table: Table, page: fitz.Page) -> Table:
     rebuilt = _rebuild_text_aligned_table(table, page)
     if rebuilt is not None:
         table = rebuilt
-    if _looks_like_grouped_financial_header(table, page):
-        return _promote_grouped_header(table, page)
-    return table
+    return normalize_complex_financial_header(table, page)
 
 
 def _normalize_generic_table(table: Table) -> Table:
@@ -163,14 +164,34 @@ def _rebuild_text_aligned_table(
     if len(row_clusters) < 2:
         return None
 
-    col_clusters = _cluster_tokens(words, axis="x", tolerance=60.0)
-    if len(col_clusters) < 2:
-        return None
+    col_boundaries = _column_boundaries_from_table(table)
+    if not col_boundaries:
+        # Fall back to word-derived columns when the original table does not
+        # expose a stable column skeleton.
+        col_clusters = _cluster_tokens(words, axis="x", tolerance=60.0)
+        if (
+            len(col_clusters) >= 2
+            and len(col_clusters) < table.cols
+        ):
+            sorted_centers = sorted(c.x_center for c in col_clusters)
+            gaps = [
+                sorted_centers[i + 1] - sorted_centers[i]
+                for i in range(len(sorted_centers) - 1)
+            ]
+            min_gap = min(gaps)
+            adaptive_tol = max(8.0, min(min_gap / 2.0, 60.0))
+            if adaptive_tol < 60.0:
+                col_clusters = _cluster_tokens(words, axis="x", tolerance=adaptive_tol)
+        if len(col_clusters) < 2:
+            return None
+        col_centers = [cluster.x_center for cluster in col_clusters]
+        col_boundaries = [
+            (col_centers[i] + col_centers[i + 1]) / 2.0
+            for i in range(len(col_centers) - 1)
+        ]
 
-    if len(row_clusters) == table.rows and len(col_clusters) == table.cols:
+    if len(row_clusters) == table.rows and len(col_boundaries) + 1 == table.cols:
         return None
-
-    col_centers = [cluster.x_center for cluster in col_clusters]
     reconstructed_rows: list[list[Cell]] = []
 
     for row_index, row_cluster in enumerate(row_clusters):
@@ -181,7 +202,10 @@ def _rebuild_text_aligned_table(
         cell_words: dict[int, list[_WordToken]] = defaultdict(list)
 
         for word in row_words:
-            col_index = _nearest_cluster_index(word.x_center, col_centers)
+            col_index = _column_index_from_boundaries(
+                word.x_center,
+                col_boundaries,
+            )
             cell_words[col_index].append(word)
 
         row_cells: list[Cell] = []
@@ -320,6 +344,46 @@ def _cluster_tokens(
 
 def _nearest_cluster_index(value: float, centers: list[float]) -> int:
     return min(range(len(centers)), key=lambda idx: abs(centers[idx] - value))
+
+
+def _column_index_from_boundaries(value: float, boundaries: list[float]) -> int:
+    """Assign a value to the column interval defined by adjacent centers."""
+    for idx, boundary in enumerate(boundaries):
+        if value < boundary:
+            return idx
+    return len(boundaries)
+
+
+def _column_boundaries_from_table(table: Table) -> list[float]:
+    """Recover column boundaries from an already-extracted table grid."""
+    by_col: dict[int, list[tuple[float, float]]] = defaultdict(list)
+    for cell in table.cells:
+        if cell.colspan != 1:
+            continue
+        by_col[cell.col_index].append((cell.bbox.x0, cell.bbox.x1))
+
+    ordered = []
+    for col_index, spans in sorted(by_col.items()):
+        if not spans:
+            continue
+        x0 = min(span[0] for span in spans)
+        x1 = max(span[1] for span in spans)
+        center = (x0 + x1) / 2.0
+        ordered.append((col_index, x0, x1, center))
+
+    if len(ordered) < 2:
+        return []
+
+    boundaries: list[float] = []
+    for idx in range(len(ordered) - 1):
+        _, _, left_x1, left_center = ordered[idx]
+        _, right_x0, _, right_center = ordered[idx + 1]
+        if left_x1 <= right_x0:
+            boundaries.append((left_x1 + right_x0) / 2.0)
+        else:
+            boundaries.append((left_center + right_center) / 2.0)
+
+    return boundaries
 
 
 _SECTION_HEADING_RE = re.compile(r"^\s*(?:\d+[．\.]|（[一二三四五六七八九十]+）)")
@@ -650,8 +714,4 @@ def _merge_header_fragment_with_lower_line(
         rowspan=1,
         colspan=cell.colspan,
     )
-
-
-
-
 
