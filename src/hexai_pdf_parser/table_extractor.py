@@ -17,6 +17,8 @@ Special handling for WPS/Office financial tables:
 - We detect sub-rows from cell rectangles and merge over-segmented columns
 """
 
+from __future__ import annotations
+
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
@@ -110,6 +112,14 @@ class TableExtractor:
     def extract(self, page: fitz.Page) -> List[Table]:
         """Return a list of :class:`Table` objects detected on *page*."""
         self._last_text_alignment_debug = None
+
+        # Detect language and use appropriate extractor
+        from hexai_pdf_parser.language_detector import detect_page_language
+        lang = detect_page_language(page)
+
+        if lang == "en":
+            return self._extract_english(page)
+
         tables = self._extract_via_lines(page)
 
         # Fallback to PyMuPDF if no tables or if line_projection produced
@@ -158,6 +168,18 @@ class TableExtractor:
         tables = [normalize_complex_financial_header(t, page) for t in tables]
 
         return tables
+
+    def _extract_english(self, page: fitz.Page) -> List[Table]:
+        """Extract tables from English financial reports.
+
+        Uses color-alternating row backgrounds as strong row signals.
+        """
+        from hexai_pdf_parser.english_table_extractor import EnglishTableExtractor
+
+        if not hasattr(self, '_en_extractor'):
+            self._en_extractor = EnglishTableExtractor()
+
+        return self._en_extractor.extract(page)
 
     def _collect_page_text_lines(self, page: fitz.Page) -> List[str]:
         """Collect normalized text lines from a page for profile matching."""
@@ -2017,7 +2039,7 @@ class TableExtractor:
         max_line_stroke = max(self._separator_max_height, 3.0)
 
         for drawing in drawings:
-            stroke_width = drawing.get("width", 1.0)
+            stroke_width = drawing.get("width") or 1.0
             for item in drawing.get("items", []):
                 if item[0] == "re":
                     rect = item[1]
@@ -2862,11 +2884,19 @@ class TableExtractor:
     def _build_text_grid_cells(
         self, rows: List[dict], guides: List[float]
     ) -> List[Cell]:
-        """Build cells by assigning each text token to a guide interval."""
+        """Build cells by assigning each text token to a guide interval.
+
+        Column boundaries are computed from actual token extents: the
+        boundary between column N and N+1 is the midpoint between the
+        rightmost edge (max x1) of column-N tokens and the leftmost edge
+        (min x0) of column-(N+1) tokens.  When no token extent data is
+        available for a pair, the guide midpoint is used as fallback.
+        """
 
         if len(guides) < 2:
             return []
 
+        # Initial boundaries from guide midpoints (fallback).
         boundaries = [
             (guides[i] + guides[i + 1]) / 2.0
             for i in range(len(guides) - 1)
@@ -2890,6 +2920,34 @@ class TableExtractor:
             end_col = min(max(end_col, start_col), len(guides) - 1)
             return start_col, end_col
 
+        # --- Refine boundaries from token extents ---
+        # First pass: assign each token to a column by centre point so we
+        # can measure the actual extent of each column.
+        col_max_x1: dict[int, float] = {}
+        col_min_x0: dict[int, float] = {}
+        for row in rows:
+            for token in row["tokens"]:
+                text = token.get("text", "").strip()
+                if not text:
+                    continue
+                cx = (float(token["x0"]) + float(token["x1"])) / 2.0
+                col = 0
+                while col < len(boundaries) and cx > boundaries[col]:
+                    col += 1
+                col = min(col, len(guides) - 1)
+                tx0, tx1 = float(token["x0"]), float(token["x1"])
+                if tx1 < tx0:
+                    tx0, tx1 = tx1, tx0
+                col_max_x1[col] = max(col_max_x1.get(col, tx1), tx1)
+                col_min_x0[col] = min(col_min_x0.get(col, tx0), tx0)
+
+        # Recompute boundaries: midpoint between max_x1 of left column
+        # and min_x0 of right column.
+        for i in range(len(boundaries)):
+            if i in col_max_x1 and (i + 1) in col_min_x0:
+                boundaries[i] = (col_max_x1[i] + col_min_x0[i + 1]) / 2.0
+
+        # Second pass: assign tokens using refined boundaries.
         grouped_tokens: dict[tuple[int, int, int], list[dict]] = defaultdict(list)
         for row_idx, row in enumerate(rows):
             for token in row["tokens"]:
