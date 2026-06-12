@@ -33,6 +33,8 @@ class PDFParser:
         use_ml: bool = False,
         ml_model_path: Optional[str] = None,
         ml_confidence: float = 0.25,
+        num_workers: Optional[int] = None,
+        backend: str = "thread",
     ) -> None:
         if isinstance(source, Document):
             self._pdf_path: str | None = None
@@ -46,6 +48,8 @@ class PDFParser:
         self._use_ml = use_ml
         self._ml_model_path = ml_model_path
         self._ml_confidence = ml_confidence
+        self._num_workers = num_workers
+        self._backend = backend
 
     def __enter__(self) -> PDFParser:
         return self
@@ -112,6 +116,8 @@ class PDFParser:
                 use_ml=self._use_ml,
                 ml_model_path=self._ml_model_path,
                 ml_confidence=self._ml_confidence,
+                num_workers=self._num_workers,
+                backend=self._backend,
             )
             self._document = pipeline.run()
             return self._document

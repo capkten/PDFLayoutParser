@@ -69,6 +69,8 @@ class BodyConfig:
     label_col: int = 0
     skip_first_token: bool = True
     column0_remap_to: Optional[int] = None
+    mode: str = "zone"  # "zone" or "guide"
+    header_row_count: Optional[int] = None  # override auto-detection
 
 
 @dataclass
@@ -120,6 +122,8 @@ class TableTemplateConfig:
             label_col=body_data.get("label_col", 0),
             skip_first_token=body_data.get("skip_first_token", True),
             column0_remap_to=body_data.get("column0_remap_to"),
+            mode=body_data.get("mode", "zone"),
+            header_row_count=body_data.get("header_row_count"),
         )
 
         validation = None
@@ -213,11 +217,32 @@ class TemplateEngine:
         cells: List[Cell] = self._build_header_cells(
             header_rows, table_bbox, width, zones, template.header_rows
         )
-        cells.extend(
-            self._build_body_cells(
-                region_rows, table_bbox, width, zones, template.header_rows, template.body
+
+        header_row_count = template.body.header_row_count
+        if header_row_count is None:
+            header_row_count = max((h.row for h in template.header_rows), default=-1) + 1
+        if template.body.mode == "guide":
+            body_rows = region_rows[header_row_count:]
+            guides = self._extractor._infer_column_guides(body_rows, table_bbox)
+            guides = self._extractor._compact_column_guides(body_rows, guides)
+            if len(guides) >= 2:
+                _, _, body_cells = self._extractor._build_text_alignment_table(
+                    body_rows, guides, table_bbox
+                )
+                for c in body_cells:
+                    c.row_index += header_row_count
+                    c.rowspan = 1
+                    c.colspan = 1
+                body_cells = self._consolidate_body_rows(
+                    body_cells, body_rows, header_row_count
+                )
+                cells.extend(body_cells)
+        else:
+            cells.extend(
+                self._build_body_cells(
+                    region_rows, table_bbox, width, zones, template.header_rows, template.body
+                )
             )
-        )
 
         if not cells:
             return None
@@ -487,6 +512,206 @@ class TemplateEngine:
                 )
 
         return cells
+
+    # ------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # Body row consolidation
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _consolidate_body_rows(
+        cells: List[Cell],
+        body_rows: List[dict] | None = None,
+        row_offset: int = 0,
+    ) -> List[Cell]:
+        """Consolidate wrapped body rows using column structure.
+
+        Three-pass approach:
+
+        Pass 1 — Split multi-line label-only rows: when a label-only
+        row contains tokens at different y-positions, split the first
+        y-group into the previous data row's col 0 and keep the rest
+        as a new label cell.
+
+        Pass 2 — Assign pending labels: data rows missing col 0 get
+        the most recent label-only row's text as their label.
+
+        Pass 3 — Merge trailing labels: when a row has col 0 but the
+        previous row does not, merge this row's col 0 into the
+        previous row's col 0.
+        """
+        if not cells:
+            return cells
+
+        row_cols: dict[int, set[int]] = defaultdict(set)
+        row_cells: dict[int, dict[int, Cell]] = defaultdict(dict)
+        for c in cells:
+            row_cols[c.row_index].add(c.col_index)
+            row_cells[c.row_index][c.col_index] = c
+
+        sorted_rows = sorted(row_cols.keys())
+        if not sorted_rows:
+            return cells
+
+        def _y_split(row_idx: int) -> tuple[str, str | None]:
+            """Split col 0 text by y-position groups."""
+            if body_rows is None:
+                return row_cells[row_idx][0].text, None
+            local_idx = row_idx - row_offset
+            if local_idx < 0 or local_idx >= len(body_rows):
+                return row_cells[row_idx][0].text, None
+            tokens = [
+                t for t in body_rows[local_idx].get("tokens", [])
+                if t["text"].strip()
+            ]
+            if len(tokens) < 2:
+                return row_cells[row_idx][0].text, None
+            sorted_t = sorted(tokens, key=lambda t: t["y0"])
+            groups: list[list[dict]] = [[sorted_t[0]]]
+            for token in sorted_t[1:]:
+                if token["y0"] - groups[-1][-1]["y0"] > 8.0:
+                    groups.append([])
+                groups[-1].append(token)
+            if len(groups) < 2:
+                return row_cells[row_idx][0].text, None
+            first = " ".join(t["text"].strip() for t in groups[0] if t["text"].strip())
+            rest = " ".join(
+                t["text"].strip()
+                for g in groups[1:]
+                for t in g
+                if t["text"].strip()
+            )
+            return first, rest or None
+
+        rows_to_delete: set[int] = set()
+
+        # Pass 1: Split multi-line label-only rows.
+        for row_idx in sorted_rows:
+            if row_idx in rows_to_delete:
+                continue
+            cols = row_cols[row_idx]
+            if not (0 in cols and not any(c > 0 for c in cols)):
+                continue
+            first, rest = _y_split(row_idx)
+            if rest is None:
+                continue
+            # Merge first group into previous row's col 0.
+            for prev_idx in reversed(sorted_rows):
+                if prev_idx >= row_idx:
+                    continue
+                if prev_idx in rows_to_delete:
+                    continue
+                if any(c > 0 for c in row_cols[prev_idx]):
+                    prev_label = row_cells[prev_idx].get(0)
+                    if prev_label is not None:
+                        prev_label.text = (prev_label.text + " " + first).strip()
+                    break
+            # Replace this row's col 0 with the rest.
+            row_cells[row_idx][0].text = rest
+
+        # Pass 2: Assign pending labels to data rows missing col 0.
+        pending_label: str | None = None
+        pending_row: int | None = None
+        pass2_cells: set[tuple[int, int]] = set()  # cells created by Pass 2
+        for row_idx in sorted_rows:
+            if row_idx in rows_to_delete:
+                continue
+            cols = row_cols[row_idx]
+            has_col0 = 0 in cols
+            has_other = any(c > 0 for c in cols)
+
+            if has_col0 and not has_other:
+                pending_label = row_cells[row_idx][0].text
+                pending_row = row_idx
+
+            elif has_other and not has_col0:
+                if pending_label is not None:
+                    new_label = Cell(
+                        text=pending_label,
+                        row_index=row_idx,
+                        col_index=0,
+                        bbox=row_cells[pending_row][0].bbox if pending_row else BBox(0, 0, 0, 0),
+                    )
+                    row_cells[row_idx][0] = new_label
+                    row_cols[row_idx].add(0)
+                    rows_to_delete.add(pending_row)
+                    pass2_cells.add((row_idx, 0))
+                    pending_label = None
+                    pending_row = None
+
+            elif has_col0 and has_other:
+                if pending_label is not None:
+                    label_cell = row_cells[row_idx][0]
+                    label_cell.text = (pending_label + " " + label_cell.text).strip()
+                    rows_to_delete.add(pending_row)
+                    pending_label = None
+                    pending_row = None
+
+        merged_away: set[tuple[int, int]] = set()
+
+        # Pass 3: Merge trailing labels into the previous data row.
+        # When a row has col 0 and the previous row has data (other
+        # columns), the col 0 text is a label continuation and should
+        # be merged into the previous row's col 0.  Skip cells
+        # created by Pass 2 (they are real labels, not continuations).
+        for row_idx in sorted_rows:
+            if row_idx in rows_to_delete:
+                continue
+            if (row_idx, 0) in pass2_cells:
+                continue  # Created by Pass 2; keep as-is.
+            cols = row_cols[row_idx]
+            if 0 not in cols:
+                continue
+            has_other = any(c > 0 for c in cols)
+            # Find previous row.
+            prev_idx = None
+            for pi in reversed(sorted_rows):
+                if pi < row_idx and pi not in rows_to_delete:
+                    prev_idx = pi
+                    break
+            if prev_idx is None:
+                continue
+            prev_cols = row_cols[prev_idx]
+            prev_has_other = any(c > 0 for c in prev_cols)
+            if not prev_has_other:
+                continue  # Previous row is label-only; skip.
+            # Previous row has data — merge this row's col 0 into it.
+            label_text = row_cells[row_idx][0].text
+            if 0 in prev_cols:
+                prev_label = row_cells[prev_idx][0]
+                prev_label.text = (prev_label.text + " " + label_text).strip()
+            else:
+                new_label = Cell(
+                    text=label_text,
+                    row_index=prev_idx,
+                    col_index=0,
+                    bbox=row_cells[row_idx][0].bbox,
+                )
+                row_cells[prev_idx][0] = new_label
+                row_cols[prev_idx].add(0)
+            # Remove col 0 from this row.
+            del row_cells[row_idx][0]
+            row_cols[row_idx].discard(0)
+            merged_away.add((row_idx, 0))
+
+        result: List[Cell] = []
+        for c in cells:
+            if c.row_index not in rows_to_delete and (c.row_index, c.col_index) not in merged_away:
+                result.append(c)
+        for row_idx, col_map in row_cells.items():
+            if row_idx in rows_to_delete:
+                continue
+            if 0 in col_map:
+                cell = col_map[0]
+                if cell not in result:
+                    result.append(cell)
+
+        # Filter out empty rows (rows with no non-empty text).
+        occupied_rows = {c.row_index for c in result if c.text.strip()}
+        result = [c for c in result if c.row_index in occupied_rows]
+
+        result.sort(key=lambda c: (c.row_index, c.col_index))
+        return result
 
     # ------------------------------------------------------------------
     # Utilities

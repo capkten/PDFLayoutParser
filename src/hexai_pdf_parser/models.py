@@ -4,6 +4,8 @@ All dataclasses in this module are the foundation for the loader, text_extractor
 layout_mapper, and other downstream modules.
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 

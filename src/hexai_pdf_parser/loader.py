@@ -4,6 +4,8 @@ Opens a PDF file with PyMuPDF (``fitz``) and builds a :class:`Document`
 containing per-page metadata (size, rotation, etc.).
 """
 
+from __future__ import annotations
+
 from pathlib import Path
 
 import fitz

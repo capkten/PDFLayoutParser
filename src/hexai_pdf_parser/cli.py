@@ -64,6 +64,20 @@ def main() -> int:
         default=False,
         help="Export debug overlays for text-aligned tables",
     )
+    parser.add_argument(
+        "--workers",
+        "-w",
+        type=int,
+        default=None,
+        help="Number of worker threads for parallel page processing (default: auto-detected)",
+    )
+    parser.add_argument(
+        "--backend",
+        "-b",
+        choices=["thread", "process", "sequential"],
+        default="thread",
+        help="Concurrency backend to use for processing: thread, process, or sequential (default: thread)",
+    )
 
     args = parser.parse_args()
 
@@ -81,6 +95,8 @@ def main() -> int:
         ml_confidence=args.ml_confidence,
         debug=args.debug,
         table_config=table_config,
+        num_workers=args.workers,
+        backend=args.backend,
     )
     pipeline.run()
 

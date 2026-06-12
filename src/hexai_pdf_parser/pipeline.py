@@ -6,9 +6,12 @@ json_writer, markdown_writer, render_engine) into a single end-to-end
 processing pipeline.
 """
 
+from __future__ import annotations
+
 import json
 import os
 import statistics
+import threading
 from time import perf_counter
 from typing import List, Optional
 
@@ -26,6 +29,194 @@ from hexai_pdf_parser.table_extractor import TableExtractor
 from hexai_pdf_parser.table_config import TableConfig
 from hexai_pdf_parser.text_alignment_debug import render_text_alignment_debug_page
 from hexai_pdf_parser.text_extractor import TextExtractor
+
+
+# Persistent process pool for multi-processing execution backend
+_PROCESS_POOL = None
+_PROCESS_POOL_WORKERS = None
+
+
+def _process_page_process_worker(
+    pdf_path: str,
+    page_index: int,
+    images_dir: str,
+    pages_dir: str,
+    text_alignment_debug_dir: str,
+    render_dpi: int,
+    seal_coords: list[dict],
+    use_ml: bool,
+    ml_model_path: str | None,
+    ml_confidence: float,
+    debug: bool,
+    table_config: TableConfig | None,
+    page_size: dict,
+    page_rotation: int,
+) -> tuple[int, Page, dict[str, float], float]:
+    import os
+    from time import perf_counter
+    import fitz
+    from hexai_pdf_parser.text_extractor import TextExtractor
+    from hexai_pdf_parser.layout_mapper import LayoutMapper
+    from hexai_pdf_parser.table_extractor import TableExtractor
+    from hexai_pdf_parser.image_extractor import ImageExtractor
+    from hexai_pdf_parser.layout_builder import LayoutBuilder
+    from hexai_pdf_parser.render_engine import RenderEngine
+    from hexai_pdf_parser.json_writer import JSONWriter
+    from hexai_pdf_parser.markdown_writer import MarkdownWriter
+    from hexai_pdf_parser.models import Page, BBox, LayoutElement, Seal
+    from hexai_pdf_parser.text_alignment_debug import render_text_alignment_debug_page
+
+    page_start = perf_counter()
+    stage_totals = {}
+
+    def time_stage(stage: str, func):
+        start = perf_counter()
+        result = func()
+        elapsed = perf_counter() - start
+        stage_totals[stage] = stage_totals.get(stage, 0.0) + elapsed
+        return result
+
+    page = Page(
+        index=page_index,
+        size=page_size,
+        rotation=page_rotation,
+    )
+
+    pdf_doc = fitz.open(pdf_path)
+    try:
+        page_handle = pdf_doc[page_index]
+
+        # a. Text extraction
+        page.blocks = time_stage(
+            "text_extract",
+            lambda: TextExtractor().extract_blocks(page_handle),
+        )
+
+        # b. Layout mapping (text -> LayoutElements)
+        text_elements = time_stage(
+            "layout_map",
+            lambda: LayoutMapper().map_blocks(page.blocks),
+        )
+
+        # c. Table extraction
+        table_extractor = TableExtractor(
+            use_ml=use_ml,
+            ml_model_path=ml_model_path,
+            ml_confidence=ml_confidence,
+            table_config=table_config,
+        )
+        page.tables = time_stage(
+            "table_extract",
+            lambda: table_extractor.extract(page_handle),
+        )
+
+        output_dir = os.path.dirname(images_dir) if images_dir else None
+
+        if debug and output_dir is not None:
+            debug_payload = table_extractor._last_text_alignment_debug
+            has_text_alignment = any(
+                table.source == "text_alignment" for table in page.tables
+            )
+            if debug_payload and has_text_alignment:
+                debug_path = os.path.join(
+                    text_alignment_debug_dir,
+                    f"page-{page.index:03d}.png",
+                )
+                time_stage(
+                    "write_text_alignment_debug",
+                    lambda: render_text_alignment_debug_page(
+                        page=page_handle,
+                        debug_payload=debug_payload,
+                        output_path=debug_path,
+                        dpi=render_dpi,
+                    ),
+                )
+
+        # d. Image extraction
+        if output_dir is not None:
+            page.images = time_stage(
+                "image_extract",
+                lambda: ImageExtractor(images_dir).extract(
+                    pdf_path, page_index
+                ),
+            )
+        else:
+            page.images = []
+
+        # e. Seals
+        seals = []
+        for coord in (seal_coords or []):
+            if coord.get("page_index") != page_index:
+                continue
+            seals.append(
+                Seal(
+                    bbox=BBox(
+                        coord["x0"],
+                        coord["y0"],
+                        coord["x1"],
+                        coord["y1"],
+                    ),
+                    page_index=page_index,
+                )
+            )
+        page.seals = seals
+
+        # f. Layout building
+        layout_elements = time_stage(
+            "layout_build",
+            lambda: LayoutBuilder().build(
+                text_elements, page.tables, page.images
+            ),
+        )
+
+        # g. Append seal layout elements
+        for seal in seals:
+            layout_elements.append(
+                LayoutElement(
+                    type="seal",
+                    bbox=seal.bbox,
+                    order=len(layout_elements),
+                    content=seal,
+                )
+            )
+
+        layout_elements = LayoutBuilder.sort_layout_elements(
+            layout_elements
+        )
+
+        # h. Set layout_elements on the page
+        page.layout_elements = layout_elements
+
+        # i. Render
+        if output_dir is not None:
+            page.render = time_stage(
+                "render",
+                lambda: RenderEngine(
+                    output_dir, render_dpi
+                ).render(pdf_path, page_index),
+            )
+
+        # j. Per-page output
+        if output_dir is not None:
+            page_json_path = os.path.join(
+                pages_dir, f"page-{page.index:03d}.json"
+            )
+            page_md_path = os.path.join(
+                pages_dir, f"page-{page.index:03d}.md"
+            )
+            time_stage(
+                "write_page_json",
+                lambda: JSONWriter().write_page(page, page_json_path),
+            )
+            time_stage(
+                "write_page_md",
+                lambda: MarkdownWriter().write_page(page, page_md_path),
+            )
+    finally:
+        pdf_doc.close()
+
+    total_page_time = perf_counter() - page_start
+    return page_index, page, stage_totals, total_page_time
 
 
 class Pipeline:
@@ -49,6 +240,8 @@ class Pipeline:
         ml_confidence: float = 0.25,
         debug: bool = False,
         table_config: Optional[TableConfig] = None,
+        num_workers: Optional[int] = None,
+        backend: str = "thread",
     ):
         self.pdf_path = pdf_path
         self.output_dir = output_dir
@@ -60,6 +253,10 @@ class Pipeline:
         self._ml_confidence = ml_confidence
         self.debug = debug
         self._table_config = table_config
+        self.num_workers = num_workers
+        self.backend = backend
+        self._lock = threading.Lock()
+        self._fitz_lock = threading.Lock()
         self._stage_totals: dict[str, float] = {}
         self._page_totals: list[dict[str, float]] = []
 
@@ -68,13 +265,15 @@ class Pipeline:
         start = perf_counter()
         result = func()
         elapsed = perf_counter() - start
-        self._stage_totals[stage] = self._stage_totals.get(stage, 0.0) + elapsed
+        with self._lock:
+            self._stage_totals[stage] = self._stage_totals.get(stage, 0.0) + elapsed
         return result, elapsed
 
     def _record_page_total(self, page_index: int, elapsed: float) -> None:
-        self._page_totals.append(
-            {"page_index": page_index, "total_seconds": elapsed}
-        )
+        with self._lock:
+            self._page_totals.append(
+                {"page_index": page_index, "total_seconds": elapsed}
+            )
 
     def _match_seals(self, page_index: int) -> list[Seal]:
         """Build seal objects for a page index."""
@@ -162,6 +361,153 @@ class Pipeline:
         with open(path, "w", encoding="utf-8") as f:
             json.dump(report, f, ensure_ascii=False, indent=2)
 
+    def _process_single_page(
+        self,
+        page_index: int,
+        document: Document,
+        images_dir: str,
+        pages_dir: str,
+        text_alignment_debug_dir: str,
+        pdf_doc: fitz.Document,
+    ) -> None:
+        page = document.pages[page_index]
+        page_start = perf_counter()
+
+        def _extract_blocks():
+            with self._fitz_lock:
+                page_handle = pdf_doc[page.index]
+                return TextExtractor().extract_blocks(page_handle)
+
+        # a. Text extraction
+        page.blocks, _ = self._time_stage(
+            "text_extract",
+            _extract_blocks,
+        )
+
+        # b. Layout mapping (text -> LayoutElements)
+        text_elements, _ = self._time_stage(
+            "layout_map",
+            lambda: LayoutMapper().map_blocks(page.blocks),
+        )
+
+        # c. Table extraction
+        table_extractor = TableExtractor(
+            use_ml=self.use_ml,
+            ml_model_path=self._ml_model_path,
+            ml_confidence=self._ml_confidence,
+            table_config=self._table_config,
+        )
+
+        def _extract_tables():
+            with self._fitz_lock:
+                page_handle = pdf_doc[page.index]
+                return table_extractor.extract(page_handle)
+
+        page.tables, _ = self._time_stage(
+            "table_extract",
+            _extract_tables,
+        )
+        if self.debug and self.output_dir is not None:
+            debug_payload = table_extractor._last_text_alignment_debug
+            has_text_alignment = any(
+                table.source == "text_alignment" for table in page.tables
+            )
+            if debug_payload and has_text_alignment:
+                debug_path = os.path.join(
+                    text_alignment_debug_dir,
+                    f"page-{page.index:03d}.png",
+                )
+                def _write_debug():
+                    with self._fitz_lock:
+                        page_handle = pdf_doc[page.index]
+                        render_text_alignment_debug_page(
+                            page=page_handle,
+                            debug_payload=debug_payload,
+                            output_path=debug_path,
+                            dpi=self.render_dpi,
+                        )
+                self._time_stage(
+                    "write_text_alignment_debug",
+                    _write_debug,
+                )
+
+        # d. Image extraction
+        if self.output_dir is not None:
+            def _extract_images():
+                with self._fitz_lock:
+                    return ImageExtractor(images_dir).extract(
+                        self.pdf_path, page.index
+                    )
+            page.images, _ = self._time_stage(
+                "image_extract",
+                _extract_images,
+            )
+        else:
+            page.images = []
+
+        # e. Seals
+        seals, _ = self._time_stage(
+            "seal_match",
+            lambda: self._match_seals(page.index),
+        )
+        page.seals = seals
+
+        # f. Layout building
+        layout_elements, _ = self._time_stage(
+            "layout_build",
+            lambda: LayoutBuilder().build(
+                text_elements, page.tables, page.images
+            ),
+        )
+
+        # g. Append seal layout elements
+        for seal in seals:
+            layout_elements.append(
+                LayoutElement(
+                    type="seal",
+                    bbox=seal.bbox,
+                    order=len(layout_elements),
+                    content=seal,
+                )
+            )
+
+        layout_elements = LayoutBuilder.sort_layout_elements(
+            layout_elements
+        )
+
+        # h. Set layout_elements on the page
+        page.layout_elements = layout_elements
+
+        # i. Render
+        if self.output_dir is not None:
+            def _render():
+                with self._fitz_lock:
+                    return RenderEngine(
+                        self.output_dir, self.render_dpi
+                    ).render(self.pdf_path, page.index)
+            page.render, _ = self._time_stage(
+                "render",
+                _render,
+            )
+
+        # j. Per-page output
+        if self.output_dir is not None:
+            page_json_path = os.path.join(
+                pages_dir, f"page-{page.index:03d}.json"
+            )
+            page_md_path = os.path.join(
+                pages_dir, f"page-{page.index:03d}.md"
+            )
+            self._time_stage(
+                "write_page_json",
+                lambda: JSONWriter().write_page(page, page_json_path),
+            )
+            self._time_stage(
+                "write_page_md",
+                lambda: MarkdownWriter().write_page(page, page_md_path),
+            )
+        self._record_page_total(page.index, perf_counter() - page_start)
+
     def run(self) -> Document:
         """Run the full processing pipeline and return the Document."""
         self._stage_totals = {}
@@ -176,6 +522,8 @@ class Pipeline:
 
         # Prepare output directories
         images_dir = ""
+        pages_dir = ""
+        text_alignment_debug_dir = ""
         if self.output_dir is not None:
             images_dir = os.path.join(self.output_dir, "images")
             pages_dir = os.path.join(self.output_dir, "pages")
@@ -191,130 +539,91 @@ class Pipeline:
                 os.makedirs(text_alignment_debug_dir, exist_ok=True)
 
         # 2. Per-page processing
-        pdf_doc = fitz.open(self.pdf_path)
-        try:
-            for page in document.pages:
-                if self.page_indices is not None and page.index not in self.page_indices:
-                    continue
+        pages_to_process = []
+        for page in document.pages:
+            if self.page_indices is not None and page.index not in self.page_indices:
+                continue
+            pages_to_process.append(page.index)
 
-                page_start = perf_counter()
-                page_handle = pdf_doc[page.index]
+        num_workers = self.num_workers
+        if num_workers is None:
+            if len(pages_to_process) > 1:
+                num_workers = min(4, os.cpu_count() or 1)
+            else:
+                num_workers = 1
 
-                # a. Text extraction
-                page.blocks, _ = self._time_stage(
-                    "text_extract",
-                    lambda: TextExtractor().extract_blocks(page_handle),
-                )
+        is_parallel = len(pages_to_process) > 1 and num_workers > 1 and self.backend != "sequential"
 
-                # b. Layout mapping (text -> LayoutElements)
-                text_elements, _ = self._time_stage(
-                    "layout_map",
-                    lambda: LayoutMapper().map_blocks(page.blocks),
-                )
+        if is_parallel:
+            if self.backend == "process":
+                global _PROCESS_POOL, _PROCESS_POOL_WORKERS
+                if _PROCESS_POOL is None or _PROCESS_POOL_WORKERS != num_workers:
+                    if _PROCESS_POOL is not None:
+                        _PROCESS_POOL.shutdown()
+                    from concurrent.futures import ProcessPoolExecutor
+                    _PROCESS_POOL = ProcessPoolExecutor(max_workers=num_workers)
+                    _PROCESS_POOL_WORKERS = num_workers
 
-                # c. Table extraction
-                table_extractor = TableExtractor(
-                    use_ml=self.use_ml,
-                    ml_model_path=self._ml_model_path,
-                    ml_confidence=self._ml_confidence,
-                    table_config=self._table_config,
-                )
-                page.tables, _ = self._time_stage(
-                    "table_extract",
-                    lambda: table_extractor.extract(page_handle),
-                )
-                if self.debug and self.output_dir is not None:
-                    debug_payload = table_extractor._last_text_alignment_debug
-                    has_text_alignment = any(
-                        table.source == "text_alignment" for table in page.tables
-                    )
-                    if debug_payload and has_text_alignment:
-                        debug_path = os.path.join(
+                futures = []
+                for page_index in pages_to_process:
+                    page = document.pages[page_index]
+                    futures.append(
+                        _PROCESS_POOL.submit(
+                            _process_page_process_worker,
+                            self.pdf_path,
+                            page_index,
+                            images_dir,
+                            pages_dir,
                             text_alignment_debug_dir,
-                            f"page-{page.index:03d}.png",
-                        )
-                        self._time_stage(
-                            "write_text_alignment_debug",
-                            lambda: render_text_alignment_debug_page(
-                                page=page_handle,
-                                debug_payload=debug_payload,
-                                output_path=debug_path,
-                                dpi=self.render_dpi,
-                            ),
-                        )
-
-                # d. Image extraction
-                if self.output_dir is not None:
-                    page.images, _ = self._time_stage(
-                        "image_extract",
-                        lambda: ImageExtractor(images_dir).extract(
-                            self.pdf_path, page.index
-                        ),
-                    )
-                else:
-                    page.images = []
-
-                # e. Seals
-                seals, _ = self._time_stage(
-                    "seal_match",
-                    lambda: self._match_seals(page.index),
-                )
-                page.seals = seals
-
-                # f. Layout building
-                layout_elements, _ = self._time_stage(
-                    "layout_build",
-                    lambda: LayoutBuilder().build(
-                        text_elements, page.tables, page.images
-                    ),
-                )
-
-                # g. Append seal layout elements
-                for seal in seals:
-                    layout_elements.append(
-                        LayoutElement(
-                            type="seal",
-                            bbox=seal.bbox,
-                            order=len(layout_elements),
-                            content=seal,
+                            self.render_dpi,
+                            self.seal_coords,
+                            self.use_ml,
+                            self._ml_model_path,
+                            self._ml_confidence,
+                            self.debug,
+                            self._table_config,
+                            page.size,
+                            page.rotation,
                         )
                     )
+                for future in futures:
+                    page_index, populated_page, stage_timings, total_page_time = future.result()
+                    document.pages[page_index] = populated_page
+                    for stage, elapsed in stage_timings.items():
+                        self._stage_totals[stage] = self._stage_totals.get(stage, 0.0) + elapsed
+                    self._record_page_total(page_index, total_page_time)
+            else:
+                from concurrent.futures import ThreadPoolExecutor
+                def process_page_job(page_index: int):
+                    thread_doc = fitz.open(self.pdf_path)
+                    try:
+                        self._process_single_page(
+                            page_index,
+                            document,
+                            images_dir,
+                            pages_dir,
+                            text_alignment_debug_dir,
+                            thread_doc,
+                        )
+                    finally:
+                        thread_doc.close()
 
-                layout_elements = LayoutBuilder.sort_layout_elements(
-                    layout_elements
-                )
-
-                # h. Set layout_elements on the page
-                page.layout_elements = layout_elements
-
-                # i. Render
-                if self.output_dir is not None:
-                    page.render, _ = self._time_stage(
-                        "render",
-                        lambda: RenderEngine(
-                            self.output_dir, self.render_dpi
-                        ).render(self.pdf_path, page.index),
+                with ThreadPoolExecutor(max_workers=num_workers) as executor:
+                    list(executor.map(process_page_job, pages_to_process))
+        else:
+            pdf_doc = fitz.open(self.pdf_path)
+            try:
+                for page_index in pages_to_process:
+                    self._process_single_page(
+                        page_index,
+                        document,
+                        images_dir,
+                        pages_dir,
+                        text_alignment_debug_dir,
+                        pdf_doc,
                     )
-
-                # j. Per-page output
-                if self.output_dir is not None:
-                    page_json_path = os.path.join(
-                        pages_dir, f"page-{page.index:03d}.json"
-                    )
-                    page_md_path = os.path.join(
-                        pages_dir, f"page-{page.index:03d}.md"
-                    )
-                    self._time_stage(
-                        "write_page_json",
-                        lambda: JSONWriter().write_page(page, page_json_path),
-                    )
-                    self._time_stage(
-                        "write_page_md",
-                        lambda: MarkdownWriter().write_page(page, page_md_path),
-                    )
-                self._record_page_total(page.index, perf_counter() - page_start)
-        finally:
-            pdf_doc.close()
+            finally:
+                pdf_doc.close()
 
         # 3. Output writers
         if self.output_dir is not None:

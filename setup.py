@@ -9,16 +9,16 @@ setup(
     version=os.getenv("CI_PUBLISH_VER", VERSION),
     description="A Python library for parsing PDF layouts into structured JSON and Markdown",
     author="HexAI Team",
-    author_email="support@hexai.com",
-    python_requires=">=3.10",
+    author_email="junhong.pan@hexinfo.cn",
+    python_requires=">=3.7",
     install_requires=[
-        "PyMuPDF>=1.23.0",
+        "PyMuPDF>=1.21.0",
     ],
     extras_require={
         "ml": [
-            "onnxruntime>=1.16.0",
-            "numpy>=1.24.0",
-            "opencv-python>=4.8.0",
+            "onnxruntime>=1.8.0",
+            "numpy>=1.20.0",
+            "opencv-python>=4.2.0",
         ],
         "demo": [
             "camelot-py[cv]>=0.11.0",
