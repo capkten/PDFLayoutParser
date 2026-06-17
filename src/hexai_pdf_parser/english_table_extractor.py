@@ -137,35 +137,6 @@ class EnglishTableExtractor:
             return False
         return all(abs(c1 - c2) <= self.color_tolerance for c1, c2 in zip(color1, color2))
 
-    def _merge_same_row_rects(
-        self, rects: List[Tuple[float, float, str]]
-    ) -> List[Tuple[float, float, str]]:
-        """Merge rectangles that belong to the same row.
-
-        Rectangles with overlapping or adjacent y ranges are merged.
-        """
-        if not rects:
-            return []
-
-        merged: List[Tuple[float, float, str]] = []
-        current_y0, current_y1, current_color = rects[0]
-
-        for y0, y1, color in rects[1:]:
-            # Check if this rectangle is part of the same row
-            if abs(y0 - current_y0) <= self.row_merge_tolerance and abs(y1 - current_y1) <= self.row_merge_tolerance:
-                # Same row, extend the y range
-                current_y0 = min(current_y0, y0)
-                current_y1 = max(current_y1, y1)
-            else:
-                # New row
-                merged.append((current_y0, current_y1, current_color))
-                current_y0, current_y1, current_color = y0, y1, color
-
-        # Don't forget the last row
-        merged.append((current_y0, current_y1, current_color))
-
-        return merged
-
     def _detect_header_rows(
         self, page: fitz.Page, row_backgrounds: List[Tuple[float, float, str]]
     ) -> List[_RowData]:
@@ -221,9 +192,6 @@ class EnglishTableExtractor:
             # Sort by x position
             items.sort(key=lambda x: x["bbox"][0])
             
-            # Check if this row is bold (title) or regular (column header)
-            has_bold = any(item["is_bold"] for item in items)
-            
             # Build words list in PyMuPDF format
             words = []
             for item in items:
@@ -243,7 +211,7 @@ class EnglishTableExtractor:
                 ))
 
         # Filter: only include rows that are close to the data area
-        # and contain column-like content (dates, numbers, etc.)
+        # and contain column-like content
         column_header_rows = []
         for row in header_rows:
             # Check if this row is close to the data area (within 30pt)
@@ -253,6 +221,9 @@ class EnglishTableExtractor:
             # Check if this row contains column-like content
             text = " ".join(w[4] for w in row.words)
             if self._is_column_header_text(text):
+                column_header_rows.append(row)
+            # Also include rows with multiple numeric-looking columns
+            elif self._has_multiple_numeric_columns(row.words):
                 column_header_rows.append(row)
 
         return column_header_rows
@@ -279,6 +250,15 @@ class EnglishTableExtractor:
                 return True
         
         return False
+
+    def _has_multiple_numeric_columns(self, words: List[Tuple]) -> bool:
+        """Check if a row has multiple numeric-looking columns."""
+        numeric_count = 0
+        for w in words:
+            text = w[4].strip()
+            if self._is_numeric(text) or text in ["$", "—", "-"]:
+                numeric_count += 1
+        return numeric_count >= 2
 
     def _group_words_into_rows(
         self, words: List[Tuple[float, float, float, float, str]]
@@ -456,75 +436,145 @@ class EnglishTableExtractor:
                     best_idx = i
 
         if best_idx is not None:
-            # Insert $ before the numeric word
+            # Save target position before pop shifts indices
+            target_x = words[best_idx][0]
             dollar = words.pop(dollar_idx)
             # Adjust the $ x position to be just before the numeric word
             adjusted_dollar = (
-                words[best_idx - 1 if best_idx > dollar_idx else best_idx][0] - 5.0,
+                target_x - 5.0,
                 dollar[1],
                 dollar[2],
                 dollar[3],
                 dollar[4],
             )
-            # Find the right insertion point
+            # After pop, best_idx shifted left if it was after dollar_idx
             insert_idx = best_idx if best_idx < dollar_idx else best_idx - 1
             words.insert(insert_idx, adjusted_dollar)
 
     def _detect_columns(
         self, rows: List[_RowData]
     ) -> List[Tuple[float, float]]:
-        """Detect column boundaries based on x-position overlap.
+        """Detect column boundaries using clustering approach.
+
+        Similar to Chinese table extractor:
+        1. Numeric tokens use right edge (x1) as anchor with high weight
+        2. Text tokens use left edge (x0) as anchor with low weight
+        3. Cluster anchors to find column boundaries
 
         Returns:
             List of (x_start, x_end) tuples defining column boundaries.
         """
-        # Collect all x positions
-        x_positions: List[Tuple[float, float]] = []
+        # Collect anchors from all rows
+        # For numeric tokens: use x1 (right edge) for right-alignment
+        # For text tokens: use x0 (left edge) for left-alignment
+        numeric_anchors: List[float] = []
+        text_anchors: List[float] = []
 
         for row in rows:
             for w in row.words:
-                x_positions.append((w[0], w[2]))
+                text = w[4].strip()
+                x0 = w[0]
+                x1 = w[2]
 
-        if not x_positions:
+                if self._is_numeric(text):
+                    # Numeric: use right edge for right-alignment
+                    numeric_anchors.append(x1)
+                elif text not in ["$", "—", "-", "(", ")"]:
+                    # Text (not special chars): use left edge
+                    text_anchors.append(x0)
+
+        # Cluster numeric anchors first (these define data columns)
+        numeric_clusters = self._cluster_positions(numeric_anchors, tolerance=15.0)
+
+        # Filter: only keep clusters with enough support (at least 30% of rows)
+        min_support = max(2, len(rows) * 0.3)
+        strong_numeric_clusters = [
+            c for c in numeric_clusters
+            if c["count"] >= min_support
+        ]
+
+        if len(strong_numeric_clusters) >= 2:
+            # Found multiple numeric columns - use these as column boundaries
+            # Sort by position
+            strong_numeric_clusters.sort(key=lambda c: c["x"])
+
+            # Build columns
+            columns = []
+
+            # Label column: from leftmost text to first numeric cluster
+            if text_anchors:
+                label_x = min(text_anchors)
+                first_numeric_x = strong_numeric_clusters[0]["x"]
+                # Use midpoint between label area and first numeric column
+                label_end = (label_x + first_numeric_x) / 2.0
+                columns.append((label_x, label_end))
+
+            # Data columns: each numeric cluster defines a column
+            for i, cluster in enumerate(strong_numeric_clusters):
+                x_start = columns[-1][1] if columns else cluster["x"] - 10
+                if i + 1 < len(strong_numeric_clusters):
+                    # Use midpoint between this and next cluster
+                    x_end = (cluster["x"] + strong_numeric_clusters[i + 1]["x"]) / 2.0
+                else:
+                    x_end = max(w[2] for row in rows for w in row.words) + 10
+                columns.append((x_start, x_end))
+
+            return columns
+
+        # Fallback: use simple gap detection
+        all_x = [w[0] for row in rows for w in row.words] + [w[2] for row in rows for w in row.words]
+        if not all_x:
             return []
 
-        # Cluster x positions to find column boundaries
-        # Use a simple approach: find gaps in x positions
-        all_x = []
-        for x0, x1 in x_positions:
-            all_x.append(x0)
-            all_x.append(x1)
-
-        all_x.sort()
-
-        # Find significant gaps
-        if len(all_x) < 2:
-            return []
-
+        # Find large gaps (> 20.0pt)
+        all_x_sorted = sorted(set(all_x))
         gaps = []
-        for i in range(1, len(all_x)):
-            gap = all_x[i] - all_x[i - 1]
-            if gap > 20.0:  # Minimum gap threshold
-                gaps.append((all_x[i - 1], all_x[i], gap))
+        for i in range(1, len(all_x_sorted)):
+            gap = all_x_sorted[i] - all_x_sorted[i-1]
+            if gap > 20.0:
+                gaps.append((all_x_sorted[i-1], all_x_sorted[i]))
 
         if not gaps:
-            # No significant gaps, return single column
             return [(min(all_x), max(all_x))]
 
         # Build columns from gaps
         columns = []
         x_start = min(all_x)
-
-        for x_left, x_right, gap in gaps:
-            # Column ends at the midpoint of the gap
+        for x_left, x_right in gaps:
             x_end = (x_left + x_right) / 2.0
             columns.append((x_start, x_end))
             x_start = x_end
-
-        # Last column
         columns.append((x_start, max(all_x)))
 
         return columns
+
+    def _cluster_positions(
+        self, positions: List[float], tolerance: float = 15.0
+    ) -> List[dict]:
+        """Cluster positions with given tolerance."""
+        if not positions:
+            return []
+
+        clusters: List[dict] = []
+
+        for pos in sorted(positions):
+            target = None
+            for cluster in clusters:
+                if abs(pos - cluster["x"]) <= tolerance:
+                    target = cluster
+                    break
+
+            if target is None:
+                clusters.append({
+                    "x": pos,
+                    "count": 1,
+                })
+            else:
+                # Update cluster center
+                target["x"] = (target["x"] * target["count"] + pos) / (target["count"] + 1)
+                target["count"] += 1
+
+        return clusters
 
     def _build_table(
         self,
