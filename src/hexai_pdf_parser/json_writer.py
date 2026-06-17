@@ -18,6 +18,10 @@ from hexai_pdf_parser.models import (
     Span,
     Table,
     Word,
+    TextChar,
+    TextBlock,
+    CellStructure,
+    TableStructure,
 )
 
 
@@ -213,4 +217,61 @@ class JSONWriter:
             return self._block_to_dict(content)
         # Fallback for plain values (strings, numbers, etc.)
         return content
+
+    def table_structures_to_dict(
+        self, structures: List[TableStructure]
+    ) -> List[Dict[str, Any]]:
+        """Convert a list of TableStructure to serializable dicts."""
+        return [self._table_structure_to_dict(s) for s in structures]
+
+    def _text_char_to_dict(self, tc: TextChar) -> Dict[str, Any]:
+        cb = tc.bbox
+        result: Dict[str, Any] = {
+            "text": tc.text,
+            "bbox": {"x0": cb.x0, "y0": cb.y0, "x1": cb.x1, "y1": cb.y1},
+        }
+        if tc.confidence is not None:
+            result["confidence"] = tc.confidence
+        return result
+
+    def _text_block_to_dict(self, tb: TextBlock) -> Dict[str, Any]:
+        bb = tb.bbox
+        return {
+            "text": tb.text,
+            "bbox": {"x0": bb.x0, "y0": bb.y0, "x1": bb.x1, "y1": bb.y1},
+            "chars": [self._text_char_to_dict(c) for c in tb.chars],
+        }
+
+    def _cell_structure_to_dict(self, cs: CellStructure) -> Dict[str, Any]:
+        cb = cs.bbox
+        result: Dict[str, Any] = {
+            "text": cs.text,
+            "row_index": cs.row_index,
+            "col_index": cs.col_index,
+            "cell_coord": [
+                {"x": p[0], "y": p[1]} for p in cs.cell_coord
+            ],
+            "bbox": {"x0": cb.x0, "y0": cb.y0, "x1": cb.x1, "y1": cb.y1},
+            "tl_row": cs.tl_row,
+            "tl_col": cs.tl_col,
+            "br_row": cs.br_row,
+            "br_col": cs.br_col,
+        }
+        if cs.text_block is not None:
+            result["text_block"] = self._text_block_to_dict(cs.text_block)
+        return result
+
+    def _table_structure_to_dict(self, ts: TableStructure) -> Dict[str, Any]:
+        tb = ts.bbox
+        result: Dict[str, Any] = {
+            "bbox": {"x0": tb.x0, "y0": tb.y0, "x1": tb.x1, "y1": tb.y1},
+            "rows": ts.rows,
+            "cols": ts.cols,
+            "cells": [self._cell_structure_to_dict(c) for c in ts.cells],
+        }
+        if ts.confidence is not None:
+            result["confidence"] = ts.confidence
+        if ts.source is not None:
+            result["source"] = ts.source
+        return result
 

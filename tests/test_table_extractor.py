@@ -1222,6 +1222,7 @@ class TestTableExtractor:
                 BBox(10.0, 10.0, 320.0, 140.0),
             )
 
+
             assert row_count == 3
             assert col_count >= 2
             header = next(cell for cell in cells if cell.row_index == 0)
@@ -2606,3 +2607,153 @@ def test_build_special_template_table_falls_back_when_equity_template_zone_check
     )
 
     assert extractor._build_special_template_table(page, region_rows) is None
+
+
+# ---------------------------------------------------------------------------
+# extract_table_structure tests
+# ---------------------------------------------------------------------------
+
+
+def _make_rect_table_pdf(path: str | Path) -> None:
+    """Create a PDF with a 3x3 table drawn as filled rectangles (line_projection source)."""
+    doc = fitz.open()
+    page = doc.new_page(width=612, height=792)
+    x0, y0, x1, y1 = 50, 50, 500, 200
+    row_h = (y1 - y0) / 3
+    col_w = (x1 - x0) / 3
+    for row in range(3):
+        for col in range(3):
+            rx = x0 + col * col_w
+            ry = y0 + row * row_h
+            page.draw_rect(fitz.Rect(rx, ry, rx + col_w, ry + row_h), color=(0, 0, 0), width=0.5)
+    page.insert_text((60, 80), "A1")
+    page.insert_text((210, 80), "B1")
+    page.insert_text((360, 80), "C1")
+    page.insert_text((60, 130), "A2")
+    page.insert_text((210, 130), "B2")
+    page.insert_text((360, 130), "C2")
+    page.insert_text((60, 180), "A3")
+    page.insert_text((210, 180), "B3")
+    page.insert_text((360, 180), "C3")
+    doc.save(path)
+    doc.close()
+
+
+def test_extract_table_structure_returns_cell_coords(tmp_path):
+    """extract_table_structure returns CellStructure with 4-corner coords."""
+    pdf_path = str(tmp_path / "table.pdf")
+    _make_rect_table_pdf(pdf_path)
+
+    doc = fitz.open(pdf_path)
+    try:
+        page = doc[0]
+        extractor = TableExtractor()
+        structures = extractor.extract_table_structure(page)
+        assert len(structures) >= 1
+        ts = structures[0]
+        assert ts.rows >= 2
+        assert ts.cols >= 2
+        for cs in ts.cells:
+            assert len(cs.cell_coord) == 4
+            # Each coord is (x, y) tuple
+            for x, y in cs.cell_coord:
+                assert isinstance(x, (int, float))
+                assert isinstance(y, (int, float))
+    finally:
+        doc.close()
+
+
+def test_extract_table_structure_has_text_block(tmp_path):
+    """extract_table_structure returns CellStructure with text_block."""
+    pdf_path = str(tmp_path / "table.pdf")
+    _make_rect_table_pdf(pdf_path)
+
+    doc = fitz.open(pdf_path)
+    try:
+        page = doc[0]
+        extractor = TableExtractor()
+        structures = extractor.extract_table_structure(page)
+        assert len(structures) >= 1
+        for cs in structures[0].cells:
+            assert cs.text_block is not None
+    finally:
+        doc.close()
+
+
+def test_extract_table_structure_span_mapping(tmp_path):
+    """CellStructure tl_row/tl_col/br_row/br_col correctly map from rowspan/colspan."""
+    pdf_path = str(tmp_path / "table.pdf")
+    _make_rect_table_pdf(pdf_path)
+
+    doc = fitz.open(pdf_path)
+    try:
+        page = doc[0]
+        extractor = TableExtractor()
+        structures = extractor.extract_table_structure(page)
+        assert len(structures) >= 1
+        for cs in structures[0].cells:
+            assert cs.tl_row == cs.row_index
+            assert cs.tl_col == cs.col_index
+            assert cs.br_row >= cs.tl_row
+            assert cs.br_col >= cs.tl_col
+    finally:
+        doc.close()
+
+
+def test_extract_table_structure_empty_page(tmp_path):
+    """extract_table_structure returns empty list for a page with no table."""
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_text((100, 100), "Hello world, no table here.")
+    pdf_path = str(tmp_path / "empty.pdf")
+    doc.save(pdf_path)
+    doc.close()
+
+    doc = fitz.open(pdf_path)
+    try:
+        page = doc[0]
+        extractor = TableExtractor()
+        structures = extractor.extract_table_structure(page)
+        assert structures == []
+    finally:
+        doc.close()
+
+
+# ---------------------------------------------------------------------------
+# _NUMERIC_RE constant test
+# ---------------------------------------------------------------------------
+
+
+def test_numeric_regex_constant_exists():
+    """Module-level _NUMERIC_RE constant is available and matches correctly."""
+    from hexai_pdf_parser.table_extractor import _NUMERIC_RE
+    import re
+
+    assert isinstance(_NUMERIC_RE, type(re.compile("")))
+    assert _NUMERIC_RE.match("123")
+    assert _NUMERIC_RE.match("1,234,567")
+    assert _NUMERIC_RE.match("-42.5")
+    assert not _NUMERIC_RE.match("hello")
+    assert not _NUMERIC_RE.match("")
+
+
+# ---------------------------------------------------------------------------
+# Dollar sign edge case test
+# ---------------------------------------------------------------------------
+
+
+def test_dollar_sign_no_numeric_neighbor():
+    """_handle_dollar_signs handles $ with no adjacent numeric token."""
+    from hexai_pdf_parser.english_table_extractor import EnglishTableExtractor, _RowData
+
+    extractor = EnglishTableExtractor()
+    row = _RowData(
+        words=[(10.0, 100.0, 15.0, 110.0, "$"), (20.0, 100.0, 80.0, 110.0, "Revenue")],
+        y0=100.0,
+        y1=110.0,
+        color="blue",
+    )
+    # Should not crash when no numeric token exists
+    result = extractor._handle_dollar_signs([row])
+    assert len(result) == 1
+    assert len(result[0].words) == 2

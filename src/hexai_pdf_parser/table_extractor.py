@@ -19,13 +19,20 @@ Special handling for WPS/Office financial tables:
 
 from __future__ import annotations
 
+import re
+import bisect
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 import fitz
 
-from hexai_pdf_parser.models import BBox, Cell, Table
+from hexai_pdf_parser.models import BBox, Cell, CellStructure, Table, TableStructure, TextBlock
+
+# Pre-compiled regex for numeric token classification (used per-word)
+_NUMERIC_RE = re.compile(
+    r"^[+-]?(?:\d{1,3}(?:[,\s]\d{3})+|\d+)(?:\.\d+)?$"
+)
 from hexai_pdf_parser.table_config import TableConfig, LayoutProfile
 from hexai_pdf_parser.financial_header_handler import (
     normalize_complex_financial_header,
@@ -118,7 +125,9 @@ class TableExtractor:
         lang = detect_page_language(page)
 
         if lang == "en":
-            return self._extract_english(page)
+            tables = self._extract_english(page)
+            if tables:
+                return tables
 
         tables = self._extract_via_lines(page)
 
@@ -168,6 +177,54 @@ class TableExtractor:
         tables = [normalize_complex_financial_header(t, page) for t in tables]
 
         return tables
+
+    def extract_table_structure(self, page: fitz.Page) -> List[TableStructure]:
+        """Return tables with cell coordinates and character-level text.
+
+        Each returned :class:`TableStructure` contains :class:`CellStructure`
+        objects with four-corner coordinates and an optional
+        :class:`TextBlock` for character-level data.
+        """
+        tables = self.extract(page)
+
+        try:
+            page_dict = page.get_text("dict", flags=fitz.TEXT_PRESERVE_WHITESPACE)
+        except Exception:
+            page_dict = {"blocks": []}
+
+        structures: List[TableStructure] = []
+        for table in tables:
+            cell_structures: List[CellStructure] = []
+            for cell in table.cells:
+                coords = self._compute_text_alignment_cell_coords(cell, table)
+                text_block = self._extract_text_block_in_bbox(cell.bbox, page_dict)
+
+                cs = CellStructure(
+                    text=cell.text,
+                    row_index=cell.row_index,
+                    col_index=cell.col_index,
+                    cell_coord=coords,
+                    bbox=cell.bbox,
+                    text_block=text_block,
+                    tl_row=cell.row_index,
+                    tl_col=cell.col_index,
+                    br_row=cell.row_index + cell.rowspan - 1,
+                    br_col=cell.col_index + cell.colspan - 1,
+                )
+                cell_structures.append(cs)
+
+            structures.append(
+                TableStructure(
+                    bbox=table.bbox,
+                    rows=table.rows,
+                    cols=table.cols,
+                    cells=cell_structures,
+                    confidence=table.confidence,
+                    source=table.source,
+                )
+            )
+
+        return structures
 
     def _extract_english(self, page: fitz.Page) -> List[Table]:
         """Extract tables from English financial reports.
@@ -1711,37 +1768,44 @@ class TableExtractor:
         tolerance = max(8.0, self.line_tolerance * 4)
         clusters: List[dict] = []
         cluster_tokens: List[List[dict]] = []  # tokens per cluster
+        cluster_xs: List[float] = []  # sorted x positions for bisect lookup
+
         for anchor_x, weight, row_idx, is_num, token in sorted(
             anchors, key=lambda item: item[0]
         ):
-            target = None
-            for cluster in clusters:
-                if abs(anchor_x - cluster["x"]) <= tolerance:
-                    target = cluster
+            # Use bisect to find nearby clusters in O(log n)
+            pos = bisect.bisect_left(cluster_xs, anchor_x)
+            target_idx = None
+
+            # Check cluster at pos-1 and pos (nearest neighbors)
+            for ci in (pos - 1, pos):
+                if 0 <= ci < len(clusters) and abs(anchor_x - cluster_xs[ci]) <= tolerance:
+                    target_idx = ci
                     break
 
-            if target is None:
-                clusters.append(
-                    {
-                        "x": anchor_x,
-                        "weight": weight,
-                        "rows": {row_idx},
-                        "numeric_weight": weight if is_num else 0.0,
-                    }
-                )
-                cluster_tokens.append([token] if is_num else [])
+            if target_idx is None:
+                # Insert new cluster maintaining sorted order
+                clusters.insert(pos, {
+                    "x": anchor_x,
+                    "weight": weight,
+                    "rows": {row_idx},
+                    "numeric_weight": weight if is_num else 0.0,
+                })
+                cluster_tokens.insert(pos, [token] if is_num else [])
+                cluster_xs.insert(pos, anchor_x)
                 continue
 
-            idx = clusters.index(target)
+            target = clusters[target_idx]
             total_weight = target["weight"] + weight
             target["x"] = (
                 target["x"] * target["weight"] + anchor_x * weight
             ) / total_weight
             target["weight"] = total_weight
             target["rows"].add(row_idx)
+            cluster_xs[target_idx] = target["x"]
             if is_num:
                 target["numeric_weight"] += weight
-                cluster_tokens[idx].append(token)
+                cluster_tokens[target_idx].append(token)
 
         guides = [
             cluster
@@ -1774,8 +1838,11 @@ class TableExtractor:
 
             # Compute average character width from cluster tokens
             def _avg_char_width(cluster: dict) -> float:
-                idx = clusters.index(cluster) if cluster in clusters else -1
-                tokens = cluster_tokens[idx] if 0 <= idx < len(cluster_tokens) else []
+                try:
+                    idx = clusters.index(cluster)
+                except ValueError:
+                    return 8.0
+                tokens = cluster_tokens[idx] if idx < len(cluster_tokens) else []
                 widths = []
                 for t in tokens:
                     text = (t.get("text") or "").strip()
@@ -1856,10 +1923,11 @@ class TableExtractor:
         # --- Triple-edge adjustment: refine guide positions ---
         # For each guide cluster, compute the best alignment edge (x0, x1,
         # or center) using variance analysis and update the guide position.
+        cluster_to_idx = {id(c): i for i, c in enumerate(clusters)}
         result = []
         for c in guides:
-            if c in clusters:
-                idx = clusters.index(c)
+            idx = cluster_to_idx.get(id(c))
+            if idx is not None:
                 tokens_in = cluster_tokens[idx] if idx < len(cluster_tokens) else []
                 best = self._best_edge_position(tokens_in)
                 if best is not None:
@@ -2938,8 +3006,17 @@ class TableExtractor:
                 tx0, tx1 = float(token["x0"]), float(token["x1"])
                 if tx1 < tx0:
                     tx0, tx1 = tx1, tx0
-                col_max_x1[col] = max(col_max_x1.get(col, tx1), tx1)
-                col_min_x0[col] = min(col_min_x0.get(col, tx0), tx0)
+
+                # Skip refinement for tokens that cross column boundaries (likely spanning cells)
+                is_spanning = False
+                if col < len(boundaries) and tx1 > boundaries[col]:
+                    is_spanning = True
+                if col > 0 and tx0 < boundaries[col - 1]:
+                    is_spanning = True
+
+                if not is_spanning:
+                    col_max_x1[col] = max(col_max_x1.get(col, tx1), tx1)
+                    col_min_x0[col] = min(col_min_x0.get(col, tx0), tx0)
 
         # Recompute boundaries: midpoint between max_x1 of left column
         # and min_x0 of right column.
@@ -3062,7 +3139,6 @@ class TableExtractor:
 
     def _classify_token_text(self, text: str) -> dict:
         """Classify a token as numeric or text and flag numeric separators."""
-        import re
 
         token_text = text.strip()
         has_decimal = False
@@ -3085,10 +3161,7 @@ class TableExtractor:
             if normalized.endswith("%"):
                 normalized = normalized[:-1]
 
-            numeric_pattern = re.compile(
-                r"^[+-]?(?:\d{1,3}(?:[,\s]\d{3})+|\d+)(?:\.\d+)?$"
-            )
-            is_numeric = bool(normalized) and bool(numeric_pattern.match(normalized))
+            is_numeric = bool(normalized) and bool(_NUMERIC_RE.match(normalized))
 
         if is_numeric:
             has_decimal = "." in token_text
@@ -3610,7 +3683,7 @@ class TableExtractor:
             # If no valid neighbor, leave unmapped (will get renumbered)
 
         # Step 2: Keep all non-narrow columns, including empty structural ones.
-        keep_cols = [ci for ci in sorted_col_indices if ci not in spacer_cols]
+        keep_cols = [ci for ci in sorted_col_indices if ci not in merge_map and ci not in spacer_cols]
         renumber: dict[int, int] = {}
         for new_idx, old_idx in enumerate(keep_cols):
             renumber[old_idx] = new_idx
@@ -3671,6 +3744,190 @@ class TableExtractor:
             )
 
         return merged_cells
+
+    def _compute_text_alignment_cell_coords(
+        self, cell: "Cell", table: "Table"
+    ) -> List[Tuple[float, float]]:
+        """Compute 4-corner coords using virtual grid lines at midpoints.
+
+        For adjacent rows A and B: grid line = (A.bottom + B.top) / 2
+        For adjacent cols A and B: grid line = (A.right + B.left) / 2
+        """
+        row_tops: dict[int, float] = {}
+        row_bottoms: dict[int, float] = {}
+        col_lefts: dict[int, float] = {}
+        col_rights: dict[int, float] = {}
+
+        # 1. Collect bounds from non-spanning cells first
+        for c in table.cells:
+            ri, ci = c.row_index, c.col_index
+            if c.rowspan == 1:
+                if ri not in row_tops or c.bbox.y0 < row_tops[ri]:
+                    row_tops[ri] = c.bbox.y0
+                if ri not in row_bottoms or c.bbox.y1 > row_bottoms[ri]:
+                    row_bottoms[ri] = c.bbox.y1
+            if c.colspan == 1:
+                if ci not in col_lefts or c.bbox.x0 < col_lefts[ci]:
+                    col_lefts[ci] = c.bbox.x0
+                if ci not in col_rights or c.bbox.x1 > col_rights[ci]:
+                    col_rights[ci] = c.bbox.x1
+
+        # 2. Update with spanning cells
+        for c in table.cells:
+            ri_start = c.row_index
+            ri_end = c.row_index + c.rowspan - 1
+            ci_start = c.col_index
+            ci_end = c.col_index + c.colspan - 1
+
+            if ri_start not in row_tops or c.bbox.y0 < row_tops[ri_start]:
+                row_tops[ri_start] = c.bbox.y0
+            if ri_end not in row_bottoms or c.bbox.y1 > row_bottoms[ri_end]:
+                row_bottoms[ri_end] = c.bbox.y1
+            if ci_start not in col_lefts or c.bbox.x0 < col_lefts[ci_start]:
+                col_lefts[ci_start] = c.bbox.x0
+            if ci_end not in col_rights or c.bbox.x1 > col_rights[ci_end]:
+                col_rights[ci_end] = c.bbox.x1
+
+        # 3. Fill missing indices
+        for ri in range(table.rows):
+            if ri not in row_tops:
+                prev_val = None
+                for prev_ri in range(ri - 1, -1, -1):
+                    if prev_ri in row_bottoms:
+                        prev_val = row_bottoms[prev_ri]
+                        break
+                row_tops[ri] = prev_val if prev_val is not None else 0.0
+            if ri not in row_bottoms:
+                next_val = None
+                for next_ri in range(ri + 1, table.rows):
+                    if next_ri in row_tops:
+                        next_val = row_tops[next_ri]
+                        break
+                row_bottoms[ri] = next_val if next_val is not None else row_tops[ri] + 12.0
+
+        for ci in range(table.cols):
+            if ci not in col_lefts:
+                prev_val = None
+                for prev_ci in range(ci - 1, -1, -1):
+                    if prev_ci in col_rights:
+                        prev_val = col_rights[prev_ci]
+                        break
+                col_lefts[ci] = prev_val if prev_val is not None else 0.0
+            if ci not in col_rights:
+                next_val = None
+                for next_ci in range(ci + 1, table.cols):
+                    if next_ci in col_lefts:
+                        next_val = col_lefts[next_ci]
+                        break
+                col_rights[ci] = next_val if next_val is not None else col_lefts[ci] + 20.0
+
+        sorted_rows = list(range(table.rows))
+        sorted_cols = list(range(table.cols))
+
+        # Row boundaries: top of first, midpoints between consecutive rows, bottom of last
+        row_bounds = [row_tops[sorted_rows[0]]]
+        for i in range(len(sorted_rows) - 1):
+            r_cur = sorted_rows[i]
+            r_nxt = sorted_rows[i + 1]
+            boundary = (row_bottoms[r_cur] + row_tops[r_nxt]) / 2.0
+            boundary = max(boundary, row_tops[r_cur])
+            boundary = min(boundary, row_tops[r_nxt])
+            row_bounds.append(boundary)
+        row_bounds.append(max(row_bottoms[sorted_rows[-1]], row_tops[sorted_rows[-1]]))
+
+        # Column boundaries: left of first, midpoints between consecutive cols, right of last
+        col_bounds = [col_lefts[sorted_cols[0]]]
+        for i in range(len(sorted_cols) - 1):
+            c_cur = sorted_cols[i]
+            c_nxt = sorted_cols[i + 1]
+            boundary = (col_rights[c_cur] + col_lefts[c_nxt]) / 2.0
+            boundary = max(boundary, col_lefts[c_cur])
+            boundary = min(boundary, col_lefts[c_nxt])
+            col_bounds.append(boundary)
+        col_bounds.append(max(col_rights[sorted_cols[-1]], col_lefts[sorted_cols[-1]]))
+
+        r_start = min(max(0, cell.row_index), table.rows - 1)
+        r_end = min(max(0, cell.row_index + cell.rowspan - 1), table.rows - 1)
+        c_start = min(max(0, cell.col_index), table.cols - 1)
+        c_end = min(max(0, cell.col_index + cell.colspan - 1), table.cols - 1)
+
+        y0 = row_bounds[r_start]
+        y1 = row_bounds[r_end + 1]
+        x0 = col_bounds[c_start]
+        x1 = col_bounds[c_end + 1]
+
+        return [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
+
+    def _extract_text_block_in_bbox(
+        self, bbox: "BBox", page_dict: dict
+    ) -> "TextBlock":
+        """Extract a TextBlock with char-level coords clipped to bbox."""
+        from hexai_pdf_parser.models import BBox, TextChar, TextBlock
+
+        chars: List[TextChar] = []
+
+        for block in page_dict.get("blocks", []):
+            if block.get("type") != 0:
+                continue
+            bx0, by0, bx1, by1 = block["bbox"]
+            if bx1 < bbox.x0 or bx0 > bbox.x1 or by1 < bbox.y0 or by0 > bbox.y1:
+                continue
+
+            for line in block.get("lines", []):
+                for span in line.get("spans", []):
+                    for ch in span.get("chars", []):
+                        cb = ch["bbox"]
+                        cx = (cb[0] + cb[2]) / 2
+                        cy = (cb[1] + cb[3]) / 2
+                        if (
+                            bbox.x0 <= cx <= bbox.x1
+                            and bbox.y0 <= cy <= bbox.y1
+                        ):
+                            chars.append(
+                                TextChar(
+                                    text=ch["c"],
+                                    bbox=BBox(cb[0], cb[1], cb[2], cb[3]),
+                                )
+                            )
+
+        if not chars:
+            return TextBlock(text="", bbox=BBox(0, 0, 0, 0))
+
+        # Tolerance-based line clustering for stable character ordering
+        sorted_by_y = sorted(chars, key=lambda c: (c.bbox.y0 + c.bbox.y1) / 2)
+        rows: List[List[TextChar]] = []
+        for char in sorted_by_y:
+            char_y_center = (char.bbox.y0 + char.bbox.y1) / 2
+            char_h = char.bbox.y1 - char.bbox.y0 if char.bbox.y1 > char.bbox.y0 else 10.0
+            
+            merged = False
+            for row in rows:
+                row_y_center = sum((c.bbox.y0 + c.bbox.y1) / 2 for c in row) / len(row)
+                row_h = sum(c.bbox.y1 - c.bbox.y0 for c in row) / len(row)
+                effective_h = max(char_h, row_h, 8.0)
+                if abs(char_y_center - row_y_center) < effective_h * 0.5:
+                    row.append(char)
+                    merged = True
+                    break
+            if not merged:
+                rows.append([char])
+
+        rows.sort(key=lambda r: sum((c.bbox.y0 + c.bbox.y1) / 2 for c in r) / len(r))
+
+        sorted_chars = []
+        for row in rows:
+            row.sort(key=lambda c: c.bbox.x0)
+            sorted_chars.extend(row)
+        chars = sorted_chars
+
+        full_text = "".join(c.text for c in chars)
+        tb = BBox(
+            min(c.bbox.x0 for c in chars),
+            min(c.bbox.y0 for c in chars),
+            max(c.bbox.x1 for c in chars),
+            max(c.bbox.y1 for c in chars),
+        )
+        return TextBlock(text=full_text, bbox=tb, chars=chars)
 
     # ------------------------------------------------------------------
     # Main line-projection extraction
