@@ -44,14 +44,14 @@ def _run_page_pipeline(
     pages_dir: str,
     text_alignment_debug_dir: str,
     render_dpi: int,
-    seal_coords: list[dict],
+    seal_coords,
     use_ml: bool,
-    ml_model_path: str | None,
+    ml_model_path,
     ml_confidence: float,
     debug: bool,
-    table_config: TableConfig | None,
-    output_dir: str | None,
-) -> dict[str, float]:
+    table_config,
+    output_dir,
+):
     """Run all pipeline stages for a single page.
 
     Mutates *page* in-place and returns a dict of stage elapsed times.
@@ -212,12 +212,12 @@ def _process_page_process_worker(
     pages_dir: str,
     text_alignment_debug_dir: str,
     render_dpi: int,
-    seal_coords: list[dict],
+    seal_coords,
     use_ml: bool,
-    ml_model_path: str | None,
+    ml_model_path,
     ml_confidence: float,
     debug: bool,
-    table_config: TableConfig | None,
+    table_config,
     page_size: dict,
     page_rotation: int,
 ) -> tuple[int, "Page", dict[str, float], float]:

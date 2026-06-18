@@ -84,9 +84,9 @@ class TableExtractor:
         fallback_max_cols: int = 30,
         fallback_max_tables: int = 10,
         use_ml: bool = False,
-        ml_model_path: str | None = None,
+        ml_model_path: Optional[str] = None,
         ml_confidence: float = 0.25,
-        table_config: TableConfig | None = None,
+        table_config: Optional[TableConfig] = None,
         ):
         self.line_tolerance = line_tolerance
         self.merge_group_tol = merge_group_tol
@@ -97,7 +97,7 @@ class TableExtractor:
         self._ml_model_path = ml_model_path
         self._ml_confidence = ml_confidence
         self._ml_detector = None  # Lazy initialization
-        self._last_text_alignment_debug: dict | None = None
+        self._last_text_alignment_debug: Optional[dict] = None
         self._table_config = table_config
         self._templates = load_templates(TEMPLATES_DIR)
         self._template_engine = TemplateEngine(self)
@@ -483,7 +483,8 @@ class TableExtractor:
 
         import bisect
         # Find the first entry with an index > seqno.
-        start_pos = bisect.bisect_right(occluding_rects, seqno, key=lambda x: x[0])
+        keys = [x[0] for x in occluding_rects]
+        start_pos = bisect.bisect_right(keys, seqno)
 
         for i in range(start_pos, len(occluding_rects)):
             _, cover_rect = occluding_rects[i]

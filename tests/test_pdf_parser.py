@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """Tests for the PDFParser class constructor and context manager."""
 
 import os
@@ -73,7 +75,7 @@ def assert_empty_result(result):
     assert result.message
 
 
-def assert_error_result(result, expected_substring: str | None = None):
+def assert_error_result(result, expected_substring=None):
     assert result.code == -1
     assert isinstance(result.message, str)
     assert result.data is None

@@ -7,7 +7,7 @@ based on character analysis.
 from __future__ import annotations
 
 import re
-from typing import Literal
+from typing_extensions import Literal
 
 import fitz
 

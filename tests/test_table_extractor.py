@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """Tests for the table extractor."""
 
 import json
@@ -12,7 +14,7 @@ from hexai_pdf_parser.text_region_detector import CandidateRegion
 from hexai_pdf_parser.table_extractor import TableExtractor
 
 
-def make_pdf_with_table(path: str | Path) -> None:
+def make_pdf_with_table(path):
     """Create a PDF with a simple 2x2 grid drawn with lines and text."""
     doc = fitz.open()
     page = doc.new_page()

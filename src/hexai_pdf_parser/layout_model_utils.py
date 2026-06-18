@@ -8,7 +8,7 @@ from typing import Any, Callable
 
 def bbox_from_detection_row(
     row: Any,
-    image_size: tuple[int, int],
+    image_size,
 ) -> tuple[float, float, float, float]:
     """Convert a Paddle detection row into clipped image coordinates.
 
@@ -40,11 +40,11 @@ def bbox_from_detection_row(
 
 
 def save_image_with_fallback(
-    output_path: str | Path,
+    output_path,
     image: Any,
     imwrite_fn: Callable[..., bool],
-    imencode_fn: Callable[..., tuple[bool, Any]],
-    imwrite_params: list[int] | None = None,
+    imencode_fn,
+    imwrite_params=None,
 ) -> str:
     """Save an image, falling back to encoded bytes when ``imwrite`` fails."""
 

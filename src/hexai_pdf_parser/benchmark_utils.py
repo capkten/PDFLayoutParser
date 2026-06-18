@@ -6,7 +6,7 @@ from pathlib import Path
 from statistics import mean
 
 
-def summarize_timings(values: list[float]) -> dict[str, float]:
+def summarize_timings(values):
     """Return basic summary statistics for timing values."""
 
     if not values:
@@ -27,7 +27,7 @@ def summarize_timings(values: list[float]) -> dict[str, float]:
     }
 
 
-def resolve_model_dir(default_dir: str | Path, override_dir: str | Path | None) -> str:
+def resolve_model_dir(default_dir, override_dir):
     """Resolve the model directory used by the benchmark script."""
 
     if override_dir:

@@ -26,7 +26,7 @@ class PDFParser:
 
     def __init__(
         self,
-        source: str | Document,
+        source,
         *,
         render_dpi: int = 200,
         seal_coords: Optional[List[dict]] = None,
@@ -37,8 +37,8 @@ class PDFParser:
         backend: str = "thread",
     ) -> None:
         if isinstance(source, Document):
-            self._pdf_path: str | None = None
-            self._document: Document | None = source
+            self._pdf_path = None
+            self._document = source
         else:
             self._pdf_path = source
             self._document = None

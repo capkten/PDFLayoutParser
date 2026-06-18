@@ -553,7 +553,7 @@ class TemplateEngine:
         if not sorted_rows:
             return cells
 
-        def _y_split(row_idx: int) -> tuple[str, str | None]:
+        def _y_split(row_idx):
             """Split col 0 text by y-position groups."""
             if body_rows is None:
                 return row_cells[row_idx][0].text, None
@@ -610,9 +610,9 @@ class TemplateEngine:
             row_cells[row_idx][0].text = rest
 
         # Pass 2: Assign pending labels to data rows missing col 0.
-        pending_label: str | None = None
-        pending_row: int | None = None
-        pass2_cells: set[tuple[int, int]] = set()  # cells created by Pass 2
+        pending_label = None
+        pending_row = None
+        pass2_cells = set()  # cells created by Pass 2
         for row_idx in sorted_rows:
             if row_idx in rows_to_delete:
                 continue
