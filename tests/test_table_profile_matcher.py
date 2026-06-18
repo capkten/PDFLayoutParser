@@ -1,5 +1,7 @@
 """Tests for the layout profile matcher."""
 
+from __future__ import annotations
+
 import pytest
 
 from hexai_pdf_parser.table_config import (

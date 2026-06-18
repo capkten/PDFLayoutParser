@@ -26,17 +26,19 @@ class PDFParser:
 
     def __init__(
         self,
-        source: str | Document,
+        source,
         *,
         render_dpi: int = 200,
         seal_coords: Optional[List[dict]] = None,
         use_ml: bool = False,
         ml_model_path: Optional[str] = None,
         ml_confidence: float = 0.25,
+        num_workers: Optional[int] = None,
+        backend: str = "thread",
     ) -> None:
         if isinstance(source, Document):
-            self._pdf_path: str | None = None
-            self._document: Document | None = source
+            self._pdf_path = None
+            self._document = source
         else:
             self._pdf_path = source
             self._document = None
@@ -46,6 +48,8 @@ class PDFParser:
         self._use_ml = use_ml
         self._ml_model_path = ml_model_path
         self._ml_confidence = ml_confidence
+        self._num_workers = num_workers
+        self._backend = backend
 
     def __enter__(self) -> PDFParser:
         return self
@@ -112,6 +116,8 @@ class PDFParser:
                 use_ml=self._use_ml,
                 ml_model_path=self._ml_model_path,
                 ml_confidence=self._ml_confidence,
+                num_workers=self._num_workers,
+                backend=self._backend,
             )
             self._document = pipeline.run()
             return self._document
@@ -485,6 +491,68 @@ class PDFParser:
                 pdf_doc.close()
 
         return self._execute_result(_do, "region table extracted", "no table found in region")
+
+    def extract_table_structure(
+        self,
+        *,
+        page_indices: Optional[List[int]] = None,
+        region: Optional[dict | list[dict]] = None,
+    ) -> ApiResult:
+        """Extract tables with cell coordinates and char-level text.
+
+        Returns ApiResult wrapping List[TableStructure].
+        Supports two modes:
+        - page_indices: extract from specified pages
+        - region: extract from normalized 0~1 region(s)
+        """
+        def _do():
+            import fitz as _fitz
+            from hexai_pdf_parser.loader import Loader
+            from hexai_pdf_parser.table_extractor import TableExtractor
+
+            pdf_path = self._pdf_path
+            if pdf_path is None:
+                raise ValueError("extract_table_structure requires a PDF file path")
+
+            extractor = TableExtractor(
+                use_ml=self._use_ml,
+                ml_model_path=self._ml_model_path,
+                ml_confidence=self._ml_confidence,
+            )
+
+            if region is not None:
+                page_sizes = self._get_page_sizes()
+                regions = self._normalize_regions(region, page_sizes)
+                pdf_doc = _fitz.open(pdf_path)
+                try:
+                    all_results = []
+                    for r in regions:
+                        page_idx = r["page_index"]
+                        page_handle = pdf_doc[page_idx]
+                        structures = extractor.extract_table_structure(page_handle)
+                        for s in structures:
+                            if self._bbox_intersects(s.bbox, r):
+                                all_results.append(s)
+                    return all_results
+                finally:
+                    pdf_doc.close()
+            else:
+                document = Loader(pdf_path).load()
+                pdf_doc = _fitz.open(pdf_path)
+                try:
+                    all_results = []
+                    for page in document.pages:
+                        if page_indices is not None and page.index not in page_indices:
+                            continue
+                        page_handle = pdf_doc[page.index]
+                        all_results.extend(
+                            extractor.extract_table_structure(page_handle)
+                        )
+                    return all_results
+                finally:
+                    pdf_doc.close()
+
+        return self._execute_result(_do, "table structure extracted", "no table structure extracted")
 
     def extract_image_in_region(
         self,

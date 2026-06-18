@@ -87,7 +87,7 @@ class TableConfig:
         return TableConfig()
 
     @staticmethod
-    def load(path: str | Path) -> TableConfig:
+    def load(path):
         """Load a :class:`TableConfig` from a UTF-8 JSON file.
 
         Unknown top-level keys are ignored so that config files can carry

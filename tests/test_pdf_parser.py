@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """Tests for the PDFParser class constructor and context manager."""
 
 import os
@@ -73,7 +75,7 @@ def assert_empty_result(result):
     assert result.message
 
 
-def assert_error_result(result, expected_substring: str | None = None):
+def assert_error_result(result, expected_substring=None):
     assert result.code == -1
     assert isinstance(result.message, str)
     assert result.data is None
@@ -816,3 +818,14 @@ def test_real_fixture_expectations_are_stable(real_pdf_path, tmp_dir):
     assert parser.extract_text_in_region(REAL_EMPTY_REGION).code == 0
     assert parser.extract_table_in_region(REAL_TABLE_REGION).code == 1
     assert parser.extract_image_in_region(REAL_IMAGE_REGION, os.path.join(tmp_dir, "images")).code == 1
+
+
+def test_parse_with_process_backend(real_pdf_path):
+    parser = PDFParser(real_pdf_path, num_workers=2, backend="process")
+    result = parser.parse(page_indices=[0, 1])
+    assert_success_result(result)
+    assert isinstance(result.data, Document)
+    assert len(result.data.pages) > 0
+
+    from hexai_pdf_parser.pipeline import _PROCESS_POOL
+    assert _PROCESS_POOL is not None

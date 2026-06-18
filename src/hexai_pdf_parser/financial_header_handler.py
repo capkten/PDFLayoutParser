@@ -48,11 +48,11 @@ def _extract_number(text: str) -> str:
 def _clone_cell(
     cell: Cell,
     *,
-    text: str | None = None,
-    row_index: int | None = None,
-    col_index: int | None = None,
-    rowspan: int | None = None,
-    colspan: int | None = None,
+    text=None,
+    row_index=None,
+    col_index=None,
+    rowspan=None,
+    colspan=None,
 ) -> Cell:
     return Cell(
         text=cell.text if text is None else text,

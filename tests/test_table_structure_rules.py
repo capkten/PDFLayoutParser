@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """Tests for the parameter-based table structure rule engine."""
 
 import pytest
@@ -13,7 +15,7 @@ from hexai_pdf_parser.table_structure_rules import (
 )
 
 
-def _make_table(rows: int, cols: int, cell_texts: list[str] | None = None) -> Table:
+def _make_table(rows, cols, cell_texts=None):
     cells = []
     for r in range(rows):
         for c in range(cols):

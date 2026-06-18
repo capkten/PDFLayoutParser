@@ -1,5 +1,7 @@
 """Markdown writer for structured Document output."""
 
+from __future__ import annotations
+
 from html import escape
 import re
 
@@ -58,27 +60,29 @@ class MarkdownWriter:
             return []
 
         max_row = max(
-            [table.rows - 1]
-            + [
-                cell.row_index + max(1, cell.rowspan) - 1
-                for cell in table.cells
-            ]
+            cell.row_index + max(1, cell.rowspan) - 1
+            for cell in table.cells
         )
         max_col = max(
-            [table.cols - 1]
-            + [
-                cell.col_index + max(1, cell.colspan) - 1
-                for cell in table.cells
-            ]
+            cell.col_index + max(1, cell.colspan) - 1
+            for cell in table.cells
         )
 
         cell_map: dict[tuple[int, int], Table] = {}
         for cell in table.cells:
             cell_map.setdefault((cell.row_index, cell.col_index), cell)
 
+        # Collect rows that have at least one cell or covered position.
+        occupied_rows: set[int] = set()
+        for cell in table.cells:
+            for r in range(cell.row_index, cell.row_index + max(1, cell.rowspan)):
+                occupied_rows.add(r)
+
         covered: set[tuple[int, int]] = set()
         lines: list[str] = ["<table>", "  <tbody>"]
         for row_index in range(max_row + 1):
+            if row_index not in occupied_rows:
+                continue
             lines.append("    <tr>")
             for col_index in range(max_col + 1):
                 if (row_index, col_index) in covered:

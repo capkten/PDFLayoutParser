@@ -4,8 +4,10 @@ All dataclasses in this module are the foundation for the loader, text_extractor
 layout_mapper, and other downstream modules.
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 
 @dataclass
@@ -100,6 +102,54 @@ class Table:
     rows: int
     cols: int
     cells: List[Cell] = field(default_factory=list)
+    confidence: Optional[float] = None
+    source: Optional[str] = None
+    h_lines: Optional[List[Tuple[float, float, float, float]]] = None
+    v_lines: Optional[List[Tuple[float, float, float, float]]] = None
+
+
+@dataclass
+class TextChar:
+    """A single character with bounding box and confidence."""
+
+    text: str
+    bbox: BBox
+    confidence: Optional[float] = None
+
+
+@dataclass
+class TextBlock:
+    """A text block with character-level coordinates."""
+
+    text: str
+    bbox: BBox
+    chars: List[TextChar] = field(default_factory=list)
+
+
+@dataclass
+class CellStructure:
+    """A table cell with four-corner coordinates and text block."""
+
+    text: str
+    row_index: int
+    col_index: int
+    cell_coord: List[Tuple[float, float]] = field(default_factory=list)
+    bbox: BBox = field(default_factory=lambda: BBox(0, 0, 0, 0))
+    text_block: Optional[TextBlock] = None
+    tl_row: int = -1
+    tl_col: int = -1
+    br_row: int = -1
+    br_col: int = -1
+
+
+@dataclass
+class TableStructure:
+    """A table with structural cell coordinates."""
+
+    bbox: BBox
+    rows: int
+    cols: int
+    cells: List[CellStructure] = field(default_factory=list)
     confidence: Optional[float] = None
     source: Optional[str] = None
 

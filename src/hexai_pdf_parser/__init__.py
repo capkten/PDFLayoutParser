@@ -4,6 +4,7 @@ from hexai_pdf_parser.models import (
     Document, Page, Block, Line, Word, Char,
     Table, Cell, Image, Seal, RenderInfo,
     LayoutElement, BBox, Span,
+    TextChar, TextBlock, CellStructure, TableStructure,
 )
 from hexai_pdf_parser.table_config import TableConfig
 
@@ -13,5 +14,6 @@ __all__ = [
     "Document", "Page", "Block", "Line", "Word", "Char",
     "Table", "Cell", "Image", "Seal", "RenderInfo",
     "LayoutElement", "BBox", "Span",
+    "TextChar", "TextBlock", "CellStructure", "TableStructure",
     "TableConfig",
 ]

@@ -11,7 +11,7 @@ def tmp_dir():
         yield td
 
 
-def make_text_pdf(path: str | Path, text: str = "Hello World") -> None:
+def make_text_pdf(path, text="Hello World"):
     doc = fitz.open()
     page = doc.new_page()
     page.insert_text((72, 72), text)
@@ -19,7 +19,7 @@ def make_text_pdf(path: str | Path, text: str = "Hello World") -> None:
     doc.close()
 
 
-def make_multi_page_pdf(path: str | Path, texts: list[str]) -> None:
+def make_multi_page_pdf(path, texts):
     doc = fitz.open()
     for text in texts:
         page = doc.new_page()
@@ -28,7 +28,7 @@ def make_multi_page_pdf(path: str | Path, texts: list[str]) -> None:
     doc.close()
 
 
-def make_pdf_with_image(path: str | Path) -> None:
+def make_pdf_with_image(path):
     doc = fitz.open()
     page = doc.new_page()
     # Create a red 10x10 RGB image

@@ -85,9 +85,9 @@ class MLTableDetector:
 
     def __init__(
         self,
-        model_path: str | None = None,
+        model_path = None,
         confidence_threshold: float = 0.25,
-        table_class_ids: set[int] | None = None,
+        table_class_ids = None,
         input_size: int = 640,
         render_dpi: int = 200,
     ):
