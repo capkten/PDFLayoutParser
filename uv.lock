@@ -938,7 +938,7 @@ requires-dist = [
     { name = "numpy", marker = "extra == 'ml'", specifier = ">=1.20.0" },
     { name = "onnxruntime", marker = "extra == 'ml'", specifier = ">=1.8.0" },
     { name = "opencv-python", marker = "extra == 'ml'", specifier = ">=4.2.0" },
-    { name = "pymupdf", specifier = ">=1.21.0" },
+    { name = "pymupdf" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0" },
 ]
 provides-extras = ["ml", "demo", "dev"]

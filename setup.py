@@ -12,7 +12,7 @@ setup(
     author_email="junhong.pan@hexinfo.cn",
     python_requires=">=3.7",
     install_requires=[
-        "PyMuPDF>=1.21.0",
+        "PyMuPDF",
     ],
     extras_require={
         "ml": [
