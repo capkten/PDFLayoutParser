@@ -8,7 +8,7 @@ dynamic = ["version"]
 description = "A Python library for parsing PDF layouts"
 requires-python = ">=3.7"
 dependencies = [
-    "PyMuPDF>=1.21.0",
+    "PyMuPDF",
 ]
 
 [project.optional-dependencies]
