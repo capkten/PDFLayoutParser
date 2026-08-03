@@ -538,9 +538,10 @@ class TableExtractor:
             return False
 
         w, h = rect.width, rect.height
+        line_thickness = max(self.line_tolerance, 3.0)
         return (
-            (h < self.line_tolerance and w >= self.line_tolerance * 2)
-            or (w < self.line_tolerance and h >= self.line_tolerance * 2)
+            (h <= line_thickness and w >= self.line_tolerance * 2)
+            or (w <= line_thickness and h >= self.line_tolerance * 2)
         )
 
     def _is_blackish_fill(self, path: dict) -> bool:
@@ -672,10 +673,12 @@ class TableExtractor:
         for rect, drawing in self._iter_effective_drawing_rects(page):
             w, h = rect.width, rect.height
 
-            if h < self.line_tolerance and w >= self.line_tolerance * 2:
+            # Some PDFs encode a coloured table rule as a filled rectangle
+            # slightly thicker than the geometric line tolerance.
+            if h <= max(self.line_tolerance, 3.0) and w >= self.line_tolerance * 2:
                 y = (rect.y0 + rect.y1) / 2
                 h_lines.append((rect.x0, y, rect.x1, y))
-            elif w < self.line_tolerance and h >= self.line_tolerance * 2:
+            elif w <= max(self.line_tolerance, 3.0) and h >= self.line_tolerance * 2:
                 x = (rect.x0 + rect.x1) / 2
                 v_lines.append((x, rect.y0, x, rect.y1))
             elif w >= self.line_tolerance and h >= self.line_tolerance:
@@ -824,7 +827,11 @@ class TableExtractor:
         if len(h_lines) < 2 or len(v_lines) < 2:
             return []
 
-        tol = self.line_tolerance
+        # Drawing coordinates on the same border can differ slightly after
+        # PDF decoding, but a larger tolerance can falsely join neighboring
+        # panels whose borders have a real narrow gap.  Keep connectivity
+        # stricter than cell-edge matching for that distinction.
+        tol = min(self.line_tolerance, 0.75)
         h_to_v: dict[int, set[int]] = defaultdict(set)
         v_to_h: dict[int, set[int]] = defaultdict(set)
 
@@ -888,6 +895,51 @@ class TableExtractor:
             return []
 
         components = self._find_line_components(h_lines, v_lines)
+
+        # A long outer border can bridge several independent line grids.  This
+        # is common in reports that place a note box beside a table and a
+        # second table immediately below it: the shared top border makes the
+        # connectivity graph look like one component even though the grids
+        # have different x/y coverage.  Split only when removing a
+        # substantially longer horizontal line produces multiple valid line
+        # components, then retain that border on every child it bounds.
+        split_components = []
+        for h_group, v_group in components:
+            lengths = [line[2] - line[0] for line in h_group]
+            shortest_length = min(lengths)
+            candidates = sorted(
+                h_group,
+                key=lambda line: line[2] - line[0],
+                reverse=True,
+            )
+            did_split = False
+            for bridge in candidates:
+                bridge_length = bridge[2] - bridge[0]
+                if bridge_length < max(shortest_length * 1.8, 120.0):
+                    break
+
+                remaining_h = [line for line in h_group if line is not bridge]
+                children = self._find_line_components(remaining_h, v_group)
+                if len(children) < 2:
+                    continue
+
+                for child_h, child_v in children:
+                    # The removed border is part of this child when it spans
+                    # a child vertical line whose y-range reaches the border.
+                    if any(
+                        bridge[0] - self.line_tolerance <= vx <= bridge[2] + self.line_tolerance
+                        and vy0 - self.line_tolerance <= bridge[1] <= vy1 + self.line_tolerance
+                        for vx, vy0, _, vy1 in child_v
+                    ):
+                        child_h = list(child_h) + [bridge]
+                    split_components.append((child_h, child_v))
+                did_split = True
+                break
+
+            if not did_split:
+                split_components.append((h_group, v_group))
+
+        components = split_components
 
         regions: List[Tuple[BBox, List[Tuple[float, float, float, float]], List[Tuple[float, float, float, float]]]] = []
         for h_group, v_group in components:
@@ -1134,7 +1186,11 @@ class TableExtractor:
                     if x_gap < 0:
                         x_gap = 0
 
-                    if y_overlap_ratio > 0.5 and x_gap < 20:
+                    # A real gap is evidence of separate neighboring grids;
+                    # only coalesce borders that are effectively touching.
+                    # The previous 20pt threshold joined note panels and
+                    # vertically stacked tables into a single table.
+                    if y_overlap_ratio > 0.5 and x_gap <= min(20.0, self.line_tolerance * 0.5):
                         merged_h.extend(h_j)
                         merged_v.extend(v_j)
                         bbox_i = BBox(
@@ -2424,6 +2480,17 @@ class TableExtractor:
             for region in regions
         )
 
+    def _get_text_alignment_regions(
+        self, page: fitz.Page
+    ) -> Optional[List[BBox]]:
+        """Return optional regions allowed for text-aligned table recovery.
+
+        ``None`` preserves the default full-page behavior.  An empty list
+        disables text-aligned recovery for the page.  Specialized pipelines
+        can override this hook while reusing the table structure algorithms.
+        """
+        return None
+
     def _extract_via_text_alignment(
         self,
         page: fitz.Page,
@@ -2431,6 +2498,10 @@ class TableExtractor:
     ) -> List[Table]:
         """Extract tables from aligned text when drawing lines are absent."""
         self._last_text_alignment_debug = None
+        allowed_regions = self._get_text_alignment_regions(page)
+        if allowed_regions == []:
+            self._last_wireless_recovery = {"regions": [], "disabled": True}
+            return []
         # Run the legacy word-based path first so existing text-alignment
         # layouts keep their established reconstruction and normalization.
         # Native-span recovery remains the fallback for borderless tables that
@@ -2439,6 +2510,7 @@ class TableExtractor:
             wireless = recover_wireless_tables(
                 page,
                 excluded_regions=excluded_regions,
+                allowed_regions=allowed_regions,
             )
         except (AttributeError, TypeError, ValueError):
             # Keep lightweight page doubles and non-native page adapters on
@@ -2450,7 +2522,28 @@ class TableExtractor:
         else:
             wireless_diagnostics = wireless.diagnostics
             wireless_tables = wireless.tables
+
+        # Span filtering happens before recovery.  Keep this bbox-level guard
+        # as a final defense for candidates assembled across an excluded
+        # region boundary.
+        if excluded_regions:
+            wireless_tables = [
+                table
+                for table in wireless_tables
+                if not self._bbox_overlaps_any(
+                    table.bbox,
+                    excluded_regions,
+                    threshold=0.5,
+                )
+            ]
         self._last_wireless_recovery = wireless_diagnostics
+
+        # Specialized extractors can provide trusted regions.  In that mode
+        # keep recovery local to those regions instead of running the
+        # page-wide legacy row detector across neighboring sections.
+        if allowed_regions is not None:
+            return wireless_tables
+
         try:
             words = page.get_text("words")
         except Exception:

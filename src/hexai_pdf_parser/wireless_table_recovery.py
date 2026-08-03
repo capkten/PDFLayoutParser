@@ -91,8 +91,9 @@ def _union(items: Iterable[BBox]) -> BBox:
 def collect_native_spans(
     page: fitz.Page,
     excluded_regions: Sequence[BBox] | None = None,
+    allowed_regions: Sequence[BBox] | None = None,
 ) -> List[NativeSpan]:
-    """Return non-empty raw spans outside trusted table regions."""
+    """Return native spans in allowed regions and outside excluded regions."""
 
     raw = page.get_text("rawdict", flags=fitz.TEXT_PRESERVE_WHITESPACE)
     spans: List[NativeSpan] = []
@@ -120,16 +121,24 @@ def collect_native_spans(
                     )
                 )
                 order += 1
-    if not excluded_regions:
-        return spans
-
     return [
         span
         for span in spans
-        if not any(
-            region.x0 <= (span.bbox.x0 + span.bbox.x1) / 2.0 <= region.x1
-            and region.y0 <= (span.bbox.y0 + span.bbox.y1) / 2.0 <= region.y1
-            for region in excluded_regions
+        if (
+            allowed_regions is None
+            or any(
+                region.x0 <= (span.bbox.x0 + span.bbox.x1) / 2.0 <= region.x1
+                and region.y0 <= (span.bbox.y0 + span.bbox.y1) / 2.0 <= region.y1
+                for region in allowed_regions
+            )
+        )
+        and (
+            not excluded_regions
+            or not any(
+                region.x0 <= (span.bbox.x0 + span.bbox.x1) / 2.0 <= region.x1
+                and region.y0 <= (span.bbox.y0 + span.bbox.y1) / 2.0 <= region.y1
+                for region in excluded_regions
+            )
         )
     ]
 
@@ -623,10 +632,15 @@ def _build_table(
 def recover_wireless_tables(
     page: fitz.Page,
     excluded_regions: Sequence[BBox] | None = None,
+    allowed_regions: Sequence[BBox] | None = None,
 ) -> WirelessRecovery:
     """Recover borderless tables from a native PDF page and retain evidence."""
 
-    spans = collect_native_spans(page, excluded_regions=excluded_regions)
+    spans = collect_native_spans(
+        page,
+        excluded_regions=excluded_regions,
+        allowed_regions=allowed_regions,
+    )
     strips = merge_text_strips(spans)
     visual_rows = merge_wrapped_rows(_row_cluster(strips))
     tables: List[Table] = []
@@ -681,6 +695,7 @@ def recover_wireless_tables(
     diagnostics = {
         "page_index": page.number,
         "excluded_regions": [region.__dict__ for region in (excluded_regions or [])],
+        "allowed_regions": [region.__dict__ for region in (allowed_regions or [])],
         "native_spans": [
             {
                 "order": span.order,

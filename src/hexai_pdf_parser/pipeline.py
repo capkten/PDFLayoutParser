@@ -52,6 +52,8 @@ def _run_page_pipeline(
     debug_pipeline: bool,
     table_config,
     output_dir,
+    table_extractor_cls=TableExtractor,
+    table_extractor_factory=None,
 ):
     """Run all pipeline stages for a single page.
 
@@ -60,7 +62,6 @@ def _run_page_pipeline(
     """
     from hexai_pdf_parser.text_extractor import TextExtractor
     from hexai_pdf_parser.layout_mapper import LayoutMapper
-    from hexai_pdf_parser.table_extractor import TableExtractor
     from hexai_pdf_parser.image_extractor import ImageExtractor
     from hexai_pdf_parser.layout_builder import LayoutBuilder
     from hexai_pdf_parser.render_engine import RenderEngine
@@ -94,13 +95,16 @@ def _run_page_pipeline(
     )
 
     # c. Table extraction
-    table_extractor = TableExtractor(
-        use_ml=use_ml,
-        ml_model_path=ml_model_path,
-        ml_confidence=ml_confidence,
-        table_config=table_config,
-        debug_pipeline=debug_pipeline,
-    )
+    if table_extractor_factory is None:
+        table_extractor = table_extractor_cls(
+            use_ml=use_ml,
+            ml_model_path=ml_model_path,
+            ml_confidence=ml_confidence,
+            table_config=table_config,
+            debug_pipeline=debug_pipeline,
+        )
+    else:
+        table_extractor = table_extractor_factory()
     page.tables = time_stage(
         "table_extract",
         lambda: table_extractor.extract(page_handle),
@@ -244,6 +248,7 @@ def _process_page_process_worker(
     table_config,
     page_size: dict,
     page_rotation: int,
+    table_extractor_cls=TableExtractor,
 ) -> tuple[int, "Page", dict[str, float], float]:
     """Worker function for process-based parallelism.
 
@@ -283,6 +288,7 @@ def _process_page_process_worker(
             debug_pipeline=debug_pipeline,
             table_config=table_config,
             output_dir=output_dir,
+            table_extractor_cls=table_extractor_cls,
         )
     finally:
         pdf_doc.close()
@@ -333,6 +339,20 @@ class Pipeline:
         self._fitz_lock = threading.Lock()
         self._stage_totals: dict[str, float] = {}
         self._page_totals: list[dict[str, float]] = []
+
+    def _get_table_extractor_class(self):
+        """Return the page table extractor class used by this pipeline."""
+        return TableExtractor
+
+    def _create_table_extractor(self):
+        """Create the table extractor used for the current page."""
+        return self._get_table_extractor_class()(
+            use_ml=self.use_ml,
+            ml_model_path=self._ml_model_path,
+            ml_confidence=self._ml_confidence,
+            table_config=self._table_config,
+            debug_pipeline=self.debug_pipeline,
+        )
 
     def _time_stage(self, stage: str, func):
         """Measure and accumulate elapsed time for a callable stage."""
@@ -445,6 +465,7 @@ class Pipeline:
                 debug_pipeline=self.debug_pipeline,
                 table_config=self._table_config,
                 output_dir=self.output_dir,
+                table_extractor_factory=self._create_table_extractor,
             )
 
         for stage, elapsed in stage_totals.items():
@@ -529,6 +550,7 @@ class Pipeline:
                             self._table_config,
                             page.size,
                             page.rotation,
+                            self._get_table_extractor_class(),
                         )
                     )
                 for future in futures:
