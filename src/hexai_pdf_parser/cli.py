@@ -65,6 +65,12 @@ def main() -> int:
         help="Export debug overlays for text-aligned tables",
     )
     parser.add_argument(
+        "--debug-pipeline",
+        action="store_true",
+        default=False,
+        help="Export visual diagnostics for every table-extraction stage",
+    )
+    parser.add_argument(
         "--workers",
         "-w",
         type=int,
@@ -94,6 +100,7 @@ def main() -> int:
         ml_model_path=args.ml_model,
         ml_confidence=args.ml_confidence,
         debug=args.debug,
+        debug_pipeline=args.debug_pipeline,
         table_config=table_config,
         num_workers=args.workers,
         backend=args.backend,

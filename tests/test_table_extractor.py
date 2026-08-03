@@ -54,6 +54,81 @@ def make_synthetic_text_alignment_pdf(
 
 
 class TestTableExtractor:
+    def test_dashed_line_segments_are_extracted_and_merged(self, tmp_dir):
+        pdf_path = Path(tmp_dir) / "dashed_table_lines.pdf"
+        doc = fitz.open()
+        page = doc.new_page(width=320, height=200)
+        for x0, x1 in ((40, 100), (101, 160), (161, 220)):
+            page.draw_line(
+                (x0, 100),
+                (x1, 100),
+                color=(1, 0, 0),
+                width=0.5,
+                dashes="[1.44 .48] 0",
+            )
+        doc.save(str(pdf_path))
+        doc.close()
+
+        doc = fitz.open(str(pdf_path))
+        try:
+            extractor = TableExtractor()
+            h_lines, v_lines = extractor._extract_lines_from_drawings(doc[0])
+            merged = extractor._merge_h_lines(h_lines)
+
+            assert len(h_lines) == 3
+            assert len(merged) == 1
+            assert merged[0][0] == pytest.approx(40.0)
+            assert merged[0][2] == pytest.approx(220.0)
+            assert v_lines == []
+        finally:
+            doc.close()
+
+    def test_vertical_line_fragments_with_small_pdf_gap_are_merged(self):
+        extractor = TableExtractor()
+
+        merged = extractor._merge_v_lines(
+            [
+                (10.0, 100.0, 10.0, 120.0),
+                (10.0, 122.28, 10.0, 150.0),
+            ]
+        )
+
+        assert len(merged) == 1
+        assert merged[0] == pytest.approx((10.0, 100.0, 10.0, 150.0))
+
+    def test_debug_pipeline_captures_drawings_and_line_stage_data(self, tmp_dir):
+        pdf_path = Path(tmp_dir) / "debug_drawing_stages.pdf"
+        doc = fitz.open()
+        page = doc.new_page(width=320, height=240)
+        page.draw_line((40, 40), (280, 40), color=(0, 0, 0), width=1)
+        page.draw_line(
+            (40, 80),
+            (280, 80),
+            color=(0, 0, 0),
+            width=1,
+            dashes="[1.44 .48] 0",
+        )
+        page.draw_line((40, 40), (40, 80), color=(0, 0, 0), width=1)
+        page.draw_line((280, 40), (280, 80), color=(0, 0, 0), width=1)
+        doc.save(str(pdf_path))
+        doc.close()
+
+        doc = fitz.open(str(pdf_path))
+        try:
+            extractor = TableExtractor(debug_pipeline=True)
+            extractor.extract(doc[0])
+            payload = extractor._last_pipeline_debug
+
+            assert payload["drawings"]
+            assert any(item.get("dashes") for item in payload["drawings"])
+            assert "raw_lines" in payload
+            assert "merged_lines" in payload
+            assert "line_regions" in payload
+            assert "line_cells" in payload
+            assert "final_tables" in payload
+        finally:
+            doc.close()
+
     def test_detect_text_regions_maps_detector_rows_back_to_original_rows(self, monkeypatch):
         extractor = TableExtractor()
         rows = [
@@ -150,6 +225,30 @@ class TestTableExtractor:
             assert len(tables) == 1
             assert tables[0].rows == 3
             assert tables[0].cols == 2
+        finally:
+            doc.close()
+
+    def test_text_alignment_ignores_words_inside_wired_table_regions(self, tmp_dir):
+        pdf_path = Path(tmp_dir) / "wired_region_exclusion.pdf"
+        make_synthetic_text_alignment_pdf(
+            pdf_path,
+            [
+                (30.0, [(20.0, "A"), (150.0, "10")]),
+                (48.0, [(20.0, "B"), (150.0, "20")]),
+                (66.0, [(20.0, "C"), (150.0, "30")]),
+            ],
+        )
+
+        doc = fitz.open(str(pdf_path))
+        try:
+            extractor = TableExtractor()
+            page = doc[0]
+
+            assert extractor._extract_via_text_alignment(page)
+            assert extractor._extract_via_text_alignment(
+                page,
+                excluded_regions=[BBox(0.0, 0.0, 320.0, 100.0)],
+            ) == []
         finally:
             doc.close()
 
@@ -251,6 +350,25 @@ class TestTableExtractor:
         result = extractor.extract(SimpleNamespace())
 
         assert result == line_tables
+
+    def test_extract_does_not_call_pymupdf_table_parser(self, tmp_dir):
+        pdf_path = Path(tmp_dir) / "without_pymupdf_tables.pdf"
+        make_pdf_with_table(pdf_path)
+
+        doc = fitz.open(str(pdf_path))
+        try:
+            extractor = TableExtractor()
+
+            def fail_if_called(page):
+                raise AssertionError("PyMuPDF table parsing must not be used")
+
+            extractor._extract_via_pymupdf = fail_if_called
+            tables = extractor.extract(doc[0])
+
+            assert tables
+            assert all(table.source != "PyMuPDF.find_tables" for table in tables)
+        finally:
+            doc.close()
 
     def test_find_table_regions_separates_disconnected_grids(self):
         extractor = TableExtractor()
@@ -575,8 +693,8 @@ class TestTableExtractor:
                 assert table.rows >= 1
                 assert table.cols >= 1
                 assert len(table.cells) >= 1
-                assert table.confidence == 1.0
-                assert table.source == "PyMuPDF.find_tables"
+                assert table.confidence > 0.0
+                assert table.source != "PyMuPDF.find_tables"
         finally:
             doc.close()
 
@@ -1136,7 +1254,7 @@ class TestTableExtractor:
                 confidence=0.85, source="ml_detection",
             )
         ]
-        extractor._extract_via_text_alignment = lambda page: []
+        extractor._extract_via_text_alignment = lambda page, excluded_regions=None: []
 
         result = extractor.extract(SimpleNamespace())
         assert len(result) == 2
@@ -1158,7 +1276,7 @@ class TestTableExtractor:
                 confidence=0.85, source="ml_detection",
             )
         ]
-        extractor._extract_via_text_alignment = lambda page: []
+        extractor._extract_via_text_alignment = lambda page, excluded_regions=None: []
 
         result = extractor.extract(SimpleNamespace())
         assert len(result) == 1
@@ -2074,6 +2192,24 @@ def test_page_046_lower_table_matches_label_structure():
     assert cell_map[(4, 6)].text == "14,558,725,540.92"
 
 
+def test_page_005_year_labels_preserve_rowspan_after_column_merge():
+    pdf_path = Path(r"D:\codes\PDFLayoutParser\个人信用报告(本人版)(1).pdf")
+
+    with fitz.open(str(pdf_path)) as doc:
+        extractor = TableExtractor()
+        tables = extractor.extract(doc[5])
+
+    year_cells = {
+        cell.text: cell
+        for table in tables
+        for cell in table.cells
+        if cell.text in {"2015", "2014"}
+    }
+
+    assert year_cells["2015"].rowspan == 2
+    assert year_cells["2014"].rowspan == 2
+
+
 def test_plain_grid_table_is_not_changed_by_header_normalization(tmp_dir):
     pdf_path = Path(tmp_dir) / "plain_grid.pdf"
     make_pdf_with_table(pdf_path)
@@ -2205,6 +2341,20 @@ def test_text_aligned_page_046_tables_are_reconstructed():
         cell.text == "追溯调整前余额" and cell.row_index == 2 and cell.col_index == 0
         for cell in lower.cells
     )
+
+
+def test_pymupdf_fallback_does_not_mask_text_alignment_tables():
+    pdf_path = Path(r"D:\codes\PDFLayoutParser\152590_20230428_N7ZK_0.pdf")
+
+    with fitz.open(str(pdf_path)) as doc:
+        extractor = TableExtractor()
+        tables = extractor.extract(doc[46])
+
+    text_tables = [t for t in tables if t.source.startswith("text_alignment:")]
+
+    assert len(text_tables) == 2
+    assert any(t.bbox.y0 < 300.0 for t in text_tables)
+    assert any(t.bbox.y0 >= 300.0 for t in text_tables)
 
 
 def test_promote_grouped_financial_header_sets_rowspan_and_colspan():

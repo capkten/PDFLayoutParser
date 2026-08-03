@@ -101,6 +101,13 @@ def test_constructor_from_path(tmp_dir):
     assert parser._document is None
 
 
+def test_constructor_accepts_pipeline_debug_flag(tmp_dir):
+    pdf_path = os.path.join(tmp_dir, "debug-parser.pdf")
+    make_text_pdf(pdf_path, text="Debug")
+    parser = PDFParser(pdf_path, debug_pipeline=True)
+    assert parser._debug_pipeline is True
+
+
 def test_constructor_from_document():
     doc = Document(file_name="test.pdf", page_count=1, pages=[])
     parser = PDFParser(doc)

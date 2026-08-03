@@ -9,6 +9,16 @@ pip install dist/hexai_pdf_parser-0.1.0-py3-none-any.whl
 python -m hexai_pdf_parser.cli input.pdf -o out
 ```
 
+To export per-page visual diagnostics for each table extraction stage:
+
+```bash
+python -m hexai_pdf_parser.cli input.pdf -o out --debug-pipeline
+```
+
+The stage images and JSON snapshots are written below
+`out/debug/pipeline/page-NNN/`: original page, drawing objects, detected
+lines, table regions, cells, text alignment, and final tables.
+
 ## Python API
 
 ```python
