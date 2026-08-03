@@ -15,7 +15,8 @@ def main() -> int:
         description="Parse PDF layouts into structured JSON and Markdown.",
     )
     parser.add_argument(
-        "pdf_path",
+        "--pdf_path",
+        default=r"D:\Code_rep\test\hexai_pdf_parser\data\个人信用报告(本人简版)(1).pdf",
         help="Path to input PDF file",
     )
     parser.add_argument(

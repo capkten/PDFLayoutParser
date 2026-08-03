@@ -1,4 +1,13 @@
-"""Table extractor module.
+"""中文使用说明：PDF 表格提取入口。
+
+用途：提取有线表格，并在文本对齐回退路径中优先调用
+``wireless_table_recovery`` 恢复原生 PDF 无线表格；恢复失败时才继续既有
+对齐逻辑。该文件不负责可视化，且未改动 Pipeline。
+
+调用方式：由现有业务代码创建 ``TableExtractor()`` 后执行 ``extract(fitz_page)``。
+如需彩色区域和二维结构，请运行 ``python -m hexai_pdf_parser.hybrid_table_debug``。
+
+Table extractor module.
 
 Detects tables on a PDF page using a line-projection approach:
 1. Extract thin rectangles from page drawings as lines
@@ -59,6 +68,7 @@ from hexai_pdf_parser.table_template_engine import (
     load_templates,
 )
 from hexai_pdf_parser.table_templates import TEMPLATES_DIR
+from hexai_pdf_parser.wireless_table_recovery import recover_wireless_tables
 
 
 @dataclass
@@ -98,6 +108,7 @@ class TableExtractor:
         self._ml_confidence = ml_confidence
         self._ml_detector = None  # Lazy initialization
         self._last_text_alignment_debug: Optional[dict] = None
+        self._last_wireless_recovery: Optional[dict] = None
         self._table_config = table_config
         self._templates = load_templates(TEMPLATES_DIR)
         self._template_engine = TemplateEngine(self)
@@ -119,6 +130,7 @@ class TableExtractor:
     def extract(self, page: fitz.Page) -> List[Table]:
         """Return a list of :class:`Table` objects detected on *page*."""
         self._last_text_alignment_debug = None
+        self._last_wireless_recovery = None
 
         # Detect language and use appropriate extractor
         from hexai_pdf_parser.language_detector import detect_page_language
@@ -2285,6 +2297,13 @@ class TableExtractor:
     def _extract_via_text_alignment(self, page: fitz.Page) -> List[Table]:
         """Extract tables from aligned text when drawing lines are absent."""
         self._last_text_alignment_debug = None
+        # Prefer the native-span recovery when it has a confident borderless
+        # table.  The legacy word-based path remains the fallback for pages
+        # whose raw output does not contain enough repeated column evidence.
+        wireless = recover_wireless_tables(page)
+        self._last_wireless_recovery = wireless.diagnostics
+        if wireless.tables:
+            return wireless.tables
         try:
             words = page.get_text("words")
         except Exception:
