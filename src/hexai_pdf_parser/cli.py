@@ -15,7 +15,14 @@ def main() -> int:
         description="Parse PDF layouts into structured JSON and Markdown.",
     )
     parser.add_argument(
-        "pdf_path",
+        "pdf_path_arg",
+        nargs="?",
+        help="Path to input PDF file (positional form)",
+    )
+    parser.add_argument(
+        "--pdf_path",
+        dest="pdf_path_option",
+        default=None,
         help="Path to input PDF file",
     )
     parser.add_argument(
@@ -91,8 +98,12 @@ def main() -> int:
     if args.table_config:
         table_config = TableConfig.load(args.table_config)
 
+    pdf_path = args.pdf_path_option or args.pdf_path_arg
+    if not pdf_path:
+        parser.error("a PDF path is required (positional path or --pdf_path)")
+
     pipeline = Pipeline(
-        pdf_path=args.pdf_path,
+        pdf_path=pdf_path,
         output_dir=args.output,
         render_dpi=args.dpi,
         page_indices=args.pages,

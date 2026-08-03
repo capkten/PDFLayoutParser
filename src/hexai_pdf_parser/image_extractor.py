@@ -45,6 +45,14 @@ class ImageExtractor:
 
             for img_index, img in enumerate(image_list):
                 xref = img[0]
+                bbox = None
+                if bbox_by_xref.get(xref):
+                    bbox = bbox_by_xref[xref].pop(0)
+                # A resource without a page placement cannot participate in
+                # reading order and would create LayoutElement(bbox=None).
+                # Keep only images that PyMuPDF can locate on this page.
+                if bbox is None:
+                    continue
                 base_image = doc.extract_image(xref)
                 image_bytes = base_image["image"]
                 ext = base_image["ext"]
@@ -55,10 +63,6 @@ class ImageExtractor:
                 path = os.path.join(self.output_dir, file_name)
                 with open(path, "wb") as f:
                     f.write(image_bytes)
-
-                bbox = None
-                if bbox_by_xref.get(xref):
-                    bbox = bbox_by_xref[xref].pop(0)
 
                 images.append(
                     Image(

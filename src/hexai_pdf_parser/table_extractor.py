@@ -1,4 +1,13 @@
-"""Table extractor module.
+"""中文使用说明：PDF 表格提取入口。
+
+用途：提取有线表格，并在文本对齐回退路径中优先调用
+``wireless_table_recovery`` 恢复原生 PDF 无线表格；恢复失败时才继续既有
+对齐逻辑。该文件不负责可视化，且未改动 Pipeline。
+
+调用方式：由现有业务代码创建 ``TableExtractor()`` 后执行 ``extract(fitz_page)``。
+如需彩色区域和二维结构，请运行 ``python -m hexai_pdf_parser.hybrid_table_debug``。
+
+Table extractor module.
 
 Detects tables on a PDF page using a line-projection approach:
 1. Extract thin rectangles from page drawings as lines
@@ -60,6 +69,7 @@ from hexai_pdf_parser.table_template_engine import (
     load_templates,
 )
 from hexai_pdf_parser.table_templates import TEMPLATES_DIR
+from hexai_pdf_parser.wireless_table_recovery import recover_wireless_tables
 
 
 @dataclass
@@ -102,6 +112,7 @@ class TableExtractor:
         self._last_text_alignment_debug: Optional[dict] = None
         self.debug_pipeline = debug_pipeline
         self._last_pipeline_debug: Optional[dict] = None
+        self._last_wireless_recovery: Optional[dict] = None
         self._table_config = table_config
         self._templates = load_templates(TEMPLATES_DIR)
         self._template_engine = TemplateEngine(self)
@@ -134,6 +145,7 @@ class TableExtractor:
             "text_alignment": None,
             "final_tables": [],
         } if self.debug_pipeline else None
+        self._last_wireless_recovery = None
 
         # Detect language and use appropriate extractor
         from hexai_pdf_parser.language_detector import detect_page_language
@@ -2419,6 +2431,26 @@ class TableExtractor:
     ) -> List[Table]:
         """Extract tables from aligned text when drawing lines are absent."""
         self._last_text_alignment_debug = None
+        # Run the legacy word-based path first so existing text-alignment
+        # layouts keep their established reconstruction and normalization.
+        # Native-span recovery remains the fallback for borderless tables that
+        # the legacy path cannot identify.
+        try:
+            wireless = recover_wireless_tables(
+                page,
+                excluded_regions=excluded_regions,
+            )
+        except (AttributeError, TypeError, ValueError):
+            # Keep lightweight page doubles and non-native page adapters on
+            # the established word-based path.
+            wireless = None
+        if wireless is None:
+            wireless_diagnostics = {"regions": []}
+            wireless_tables = []
+        else:
+            wireless_diagnostics = wireless.diagnostics
+            wireless_tables = wireless.tables
+        self._last_wireless_recovery = wireless_diagnostics
         try:
             words = page.get_text("words")
         except Exception:
@@ -2434,13 +2466,13 @@ class TableExtractor:
 
         rows = self._collect_text_rows(words)
         if not rows:
-            return []
+            return wireless_tables
 
         rows = self._merge_continuation_rows(rows)
 
         candidate_regions = self._detect_text_regions(rows, page)
         if not candidate_regions:
-            return []
+            return wireless_tables
 
         # Identify spans rejected by _detect_text_regions so we can attempt
         # to merge them as headers with the next candidate region.
@@ -2671,7 +2703,18 @@ class TableExtractor:
                 "regions": debug_regions,
             }
 
-        return tables
+        wireless_confidence = max(
+            (region.get("confidence", 0.0) for region in wireless_diagnostics.get("regions", [])),
+            default=0.0,
+        )
+        same_shape = len(wireless_tables) == len(tables) and all(
+            wireless_table.rows == legacy_table.rows
+            and wireless_table.cols == legacy_table.cols
+            for wireless_table, legacy_table in zip(wireless_tables, tables)
+        )
+        if wireless_tables and wireless_confidence >= 0.9 and same_shape:
+            return wireless_tables
+        return tables or wireless_tables
 
     def _build_special_template_table(
         self, page: fitz.Page, region_rows: List[dict]
