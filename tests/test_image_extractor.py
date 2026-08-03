@@ -32,6 +32,7 @@ class TestImageExtractor:
                     get_images=lambda full=True: [
                         (101, 0, 10, 10, 8, "ICCBased", "", "fzImg0", "", 0),
                         (202, 0, 10, 10, 8, "ICCBased", "", "fzImg1", "", 0),
+                        (303, 0, 10, 10, 8, "ICCBased", "", "unplaced", "", 0),
                     ],
                     get_image_info=lambda xrefs=True: [
                         {"xref": 202, "bbox": (200.0, 200.0, 260.0, 260.0)},

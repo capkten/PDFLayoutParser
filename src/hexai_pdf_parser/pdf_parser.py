@@ -35,6 +35,7 @@ class PDFParser:
         ml_confidence: float = 0.25,
         num_workers: Optional[int] = None,
         backend: str = "thread",
+        debug_pipeline: bool = False,
     ) -> None:
         if isinstance(source, Document):
             self._pdf_path = None
@@ -50,6 +51,7 @@ class PDFParser:
         self._ml_confidence = ml_confidence
         self._num_workers = num_workers
         self._backend = backend
+        self._debug_pipeline = debug_pipeline
 
     def __enter__(self) -> PDFParser:
         return self
@@ -118,6 +120,7 @@ class PDFParser:
                 ml_confidence=self._ml_confidence,
                 num_workers=self._num_workers,
                 backend=self._backend,
+                debug_pipeline=self._debug_pipeline,
             )
             self._document = pipeline.run()
             return self._document

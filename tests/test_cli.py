@@ -63,3 +63,29 @@ def test_cli_with_table_config(tmp_dir):
 
     assert result.returncode == 0
     assert os.path.exists(os.path.join(tmp_dir, "output.json"))
+
+
+def test_cli_debug_pipeline_writes_stage_visualizations(tmp_dir):
+    pdf_path = os.path.join(tmp_dir, "cli_debug.pdf")
+    make_text_pdf(pdf_path, text="Debug Test")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "hexai_pdf_parser.cli",
+            pdf_path,
+            "--output",
+            tmp_dir,
+            "--debug-pipeline",
+            "--backend",
+            "sequential",
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0
+    assert os.path.exists(
+        os.path.join(tmp_dir, "debug", "pipeline", "page-000", "debug.json")
+    )

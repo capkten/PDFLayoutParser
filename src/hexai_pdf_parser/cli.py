@@ -15,7 +15,14 @@ def main() -> int:
         description="Parse PDF layouts into structured JSON and Markdown.",
     )
     parser.add_argument(
-        "pdf_path",
+        "pdf_path_arg",
+        nargs="?",
+        help="Path to input PDF file (positional form)",
+    )
+    parser.add_argument(
+        "--pdf_path",
+        dest="pdf_path_option",
+        default=None,
         help="Path to input PDF file",
     )
     parser.add_argument(
@@ -65,6 +72,12 @@ def main() -> int:
         help="Export debug overlays for text-aligned tables",
     )
     parser.add_argument(
+        "--debug-pipeline",
+        action="store_true",
+        default=False,
+        help="Export visual diagnostics for every table-extraction stage",
+    )
+    parser.add_argument(
         "--workers",
         "-w",
         type=int,
@@ -85,8 +98,12 @@ def main() -> int:
     if args.table_config:
         table_config = TableConfig.load(args.table_config)
 
+    pdf_path = args.pdf_path_option or args.pdf_path_arg
+    if not pdf_path:
+        parser.error("a PDF path is required (positional path or --pdf_path)")
+
     pipeline = Pipeline(
-        pdf_path=args.pdf_path,
+        pdf_path=pdf_path,
         output_dir=args.output,
         render_dpi=args.dpi,
         page_indices=args.pages,
@@ -94,6 +111,7 @@ def main() -> int:
         ml_model_path=args.ml_model,
         ml_confidence=args.ml_confidence,
         debug=args.debug,
+        debug_pipeline=args.debug_pipeline,
         table_config=table_config,
         num_workers=args.workers,
         backend=args.backend,

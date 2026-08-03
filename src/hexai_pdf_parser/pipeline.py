@@ -49,8 +49,11 @@ def _run_page_pipeline(
     ml_model_path,
     ml_confidence: float,
     debug: bool,
+    debug_pipeline: bool,
     table_config,
     output_dir,
+    table_extractor_cls=TableExtractor,
+    table_extractor_factory=None,
 ):
     """Run all pipeline stages for a single page.
 
@@ -59,7 +62,6 @@ def _run_page_pipeline(
     """
     from hexai_pdf_parser.text_extractor import TextExtractor
     from hexai_pdf_parser.layout_mapper import LayoutMapper
-    from hexai_pdf_parser.table_extractor import TableExtractor
     from hexai_pdf_parser.image_extractor import ImageExtractor
     from hexai_pdf_parser.layout_builder import LayoutBuilder
     from hexai_pdf_parser.render_engine import RenderEngine
@@ -67,6 +69,7 @@ def _run_page_pipeline(
     from hexai_pdf_parser.markdown_writer import MarkdownWriter
     from hexai_pdf_parser.models import BBox, LayoutElement, Seal
     from hexai_pdf_parser.text_alignment_debug import render_text_alignment_debug_page
+    from hexai_pdf_parser.pipeline_debug import render_pipeline_debug_page
 
     stage_totals: dict[str, float] = {}
 
@@ -92,12 +95,16 @@ def _run_page_pipeline(
     )
 
     # c. Table extraction
-    table_extractor = TableExtractor(
-        use_ml=use_ml,
-        ml_model_path=ml_model_path,
-        ml_confidence=ml_confidence,
-        table_config=table_config,
-    )
+    if table_extractor_factory is None:
+        table_extractor = table_extractor_cls(
+            use_ml=use_ml,
+            ml_model_path=ml_model_path,
+            ml_confidence=ml_confidence,
+            table_config=table_config,
+            debug_pipeline=debug_pipeline,
+        )
+    else:
+        table_extractor = table_extractor_factory()
     page.tables = time_stage(
         "table_extract",
         lambda: table_extractor.extract(page_handle),
@@ -119,6 +126,26 @@ def _run_page_pipeline(
                     page=page_handle,
                     debug_payload=debug_payload,
                     output_path=debug_path,
+                    dpi=render_dpi,
+                ),
+            )
+
+    if debug_pipeline and output_dir is not None:
+        pipeline_debug_dir = os.path.join(
+            output_dir,
+            "debug",
+            "pipeline",
+            f"page-{page.index:03d}",
+        )
+        debug_payload = table_extractor._last_pipeline_debug
+        if debug_payload is not None:
+            time_stage(
+                "write_pipeline_debug",
+                lambda: render_pipeline_debug_page(
+                    pdf_path=pdf_path,
+                    page_index=page.index,
+                    output_dir=pipeline_debug_dir,
+                    debug_payload=debug_payload,
                     dpi=render_dpi,
                 ),
             )
@@ -217,9 +244,11 @@ def _process_page_process_worker(
     ml_model_path,
     ml_confidence: float,
     debug: bool,
+    debug_pipeline: bool,
     table_config,
     page_size: dict,
     page_rotation: int,
+    table_extractor_cls=TableExtractor,
 ) -> tuple[int, "Page", dict[str, float], float]:
     """Worker function for process-based parallelism.
 
@@ -256,8 +285,10 @@ def _process_page_process_worker(
             ml_model_path=ml_model_path,
             ml_confidence=ml_confidence,
             debug=debug,
+            debug_pipeline=debug_pipeline,
             table_config=table_config,
             output_dir=output_dir,
+            table_extractor_cls=table_extractor_cls,
         )
     finally:
         pdf_doc.close()
@@ -286,6 +317,7 @@ class Pipeline:
         ml_model_path: Optional[str] = None,
         ml_confidence: float = 0.25,
         debug: bool = False,
+        debug_pipeline: bool = False,
         table_config: Optional[TableConfig] = None,
         num_workers: Optional[int] = None,
         backend: str = "thread",
@@ -299,6 +331,7 @@ class Pipeline:
         self._ml_model_path = ml_model_path
         self._ml_confidence = ml_confidence
         self.debug = debug
+        self.debug_pipeline = debug_pipeline
         self._table_config = table_config
         self.num_workers = num_workers
         self.backend = backend
@@ -306,6 +339,20 @@ class Pipeline:
         self._fitz_lock = threading.Lock()
         self._stage_totals: dict[str, float] = {}
         self._page_totals: list[dict[str, float]] = []
+
+    def _get_table_extractor_class(self):
+        """Return the page table extractor class used by this pipeline."""
+        return TableExtractor
+
+    def _create_table_extractor(self):
+        """Create the table extractor used for the current page."""
+        return self._get_table_extractor_class()(
+            use_ml=self.use_ml,
+            ml_model_path=self._ml_model_path,
+            ml_confidence=self._ml_confidence,
+            table_config=self._table_config,
+            debug_pipeline=self.debug_pipeline,
+        )
 
     def _time_stage(self, stage: str, func):
         """Measure and accumulate elapsed time for a callable stage."""
@@ -415,8 +462,10 @@ class Pipeline:
                 ml_model_path=self._ml_model_path,
                 ml_confidence=self._ml_confidence,
                 debug=self.debug,
+                debug_pipeline=self.debug_pipeline,
                 table_config=self._table_config,
                 output_dir=self.output_dir,
+                table_extractor_factory=self._create_table_extractor,
             )
 
         for stage, elapsed in stage_totals.items():
@@ -497,9 +546,11 @@ class Pipeline:
                             self._ml_model_path,
                             self._ml_confidence,
                             self.debug,
+                            self.debug_pipeline,
                             self._table_config,
                             page.size,
                             page.rotation,
+                            self._get_table_extractor_class(),
                         )
                     )
                 for future in futures:

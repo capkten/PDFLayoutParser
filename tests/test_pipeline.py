@@ -140,7 +140,7 @@ def test_pipeline_with_debug_writes_text_alignment_debug_image(tmp_dir):
     assert image_path.stat().st_size > 0
 
 
-def test_pipeline_with_debug_skips_pages_without_text_alignment_tables(tmp_dir):
+def test_pipeline_with_debug_skips_text_alignment_when_lines_are_detected(tmp_dir):
     pdf_path = Path(tmp_dir) / "line_table.pdf"
     output_dir = Path(tmp_dir) / "out"
     make_pdf_with_table(pdf_path)

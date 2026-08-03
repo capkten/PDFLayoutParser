@@ -1,4 +1,13 @@
-"""Table extractor module.
+"""中文使用说明：PDF 表格提取入口。
+
+用途：提取有线表格，并在文本对齐回退路径中优先调用
+``wireless_table_recovery`` 恢复原生 PDF 无线表格；恢复失败时才继续既有
+对齐逻辑。该文件不负责可视化，且未改动 Pipeline。
+
+调用方式：由现有业务代码创建 ``TableExtractor()`` 后执行 ``extract(fitz_page)``。
+如需彩色区域和二维结构，请运行 ``python -m hexai_pdf_parser.hybrid_table_debug``。
+
+Table extractor module.
 
 Detects tables on a PDF page using a line-projection approach:
 1. Extract thin rectangles from page drawings as lines
@@ -26,6 +35,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 import fitz
+import copy
 
 from hexai_pdf_parser.models import BBox, Cell, CellStructure, Table, TableStructure, TextBlock
 
@@ -59,6 +69,7 @@ from hexai_pdf_parser.table_template_engine import (
     load_templates,
 )
 from hexai_pdf_parser.table_templates import TEMPLATES_DIR
+from hexai_pdf_parser.wireless_table_recovery import recover_wireless_tables
 
 
 @dataclass
@@ -87,6 +98,7 @@ class TableExtractor:
         ml_model_path: Optional[str] = None,
         ml_confidence: float = 0.25,
         table_config: Optional[TableConfig] = None,
+        debug_pipeline: bool = False,
         ):
         self.line_tolerance = line_tolerance
         self.merge_group_tol = merge_group_tol
@@ -98,6 +110,9 @@ class TableExtractor:
         self._ml_confidence = ml_confidence
         self._ml_detector = None  # Lazy initialization
         self._last_text_alignment_debug: Optional[dict] = None
+        self.debug_pipeline = debug_pipeline
+        self._last_pipeline_debug: Optional[dict] = None
+        self._last_wireless_recovery: Optional[dict] = None
         self._table_config = table_config
         self._templates = load_templates(TEMPLATES_DIR)
         self._template_engine = TemplateEngine(self)
@@ -119,6 +134,18 @@ class TableExtractor:
     def extract(self, page: fitz.Page) -> List[Table]:
         """Return a list of :class:`Table` objects detected on *page*."""
         self._last_text_alignment_debug = None
+        self._last_pipeline_debug = {
+            "page_index": page.number,
+            "page_rect": self._rect_to_dict(page.rect),
+            "drawings": self._capture_drawings(page) if self.debug_pipeline else [],
+            "raw_lines": {"horizontal": [], "vertical": []},
+            "merged_lines": {"horizontal": [], "vertical": []},
+            "line_regions": [],
+            "line_cells": [],
+            "text_alignment": None,
+            "final_tables": [],
+        } if self.debug_pipeline else None
+        self._last_wireless_recovery = None
 
         # Detect language and use appropriate extractor
         from hexai_pdf_parser.language_detector import detect_page_language
@@ -131,15 +158,6 @@ class TableExtractor:
 
         tables = self._extract_via_lines(page)
 
-        # Fallback to PyMuPDF if no tables or if line_projection produced
-        # overly fragmented / wide tables (merged-cell layouts).
-        if not tables:
-            tables = self._extract_via_pymupdf(page)
-        elif self._should_fallback(tables):
-            fallback_tables = self._extract_via_pymupdf(page)
-            if fallback_tables:
-                tables = fallback_tables
-
         # ML-based table region detection (supplemental).
         if self.use_ml:
             ml_tables = self._extract_via_ml(page)
@@ -150,7 +168,15 @@ class TableExtractor:
                         tables.append(mt)
 
         # Supplement with text-aligned tables (text-only tables without drawn lines).
-        text_tables = self._extract_via_text_alignment(page)
+        wired_regions = [
+            table.bbox
+            for table in tables
+            if table.source == "line_projection"
+        ]
+        text_tables = self._extract_via_text_alignment(
+            page,
+            excluded_regions=wired_regions,
+        )
         if text_tables:
             existing_bboxes = [t.bbox for t in tables]
             for tt in text_tables:
@@ -176,7 +202,83 @@ class TableExtractor:
         tables = [normalize_table_headers(t, page) for t in tables]
         tables = [normalize_complex_financial_header(t, page) for t in tables]
 
+        if self.debug_pipeline:
+            self._last_pipeline_debug["text_alignment"] = copy.deepcopy(
+                self._last_text_alignment_debug
+            )
+            self._last_pipeline_debug["final_tables"] = [
+                self._table_to_dict(table) for table in tables
+            ]
+
         return tables
+
+    @staticmethod
+    def _rect_to_dict(rect: fitz.Rect) -> dict:
+        return {
+            "x0": float(rect.x0),
+            "y0": float(rect.y0),
+            "x1": float(rect.x1),
+            "y1": float(rect.y1),
+        }
+
+    @classmethod
+    def _capture_drawings(cls, page: fitz.Page) -> list[dict]:
+        drawings = []
+        for drawing in page.get_drawings():
+            items = []
+            for item in drawing.get("items", []):
+                if item[0] == "l":
+                    items.append(
+                        {
+                            "type": "line",
+                            "p1": {"x": float(item[1].x), "y": float(item[1].y)},
+                            "p2": {"x": float(item[2].x), "y": float(item[2].y)},
+                        }
+                    )
+                elif item[0] == "re":
+                    items.append({"type": "rect", "bbox": cls._rect_to_dict(item[1])})
+            drawings.append(
+                {
+                    "type": drawing.get("type"),
+                    "color": drawing.get("color"),
+                    "fill": drawing.get("fill"),
+                    "width": drawing.get("width"),
+                    "dashes": drawing.get("dashes"),
+                    "items": items,
+                }
+            )
+        return drawings
+
+    @staticmethod
+    def _line_to_list(line) -> list[float]:
+        return [float(value) for value in line]
+
+    @classmethod
+    def _table_to_dict(cls, table: Table) -> dict:
+        return {
+            "bbox": cls._rect_to_dict(
+                fitz.Rect(table.bbox.x0, table.bbox.y0, table.bbox.x1, table.bbox.y1)
+            ),
+            "rows": table.rows,
+            "cols": table.cols,
+            "source": table.source,
+            "cells": [
+                {
+                    "text": cell.text,
+                    "row_index": cell.row_index,
+                    "col_index": cell.col_index,
+                    "rowspan": cell.rowspan,
+                    "colspan": cell.colspan,
+                    "bbox": {
+                        "x0": float(cell.bbox.x0),
+                        "y0": float(cell.bbox.y0),
+                        "x1": float(cell.bbox.x1),
+                        "y1": float(cell.bbox.y1),
+                    },
+                }
+                for cell in table.cells
+            ],
+        }
 
     def extract_table_structure(self, page: fitz.Page) -> List[TableStructure]:
         """Return tables with cell coordinates and character-level text.
@@ -436,9 +538,10 @@ class TableExtractor:
             return False
 
         w, h = rect.width, rect.height
+        line_thickness = max(self.line_tolerance, 3.0)
         return (
-            (h < self.line_tolerance and w >= self.line_tolerance * 2)
-            or (w < self.line_tolerance and h >= self.line_tolerance * 2)
+            (h <= line_thickness and w >= self.line_tolerance * 2)
+            or (w <= line_thickness and h >= self.line_tolerance * 2)
         )
 
     def _is_blackish_fill(self, path: dict) -> bool:
@@ -554,12 +657,14 @@ class TableExtractor:
     def _extract_lines_from_drawings(
         self, page: fitz.Page
     ) -> Tuple[List[Tuple], List[Tuple]]:
-        """Extract visible rectangles as candidate table lines.
+        """Extract visible drawing paths as candidate table lines.
 
         Line-like rectangles (thin borders) are accepted regardless of fill
         colour.  Normal rectangles are only decomposed into edge lines when
         their fill is black/near-black; gray cell-background rectangles are
-        skipped so they do not create spurious inner borders.
+        skipped so they do not create spurious inner borders.  Horizontal and
+        vertical line paths are also accepted, including dashed paths.  Their
+        segments are merged later with the same logic as ordinary table lines.
         """
         h_lines = []
         v_lines = []
@@ -568,10 +673,12 @@ class TableExtractor:
         for rect, drawing in self._iter_effective_drawing_rects(page):
             w, h = rect.width, rect.height
 
-            if h < self.line_tolerance and w >= self.line_tolerance * 2:
+            # Some PDFs encode a coloured table rule as a filled rectangle
+            # slightly thicker than the geometric line tolerance.
+            if h <= max(self.line_tolerance, 3.0) and w >= self.line_tolerance * 2:
                 y = (rect.y0 + rect.y1) / 2
                 h_lines.append((rect.x0, y, rect.x1, y))
-            elif w < self.line_tolerance and h >= self.line_tolerance * 2:
+            elif w <= max(self.line_tolerance, 3.0) and h >= self.line_tolerance * 2:
                 x = (rect.x0 + rect.x1) / 2
                 v_lines.append((x, rect.y0, x, rect.y1))
             elif w >= self.line_tolerance and h >= self.line_tolerance:
@@ -584,6 +691,32 @@ class TableExtractor:
                     h_lines.append((rect.x0, rect.y1, rect.x1, rect.y1))
                     v_lines.append((rect.x0, rect.y0, rect.x0, rect.y1))
                     v_lines.append((rect.x1, rect.y0, rect.x1, rect.y1))
+
+        try:
+            drawings = page.get_drawings()
+        except Exception:
+            drawings = []
+
+        for drawing in drawings:
+            if not self._has_visible_stroke(drawing):
+                continue
+
+            for item in drawing.get("items", []):
+                if item[0] != "l":
+                    continue
+
+                p1, p2 = item[1], item[2]
+                x0, x1 = sorted((float(p1.x), float(p2.x)))
+                y0, y1 = sorted((float(p1.y), float(p2.y)))
+                dx = abs(float(p2.x) - float(p1.x))
+                dy = abs(float(p2.y) - float(p1.y))
+
+                if dy <= self.line_tolerance and dx >= self.line_tolerance * 2:
+                    y = (float(p1.y) + float(p2.y)) / 2.0
+                    h_lines.append((x0, y, x1, y))
+                elif dx <= self.line_tolerance and dy >= self.line_tolerance * 2:
+                    x = (float(p1.x) + float(p2.x)) / 2.0
+                    v_lines.append((x, y0, x, y1))
 
         return h_lines, v_lines
 
@@ -607,6 +740,7 @@ class TableExtractor:
         merged = []
         group = [sorted_lines[0]]
         group_y = sorted_lines[0][1]
+        line_gap_tolerance = max(self.line_tolerance, 2.5)
 
         def _flush_group():
             if not group:
@@ -616,7 +750,7 @@ class TableExtractor:
             segs = sorted(group, key=lambda s: s[0])
             cur_x0, cur_x1 = segs[0][0], segs[0][2]
             for x0, _, x1, _ in segs[1:]:
-                if x0 <= cur_x1 + self.line_tolerance:
+                if x0 <= cur_x1 + line_gap_tolerance:
                     cur_x1 = max(cur_x1, x1)
                 else:
                     merged.append((cur_x0, avg_y, cur_x1, avg_y))
@@ -651,6 +785,7 @@ class TableExtractor:
         merged = []
         group = [sorted_lines[0]]
         group_x = sorted_lines[0][0]
+        line_gap_tolerance = max(self.line_tolerance, 2.5)
 
         def _flush_group():
             if not group:
@@ -660,7 +795,7 @@ class TableExtractor:
             segs = sorted(group, key=lambda s: s[1])
             cur_y0, cur_y1 = segs[0][1], segs[0][3]
             for _, y0, _, y1 in segs[1:]:
-                if y0 <= cur_y1 + self.line_tolerance:
+                if y0 <= cur_y1 + line_gap_tolerance:
                     cur_y1 = max(cur_y1, y1)
                 else:
                     merged.append((avg_x, cur_y0, avg_x, cur_y1))
@@ -692,7 +827,11 @@ class TableExtractor:
         if len(h_lines) < 2 or len(v_lines) < 2:
             return []
 
-        tol = self.line_tolerance
+        # Drawing coordinates on the same border can differ slightly after
+        # PDF decoding, but a larger tolerance can falsely join neighboring
+        # panels whose borders have a real narrow gap.  Keep connectivity
+        # stricter than cell-edge matching for that distinction.
+        tol = min(self.line_tolerance, 0.75)
         h_to_v: dict[int, set[int]] = defaultdict(set)
         v_to_h: dict[int, set[int]] = defaultdict(set)
 
@@ -756,6 +895,51 @@ class TableExtractor:
             return []
 
         components = self._find_line_components(h_lines, v_lines)
+
+        # A long outer border can bridge several independent line grids.  This
+        # is common in reports that place a note box beside a table and a
+        # second table immediately below it: the shared top border makes the
+        # connectivity graph look like one component even though the grids
+        # have different x/y coverage.  Split only when removing a
+        # substantially longer horizontal line produces multiple valid line
+        # components, then retain that border on every child it bounds.
+        split_components = []
+        for h_group, v_group in components:
+            lengths = [line[2] - line[0] for line in h_group]
+            shortest_length = min(lengths)
+            candidates = sorted(
+                h_group,
+                key=lambda line: line[2] - line[0],
+                reverse=True,
+            )
+            did_split = False
+            for bridge in candidates:
+                bridge_length = bridge[2] - bridge[0]
+                if bridge_length < max(shortest_length * 1.8, 120.0):
+                    break
+
+                remaining_h = [line for line in h_group if line is not bridge]
+                children = self._find_line_components(remaining_h, v_group)
+                if len(children) < 2:
+                    continue
+
+                for child_h, child_v in children:
+                    # The removed border is part of this child when it spans
+                    # a child vertical line whose y-range reaches the border.
+                    if any(
+                        bridge[0] - self.line_tolerance <= vx <= bridge[2] + self.line_tolerance
+                        and vy0 - self.line_tolerance <= bridge[1] <= vy1 + self.line_tolerance
+                        for vx, vy0, _, vy1 in child_v
+                    ):
+                        child_h = list(child_h) + [bridge]
+                    split_components.append((child_h, child_v))
+                did_split = True
+                break
+
+            if not did_split:
+                split_components.append((h_group, v_group))
+
+        components = split_components
 
         regions: List[Tuple[BBox, List[Tuple[float, float, float, float]], List[Tuple[float, float, float, float]]]] = []
         for h_group, v_group in components:
@@ -1002,7 +1186,11 @@ class TableExtractor:
                     if x_gap < 0:
                         x_gap = 0
 
-                    if y_overlap_ratio > 0.5 and x_gap < 20:
+                    # A real gap is evidence of separate neighboring grids;
+                    # only coalesce borders that are effectively touching.
+                    # The previous 20pt threshold joined note panels and
+                    # vertically stacked tables into a single table.
+                    if y_overlap_ratio > 0.5 and x_gap <= min(20.0, self.line_tolerance * 0.5):
                         merged_h.extend(h_j)
                         merged_v.extend(v_j)
                         bbox_i = BBox(
@@ -2282,23 +2470,102 @@ class TableExtractor:
             return body_rows
         return previous_rows + body_rows
 
-    def _extract_via_text_alignment(self, page: fitz.Page) -> List[Table]:
+    @staticmethod
+    def _word_is_inside_regions(word: tuple, regions: List[BBox]) -> bool:
+        """Return whether a word center is covered by a trusted table region."""
+        cx = (word[0] + word[2]) / 2.0
+        cy = (word[1] + word[3]) / 2.0
+        return any(
+            region.x0 <= cx <= region.x1 and region.y0 <= cy <= region.y1
+            for region in regions
+        )
+
+    def _get_text_alignment_regions(
+        self, page: fitz.Page
+    ) -> Optional[List[BBox]]:
+        """Return optional regions allowed for text-aligned table recovery.
+
+        ``None`` preserves the default full-page behavior.  An empty list
+        disables text-aligned recovery for the page.  Specialized pipelines
+        can override this hook while reusing the table structure algorithms.
+        """
+        return None
+
+    def _extract_via_text_alignment(
+        self,
+        page: fitz.Page,
+        excluded_regions: Optional[List[BBox]] = None,
+    ) -> List[Table]:
         """Extract tables from aligned text when drawing lines are absent."""
         self._last_text_alignment_debug = None
+        allowed_regions = self._get_text_alignment_regions(page)
+        if allowed_regions == []:
+            self._last_wireless_recovery = {"regions": [], "disabled": True}
+            return []
+        # Run the legacy word-based path first so existing text-alignment
+        # layouts keep their established reconstruction and normalization.
+        # Native-span recovery remains the fallback for borderless tables that
+        # the legacy path cannot identify.
+        try:
+            wireless = recover_wireless_tables(
+                page,
+                excluded_regions=excluded_regions,
+                allowed_regions=allowed_regions,
+            )
+        except (AttributeError, TypeError, ValueError):
+            # Keep lightweight page doubles and non-native page adapters on
+            # the established word-based path.
+            wireless = None
+        if wireless is None:
+            wireless_diagnostics = {"regions": []}
+            wireless_tables = []
+        else:
+            wireless_diagnostics = wireless.diagnostics
+            wireless_tables = wireless.tables
+
+        # Span filtering happens before recovery.  Keep this bbox-level guard
+        # as a final defense for candidates assembled across an excluded
+        # region boundary.
+        if excluded_regions:
+            wireless_tables = [
+                table
+                for table in wireless_tables
+                if not self._bbox_overlaps_any(
+                    table.bbox,
+                    excluded_regions,
+                    threshold=0.5,
+                )
+            ]
+        self._last_wireless_recovery = wireless_diagnostics
+
+        # Specialized extractors can provide trusted regions.  In that mode
+        # keep recovery local to those regions instead of running the
+        # page-wide legacy row detector across neighboring sections.
+        if allowed_regions is not None:
+            return wireless_tables
+
         try:
             words = page.get_text("words")
         except Exception:
             return []
 
+        excluded_regions = excluded_regions or []
+        if excluded_regions:
+            words = [
+                word
+                for word in words
+                if not self._word_is_inside_regions(word, excluded_regions)
+            ]
+
         rows = self._collect_text_rows(words)
         if not rows:
-            return []
+            return wireless_tables
 
         rows = self._merge_continuation_rows(rows)
 
         candidate_regions = self._detect_text_regions(rows, page)
         if not candidate_regions:
-            return []
+            return wireless_tables
 
         # Identify spans rejected by _detect_text_regions so we can attempt
         # to merge them as headers with the next candidate region.
@@ -2517,10 +2784,30 @@ class TableExtractor:
         if tables and debug_regions:
             self._last_text_alignment_debug = {
                 "page_index": page.number,
+                "excluded_regions": [
+                    {
+                        "x0": region.x0,
+                        "y0": region.y0,
+                        "x1": region.x1,
+                        "y1": region.y1,
+                    }
+                    for region in excluded_regions
+                ],
                 "regions": debug_regions,
             }
 
-        return tables
+        wireless_confidence = max(
+            (region.get("confidence", 0.0) for region in wireless_diagnostics.get("regions", [])),
+            default=0.0,
+        )
+        same_shape = len(wireless_tables) == len(tables) and all(
+            wireless_table.rows == legacy_table.rows
+            and wireless_table.cols == legacy_table.cols
+            for wireless_table, legacy_table in zip(wireless_tables, tables)
+        )
+        if wireless_tables and wireless_confidence >= 0.9 and same_shape:
+            return wireless_tables
+        return tables or wireless_tables
 
     def _build_special_template_table(
         self, page: fitz.Page, region_rows: List[dict]
@@ -3713,6 +4000,10 @@ class TableExtractor:
         for (ri, ci), group in merged.items():
             texts = [c.text.strip() for c in group if c.text.strip()]
             merged_text = " ".join(texts) if texts else ""
+            row_start = min(c.row_index for c in group)
+            row_end = max(
+                c.row_index + max(1, c.rowspan) - 1 for c in group
+            )
             covered_cols: set[int] = set()
             for cell in group:
                 for original_col in range(
@@ -3732,7 +4023,7 @@ class TableExtractor:
             merged_cells.append(
                 Cell(
                     text=merged_text,
-                    row_index=ri,
+                    row_index=row_start,
                     col_index=start_col,
                     bbox=BBox(
                         min(c.bbox.x0 for c in group),
@@ -3740,6 +4031,7 @@ class TableExtractor:
                         max(c.bbox.x1 for c in group),
                         max(c.bbox.y1 for c in group),
                     ),
+                    rowspan=row_end - row_start + 1,
                     colspan=end_col - start_col + 1,
                 )
             )
@@ -3938,16 +4230,40 @@ class TableExtractor:
         """Extract tables using line-projection approach."""
         h_lines, v_lines = self._extract_lines_from_drawings(page)
 
+        if self.debug_pipeline:
+            self._last_pipeline_debug["raw_lines"] = {
+                "horizontal": [self._line_to_list(line) for line in h_lines],
+                "vertical": [self._line_to_list(line) for line in v_lines],
+            }
+
         if len(h_lines) < 2 or len(v_lines) < 2:
             return []
 
         h_lines = self._merge_h_lines(h_lines)
         v_lines = self._merge_v_lines(v_lines)
 
+        if self.debug_pipeline:
+            self._last_pipeline_debug["merged_lines"] = {
+                "horizontal": [self._line_to_list(line) for line in h_lines],
+                "vertical": [self._line_to_list(line) for line in v_lines],
+            }
+
         if len(h_lines) < 2 or len(v_lines) < 2:
             return []
 
         table_regions = self._find_table_regions(h_lines, v_lines)
+
+        if self.debug_pipeline:
+            self._last_pipeline_debug["line_regions"] = [
+                {
+                    "bbox": self._rect_to_dict(
+                        fitz.Rect(bbox.x0, bbox.y0, bbox.x1, bbox.y1)
+                    ),
+                    "horizontal": [self._line_to_list(line) for line in region_h],
+                    "vertical": [self._line_to_list(line) for line in region_v],
+                }
+                for bbox, region_h, region_v in table_regions
+            ]
 
         if not table_regions:
             return []
@@ -3957,6 +4273,34 @@ class TableExtractor:
             cells = self._build_cells_for_region(
                 table_bbox, region_h_lines, region_v_lines
             )
+            if self.debug_pipeline:
+                self._last_pipeline_debug["line_cells"].append(
+                    {
+                        "bbox": self._rect_to_dict(
+                            fitz.Rect(
+                                table_bbox.x0,
+                                table_bbox.y0,
+                                table_bbox.x1,
+                                table_bbox.y1,
+                            )
+                        ),
+                        "cells": [
+                            {
+                                "row_index": cell.row_index,
+                                "col_index": cell.col_index,
+                                "rowspan": cell.rowspan,
+                                "colspan": cell.colspan,
+                                "bbox": {
+                                    "x0": float(cell.bbox.x0),
+                                    "y0": float(cell.bbox.y0),
+                                    "x1": float(cell.bbox.x1),
+                                    "y1": float(cell.bbox.y1),
+                                },
+                            }
+                            for cell in cells
+                        ],
+                    }
+                )
             if not cells:
                 continue
 
