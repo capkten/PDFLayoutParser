@@ -7,6 +7,7 @@ from typing import List, Optional
 import fitz
 
 from hexai_pdf_parser.models import BBox, Document, Table
+from hexai_pdf_parser.markdown_writer import MarkdownWriter
 from hexai_pdf_parser.pipeline import Pipeline
 from hexai_pdf_parser.table_extractor import TableExtractor
 
@@ -102,6 +103,64 @@ def _trim_query_table(table: Table) -> Table:
     return table
 
 
+def _bbox_values(bbox: BBox) -> list[float]:
+    """Convert an internal bbox to the public four-number representation."""
+    return [float(bbox.x0), float(bbox.y0), float(bbox.x1), float(bbox.y1)]
+
+
+def _document_result(document: Document) -> dict:
+    """Return the compact public result for the personal-report API."""
+    writer = MarkdownWriter()
+    pages = []
+    for page in sorted(document.pages, key=lambda item: item.index):
+        blocks = []
+        ordered_elements = sorted(
+            page.layout_elements,
+            key=lambda element: (
+                element.bbox.y0,
+                element.bbox.x0,
+                element.bbox.y1,
+                element.bbox.x1,
+            ),
+        )
+        for element in ordered_elements:
+            if element.type == "text":
+                content = str(element.content or "").strip()
+                if not content:
+                    continue
+            elif element.type == "table":
+                content = "\n".join(writer._render_table(element.content)).strip()
+                if not content:
+                    continue
+            else:
+                continue
+
+            blocks.append(
+                {
+                    "type": element.type,
+                    "content": content,
+                    "bbox": _bbox_values(element.bbox),
+                }
+            )
+
+        pages.append(
+            {
+                "page": page.index + 1,
+                "width": float(page.size["width"]),
+                "height": float(page.size["height"]),
+                "blocks": blocks,
+            }
+        )
+
+    return {
+        "document": {
+            "file_name": document.file_name,
+            "page_count": document.page_count,
+        },
+        "pages": pages,
+    }
+
+
 class PersonalCreditReportTableExtractor(TableExtractor):
     """Table extractor reserved for personal-credit-report region rules."""
 
@@ -137,9 +196,9 @@ def parse_personal_credit_report(
     page_indices: list[int] | None = None,
     debug: bool = False,
     debug_pipeline: bool = False,
-) -> Document:
-    """Parse either supported personal credit report variant."""
-    return PersonalCreditReportPipeline(
+) -> dict:
+    """Parse a personal credit report into the compact public result format."""
+    document = PersonalCreditReportPipeline(
         pdf_path=pdf_path,
         output_dir=output_dir,
         render_dpi=render_dpi,
@@ -147,3 +206,4 @@ def parse_personal_credit_report(
         debug=debug,
         debug_pipeline=debug_pipeline,
     ).run()
+    return _document_result(document)
