@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import re
 from typing import List, Optional
 
 import fitz
 
-from hexai_pdf_parser.models import BBox, Document, Table
+from hexai_pdf_parser.models import BBox, Cell, Document, Table
 from hexai_pdf_parser.markdown_writer import MarkdownWriter
 from hexai_pdf_parser.pipeline import Pipeline
 from hexai_pdf_parser.table_extractor import TableExtractor
@@ -167,8 +168,85 @@ class PersonalCreditReportTableExtractor(TableExtractor):
     def _get_text_alignment_regions(
         self, page: fitz.Page
     ) -> Optional[list[BBox]]:
-        """Limit wireless recovery to the two query-detail regions."""
-        return _query_regions(page)
+        """Recover native-span tables across the complete report page."""
+        return None
+
+    def _use_legacy_text_alignment_fallback(self) -> bool:
+        """Avoid treating numbered explanatory paragraphs as tables."""
+        return False
+
+    @staticmethod
+    def _is_numbered_prose_candidate(table: Table) -> bool:
+        """Reject sparse long numbered paragraphs emitted as two-column tables."""
+        cells = [cell.text.strip() for cell in table.cells if cell.text.strip()]
+        return (
+            table.cols <= 2
+            and sum(len(text) >= 50 for text in cells) >= 2
+            and sum(bool(re.match(r"^\d+[.、]", text)) for text in cells) >= 2
+        )
+
+    @staticmethod
+    def _is_report_metadata_candidate(table: Table) -> bool:
+        """Exclude the report identity block from structured table output."""
+        text = "\n".join(cell.text for cell in table.cells)
+        markers = (
+            "\u62a5\u544a\u7f16\u53f7",
+            "\u62a5\u544a\u65f6\u95f4",
+            "\u8bc1\u4ef6\u53f7\u7801",
+            "\u5176\u4ed6\u8bc1\u4ef6\u4fe1\u606f",
+        )
+        return sum(marker in text for marker in markers) >= 2
+
+    @staticmethod
+    def _split_repeated_record_table(table: Table) -> list[Table]:
+        """Split repeated personal-report records sharing one layout."""
+        record_starts = (
+            "\u5904\u7f5a\u673a\u6784",
+            "\u7acb\u6848\u6cd5\u9662",
+            "\u6267\u884c\u6cd5\u9662",
+        )
+        starts = sorted(
+            {
+                cell.row_index
+                for cell in table.cells
+                if cell.col_index == 0
+                and cell.text.strip().startswith(record_starts)
+            }
+        )
+        if len(starts) < 2:
+            return [table]
+
+        ranges = list(zip([0, *starts[1:]], [*starts[1:], table.rows]))
+        result = []
+        for start, end in ranges:
+            cells = [
+                Cell(
+                    text=cell.text,
+                    row_index=cell.row_index - start,
+                    col_index=cell.col_index,
+                    bbox=cell.bbox,
+                    rowspan=cell.rowspan,
+                    colspan=cell.colspan,
+                )
+                for cell in table.cells
+                if start <= cell.row_index < end
+            ]
+            result.append(
+                Table(
+                    bbox=BBox(
+                        min(cell.bbox.x0 for cell in cells),
+                        min(cell.bbox.y0 for cell in cells),
+                        max(cell.bbox.x1 for cell in cells),
+                        max(cell.bbox.y1 for cell in cells),
+                    ),
+                    rows=end - start,
+                    cols=table.cols,
+                    cells=cells,
+                    confidence=table.confidence,
+                    source=table.source,
+                )
+            )
+        return result
 
     def _extract_via_text_alignment(
         self,
@@ -179,7 +257,17 @@ class PersonalCreditReportTableExtractor(TableExtractor):
             page,
             excluded_regions=excluded_regions,
         )
-        return [_trim_query_table(table) for table in tables]
+        filtered = [
+            _trim_query_table(table)
+            for table in tables
+            if not self._is_numbered_prose_candidate(table)
+            and not self._is_report_metadata_candidate(table)
+        ]
+        return [
+            split
+            for table in filtered
+            for split in self._split_repeated_record_table(table)
+        ]
 
 
 class PersonalCreditReportPipeline(Pipeline):

@@ -183,6 +183,7 @@ class TableExtractor:
                 overlap_idx = self._bbox_overlaps_any_index(tt.bbox, existing_bboxes)
                 if overlap_idx is None:
                     tables.append(tt)
+                    existing_bboxes.append(tt.bbox)
                 else:
                     # Overlaps with an existing table — keep the one with fewer
                     # empty cells (less fragmentation / better structure).
@@ -193,6 +194,7 @@ class TableExtractor:
                     tt_empty = sum(1 for c in tt.cells if not c.text.strip())
                     if tt_empty < existing_empty:
                         tables[overlap_idx] = tt
+                        existing_bboxes[overlap_idx] = tt.bbox
 
         # Apply layout rule system when a config with profiles is provided.
         if self._table_config and self._table_config.profiles:
@@ -2491,6 +2493,10 @@ class TableExtractor:
         """
         return None
 
+    def _use_legacy_text_alignment_fallback(self) -> bool:
+        """Whether to supplement native-span recovery with word alignment."""
+        return True
+
     def _extract_via_text_alignment(
         self,
         page: fitz.Page,
@@ -2541,7 +2547,10 @@ class TableExtractor:
         # Specialized extractors can provide trusted regions.  In that mode
         # keep recovery local to those regions instead of running the
         # page-wide legacy row detector across neighboring sections.
-        if allowed_regions is not None:
+        if (
+            allowed_regions is not None
+            or not self._use_legacy_text_alignment_fallback()
+        ):
             return wireless_tables
 
         try:

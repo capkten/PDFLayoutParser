@@ -11,15 +11,20 @@ from pathlib import Path
 
 import fitz
 
-from hexai_pdf_parser.models import BBox
+from hexai_pdf_parser.models import BBox, Cell, Table
 from hexai_pdf_parser.table_extractor import TableExtractor
 from hexai_pdf_parser.wireless_table_recovery import (
     NativeSpan,
     TextStrip,
     _anchor,
     _build_table,
+    _completion_date_continuations,
+    _drop_orphan_field_before_title,
     _prepend_short_title,
+    _significant_overlap,
     _single_field_record_runs,
+    _table_quality,
+    _two_row_field_runs,
     collect_native_spans,
     export_wireless_debug,
     merge_text_strips,
@@ -55,6 +60,117 @@ def test_merge_text_strips_keeps_columns_separate_but_joins_tight_font_splits():
 
     assert [strip.text for strip in strips] == ["$120", "next"]
     assert [span.order for span in strips[0].spans] == [0, 1]
+
+
+def test_overlap_selection_ignores_adjacent_tables_but_prefers_complete_candidate():
+    partial = Table(
+        BBox(50, 510, 538, 582), 4, 2,
+        [Cell("value", 0, 0, BBox(50, 510, 200, 530))],
+        confidence=0.80,
+    )
+    complete = Table(
+        BBox(42, 461, 542, 646), 11, 2,
+        [Cell("value", 0, 0, BBox(42, 461, 200, 480))] * 19,
+        confidence=0.95,
+    )
+    adjacent = BBox(42, 637, 528, 782)
+
+    assert _significant_overlap(partial.bbox, complete.bbox)
+    assert not _significant_overlap(complete.bbox, adjacent)
+    assert _table_quality(complete) > _table_quality(partial)
+
+
+def test_two_row_field_run_accepts_a_shifting_right_column():
+    rows = [
+        [
+            TextStrip("Authority: A", BBox(60, 40, 180, 50), []),
+            TextStrip("Date: 2023", BBox(420, 40, 520, 50), []),
+        ],
+        [
+            TextStrip("Amount: 500", BBox(60, 60, 150, 70), []),
+            TextStrip("Identifier: C1", BBox(294, 60, 410, 70), []),
+        ],
+    ]
+
+    assert _two_row_field_runs(rows) == [rows]
+
+
+def test_orphan_field_before_new_title_is_removed_and_title_spans_columns():
+    def strip(text, bbox, order):
+        span = NativeSpan(text, bbox, "Helvetica", 10, order)
+        return TextStrip(text, bbox, [span])
+
+    rows = [
+        [strip("Amount: 500", BBox(60, 40, 150, 50), 0)],
+        [strip("New record", BBox(42, 60, 120, 70), 1)],
+        [
+            strip("Court: A", BBox(60, 80, 140, 90), 2),
+            strip("Case: 1", BBox(294, 80, 360, 90), 3),
+        ],
+    ]
+
+    cleaned = _drop_orphan_field_before_title(rows)
+    table, _ = _build_table(cleaned, tracks_override=[60, 294])
+
+    assert [row[0].text for row in cleaned] == ["New record", "Court: A"]
+    assert table is not None
+    title = next(cell for cell in table.cells if cell.row_index == 0)
+    assert (title.col_index, title.colspan) == (0, 2)
+
+
+def test_completion_date_before_a_new_two_column_record_is_removed():
+    def strip(text, bbox, order):
+        span = NativeSpan(text, bbox, "Helvetica", 10, order)
+        return TextStrip(text, bbox, [span])
+
+    rows = [
+        [strip("结案日期：2024 年01 月", BBox(60, 40, 180, 50), 0)],
+        [
+            strip("Court: A", BBox(60, 60, 140, 70), 1),
+            strip("Case: 1", BBox(294, 60, 360, 70), 2),
+        ],
+        [
+            strip("Reason: --", BBox(60, 80, 140, 90), 3),
+            strip("Result: done", BBox(294, 80, 380, 90), 4),
+        ],
+    ]
+
+    assert _drop_orphan_field_before_title(rows) == rows[1:]
+
+
+def test_completion_date_continuation_is_a_separate_one_row_table():
+    def strip(text, bbox, order):
+        span = NativeSpan(text, bbox, "Helvetica", 10, order)
+        return TextStrip(text, bbox, [span])
+
+    rows = [
+        [strip("结案日期：2024 年01 月", BBox(60, 40, 180, 50), 0)],
+        [
+            strip("Court: A", BBox(60, 60, 140, 70), 1),
+            strip("Case: 1", BBox(294, 60, 360, 70), 2),
+        ],
+    ]
+
+    tables = _completion_date_continuations(rows)
+    assert len(tables) == 1
+    assert (tables[0].rows, tables[0].cols) == (1, 2)
+    assert tables[0].cells[0].text.startswith("结案日期")
+
+
+def test_collect_native_spans_excludes_footer_page_number(tmp_path):
+    pdf_path = tmp_path / "footer.pdf"
+    document = fitz.open()
+    page = document.new_page(width=300, height=400)
+    page.insert_text((40, 80), "Body")
+    page.insert_text((120, 380), "第3页/共5页")
+    document.save(pdf_path)
+    document.close()
+
+    with fitz.open(pdf_path) as document:
+        texts = [span.text for span in collect_native_spans(document[0])]
+
+    assert "Body" in texts
+    assert "第3页/共5页" not in texts
 
 
 def test_merge_text_strips_splits_raw_span_with_character_level_field_positions():
