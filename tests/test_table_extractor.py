@@ -10,6 +10,7 @@ import fitz
 import pytest
 
 from hexai_pdf_parser.models import BBox, Cell, Table
+from hexai_pdf_parser.personal_credit_report import PersonalCreditReportTableExtractor
 from hexai_pdf_parser.text_region_detector import CandidateRegion
 from hexai_pdf_parser.table_extractor import TableExtractor
 
@@ -51,6 +52,94 @@ def make_synthetic_text_alignment_pdf(
         doc.save(str(path))
     finally:
         doc.close()
+
+
+def test_extract_deduplicates_overlapping_text_alignment_candidates(
+    tmp_dir, monkeypatch
+):
+    pdf_path = Path(tmp_dir) / "deduplicate-text-tables.pdf"
+    make_synthetic_text_alignment_pdf(pdf_path, [(40, [(40, "content")])])
+    candidate = Table(
+        bbox=BBox(40, 30, 160, 80),
+        rows=1,
+        cols=1,
+        cells=[Cell("content", 0, 0, BBox(40, 30, 160, 80))],
+        source="text_alignment",
+    )
+
+    monkeypatch.setattr(
+        "hexai_pdf_parser.language_detector.detect_page_language",
+        lambda page: "zh",
+    )
+    extractor = TableExtractor()
+    extractor._extract_via_lines = lambda page: []
+    extractor._extract_via_text_alignment = lambda page, excluded_regions=None: [
+        candidate,
+        candidate,
+    ]
+
+    with fitz.open(pdf_path) as document:
+        tables = extractor.extract(document[0])
+
+    assert len(tables) == 1
+
+
+def test_personal_credit_report_rejects_sparse_numbered_prose_candidate():
+    table = Table(
+        bbox=BBox(40, 30, 540, 150),
+        rows=3,
+        cols=2,
+        cells=[
+            Cell("说明", 0, 1, BBox(240, 30, 280, 45)),
+            Cell("1.本报告中的信息用于说明，内容足够长以模拟正文段落。" * 2, 1, 0, BBox(40, 60, 540, 90)),
+            Cell("年7月", 1, 1, BBox(300, 60, 340, 90)),
+            Cell("2.这是一段同样足够长的编号说明正文，用于确认不会被当成表格。" * 2, 2, 0, BBox(40, 100, 540, 130)),
+            Cell("年5月", 2, 1, BBox(300, 100, 340, 130)),
+        ],
+        source="wireless_span_recovery",
+    )
+
+    assert PersonalCreditReportTableExtractor._is_numbered_prose_candidate(table)
+
+
+def test_personal_credit_report_rejects_report_metadata_candidate():
+    table = Table(
+        bbox=BBox(40, 30, 540, 150),
+        rows=2,
+        cols=2,
+        cells=[
+            Cell("报告编号：A", 0, 0, BBox(40, 30, 180, 50)),
+            Cell("报告时间：2025", 0, 1, BBox(300, 30, 500, 50)),
+            Cell("证件号码：B", 1, 0, BBox(40, 70, 180, 90)),
+            Cell("其他证件信息：C", 1, 1, BBox(300, 70, 500, 90)),
+        ],
+        source="wireless_span_recovery",
+    )
+
+    assert PersonalCreditReportTableExtractor._is_report_metadata_candidate(table)
+
+
+def test_personal_credit_report_splits_repeated_records():
+    table = Table(
+        bbox=BBox(40, 30, 540, 180),
+        rows=5,
+        cols=2,
+        cells=[
+            Cell("行政处罚记录", 0, 0, BBox(40, 30, 140, 45), colspan=2),
+            Cell("处罚机构：甲", 1, 0, BBox(40, 60, 200, 75)),
+            Cell("文书编号：1", 1, 1, BBox(300, 60, 500, 75)),
+            Cell("处罚机构：乙", 3, 0, BBox(40, 120, 200, 135)),
+            Cell("文书编号：2", 3, 1, BBox(300, 120, 500, 135)),
+        ],
+        source="wireless_span_recovery",
+    )
+
+    tables = PersonalCreditReportTableExtractor._split_repeated_record_table(table)
+
+    assert [(item.rows, item.cells[0].text) for item in tables] == [
+        (3, "行政处罚记录"),
+        (2, "处罚机构：乙"),
+    ]
 
 
 class TestTableExtractor:

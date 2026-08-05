@@ -95,6 +95,9 @@ def collect_native_spans(
 ) -> List[NativeSpan]:
     """Return native spans in allowed regions and outside excluded regions."""
 
+    footer_page_number = re.compile(
+        r"^\s*\u7b2c\s*\d+\s*\u9875\s*/\s*\u5171\s*\d+\s*\u9875\s*$"
+    )
     raw = page.get_text("rawdict", flags=fitz.TEXT_PRESERVE_WHITESPACE)
     spans: List[NativeSpan] = []
     order = 0
@@ -102,6 +105,16 @@ def collect_native_spans(
         if block.get("type") != 0:
             continue
         for line in block.get("lines", []):
+            line_text = "".join(
+                char.get("c", "")
+                for item in line.get("spans", [])
+                for char in item.get("chars", [])
+            )
+            if (
+                footer_page_number.match(line_text)
+                and line["bbox"][1] >= page.rect.y0 + page.rect.height * 0.85
+            ):
+                continue
             for item in line.get("spans", []):
                 text = "".join(char.get("c", "") for char in item.get("chars", []))
                 if not text.strip():
@@ -516,6 +529,34 @@ def _single_field_record_runs(rows: Sequence[Sequence[TextStrip]]) -> List[List[
     return candidates
 
 
+def _two_row_field_runs(rows: Sequence[Sequence[TextStrip]]) -> List[List[List[TextStrip]]]:
+    """Recognize two adjacent field rows despite a shifting right column."""
+    candidates: List[List[List[TextStrip]]] = []
+    for first, second in zip(rows, rows[1:]):
+        if len(first) != 2 or len(second) != 2:
+            continue
+        first_box = _union(strip.bbox for strip in first)
+        second_box = _union(strip.bbox for strip in second)
+        gap = second_box.y0 - first_box.y1
+        left_aligned = abs(_anchor(first[0]) - _anchor(second[0])) <= 8.0
+        separated = min(
+            _anchor(first[1]) - _anchor(first[0]),
+            _anchor(second[1]) - _anchor(second[0]),
+        ) >= 180.0
+        if (
+            0 <= gap <= 24.0
+            and left_aligned
+            and separated
+            and all(
+                _looks_like_field(strip.text)
+                for row in (first, second)
+                for strip in row
+            )
+        ):
+            candidates.append([list(first), list(second)])
+    return candidates
+
+
 def _prepend_short_title(run: List[List[TextStrip]], all_rows: Sequence[Sequence[TextStrip]]) -> List[List[TextStrip]]:
     """Keep only a nearby short section title with a sparse single-record table."""
 
@@ -549,6 +590,62 @@ def _prepend_headers(run: List[List[TextStrip]], all_rows: Sequence[Sequence[Tex
     return result
 
 
+def _drop_orphan_field_before_title(rows: Sequence[Sequence[TextStrip]]) -> List[List[TextStrip]]:
+    """Remove a trailing field from the previous table before a new title."""
+    if len(rows) < 3:
+        return [list(row) for row in rows]
+    first, title, detail = rows[:3]
+    title_box = _union(strip.bbox for strip in title)
+    if (
+        len(first) == 1
+        and first[0].text.startswith("\u7ed3\u6848\u65e5\u671f")
+        and len(title) >= 2
+    ):
+        return [list(row) for row in rows[1:]]
+    if (
+        len(first) == 1
+        and _looks_like_field(first[0].text)
+        and len(title) == 1
+        and title_box.x1 - title_box.x0 <= 180.0
+        and not _looks_like_field(title[0].text)
+        and len(detail) >= 2
+    ):
+        return [list(row) for row in rows[1:]]
+    return [list(row) for row in rows]
+
+
+def _completion_date_continuations(
+    rows: Sequence[Sequence[TextStrip]],
+) -> List[Table]:
+    """Recover a page-leading completion-date row as a one-row continuation."""
+    tables: List[Table] = []
+    for first, second in zip(rows, rows[1:]):
+        if (
+            len(first) != 1
+            or not first[0].text.startswith("\u7ed3\u6848\u65e5\u671f")
+            or len(second) < 2
+        ):
+            continue
+        left = first[0]
+        right_x = min(strip.bbox.x0 for strip in second[1:])
+        right_edge = max(strip.bbox.x1 for strip in second)
+        bbox = BBox(left.bbox.x0, left.bbox.y0, right_edge, left.bbox.y1)
+        tables.append(
+            Table(
+                bbox=bbox,
+                rows=1,
+                cols=2,
+                cells=[
+                    Cell(left.text, 0, 0, BBox(bbox.x0, bbox.y0, right_x, bbox.y1)),
+                    Cell("", 0, 1, BBox(right_x, bbox.y0, bbox.x1, bbox.y1)),
+                ],
+                confidence=0.80,
+                source="wireless_span_recovery",
+            )
+        )
+    return tables
+
+
 def _build_table(
     rows: Sequence[Sequence[TextStrip]], tracks_override: Sequence[float] | None = None
 ) -> Tuple[Table | None, Dict[str, Any]]:
@@ -571,6 +668,15 @@ def _build_table(
         and abs((row[0].bbox.x0 + row[0].bbox.x1) / 2.0 - table_center)
         <= max(32.0, (table_box.x1 - table_box.x0) * 0.18)
     }
+    short_title_rows = {
+        index
+        for index, row in enumerate(normalized_rows[:-1])
+        if len(row) == 1
+        and len(normalized_rows[index + 1]) >= 2
+        and row[0].bbox.x1 - row[0].bbox.x0 <= 180.0
+        and not _looks_like_field(row[0].text)
+    }
+    spanning_single_rows = centered_single_rows | short_title_rows
     grouped: Dict[Tuple[int, int], List[TextStrip]] = {}
     for row_index, row in enumerate(normalized_rows):
         for strip in row:
@@ -586,14 +692,14 @@ def _build_table(
     for (row_index, original_column), members in grouped.items():
         members.sort(key=lambda item: item.order)
         bbox = _union(item.bbox for item in members)
-        col_index = 0 if row_index in centered_single_rows else col_map[original_column]
+        col_index = 0 if row_index in spanning_single_rows else col_map[original_column]
         # 一条 Span 横跨多个列轨迹时，以 colspan 作为基础合并单元格表示。
         covered = [
             col_map[column]
             for column in active_columns
             if bbox.x0 <= tracks[column] <= bbox.x1
         ]
-        colspan = len(active_columns) if row_index in centered_single_rows else max(1, len(covered))
+        colspan = len(active_columns) if row_index in spanning_single_rows else max(1, len(covered))
         cells.append(
             Cell(
                 # 同一逻辑单元格的下一视觉行以换行保留，便于下游审计。
@@ -629,6 +735,24 @@ def _build_table(
     ), evidence
 
 
+def _significant_overlap(left: BBox, right: BBox) -> bool:
+    """Return whether two candidates cover substantially the same table."""
+    width = min(left.x1, right.x1) - max(left.x0, right.x0)
+    height = min(left.y1, right.y1) - max(left.y0, right.y0)
+    if width <= 0 or height <= 0:
+        return False
+    overlap = width * height
+    left_area = (left.x1 - left.x0) * (left.y1 - left.y0)
+    right_area = (right.x1 - right.x0) * (right.y1 - right.y0)
+    return overlap / min(left_area, right_area) >= 0.20
+
+
+def _table_quality(table: Table) -> tuple[float, int, int]:
+    """Rank overlapping candidates by confidence, populated cells and size."""
+    populated = sum(1 for cell in table.cells if cell.text.strip())
+    return (table.confidence, populated, table.rows * table.cols)
+
+
 def recover_wireless_tables(
     page: fitz.Page,
     excluded_regions: Sequence[BBox] | None = None,
@@ -653,17 +777,21 @@ def recover_wireless_tables(
         ("field_records", run) for run in _field_record_runs(visual_rows)
     ] + [("aligned_rows", run) for run in candidate_runs] + [
         ("single_field_record", run) for run in _single_field_record_runs(visual_rows)
+    ] + [
+        ("two_row_fields", run) for run in _two_row_field_runs(visual_rows)
     ]
     seen_boxes: List[BBox] = []
+    accepted_region_indexes: List[int] = []
     for run_type, run in tagged_runs:
         if run_type in {"field_records", "two_line_field_records"}:
             expanded = run
-        elif run_type == "single_field_record":
+        elif run_type in {"single_field_record", "two_row_fields"}:
             expanded = _prepend_short_title(run, visual_rows)
         else:
             expanded = _prepend_headers(run, visual_rows)
+        expanded = _drop_orphan_field_before_title(expanded)
         tracks_override = None
-        if run_type == "single_field_record":
+        if run_type in {"single_field_record", "two_row_fields"}:
             detail_row = next(row for row in expanded if len(row) >= 2)
             tracks_override = sorted(_anchor(strip) for strip in detail_row)
         table, evidence = _build_table(expanded, tracks_override=tracks_override)
@@ -676,14 +804,26 @@ def recover_wireless_tables(
         if table is None:
             regions.append(evidence)
             continue
-        if any(
-            min(table.bbox.x1, old.x1) > max(table.bbox.x0, old.x0)
-            and min(table.bbox.y1, old.y1) > max(table.bbox.y0, old.y0)
-            for old in seen_boxes
+        overlapping_indexes = [
+            index
+            for index, old in enumerate(seen_boxes)
+            if _significant_overlap(table.bbox, old)
+        ]
+        if overlapping_indexes and not all(
+            _table_quality(table) > _table_quality(tables[index])
+            for index in overlapping_indexes
         ):
             evidence["rejected_reason"] = "overlaps an accepted table candidate"
             regions.append(evidence)
             continue
+        for index in reversed(overlapping_indexes):
+            replaced_region = regions[accepted_region_indexes[index]]
+            replaced_region["rejected_reason"] = (
+                "replaced by a higher-quality overlapping table candidate"
+            )
+            del tables[index]
+            del seen_boxes[index]
+            del accepted_region_indexes[index]
         evidence["bbox"] = table.bbox.__dict__
         evidence["cells"] = [
             {"row": cell.row_index, "col": cell.col_index, "text": cell.text, "bbox": cell.bbox.__dict__}
@@ -692,6 +832,7 @@ def recover_wireless_tables(
         tables.append(table)
         seen_boxes.append(table.bbox)
         regions.append(evidence)
+        accepted_region_indexes.append(len(regions) - 1)
     diagnostics = {
         "page_index": page.number,
         "excluded_regions": [region.__dict__ for region in (excluded_regions or [])],
@@ -716,6 +857,20 @@ def recover_wireless_tables(
         ],
         "regions": regions,
     }
+    for table in _completion_date_continuations(visual_rows):
+        if any(_significant_overlap(table.bbox, old) for old in seen_boxes):
+            continue
+        tables.append(table)
+        seen_boxes.append(table.bbox)
+        diagnostics["regions"].append(
+            {
+                "run_type": "completion_date_continuation",
+                "bbox": table.bbox.__dict__,
+                "row_count": table.rows,
+                "column_count": table.cols,
+                "confidence": table.confidence,
+            }
+        )
     if not candidate_runs:
         diagnostics["rejected_reason"] = "no consecutive multi-column visual rows"
     return WirelessRecovery(tables=tables, diagnostics=diagnostics)
