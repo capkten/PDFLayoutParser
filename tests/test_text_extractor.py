@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from hexai_pdf_parser.models import BBox, Block, Table
 from hexai_pdf_parser.text_extractor import TextExtractor
 from tests.conftest import make_text_pdf
 
@@ -90,3 +91,46 @@ class TestTextExtractor:
         assert len(blocks) == 1
         assert blocks[0].lines[0].text == "Hello World"
         assert blocks[0].text == "Hello World"
+
+    def test_refines_only_blocks_that_cross_table_boundary(self):
+        block = Block(
+            text="inside\noutside",
+            bbox=BBox(0, 0, 150, 30),
+        )
+        table = Table(bbox=BBox(0, 0, 100, 30), rows=1, cols=1)
+        page = SimpleNamespace(
+            get_text=lambda mode: [
+                (10, 10, 20, 20, "inside", 0, 0, 0),
+                (110, 10, 120, 20, "outside", 0, 1, 0),
+            ]
+        )
+
+        result = TextExtractor().refine_blocks_for_tables(
+            page,
+            [block],
+            [table],
+        )
+
+        assert [item.text for item in result] == ["inside", "outside"]
+        assert result[0].bbox.x1 == 20
+        assert result[1].bbox.x0 == 110
+
+    def test_does_not_request_words_without_a_crossing_block(self):
+        block = Block(
+            text="inside",
+            bbox=BBox(10, 10, 20, 20),
+        )
+        table = Table(bbox=BBox(0, 0, 100, 30), rows=1, cols=1)
+
+        def unexpected_words_call(mode):
+            raise AssertionError("word extraction should not be requested")
+
+        page = SimpleNamespace(get_text=unexpected_words_call)
+
+        result = TextExtractor().refine_blocks_for_tables(
+            page,
+            [block],
+            [table],
+        )
+
+        assert result == [block]

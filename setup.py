@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 import os
 
 NAME = "hexai_pdf_parser"
-VERSION = os.getenv("VER", "1.0.6")
+VERSION = os.getenv("VER", "1.0.7")
 
 setup(
     name=NAME,

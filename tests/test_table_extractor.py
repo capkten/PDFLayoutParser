@@ -693,6 +693,31 @@ class TestTableExtractor:
         assert len(h_lines) == 2
         assert len(v_lines) == 2
 
+    def test_keep_rectangles_when_later_image_overlaps(self):
+        page = SimpleNamespace(
+            rect=fitz.Rect(0, 0, 400, 400),
+            get_drawings=lambda: [
+                {
+                    "items": [("re", fitz.Rect(100, 100, 200, 150), 1)],
+                    "type": "s",
+                    "stroke_opacity": 1.0,
+                    "color": (0.0, 0.0, 0.0),
+                    "width": 1.0,
+                    "seqno": 0,
+                }
+            ],
+            get_bboxlog=lambda: [
+                ("stroke-path", (100, 100, 200, 150)),
+                ("fill-image", (95, 95, 205, 155)),
+            ],
+        )
+
+        extractor = TableExtractor()
+        h_lines, v_lines = extractor._extract_lines_from_drawings(page)
+
+        assert len(h_lines) == 2
+        assert len(v_lines) == 2
+
     def test_ignore_fully_transparent_rectangles_when_extracting_lines(
         self, tmp_dir
     ):
