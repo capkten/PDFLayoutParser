@@ -4,7 +4,7 @@ set -e
 ARCH=$(uname -m)
 
 # 每次提交代码,请将版本号加1
-VER="1.0.6"
+VER="1.0.7"
 
 SRV_NAME="hexai_pdf_parser"
 

@@ -83,18 +83,13 @@ def _run_page_pipeline(
     page_handle = pdf_doc[page.index]
 
     # a. Text extraction
+    text_extractor = TextExtractor()
     page.blocks = time_stage(
         "text_extract",
-        lambda: TextExtractor().extract_blocks(page_handle),
+        lambda: text_extractor.extract_blocks(page_handle),
     )
 
-    # b. Layout mapping (text -> LayoutElements)
-    text_elements = time_stage(
-        "layout_map",
-        lambda: LayoutMapper().map_blocks(page.blocks),
-    )
-
-    # c. Table extraction
+    # b. Table extraction
     if table_extractor_factory is None:
         table_extractor = table_extractor_cls(
             use_ml=use_ml,
@@ -108,6 +103,22 @@ def _run_page_pipeline(
     page.tables = time_stage(
         "table_extract",
         lambda: table_extractor.extract(page_handle),
+    )
+
+    # c. Refine only text blocks that cross a table boundary.
+    page.blocks = time_stage(
+        "text_refine",
+        lambda: text_extractor.refine_blocks_for_tables(
+            page_handle,
+            page.blocks,
+            page.tables,
+        ),
+    )
+
+    # d. Layout mapping (text -> LayoutElements)
+    text_elements = time_stage(
+        "layout_map",
+        lambda: LayoutMapper().map_blocks(page.blocks),
     )
 
     if debug and output_dir is not None:

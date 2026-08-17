@@ -67,8 +67,8 @@ class TestLayoutBuilder:
         assert result[2].order == 2
         assert result[2].content == image
 
-    def test_build_filters_text_that_overlaps_a_table(self):
-        """Text that intersects a table should not be duplicated in output."""
+    def test_build_keeps_text_with_small_table_overlap(self):
+        """Small bbox overlap should not remove the text element."""
         overlapping_text = LayoutElement(
             type="text",
             bbox=BBox(x0=90, y0=10, x1=120, y1=30),
@@ -84,8 +84,60 @@ class TestLayoutBuilder:
         builder = LayoutBuilder()
         result = builder.build([overlapping_text], [table], [])
 
-        assert len(result) == 1
-        assert result[0].type == "table"
+        assert [element.type for element in result] == ["table", "text"]
+
+    def test_build_filters_text_fully_inside_a_table(self):
+        text_element = LayoutElement(
+            type="text",
+            bbox=BBox(x0=10, y0=10, x1=20, y1=20),
+            order=0,
+            content="Cell text",
+        )
+        table = Table(
+            bbox=BBox(x0=0, y0=0, x1=100, y1=100),
+            rows=2,
+            cols=2,
+        )
+
+        result = LayoutBuilder().build([text_element], [table], [])
+
+        assert [element.type for element in result] == ["table"]
+
+    def test_build_filters_text_when_iou_exceeds_half(self):
+        """Text should be filtered when bbox IoU with a table exceeds 0.5."""
+        text_element = LayoutElement(
+            type="text",
+            bbox=BBox(x0=0, y0=0, x1=80, y1=80),
+            order=0,
+            content="Covered",
+        )
+        table = Table(
+            bbox=BBox(x0=0, y0=0, x1=100, y1=100),
+            rows=2,
+            cols=2,
+        )
+
+        result = LayoutBuilder().build([text_element], [table], [])
+
+        assert [element.type for element in result] == ["table"]
+
+    def test_build_keeps_text_when_iou_equals_half(self):
+        """An IoU of exactly 0.5 should not meet the strict threshold."""
+        text_element = LayoutElement(
+            type="text",
+            bbox=BBox(x0=0, y0=0, x1=100, y1=50),
+            order=0,
+            content="Boundary",
+        )
+        table = Table(
+            bbox=BBox(x0=0, y0=0, x1=100, y1=100),
+            rows=2,
+            cols=2,
+        )
+
+        result = LayoutBuilder().build([text_element], [table], [])
+
+        assert [element.type for element in result] == ["table", "text"]
 
     def test_build_sorts_elements_by_page_position(self):
         """Layout elements should follow page order, top-to-bottom then left-to-right."""

@@ -574,10 +574,12 @@ class TableExtractor:
     ) -> bool:
         """Return True if a later opaque paint operation fully covers *rect*.
 
-        We use this as a conservative heuristic only for solid later content:
-        fill paths, images, and shadings. Partial overlap should not hide the
-        border candidate, but near-complete containment usually means the
-        rectangle is not visually contributing to the final page appearance.
+        We use this as a conservative heuristic only for solid later vector
+        content: fill paths and shadings. Images may contain transparency, so
+        their bbox alone is not enough evidence that a border is hidden.
+        Partial overlap should not hide the border candidate, but
+        near-complete containment usually means the rectangle is not visually
+        contributing to the final page appearance.
         """
         if seqno is None or not occluding_rects:
             return False
@@ -620,7 +622,7 @@ class TableExtractor:
 
     def _get_occluding_rects(self, bboxlog: List[Tuple]) -> List[Tuple[int, fitz.Rect]]:
         """Pre-filter and pre-convert occluding entries from bboxlog."""
-        occluding_types = {"fill-path", "fill-image", "fill-shade"}
+        occluding_types = {"fill-path", "fill-shade"}
         result = []
         for idx, entry in enumerate(bboxlog):
             if entry and entry[0] in occluding_types:
