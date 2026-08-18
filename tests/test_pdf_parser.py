@@ -49,6 +49,8 @@ REAL_EMPTY_REGION = {
     "y1": 0.03,
 }
 
+LOAN_PDF_PATH = os.path.abspath("PDFsam_merge0.pdf")
+
 
 @pytest.fixture
 def real_pdf_path() -> str:
@@ -209,6 +211,27 @@ def test_extract_text_from_path(tmp_dir):
     assert "Extract" in blocks[0].text
 
 
+def test_extract_text_rebuilds_visual_order_for_loan_details():
+    if not os.path.exists(LOAN_PDF_PATH):
+        pytest.skip("loan regression PDF not found: PDFsam_merge0.pdf")
+
+    result = PDFParser(LOAN_PDF_PATH).extract_text(page_indices=[0])
+    assert_success_result(result)
+
+    texts = [block.text for block in result.data]
+    first_detail = next(
+        index for index, text in enumerate(texts)
+        if text.startswith("2022年08月10日重庆蚂蚁消费金融有限公司")
+    )
+    second_serial = texts.index("2.")
+    second_detail = next(
+        index for index, text in enumerate(texts)
+        if text.startswith("2023年06月26日重庆京东盛际小额贷款有限公司")
+    )
+
+    assert texts.index("1.") < first_detail < second_serial < second_detail
+
+
 def test_extract_text_from_cached_document(tmp_dir):
     pdf_path = os.path.join(tmp_dir, "test.pdf")
     make_text_pdf(pdf_path, text="Cached text")
@@ -219,6 +242,19 @@ def test_extract_text_from_cached_document(tmp_dir):
     blocks = result.data
     assert len(blocks) >= 1
     assert "Cached" in blocks[0].text
+
+
+def test_parse_after_extract_text_runs_full_pipeline(tmp_dir):
+    pdf_path = os.path.join(tmp_dir, "text-then-parse.pdf")
+    make_text_pdf(pdf_path, text="Text first")
+    parser = PDFParser(pdf_path)
+
+    text_result = parser.extract_text()
+    assert_success_result(text_result)
+    parse_result = parser.parse()
+
+    assert_success_result(parse_result)
+    assert parse_result.data.pages[0].layout_elements
 
 
 def test_extract_text_with_page_indices(tmp_dir):

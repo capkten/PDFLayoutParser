@@ -108,6 +108,119 @@ class TextExtractor:
 
         return blocks
 
+    def extract_layout_blocks(
+        self,
+        page: fitz.Page,
+        tables: List[Table],
+    ) -> List[Block]:
+        """Extract line-sized blocks for final page layout ordering.
+
+        The raw block structure is retained for wireless-table detection, but
+        it can combine unrelated visual lines.  Final layout text is rebuilt
+        from individual PDF lines and excludes words assigned to tables.
+        """
+        page_dict = page.get_text("dict", flags=fitz.TEXT_PRESERVE_WHITESPACE)
+        blocks: List[Block] = []
+
+        for block_dict in page_dict.get("blocks", []):
+            if block_dict.get("type") != 0:
+                continue
+
+            for line_dict in block_dict.get("lines", []):
+                words = self._words_from_spans(line_dict.get("spans", []))
+                if not words:
+                    continue
+
+                outside_words: List[Word] = []
+                for word in words:
+                    if self._word_inside_any_table(word, tables):
+                        if outside_words:
+                            blocks.append(self._block_from_words(outside_words))
+                            outside_words = []
+                        continue
+                    outside_words.append(word)
+
+                if outside_words:
+                    blocks.append(self._block_from_words(outside_words))
+
+        return sorted(
+            blocks,
+            key=lambda block: (
+                block.bbox.y0,
+                block.bbox.x0,
+                block.bbox.y1,
+                block.bbox.x1,
+            ),
+        )
+
+    def _words_from_spans(self, spans: List[dict]) -> List[Word]:
+        words: List[Word] = []
+        for span_dict in spans:
+            span_text = span_dict.get("text", "")
+            if not span_text.strip():
+                continue
+
+            span_bbox = BBox(*span_dict["bbox"])
+            span_font = span_dict.get("font")
+            span_size = span_dict.get("size")
+            chars: List[Char] = []
+            raw_chars = span_dict.get("chars")
+            if raw_chars:
+                for char_dict in raw_chars:
+                    chars.append(
+                        Char(
+                            text=char_dict.get("c", ""),
+                            bbox=BBox(*char_dict["bbox"]),
+                            font=char_dict.get("font", span_font),
+                            size=char_dict.get("size", span_size),
+                        )
+                    )
+            else:
+                span_width = span_bbox.x1 - span_bbox.x0
+                char_count = len(span_text)
+                if char_count > 0:
+                    char_width = span_width / char_count
+                    for index, char in enumerate(span_text):
+                        chars.append(
+                            Char(
+                                text=char,
+                                bbox=BBox(
+                                    span_bbox.x0 + index * char_width,
+                                    span_bbox.y0,
+                                    span_bbox.x0 + (index + 1) * char_width,
+                                    span_bbox.y1,
+                                ),
+                                font=span_font,
+                                size=span_size,
+                            )
+                        )
+
+            words.append(Word(text=span_text, bbox=span_bbox, chars=chars))
+        return words
+
+    def _block_from_words(self, words: List[Word]) -> Block:
+        line = Line(
+            text=self._join_words(words),
+            bbox=BBox(
+                min(word.bbox.x0 for word in words),
+                min(word.bbox.y0 for word in words),
+                max(word.bbox.x1 for word in words),
+                max(word.bbox.y1 for word in words),
+            ),
+            words=words,
+        )
+        return Block(text=line.text, bbox=line.bbox, lines=[line])
+
+    @staticmethod
+    def _word_inside_any_table(word: Word, tables: List[Table]) -> bool:
+        center_x = (word.bbox.x0 + word.bbox.x1) / 2.0
+        center_y = (word.bbox.y0 + word.bbox.y1) / 2.0
+        return any(
+            table.bbox.x0 <= center_x <= table.bbox.x1
+            and table.bbox.y0 <= center_y <= table.bbox.y1
+            for table in tables
+        )
+
     def _join_words(self, words: List[Word]) -> str:
         """Join words while preserving visible gaps between spans."""
         if not words:

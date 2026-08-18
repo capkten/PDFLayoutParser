@@ -62,6 +62,41 @@ def test_merge_text_strips_keeps_columns_separate_but_joins_tight_font_splits():
     assert [span.order for span in strips[0].spans] == [0, 1]
 
 
+def test_merge_text_strips_joins_nearby_fields_in_visual_order():
+    spans = [
+        NativeSpan("证件类型：", BBox(178, 10, 231, 20), "Helvetica", 10, 0),
+        NativeSpan("姓名：小小", BBox(41, 10, 105, 20), "Helvetica", 10, 1),
+        NativeSpan("身份证", BBox(231.5, 10, 263, 20), "Helvetica", 10, 2),
+    ]
+
+    strips = merge_text_strips(spans)
+
+    assert [strip.text for strip in strips] == ["姓名：小小", "证件类型：身份证"]
+
+
+def test_build_table_orders_nearby_same_cell_text_by_geometry():
+    def strip(text, bbox, order):
+        span = NativeSpan(text, bbox, "Helvetica", 10, order)
+        return TextStrip(text, bbox, [span])
+
+    row = [
+        strip("证件类型：", BBox(178, 40, 231, 50), 0),
+        strip("姓名：小小", BBox(41, 40, 105, 50), 1),
+        strip("身份证", BBox(231, 40, 263, 50), 2),
+        strip("报告时间：今天", BBox(405, 40, 480, 50), 3),
+    ]
+    second_row = [
+        strip("编号：1", BBox(41, 60, 100, 70), 4),
+        strip("状态：正常", BBox(405, 60, 480, 70), 5),
+    ]
+
+    table, _ = _build_table([row, second_row], tracks_override=[110, 405])
+
+    assert table is not None
+    first_cell = next(cell for cell in table.cells if cell.row_index == 0 and cell.col_index == 0)
+    assert first_cell.text == "姓名：小小证件类型：身份证"
+
+
 def test_overlap_selection_ignores_adjacent_tables_but_prefers_complete_candidate():
     partial = Table(
         BBox(50, 510, 538, 582), 4, 2,
