@@ -44,6 +44,9 @@ class PDFParser:
             self._pdf_path = source
             self._document = None
 
+        self._text_ready = self._document is not None
+        self._document_complete = self._document is not None
+
         self._render_dpi = render_dpi
         self._seal_coords = seal_coords or []
         self._use_ml = use_ml
@@ -104,7 +107,7 @@ class PDFParser:
         Pass *output_dir* to also write JSON, Markdown, images, and renders.
         """
         def _do_parse():
-            if self._document is not None:
+            if self._document is not None and self._document_complete:
                 return self._document
 
             from hexai_pdf_parser.pipeline import Pipeline
@@ -123,6 +126,8 @@ class PDFParser:
                 debug_pipeline=self._debug_pipeline,
             )
             self._document = pipeline.run()
+            self._text_ready = True
+            self._document_complete = True
             return self._document
 
         return self._execute_result(_do_parse, "document parsed", "document parsed but empty")
@@ -135,28 +140,43 @@ class PDFParser:
         """Extract text blocks from the PDF, returning an ApiResult wrapping List[Block].
 
         If a cached Document exists, returns its blocks directly.
-        Otherwise loads the PDF and runs only the text extraction stage.
+        Otherwise loads the PDF, detects table regions, and rebuilds the
+        final line-ordered text blocks.
         """
         def _do():
-            if self._document is not None:
+            if self._document is not None and self._text_ready:
                 return self._collect_from_document(
                     lambda p: p.blocks, page_indices
                 )
 
             import fitz as _fitz
             from hexai_pdf_parser.loader import Loader
+            from hexai_pdf_parser.table_extractor import TableExtractor
             from hexai_pdf_parser.text_extractor import TextExtractor
 
             document = Loader(self._pdf_path).load()
             pdf_doc = _fitz.open(self._pdf_path)
             try:
+                table_extractor = TableExtractor(
+                    use_ml=self._use_ml,
+                    ml_model_path=self._ml_model_path,
+                    ml_confidence=self._ml_confidence,
+                )
                 for page in document.pages:
                     if page_indices is not None and page.index not in page_indices:
                         continue
-                    page.blocks = TextExtractor().extract_blocks(pdf_doc[page.index])
+                    page_handle = pdf_doc[page.index]
+                    page.blocks = TextExtractor().extract_blocks(page_handle)
+                    page.tables = table_extractor.extract(page_handle)
+                    page.blocks = TextExtractor().extract_layout_blocks(
+                        page_handle,
+                        page.tables,
+                    )
             finally:
                 pdf_doc.close()
             self._document = document
+            self._text_ready = True
+            self._document_complete = False
             return self._collect_from_document(lambda p: p.blocks, page_indices)
 
         return self._execute_result(_do, "text extracted", "no text extracted")
@@ -196,6 +216,8 @@ class PDFParser:
             finally:
                 pdf_doc.close()
             self._document = document
+            self._text_ready = False
+            self._document_complete = False
             return self._collect_from_document(lambda p: p.tables, page_indices)
 
         return self._execute_result(_do, "tables extracted", "no tables extracted")

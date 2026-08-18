@@ -204,16 +204,28 @@ def merge_text_strips(spans: Sequence[NativeSpan]) -> List[TextStrip]:
     # 合并阈值故意保守：宁可保留列间空隙，也不要误把相邻列拼成一个单元格。
     if not spans:
         return []
+    ordered_spans = sorted(
+        spans,
+        key=lambda span: (
+            (span.bbox.y0 + span.bbox.y1) / 2.0,
+            span.bbox.x0,
+            span.order,
+        ),
+    )
     strips: List[TextStrip] = []
-    current = TextStrip(text=spans[0].text, bbox=spans[0].bbox, spans=[spans[0]])
-    for span in spans[1:]:
+    current = TextStrip(
+        text=ordered_spans[0].text,
+        bbox=ordered_spans[0].bbox,
+        spans=[ordered_spans[0]],
+    )
+    for span in ordered_spans[1:]:
         previous = current.spans[-1]
         size = max(previous.size or 0.0, span.size or 0.0, 6.0)
         gap = span.bbox.x0 - current.bbox.x1
         same_band = abs(((span.bbox.y0 + span.bbox.y1) / 2.0) - current.center_y) <= max(2.5, size * 0.38)
         close = -1.0 <= gap <= max(2.0, size * 0.28)
         attached_super = -1.0 <= gap <= max(3.0, size * 0.45) and _is_small_superscript(current, span)
-        if span.order == previous.order + 1 and (same_band and close or attached_super):
+        if (same_band and close) or attached_super:
             current.text += span.text
             current.bbox = _union([current.bbox, span.bbox])
             current.spans.append(span)
@@ -690,7 +702,9 @@ def _build_table(
     col_map = {column: index for index, column in enumerate(active_columns)}
     cells: List[Cell] = []
     for (row_index, original_column), members in grouped.items():
-        members.sort(key=lambda item: item.order)
+        # Native PDF span order can differ from visual order when fields are
+        # positioned independently on the same line.
+        members.sort(key=lambda item: (item.bbox.y0, item.bbox.x0, item.order))
         bbox = _union(item.bbox for item in members)
         col_index = 0 if row_index in spanning_single_rows else col_map[original_column]
         # 一条 Span 横跨多个列轨迹时，以 colspan 作为基础合并单元格表示。

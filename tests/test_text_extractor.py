@@ -11,6 +11,35 @@ from tests.conftest import make_text_pdf
 
 
 class TestTextExtractor:
+    def test_extract_layout_blocks_orders_lines_and_excludes_tables(self, tmp_dir):
+        pdf_path = Path(tmp_dir) / "layout-lines.pdf"
+
+        import fitz
+
+        doc = fitz.open()
+        page = doc.new_page(width=300, height=300)
+        page.insert_text((20, 100), "1.")
+        page.insert_text((40, 100), "First body line")
+        page.insert_text((20, 115), "2.")
+        page.insert_text((40, 115), "Second body line")
+        page.insert_text((40, 160), "TABLE TEXT")
+        doc.save(pdf_path)
+        doc.close()
+
+        table = Table(
+            bbox=BBox(30, 145, 150, 175),
+            rows=1,
+            cols=1,
+        )
+        with fitz.open(pdf_path) as doc:
+            blocks = TextExtractor().extract_layout_blocks(doc[0], [table])
+
+        texts = [block.text for block in blocks]
+        assert texts.index("1.") < texts.index("First body line")
+        assert texts.index("First body line") < texts.index("2.")
+        assert texts.index("2.") < texts.index("Second body line")
+        assert "TABLE TEXT" not in texts
+
     def test_extract_blocks_and_lines(self, tmp_dir):
         pdf_path = Path(tmp_dir) / "hello.pdf"
         make_text_pdf(pdf_path, text="Hello World")

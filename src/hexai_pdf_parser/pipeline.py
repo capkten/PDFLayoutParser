@@ -105,12 +105,12 @@ def _run_page_pipeline(
         lambda: table_extractor.extract(page_handle),
     )
 
-    # c. Refine only text blocks that cross a table boundary.
+    # c. Rebuild final text blocks after table regions are known.  The raw
+    # blocks above remain the input context for table extraction.
     page.blocks = time_stage(
         "text_refine",
-        lambda: text_extractor.refine_blocks_for_tables(
+        lambda: text_extractor.extract_layout_blocks(
             page_handle,
-            page.blocks,
             page.tables,
         ),
     )
