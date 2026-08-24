@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import re
 import bisect
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -38,6 +38,7 @@ import fitz
 import copy
 
 from hexai_pdf_parser.models import BBox, Cell, CellStructure, Table, TableStructure, TextBlock
+from hexai_pdf_parser.page_normalizer import normalize_page_rotation
 
 # Pre-compiled regex for numeric token classification (used per-word)
 _NUMERIC_RE = re.compile(
@@ -133,6 +134,7 @@ class TableExtractor:
 
     def extract(self, page: fitz.Page) -> List[Table]:
         """Return a list of :class:`Table` objects detected on *page*."""
+        normalize_page_rotation(page)
         self._last_text_alignment_debug = None
         self._last_pipeline_debug = {
             "page_index": page.number,
@@ -886,10 +888,111 @@ class TableExtractor:
 
         return components
 
+    def _get_character_bboxes_and_height_mode(
+        self, page: Optional[fitz.Page]
+    ) -> Tuple[List[BBox], Optional[float]]:
+        """Collect non-empty character bboxes and their modal height."""
+        if page is None:
+            return [], None
+
+        try:
+            page_dict = page.get_text(
+                "rawdict", flags=fitz.TEXT_PRESERVE_WHITESPACE
+            )
+        except Exception:
+            return [], None
+
+        character_bboxes: List[BBox] = []
+        character_heights: List[float] = []
+        for block in page_dict.get("blocks", []):
+            if block.get("type") != 0:
+                continue
+            for line in block.get("lines", []):
+                for span in line.get("spans", []):
+                    for char in span.get("chars", []):
+                        if not isinstance(char.get("c"), str) or not char["c"].strip():
+                            continue
+                        raw_bbox = char.get("bbox")
+                        if not raw_bbox or len(raw_bbox) < 4:
+                            continue
+                        try:
+                            bbox = BBox(*(float(value) for value in raw_bbox[:4]))
+                        except (TypeError, ValueError):
+                            continue
+                        if bbox.x1 <= bbox.x0 or bbox.y1 <= bbox.y0:
+                            continue
+                        character_bboxes.append(bbox)
+                        character_heights.append(round(bbox.y1 - bbox.y0, 1))
+
+        if not character_heights:
+            return character_bboxes, None
+
+        modal_height = Counter(character_heights).most_common(1)[0][0]
+        return character_bboxes, float(modal_height)
+
+    def _accept_virtual_boundary(
+        self,
+        side: str,
+        candidate: float,
+        current: float,
+        current_bbox: BBox,
+        candidate_bbox: BBox,
+        character_bboxes: List[BBox],
+        modal_character_height: Optional[float],
+    ) -> bool:
+        """Validate one candidate table boundary against page text."""
+        if side == "left":
+            if candidate >= current:
+                return False
+            extension = current - candidate
+            strip = BBox(candidate, current_bbox.y0, current, current_bbox.y1)
+        elif side == "right":
+            if candidate <= current:
+                return False
+            extension = candidate - current
+            strip = BBox(current, current_bbox.y0, candidate, current_bbox.y1)
+        elif side == "top":
+            if candidate >= current:
+                return False
+            extension = current - candidate
+            strip = BBox(current_bbox.x0, candidate, current_bbox.x1, current)
+        elif side == "bottom":
+            if candidate <= current:
+                return False
+            extension = candidate - current
+            strip = BBox(current_bbox.x0, current, current_bbox.x1, candidate)
+        else:
+            raise ValueError(f"Unsupported virtual boundary side: {side}")
+
+        if modal_character_height is None:
+            return False
+        if extension >= modal_character_height:
+            return True
+
+        touched = [
+            bbox
+            for bbox in character_bboxes
+            if bbox.x1 > strip.x0
+            and bbox.x0 < strip.x1
+            and bbox.y1 > strip.y0
+            and bbox.y0 < strip.y1
+        ]
+        if not touched:
+            return False
+
+        return all(
+            candidate_bbox.x0 <= bbox.x0
+            and bbox.x1 <= candidate_bbox.x1
+            and candidate_bbox.y0 <= bbox.y0
+            and bbox.y1 <= candidate_bbox.y1
+            for bbox in touched
+        )
+
     def _find_table_regions(
         self,
         h_lines: List[Tuple[float, float, float, float]],
         v_lines: List[Tuple[float, float, float, float]],
+        page: Optional[fitz.Page] = None,
     ) -> List[Tuple[BBox, List[Tuple[float, float, float, float]], List[Tuple[float, float, float, float]]]]:
         """Partition the page into table regions by line connectivity.
 
@@ -944,6 +1047,9 @@ class TableExtractor:
                 split_components.append((h_group, v_group))
 
         components = split_components
+        character_bboxes, modal_character_height = (
+            self._get_character_bboxes_and_height_mode(page)
+        )
 
         regions: List[Tuple[BBox, List[Tuple[float, float, float, float]], List[Tuple[float, float, float, float]]]] = []
         for h_group, v_group in components:
@@ -974,7 +1080,76 @@ class TableExtractor:
             x0, x1 = v_xs[0], v_xs[-1]
             y0, y1 = h_ys[0], h_ys[-1]
 
-            regions.append((BBox(x0, y0, x1, y1), valid_h_group, v_group))
+            candidate_x0 = min(line[0] for line in valid_h_group)
+            candidate_x1 = max(line[2] for line in valid_h_group)
+            candidate_y0 = min(line[1] for line in v_group)
+            candidate_y1 = max(line[3] for line in v_group)
+            candidate_bbox = BBox(candidate_x0, candidate_y0, candidate_x1, candidate_y1)
+            current_bbox = BBox(x0, y0, x1, y1)
+
+            accept_left = self._accept_virtual_boundary(
+                "left",
+                candidate_x0,
+                x0,
+                current_bbox,
+                candidate_bbox,
+                character_bboxes,
+                modal_character_height,
+            )
+            accept_right = self._accept_virtual_boundary(
+                "right",
+                candidate_x1,
+                x1,
+                current_bbox,
+                candidate_bbox,
+                character_bboxes,
+                modal_character_height,
+            )
+            accept_top = self._accept_virtual_boundary(
+                "top",
+                candidate_y0,
+                y0,
+                current_bbox,
+                candidate_bbox,
+                character_bboxes,
+                modal_character_height,
+            )
+            accept_bottom = self._accept_virtual_boundary(
+                "bottom",
+                candidate_y1,
+                y1,
+                current_bbox,
+                candidate_bbox,
+                character_bboxes,
+                modal_character_height,
+            )
+
+            final_x0 = candidate_x0 if accept_left else x0
+            final_x1 = candidate_x1 if accept_right else x1
+            final_y0 = candidate_y0 if accept_top else y0
+            final_y1 = candidate_y1 if accept_bottom else y1
+
+            virtual_h_lines = []
+            virtual_v_lines = []
+            if accept_top:
+                virtual_h_lines.append((final_x0, final_y0, final_x1, final_y0))
+            if accept_bottom:
+                virtual_h_lines.append((final_x0, final_y1, final_x1, final_y1))
+            if accept_left:
+                virtual_v_lines.append((final_x0, final_y0, final_x0, final_y1))
+            if accept_right:
+                virtual_v_lines.append((final_x1, final_y0, final_x1, final_y1))
+
+            enriched_h_group = valid_h_group + virtual_h_lines
+            enriched_v_group = list(v_group) + virtual_v_lines
+
+            regions.append(
+                (
+                    BBox(final_x0, final_y0, final_x1, final_y1),
+                    enriched_h_group,
+                    enriched_v_group,
+                )
+            )
 
         regions = self._merge_adjacent_regions(regions)
         return regions
@@ -4262,7 +4437,7 @@ class TableExtractor:
         if len(h_lines) < 2 or len(v_lines) < 2:
             return []
 
-        table_regions = self._find_table_regions(h_lines, v_lines)
+        table_regions = self._find_table_regions(h_lines, v_lines, page=page)
 
         if self.debug_pipeline:
             self._last_pipeline_debug["line_regions"] = [

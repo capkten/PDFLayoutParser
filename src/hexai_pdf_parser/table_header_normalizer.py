@@ -190,6 +190,7 @@ def _rebuild_text_aligned_table(
             for i in range(len(col_centers) - 1)
         ]
 
+    column_count = len(col_boundaries) + 1
     if len(row_clusters) == table.rows and len(col_boundaries) + 1 == table.cols:
         return None
     reconstructed_rows: list[list[Cell]] = []
@@ -233,7 +234,7 @@ def _rebuild_text_aligned_table(
             continue
 
         if _looks_like_group_header_row(row_cells, row_index):
-            row_cells = _promote_group_header_row(row_cells, len(col_clusters))
+            row_cells = _promote_group_header_row(row_cells, column_count)
 
         reconstructed_rows.append(row_cells)
 
@@ -714,4 +715,3 @@ def _merge_header_fragment_with_lower_line(
         rowspan=1,
         colspan=cell.colspan,
     )
-

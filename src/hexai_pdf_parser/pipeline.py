@@ -24,6 +24,7 @@ from hexai_pdf_parser.layout_mapper import LayoutMapper
 from hexai_pdf_parser.loader import Loader
 from hexai_pdf_parser.markdown_writer import MarkdownWriter
 from hexai_pdf_parser.models import BBox, Document, LayoutElement, Seal
+from hexai_pdf_parser.page_normalizer import normalize_page_rotation
 from hexai_pdf_parser.render_engine import RenderEngine
 from hexai_pdf_parser.table_extractor import TableExtractor
 from hexai_pdf_parser.table_config import TableConfig
@@ -81,6 +82,7 @@ def _run_page_pipeline(
         return result
 
     page_handle = pdf_doc[page.index]
+    normalize_page_rotation(page_handle)
 
     # a. Text extraction
     text_extractor = TextExtractor()

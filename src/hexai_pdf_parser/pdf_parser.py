@@ -151,6 +151,7 @@ class PDFParser:
 
             import fitz as _fitz
             from hexai_pdf_parser.loader import Loader
+            from hexai_pdf_parser.page_normalizer import normalize_page_rotation
             from hexai_pdf_parser.table_extractor import TableExtractor
             from hexai_pdf_parser.text_extractor import TextExtractor
 
@@ -166,6 +167,7 @@ class PDFParser:
                     if page_indices is not None and page.index not in page_indices:
                         continue
                     page_handle = pdf_doc[page.index]
+                    normalize_page_rotation(page_handle)
                     page.blocks = TextExtractor().extract_blocks(page_handle)
                     page.tables = table_extractor.extract(page_handle)
                     page.blocks = TextExtractor().extract_layout_blocks(
@@ -199,6 +201,7 @@ class PDFParser:
 
             import fitz as _fitz
             from hexai_pdf_parser.loader import Loader
+            from hexai_pdf_parser.page_normalizer import normalize_page_rotation
             from hexai_pdf_parser.table_extractor import TableExtractor
 
             document = Loader(self._pdf_path).load()
@@ -212,7 +215,9 @@ class PDFParser:
                 for page in document.pages:
                     if page_indices is not None and page.index not in page_indices:
                         continue
-                    page.tables = extractor.extract(pdf_doc[page.index])
+                    page_handle = pdf_doc[page.index]
+                    normalize_page_rotation(page_handle)
+                    page.tables = extractor.extract(page_handle)
             finally:
                 pdf_doc.close()
             self._document = document

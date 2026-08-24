@@ -8,6 +8,7 @@ import os
 import fitz
 
 from hexai_pdf_parser.models import RenderInfo
+from hexai_pdf_parser.page_normalizer import normalize_page_rotation
 
 
 class RenderEngine:
@@ -30,6 +31,7 @@ class RenderEngine:
         doc = fitz.open(file_path)
         try:
             page = doc[page_index]
+            normalize_page_rotation(page)
             mat = fitz.Matrix(self.dpi / 72, self.dpi / 72)
             pix = page.get_pixmap(matrix=mat)
 
