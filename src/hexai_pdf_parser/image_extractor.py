@@ -10,6 +10,7 @@ from typing import List
 import fitz
 
 from hexai_pdf_parser.models import BBox, Image
+from hexai_pdf_parser.page_normalizer import normalize_page_rotation
 
 
 class ImageExtractor:
@@ -31,6 +32,7 @@ class ImageExtractor:
         doc = fitz.open(file_path)
         try:
             page = doc[page_index]
+            normalize_page_rotation(page)
             image_list = page.get_images(full=True)
             image_infos = page.get_image_info(xrefs=True)
             bbox_by_xref = defaultdict(list)

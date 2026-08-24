@@ -7,15 +7,16 @@ from typing import List, Optional
 
 import fitz
 
-from hexai_pdf_parser.models import BBox, Cell, Document, Table
+from hexai_pdf_parser.models import BBox, Cell, Document, Table, Word
 from hexai_pdf_parser.markdown_writer import MarkdownWriter
 from hexai_pdf_parser.pipeline import Pipeline
 from hexai_pdf_parser.table_extractor import TableExtractor
+from hexai_pdf_parser.text_extractor import TextExtractor
 
 
 _QUERY_SECTION = "查询记录"
 _INSTITUTION_TITLE = "机构查询记录明细"
-_PERSONAL_TITLE = "本人查询记录明细"
+_PERSONAL_TITLE = "个人查询记录明细"
 _QUERY_HEADERS = ("编号", "查询日期", "查询机构", "查询原因")
 
 
@@ -109,13 +110,32 @@ def _bbox_values(bbox: BBox) -> list[float]:
     return [float(bbox.x0), float(bbox.y0), float(bbox.x1), float(bbox.y1)]
 
 
-def _query_rows(page: fitz.Page) -> list[list[tuple[float, float, float, float, str]]]:
-    """Group native page words into visual rows for query-record recovery."""
+def _query_rows(
+    page: fitz.Page,
+    *,
+    bbox: BBox | None = None,
+    merged: bool = False,
+) -> list[list[tuple[float, float, float, float, str]]]:
+    """Group query-region words into rows, optionally using merged spans."""
     rows: list[list[tuple[float, float, float, float, str]]] = []
-    for word in page.get_text("words"):
-        x0, y0, x1, y1, text = word[:5]
+    if merged:
+        source_words = [
+            (word.bbox.x0, word.bbox.y0, word.bbox.x1, word.bbox.y1, word.text)
+            for block in TextExtractor().extract_blocks(page)
+            for line in block.lines
+            for word in line.words
+        ]
+    else:
+        source_words = [word[:5] for word in page.get_text("words")]
+
+    for x0, y0, x1, y1, text in source_words:
         if not text.strip():
             continue
+        if bbox is not None:
+            center_x = (x0 + x1) / 2.0
+            center_y = (y0 + y1) / 2.0
+            if not (bbox.x0 <= center_x <= bbox.x1 and bbox.y0 <= center_y <= bbox.y1):
+                continue
         center_y = (y0 + y1) / 2.0
         row = next(
             (candidate for candidate in rows if abs((candidate[0][1] + candidate[0][3]) / 2.0 - center_y) <= 2.0),
@@ -127,6 +147,12 @@ def _query_rows(page: fitz.Page) -> list[list[tuple[float, float, float, float, 
         else:
             row.append(item)
     return [sorted(row, key=lambda item: item[0]) for row in sorted(rows, key=lambda row: row[0][1])]
+
+
+def _join_query_items(items: list[tuple[float, float, float, float, str]]) -> str:
+    """Join span-backed query words with the main text spacing rules."""
+    words = [Word(text=item[4], bbox=BBox(*item[:4])) for item in items]
+    return TextExtractor()._join_words(words)
 
 
 def _is_query_record_row(row: list[tuple[float, float, float, float, str]]) -> bool:
@@ -177,6 +203,29 @@ def _make_query_table(
             if header == item[4]
         ]
 
+    region_start_index = header_index if header_index is not None else start_index
+    region_start = min(item[1] for item in rows[region_start_index])
+    region_end = max(item[3] for item in rows[end_index - 1])
+    merged_rows = _query_rows(
+        page,
+        bbox=BBox(0.0, region_start, page.rect.width, region_end),
+        merged=True,
+    )
+    if header_index is not None:
+        merged_header_index = next(
+            (
+                index
+                for index, row in enumerate(merged_rows)
+                if all(header in "".join(item[4] for item in row) for header in _QUERY_HEADERS)
+            ),
+            None,
+        )
+        if merged_header_index is None:
+            return None
+        start_index = merged_header_index + 1
+    rows = merged_rows
+    end_index = len(rows)
+
     boundaries = [120.0, 243.0, 410.0]
     recovered_rows: list[list[tuple[float, float, float, float, str]]] = []
     for row in rows[start_index:end_index]:
@@ -186,7 +235,7 @@ def _make_query_table(
         if _is_query_record_row(row):
             recovered_rows.append(row)
             continue
-        if recovered_rows and any(243.0 <= (item[0] + item[2]) / 2.0 < 410.0 for item in row):
+        if recovered_rows and any((item[0] + item[2]) / 2.0 >= 243.0 for item in row):
             recovered_rows.append(row)
 
     if not recovered_rows or not any(_is_query_record_row(row) for row in recovered_rows):
@@ -204,11 +253,13 @@ def _make_query_table(
         if not by_col[0]:
             if row_number <= 1:
                 continue
-            continuation = "".join(item[4] for item in by_col[2])
+            continuation_items = by_col[2] + by_col[3]
+            continuation = _join_query_items(continuation_items)
             if continuation:
-                previous = next(cell for cell in cells if cell.row_index == row_number - 1 and cell.col_index == 2)
+                target_col = 3 if by_col[3] else 2
+                previous = next(cell for cell in cells if cell.row_index == row_number - 1 and cell.col_index == target_col)
                 previous.text += continuation
-                previous.bbox = BBox(previous.bbox.x0, previous.bbox.y0, max(previous.bbox.x1, max(item[2] for item in by_col[2])), max(previous.bbox.y1, max(item[3] for item in by_col[2])))
+                previous.bbox = BBox(previous.bbox.x0, previous.bbox.y0, max(previous.bbox.x1, max(item[2] for item in continuation_items)), max(previous.bbox.y1, max(item[3] for item in continuation_items)))
             continue
 
         row_y0 = min(item[1] for item in row)
@@ -222,7 +273,7 @@ def _make_query_table(
                     max(item[2] for item in parts),
                     max(item[3] for item in parts),
                 )
-                text = "".join(item[4] for item in parts)
+                text = _join_query_items(parts)
             else:
                 x0 = 0.0 if col_index == 0 else boundaries[col_index - 1]
                 x1 = boundaries[col_index] if col_index < 3 else page.rect.width
