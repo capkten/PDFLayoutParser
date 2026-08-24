@@ -109,6 +109,188 @@ def _bbox_values(bbox: BBox) -> list[float]:
     return [float(bbox.x0), float(bbox.y0), float(bbox.x1), float(bbox.y1)]
 
 
+def _query_rows(page: fitz.Page) -> list[list[tuple[float, float, float, float, str]]]:
+    """Group native page words into visual rows for query-record recovery."""
+    rows: list[list[tuple[float, float, float, float, str]]] = []
+    for word in page.get_text("words"):
+        x0, y0, x1, y1, text = word[:5]
+        if not text.strip():
+            continue
+        center_y = (y0 + y1) / 2.0
+        row = next(
+            (candidate for candidate in rows if abs((candidate[0][1] + candidate[0][3]) / 2.0 - center_y) <= 2.0),
+            None,
+        )
+        item = (x0, y0, x1, y1, text)
+        if row is None:
+            rows.append([item])
+        else:
+            row.append(item)
+    return [sorted(row, key=lambda item: item[0]) for row in sorted(rows, key=lambda row: row[0][1])]
+
+
+def _is_query_record_row(row: list[tuple[float, float, float, float, str]]) -> bool:
+    """Return True for a row with the four query-record column anchors."""
+    texts = [item[4] for item in row]
+    has_number = any(item[0] < 110 and re.fullmatch(r"\d+", item[4]) for item in row)
+    has_date = any(item[0] >= 120 and item[0] < 240 and "年" in text for item, text in zip(row, texts))
+    has_reason = any(item[0] >= 350 for item in row)
+    return has_number and has_date and has_reason
+
+
+def _make_query_table(
+    page: fitz.Page,
+    *,
+    header_index: int | None = None,
+    end_index: int | None = None,
+) -> Table | None:
+    """Recover one four-column institution-query table directly from page words."""
+    rows = _query_rows(page)
+    if header_index is None:
+        for index, row in enumerate(rows):
+            row_text = "".join(item[4] for item in row)
+            if all(header in row_text for header in _QUERY_HEADERS):
+                header_index = index
+                break
+
+    if header_index is None:
+        record_indices = [index for index, row in enumerate(rows) if _is_query_record_row(row)]
+        if len(record_indices) < 2:
+            return None
+        start_index = record_indices[0]
+        end_index = record_indices[-1] + 1
+        header_cells: list[Cell] = []
+    else:
+        start_index = header_index + 1
+        end_index = len(rows) if end_index is None else end_index
+        header_cells = [
+            Cell(
+                text=header,
+                row_index=0,
+                col_index=index,
+                bbox=BBox(
+                    item[0], item[1], item[2], item[3]
+                ),
+            )
+            for index, header in enumerate(_QUERY_HEADERS)
+            for item in rows[header_index]
+            if header == item[4]
+        ]
+
+    boundaries = [120.0, 243.0, 410.0]
+    recovered_rows: list[list[tuple[float, float, float, float, str]]] = []
+    for row in rows[start_index:end_index]:
+        row_text = "".join(item[4] for item in row)
+        if "页" in row_text and "第" in row_text:
+            break
+        if _is_query_record_row(row):
+            recovered_rows.append(row)
+            continue
+        if recovered_rows and any(243.0 <= (item[0] + item[2]) / 2.0 < 410.0 for item in row):
+            recovered_rows.append(row)
+
+    if not recovered_rows or not any(_is_query_record_row(row) for row in recovered_rows):
+        return None
+
+    cells = list(header_cells)
+    row_number = 1 if header_index is not None else 0
+    for row in recovered_rows:
+        by_col: dict[int, list[tuple[float, float, float, float, str]]] = {index: [] for index in range(4)}
+        for item in row:
+            center_x = (item[0] + item[2]) / 2.0
+            col_index = 0 if center_x < boundaries[0] else 1 if center_x < boundaries[1] else 2 if center_x < boundaries[2] else 3
+            by_col[col_index].append(item)
+
+        if not by_col[0]:
+            if row_number <= 1:
+                continue
+            continuation = "".join(item[4] for item in by_col[2])
+            if continuation:
+                previous = next(cell for cell in cells if cell.row_index == row_number - 1 and cell.col_index == 2)
+                previous.text += continuation
+                previous.bbox = BBox(previous.bbox.x0, previous.bbox.y0, max(previous.bbox.x1, max(item[2] for item in by_col[2])), max(previous.bbox.y1, max(item[3] for item in by_col[2])))
+            continue
+
+        row_y0 = min(item[1] for item in row)
+        row_y1 = max(item[3] for item in row)
+        for col_index in range(4):
+            parts = by_col[col_index]
+            if parts:
+                bbox = BBox(
+                    min(item[0] for item in parts),
+                    min(item[1] for item in parts),
+                    max(item[2] for item in parts),
+                    max(item[3] for item in parts),
+                )
+                text = "".join(item[4] for item in parts)
+            else:
+                x0 = 0.0 if col_index == 0 else boundaries[col_index - 1]
+                x1 = boundaries[col_index] if col_index < 3 else page.rect.width
+                bbox = BBox(x0, row_y0, x1, row_y1)
+                text = ""
+            cells.append(Cell(text, row_number, col_index, bbox))
+        row_number += 1
+
+    if row_number <= (1 if header_index is not None else 0):
+        return None
+    all_cells = [cell for cell in cells if cell.text or cell.row_index == 0]
+    return Table(
+        bbox=BBox(
+            min(cell.bbox.x0 for cell in all_cells),
+            min(cell.bbox.y0 for cell in all_cells),
+            max(cell.bbox.x1 for cell in all_cells),
+            max(cell.bbox.y1 for cell in all_cells),
+        ),
+        rows=row_number,
+        cols=4,
+        cells=all_cells,
+        confidence=0.95,
+        source="personal_query_recovery",
+    )
+
+
+def _make_query_tables(page: fitz.Page) -> list[Table]:
+    """Recover separate institution and personal query tables on one page."""
+    rows = _query_rows(page)
+    header_indices = []
+    section_indices = []
+    for index, row in enumerate(rows):
+        row_text = "".join(item[4] for item in row)
+        if all(header in row_text for header in _QUERY_HEADERS):
+            header_indices.append(index)
+        if _INSTITUTION_TITLE in row_text or _PERSONAL_TITLE in row_text:
+            section_indices.append(index)
+
+    if not header_indices:
+        table = _make_query_table(page)
+        return [table] if table is not None else []
+
+    tables = []
+    for header_index in header_indices:
+        next_boundaries = [
+            index
+            for index in [*header_indices, *section_indices, len(rows)]
+            if index > header_index
+        ]
+        table = _make_query_table(
+            page,
+            header_index=header_index,
+            end_index=min(next_boundaries),
+        )
+        if table is not None:
+            tables.append(table)
+    return tables
+
+
+def _table_overlaps(left: Table, right: Table) -> bool:
+    return not (
+        left.bbox.x1 < right.bbox.x0
+        or right.bbox.x1 < left.bbox.x0
+        or left.bbox.y1 < right.bbox.y0
+        or right.bbox.y1 < left.bbox.y0
+    )
+
+
 def _document_result(document: Document) -> dict:
     """Return the compact public result for the personal-report API."""
     writer = MarkdownWriter()
@@ -257,6 +439,14 @@ class PersonalCreditReportTableExtractor(TableExtractor):
             page,
             excluded_regions=excluded_regions,
         )
+        query_tables = _make_query_tables(page)
+        if query_tables:
+            tables = [
+                table
+                for table in tables
+                if not any(_table_overlaps(table, query) for query in query_tables)
+            ]
+            tables.extend(query_tables)
         filtered = [
             _trim_query_table(table)
             for table in tables

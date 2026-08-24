@@ -10,7 +10,10 @@ import fitz
 import pytest
 
 from hexai_pdf_parser.models import BBox, Cell, Table
-from hexai_pdf_parser.personal_credit_report import PersonalCreditReportTableExtractor
+from hexai_pdf_parser.personal_credit_report import (
+    PersonalCreditReportTableExtractor,
+    parse_personal_credit_report,
+)
 from hexai_pdf_parser.text_region_detector import CandidateRegion
 from hexai_pdf_parser.table_extractor import TableExtractor
 
@@ -3023,3 +3026,55 @@ def test_dollar_sign_no_numeric_neighbor():
     result = extractor._handle_dollar_signs([row])
     assert len(result) == 1
     assert len(result[0].words) == 2
+
+
+@pytest.mark.parametrize(
+    "pdf_name, expected_pages, expected_rows",
+    [
+        ("PDFsam_merge1.pdf", [2], [13]),
+        ("PDFsam_merge3.pdf", [2, 3], [18, 26]),
+    ],
+)
+def test_personal_credit_report_recovers_query_record_tables(
+    pdf_name, expected_pages, expected_rows
+):
+    document = parse_personal_credit_report(pdf_name)
+    query_tables = []
+    for page in document["pages"]:
+        for block in page["blocks"]:
+            x0, y0, x1, _ = block["bbox"]
+            is_query_area = (
+                block["type"] == "table"
+                and x0 >= 60
+                and x1 >= 498
+                and (
+                    (pdf_name.endswith("merge1.pdf") and page["page"] == 2 and y0 >= 100)
+                    or (pdf_name.endswith("merge3.pdf") and page["page"] == 2 and y0 >= 400)
+                    or (pdf_name.endswith("merge3.pdf") and page["page"] == 3 and y0 < 600)
+                )
+            )
+            if is_query_area:
+                query_tables.append((page["page"], block["content"]))
+
+    assert [page for page, _ in query_tables] == expected_pages
+    assert [content.count("<tr>") for _, content in query_tables] == expected_rows
+    assert "12" in query_tables[-1][1] or "43" in query_tables[-1][1]
+    assert any("信用卡中心" in content for _, content in query_tables)
+
+
+def test_personal_credit_report_keeps_institution_and_personal_query_tables_separate():
+    pdf_path = next(
+        path for path in Path(".").glob("*.pdf") if path.stat().st_size == 850048
+    )
+    document = parse_personal_credit_report(str(pdf_path))
+    page = document["pages"][3]
+    query_tables = [
+        block
+        for block in page["blocks"]
+        if block["type"] == "table"
+        and 550 <= block["bbox"][1] < 800
+        and block["bbox"][0] > 50
+    ]
+
+    assert len(query_tables) == 2
+    assert [table["content"].count("<tr>") for table in query_tables] == [6, 5]
