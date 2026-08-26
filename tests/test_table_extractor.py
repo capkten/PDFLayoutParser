@@ -3023,3 +3023,39 @@ def test_dollar_sign_no_numeric_neighbor():
     result = extractor._handle_dollar_signs([row])
     assert len(result) == 1
     assert len(result[0].words) == 2
+
+
+def test_english_title_header_absorbs_trailing_empty_column():
+    from hexai_pdf_parser.english_table_extractor import EnglishTableExtractor
+
+    extractor = EnglishTableExtractor()
+    cells = [
+        Cell(
+            text="Alphabet Inc. CONSOLIDATED STATEMENTS OF STOCKHOLDERS' EQUITY",
+            row_index=0,
+            col_index=0,
+            colspan=5,
+            bbox=BBox(30, 10, 470, 20),
+        ),
+        Cell(text="", row_index=0, col_index=5, bbox=BBox(470, 10, 580, 20)),
+        Cell(text="Shares", row_index=1, col_index=0, bbox=BBox(30, 20, 100, 30)),
+    ]
+
+    result = extractor._normalize_title_header_spans(cells, 2, 6)
+
+    assert [(cell.col_index, cell.colspan) for cell in result if cell.row_index == 0] == [(0, 6)]
+
+
+def test_english_grouped_header_does_not_absorb_real_empty_slots():
+    from hexai_pdf_parser.english_table_extractor import EnglishTableExtractor
+
+    extractor = EnglishTableExtractor()
+    cells = [
+        Cell(text="2024", row_index=0, col_index=2, colspan=3, bbox=BBox(200, 10, 400, 20)),
+        Cell(text="", row_index=0, col_index=0, bbox=BBox(30, 10, 100, 20)),
+        Cell(text="", row_index=0, col_index=5, bbox=BBox(400, 10, 500, 20)),
+    ]
+
+    result = extractor._normalize_title_header_spans(cells, 2, 6)
+
+    assert [(cell.col_index, cell.colspan) for cell in result] == [(2, 3), (0, 1), (5, 1)]

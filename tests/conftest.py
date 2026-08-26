@@ -1,7 +1,13 @@
+import sys
 import tempfile
 from pathlib import Path
 
-import fitz
+try:
+    import pymupdf as fitz
+    sys.modules['fitz'] = fitz
+except ImportError:
+    import fitz
+
 import pytest
 
 

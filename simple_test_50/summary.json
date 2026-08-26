@@ -1,0 +1,36 @@
+{
+  "seed": 20260824,
+  "selected_count": 50,
+  "language_counts": {
+    "en": 25,
+    "zh": 25
+  },
+  "sample_type_counts": {
+    "challenge": 14,
+    "representative": 36
+  },
+  "source_family_counts": {
+    "sec_pdfs": 22,
+    "SEC": 3,
+    "downloads_szse": 16,
+    "downloads_hkex": 6,
+    "downloads": 3
+  },
+  "page_bucket_counts": {
+    "long": 12,
+    "medium": 27,
+    "short": 10,
+    "xlong": 1
+  },
+  "document_complexity_counts": {
+    "high": 31,
+    "medium": 15,
+    "low": 4
+  },
+  "table_complexity_counts": {
+    "low": 16,
+    "medium": 29,
+    "high": 1,
+    "none": 4
+  }
+}
