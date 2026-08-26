@@ -20,9 +20,6 @@ setup(
             "numpy>=1.20.0",
             "opencv-python>=4.2.0",
         ],
-        "demo": [
-            "camelot-py[cv]>=0.11.0",
-        ],
         "dev": [
             "pytest>=7.0",
         ],
@@ -30,11 +27,12 @@ setup(
     packages=find_packages(where="src"),
     package_dir={"": "src"},
     package_data={
-        "hexai_pdf_parser": ["data/models/*.onnx", "table_templates/*.json"],
+        "hexai_pdf_parser.tables": ["table_templates/*.json"],
+        "hexai_pdf_parser.ml": ["table_detector_model/*.onnx"],
     },
     entry_points={
         "console_scripts": [
-            "hexai_pdf_parser=hexai_pdf_parser.cli:main",
+            "hexai_pdf_parser=hexai_pdf_parser.core.cli:main",
         ],
     },
 )

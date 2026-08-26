@@ -39,3 +39,5 @@ src/models/
 output*
 *tmp*
 docs/
+simple_test_50/*
+src/hexai_pdf_parser/data/*
