@@ -191,12 +191,17 @@ class TableExtractor:
 
         return [item for idx, item in enumerate(items) if idx not in suppressed]
 
-    def _detect_rule_candidates(self, page: fitz.Page) -> List[Table]:
+    def _detect_rule_candidates(
+        self, page: fitz.Page, page_language: Optional[str] = None
+    ) -> List[Table]:
         """Find recall-oriented table candidates used only to gate the model."""
         from hexai_pdf_parser.extractors.language_detector import detect_page_language
 
+        if page_language is None:
+            page_language = detect_page_language(page)
+
         candidates: List[Table] = []
-        if detect_page_language(page) == "en":
+        if page_language == "en":
             candidates.extend(self._wireless_extractor.extract_zebra(page))
 
         line_tables = self._wired_extractor.extract(page)
@@ -215,8 +220,25 @@ class TableExtractor:
         )
         return candidates
 
-    def _extract_model_tables(self, page: fitz.Page) -> List[Table]:
-        """Locate and structure tables on a rule-selected page."""
+    @staticmethod
+    def _bbox_overlaps(left: BBox, right: BBox) -> bool:
+        """Return whether two regions overlap with positive area."""
+        return (
+            min(left.x1, right.x1) > max(left.x0, right.x0)
+            and min(left.y1, right.y1) > max(left.y0, right.y0)
+        )
+
+    def _extract_model_tables(
+        self,
+        page: fitz.Page,
+        wired_tables: Optional[List[Table]] = None,
+        page_language: Optional[str] = None,
+    ) -> List[Table]:
+        """Locate tables on a rule-selected page, preferring overlapping wired results."""
+        if page_language is None:
+            from hexai_pdf_parser.extractors.language_detector import detect_page_language
+
+            page_language = detect_page_language(page)
         try:
             if self._ml_detector is None:
                 from hexai_pdf_parser.ml.ml_table_detector import MLTableDetector
@@ -235,10 +257,20 @@ class TableExtractor:
 
         tables: List[Table] = []
         for bbox, score in model_items:
+            overlapping_wired = [
+                table
+                for table in wired_tables or []
+                if self._bbox_overlaps(table.bbox, bbox)
+            ]
+            if overlapping_wired:
+                tables.extend(overlapping_wired)
+                continue
+
             region_tables = self._wireless_extractor.extract(
                 page,
                 table_bbox=bbox,
                 confidence=score,
+                page_language=page_language,
             )
             if not region_tables:
                 region_tables = self._wired_extractor.extract(
@@ -252,6 +284,9 @@ class TableExtractor:
     def extract(self, page: fitz.Page) -> List[Table]:
         """Detect rule candidates, then use the model for final table results."""
         normalize_page_rotation(page)
+        from hexai_pdf_parser.extractors.language_detector import detect_page_language
+
+        page_language = detect_page_language(page)
         self._last_text_alignment_debug = None
         self._last_pipeline_debug = {
             "page_index": page.number,
@@ -266,10 +301,16 @@ class TableExtractor:
         } if self.debug_pipeline else None
         self._last_wireless_recovery = None
 
-        if not self._detect_rule_candidates(page):
+        candidates = self._detect_rule_candidates(page, page_language=page_language)
+        if not candidates:
             return []
 
-        tables = self._extract_model_tables(page)
+        wired_tables = [
+            table for table in candidates if table.source == "line_projection"
+        ]
+        tables = self._extract_model_tables(
+            page, wired_tables=wired_tables, page_language=page_language
+        )
 
         # Apply layout rule system when a config with profiles is provided.
         if self._table_config and self._table_config.profiles:

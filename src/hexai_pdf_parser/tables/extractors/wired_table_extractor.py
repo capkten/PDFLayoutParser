@@ -32,13 +32,13 @@ class WiredTableExtractor(BaseTableExtractor):
         """Extract wired tables using physical vector line-projection and intersection topology."""
         h_lines, v_lines = self._extract_lines_from_drawings(page, clip_bbox=table_bbox)
 
-        if len(h_lines) < 2 or len(v_lines) < 2:
+        if len(h_lines) < 2 or not v_lines:
             return []
 
         h_lines = self._merge_h_lines(h_lines)
         v_lines = self._merge_v_lines(v_lines)
 
-        if len(h_lines) < 2 or len(v_lines) < 2:
+        if len(h_lines) < 2 or not v_lines:
             return []
 
         table_regions = self._find_table_regions(h_lines, v_lines)
@@ -207,7 +207,7 @@ class WiredTableExtractor(BaseTableExtractor):
         h_lines: List[Tuple[float, float, float, float]],
         v_lines: List[Tuple[float, float, float, float]],
     ) -> List[Tuple[BBox, List[Tuple[float, float, float, float]], List[Tuple[float, float, float, float]]]]:
-        if len(h_lines) < 2 or len(v_lines) < 2:
+        if len(h_lines) < 2 or not v_lines:
             return []
 
         # Ignore page rules, footer lines, and text underlines that do not
@@ -215,30 +215,89 @@ class WiredTableExtractor(BaseTableExtractor):
         h_lines = [
             line
             for line in h_lines
-            if sum(self._lines_intersect(h_line=line, v_line=v_line) for v_line in v_lines) >= 2
+            if sum(self._lines_intersect(h_line=line, v_line=v_line) for v_line in v_lines) >= 1
         ]
         v_lines = [
             line
             for line in v_lines
-            if sum(self._lines_intersect(h_line=h_line, v_line=line) for h_line in h_lines) >= 2
+            if sum(self._lines_intersect(h_line=h_line, v_line=line) for h_line in h_lines) >= 1
         ]
         h_lines = [
             line
             for line in h_lines
-            if sum(self._lines_intersect(h_line=line, v_line=v_line) for v_line in v_lines) >= 2
+            if sum(self._lines_intersect(h_line=line, v_line=v_line) for v_line in v_lines) >= 1
         ]
 
-        if len(h_lines) < 2 or len(v_lines) < 2:
+        if len(h_lines) < 2 or not v_lines:
             return []
 
-        all_x = sorted(list(set([l[0] for l in v_lines] + [l[0] for l in h_lines] + [l[2] for l in h_lines])))
-        all_y = sorted(list(set([l[1] for l in h_lines] + [l[1] for l in v_lines] + [l[3] for l in v_lines])))
+        h_to_v = {
+            h_idx: [
+                v_idx
+                for v_idx, v_line in enumerate(v_lines)
+                if self._lines_intersect(h_line=h_line, v_line=v_line)
+            ]
+            for h_idx, h_line in enumerate(h_lines)
+        }
+        v_to_h = {
+            v_idx: [
+                h_idx
+                for h_idx, h_line in enumerate(h_lines)
+                if self._lines_intersect(h_line=h_line, v_line=v_line)
+            ]
+            for v_idx, v_line in enumerate(v_lines)
+        }
 
-        min_x, max_x = min(all_x), max(all_x)
-        min_y, max_y = min(all_y), max(all_y)
+        components = []
+        visited_h = set()
+        visited_v = set()
+        for start_h in range(len(h_lines)):
+            if start_h in visited_h:
+                continue
 
-        bbox = BBox(min_x, min_y, max_x, max_y)
-        return [(bbox, h_lines, v_lines)]
+            component_h = set()
+            component_v = set()
+            pending = [("h", start_h)]
+            while pending:
+                line_type, line_idx = pending.pop()
+                if line_type == "h":
+                    if line_idx in visited_h:
+                        continue
+                    visited_h.add(line_idx)
+                    component_h.add(line_idx)
+                    pending.extend(("v", v_idx) for v_idx in h_to_v[line_idx])
+                else:
+                    if line_idx in visited_v:
+                        continue
+                    visited_v.add(line_idx)
+                    component_v.add(line_idx)
+                    pending.extend(("h", h_idx) for h_idx in v_to_h[line_idx])
+
+            if len(component_h) < 2 or not component_v:
+                continue
+            components.append(
+                (
+                    [h_lines[idx] for idx in sorted(component_h)],
+                    [v_lines[idx] for idx in sorted(component_v)],
+                )
+            )
+
+        regions = []
+        for component_h, component_v in components:
+            all_x = [
+                value
+                for line in component_h
+                for value in (line[0], line[2])
+            ] + [line[0] for line in component_v]
+            all_y = [line[1] for line in component_h] + [
+                value
+                for line in component_v
+                for value in (line[1], line[3])
+            ]
+            bbox = BBox(min(all_x), min(all_y), max(all_x), max(all_y))
+            regions.append((bbox, component_h, component_v))
+
+        return sorted(regions, key=lambda region: (region[0].y0, region[0].x0))
 
     def _lines_intersect(
         self,
@@ -261,7 +320,13 @@ class WiredTableExtractor(BaseTableExtractor):
         h_lines: List[Tuple[float, float, float, float]],
         v_lines: List[Tuple[float, float, float, float]],
     ) -> List[Cell]:
-        xs = sorted(list(set(round(l[0], 1) for l in v_lines)))
+        xs = sorted(
+            {
+                round(bbox.x0, 1),
+                round(bbox.x1, 1),
+                *(round(line[0], 1) for line in v_lines),
+            }
+        )
         ys = sorted(list(set(round(l[1], 1) for l in h_lines)))
 
         if len(xs) < 2 or len(ys) < 2:

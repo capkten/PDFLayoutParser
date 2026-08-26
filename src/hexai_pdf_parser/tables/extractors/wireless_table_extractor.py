@@ -47,12 +47,18 @@ class WirelessTableExtractor(BaseTableExtractor):
         page: fitz.Page,
         table_bbox: Optional[BBox] = None,
         confidence: Optional[float] = None,
+        page_language: Optional[str] = None,
     ) -> List[Table]:
         """Extract wireless tables from candidate region or page."""
-        # 1. 优先尝试斑马纹底色无线表格提取 (如美股 10-K/10-Q 847, 846, 838 等)
-        zebra_tables = self.extract_zebra(page, table_bbox=table_bbox, confidence=confidence)
-        if zebra_tables:
-            return zebra_tables
+        if page_language is None:
+            page_language = detect_page_language(page)
+
+        if page_language == "en":
+            zebra_tables = self.extract_zebra(
+                page, table_bbox=table_bbox, confidence=confidence
+            )
+            if zebra_tables:
+                return zebra_tables
 
         # 2. 文本对齐与表头引导无线表格提取 (如 850 页 Exhibit 表、A股三线表等)
         if table_bbox is not None:

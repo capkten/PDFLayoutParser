@@ -47,7 +47,7 @@ def test_rule_hit_calls_model_and_only_model_tables_are_final(monkeypatch):
 
     extractor._ml_detector = FakeDetector()
     extractor._wireless_extractor.extract = (
-        lambda page, table_bbox=None, confidence=None: [model_table]
+        lambda page, table_bbox=None, confidence=None, **kwargs: [model_table]
     )
     monkeypatch.setattr(
         "hexai_pdf_parser.tables.table_extractor.normalize_page_rotation",
@@ -97,3 +97,45 @@ def test_model_failure_does_not_fall_back_to_rule_tables(monkeypatch):
     )
 
     assert extractor.extract(_page()) == []
+
+
+def test_overlapping_model_region_prefers_rule_wired_table(monkeypatch):
+    extractor = TableExtractor()
+    wired_table = _table("line_projection", 10)
+    model_table = _table("model", 20)
+    detector_calls = []
+    structure_calls = []
+
+    extractor._wireless_extractor.extract_zebra = lambda page: []
+
+    def extract_wired(page, table_bbox=None, confidence=None):
+        if table_bbox is None:
+            return [wired_table]
+        structure_calls.append((table_bbox, confidence))
+        return [model_table]
+
+    extractor._wired_extractor.extract = extract_wired
+    extractor._extract_via_text_alignment = lambda page, excluded_regions=None: []
+
+    class FakeDetector:
+        def detect_with_scores(self, page):
+            detector_calls.append(page)
+            return [(model_table.bbox, 0.91)]
+
+    extractor._ml_detector = FakeDetector()
+    extractor._wireless_extractor.extract = (
+        lambda page, table_bbox=None, confidence=None, **kwargs: (_ for _ in ()).throw(
+            AssertionError("overlapping wired table must take precedence")
+        )
+    )
+    monkeypatch.setattr(
+        "hexai_pdf_parser.tables.table_extractor.normalize_page_rotation",
+        lambda page: None,
+        raising=False,
+    )
+
+    result = extractor.extract(_page())
+
+    assert detector_calls
+    assert result == [wired_table]
+    assert structure_calls == []

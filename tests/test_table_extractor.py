@@ -16,6 +16,7 @@ from hexai_pdf_parser.personal_credit_report import (
 )
 from hexai_pdf_parser.text_region_detector import CandidateRegion
 from hexai_pdf_parser.table_extractor import TableExtractor
+from hexai_pdf_parser.wireless_table_extractor import WirelessTableExtractor
 
 
 def make_pdf_with_table(path):
@@ -37,6 +38,44 @@ def make_pdf_with_table(path):
     page.insert_text((220, 170), "B2")
     doc.save(path)
     doc.close()
+
+
+def test_wireless_extractor_skips_zebra_for_chinese_page(monkeypatch):
+    extractor = WirelessTableExtractor()
+    zebra_called = False
+
+    def fail_zebra(*args, **kwargs):
+        nonlocal zebra_called
+        zebra_called = True
+        return [object()]
+
+    monkeypatch.setattr(extractor, "extract_zebra", fail_zebra)
+    monkeypatch.setattr(
+        extractor,
+        "extract_cells_from_region",
+        lambda page, bbox: (1, 1, [Cell("中文", 0, 0, bbox)]),
+    )
+
+    tables = extractor.extract(
+        object(), table_bbox=BBox(0, 0, 100, 100), page_language="zh"
+    )
+
+    assert tables[0].source == "text_alignment"
+    assert not zebra_called
+
+
+def test_wireless_extractor_keeps_zebra_for_english_page(monkeypatch):
+    extractor = WirelessTableExtractor()
+    zebra_table = Table(
+        bbox=BBox(0, 0, 100, 100), rows=1, cols=1, cells=[], source="english_color_based"
+    )
+    monkeypatch.setattr(extractor, "extract_zebra", lambda *args, **kwargs: [zebra_table])
+
+    tables = extractor.extract(
+        object(), table_bbox=BBox(0, 0, 100, 100), page_language="en"
+    )
+
+    assert tables == [zebra_table]
 
 
 def make_synthetic_text_alignment_pdf(
