@@ -210,6 +210,27 @@ class WiredTableExtractor(BaseTableExtractor):
         if len(h_lines) < 2 or len(v_lines) < 2:
             return []
 
+        # Ignore page rules, footer lines, and text underlines that do not
+        # participate in the same connected line network as the table.
+        h_lines = [
+            line
+            for line in h_lines
+            if sum(self._lines_intersect(h_line=line, v_line=v_line) for v_line in v_lines) >= 2
+        ]
+        v_lines = [
+            line
+            for line in v_lines
+            if sum(self._lines_intersect(h_line=h_line, v_line=line) for h_line in h_lines) >= 2
+        ]
+        h_lines = [
+            line
+            for line in h_lines
+            if sum(self._lines_intersect(h_line=line, v_line=v_line) for v_line in v_lines) >= 2
+        ]
+
+        if len(h_lines) < 2 or len(v_lines) < 2:
+            return []
+
         all_x = sorted(list(set([l[0] for l in v_lines] + [l[0] for l in h_lines] + [l[2] for l in h_lines])))
         all_y = sorted(list(set([l[1] for l in h_lines] + [l[1] for l in v_lines] + [l[3] for l in v_lines])))
 
@@ -218,6 +239,21 @@ class WiredTableExtractor(BaseTableExtractor):
 
         bbox = BBox(min_x, min_y, max_x, max_y)
         return [(bbox, h_lines, v_lines)]
+
+    def _lines_intersect(
+        self,
+        *,
+        h_line: Tuple[float, float, float, float],
+        v_line: Tuple[float, float, float, float],
+    ) -> bool:
+        """Return whether a horizontal and vertical line touch within tolerance."""
+        hx0, hy, hx1, _ = h_line
+        vx, vy0, _, vy1 = v_line
+        tolerance = self.line_tolerance
+        return (
+            hx0 - tolerance <= vx <= hx1 + tolerance
+            and vy0 - tolerance <= hy <= vy1 + tolerance
+        )
 
     def _build_cells_for_region(
         self,
