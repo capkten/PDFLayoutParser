@@ -100,3 +100,50 @@ def test_find_table_regions_accepts_one_internal_vertical_line():
         (0.0, 0.0, 100.0, 20.0)
     )
     assert len(region_v) == 1
+
+
+def test_build_cells_respects_partial_line_segments_and_merges_missing_edges():
+    extractor = WiredTableExtractor()
+    cells = extractor._build_cells_for_region(
+        bbox=BBox(0.0, 0.0, 100.0, 20.0),
+        h_lines=[
+            (0.0, 0.0, 100.0, 0.0),
+            (0.0, 10.0, 100.0, 10.0),
+            (0.0, 20.0, 100.0, 20.0),
+        ],
+        v_lines=[
+            (0.0, 0.0, 0.0, 20.0),
+            (50.0, 10.0, 50.0, 20.0),
+            (100.0, 0.0, 100.0, 20.0),
+        ],
+    )
+
+    assert len(cells) == 3
+    merged = [cell for cell in cells if cell.colspan == 2]
+    assert len(merged) == 1
+    assert merged[0].bbox == BBox(0.0, 0.0, 100.0, 10.0)
+    assert merged[0].colspan == 2
+
+
+def test_build_cells_accepts_visually_touching_lines_with_small_coordinate_gap():
+    extractor = WiredTableExtractor(line_tolerance=2.0)
+    cells = extractor._build_cells_for_region(
+        bbox=BBox(0.0, 0.0, 100.0, 20.0),
+        h_lines=[
+            (0.0, 0.0, 100.0, 0.0),
+            (0.0, 10.0, 100.0, 10.0),
+            (0.0, 20.0, 100.0, 20.0),
+        ],
+        v_lines=[
+            (0.0, 0.0, 0.0, 20.0),
+            (50.5, 10.5, 50.5, 20.0),
+            (100.0, 0.0, 100.0, 20.0),
+        ],
+    )
+
+    assert len(cells) == 3
+    assert any(cell.colspan == 2 for cell in cells)
+    assert extractor._lines_intersect(
+        h_line=(0.0, 10.0, 100.0, 10.0),
+        v_line=(50.5, 10.5, 50.5, 20.0),
+    )

@@ -250,20 +250,20 @@ class TableExtractor:
             model_items = self._ml_detector.detect_with_scores(page)
             model_items = self._filter_contained_bboxes(model_items)
         except Exception:
-            return []
-
-        if not model_items:
-            return []
+            return list(wired_tables or [])
 
         tables: List[Table] = []
+        included_wired: set[int] = set()
         for bbox, score in model_items:
             overlapping_wired = [
                 table
                 for table in wired_tables or []
-                if self._bbox_overlaps(table.bbox, bbox)
+                if id(table) not in included_wired
+                and self._bbox_overlaps(table.bbox, bbox)
             ]
             if overlapping_wired:
                 tables.extend(overlapping_wired)
+                included_wired.update(id(table) for table in overlapping_wired)
                 continue
 
             region_tables = self._wireless_extractor.extract(
@@ -279,6 +279,12 @@ class TableExtractor:
                     confidence=score,
                 )
             tables.extend(region_tables)
+
+        tables.extend(
+            table
+            for table in wired_tables or []
+            if id(table) not in included_wired
+        )
         return tables
 
     def extract(self, page: fitz.Page) -> List[Table]:

@@ -320,31 +320,179 @@ class WiredTableExtractor(BaseTableExtractor):
         h_lines: List[Tuple[float, float, float, float]],
         v_lines: List[Tuple[float, float, float, float]],
     ) -> List[Cell]:
-        xs = sorted(
+        h_ys = sorted(set(round(line[1], 1) for line in h_lines))
+        v_xs = sorted(
             {
                 round(bbox.x0, 1),
                 round(bbox.x1, 1),
                 *(round(line[0], 1) for line in v_lines),
             }
         )
-        ys = sorted(list(set(round(l[1], 1) for l in h_lines)))
 
-        if len(xs) < 2 or len(ys) < 2:
+        if len(h_ys) < 2 or len(v_xs) < 2:
             return []
 
+        rows = len(h_ys) - 1
+        cols = len(v_xs) - 1
+        tol = self.line_tolerance
+        effective_v_lines = list(v_lines)
+        if not any(abs(line[0] - bbox.x0) <= tol for line in v_lines):
+            effective_v_lines.append((bbox.x0, bbox.y0, bbox.x0, bbox.y1))
+        if not any(abs(line[0] - bbox.x1) <= tol for line in v_lines):
+            effective_v_lines.append((bbox.x1, bbox.y0, bbox.x1, bbox.y1))
+
+        def has_h_segment(y: float, x0: float, x1: float) -> bool:
+            span = x1 - x0
+            for lx0, ly, lx1, _ in h_lines:
+                if abs(ly - y) > tol:
+                    continue
+                overlap = min(lx1, x1 + tol) - max(lx0, x0 - tol)
+                if overlap >= max(span - tol, span * 0.9):
+                    return True
+            return False
+
+        def has_v_segment(x: float, y0: float, y1: float) -> bool:
+            span = y1 - y0
+            for lx, ly0, _, ly1 in effective_v_lines:
+                if abs(lx - x) > tol:
+                    continue
+                overlap = min(ly1, y1 + tol) - max(ly0, y0 - tol)
+                if overlap >= max(span - tol, span * 0.9):
+                    return True
+            return False
+
+        h_edges = [
+            [
+                has_h_segment(h_ys[row], v_xs[col], v_xs[col + 1])
+                for col in range(cols)
+            ]
+            for row in range(rows + 1)
+        ]
+        v_edges = [
+            [
+                has_v_segment(v_xs[col], h_ys[row], h_ys[row + 1])
+                for col in range(cols + 1)
+            ]
+            for row in range(rows)
+        ]
+
+        outside: set[tuple[int, int]] = set()
+        stack: list[tuple[int, int]] = []
+
+        def mark_outside(row: int, col: int) -> None:
+            if (row, col) not in outside:
+                outside.add((row, col))
+                stack.append((row, col))
+
+        for col in range(cols):
+            if not h_edges[0][col]:
+                mark_outside(0, col)
+            if not h_edges[rows][col]:
+                mark_outside(rows - 1, col)
+        for row in range(rows):
+            if not v_edges[row][0]:
+                mark_outside(row, 0)
+            if not v_edges[row][cols]:
+                mark_outside(row, cols - 1)
+
+        while stack:
+            row, col = stack.pop()
+            if row > 0 and not h_edges[row][col]:
+                mark_outside(row - 1, col)
+            if row + 1 < rows and not h_edges[row + 1][col]:
+                mark_outside(row + 1, col)
+            if col > 0 and not v_edges[row][col]:
+                mark_outside(row, col - 1)
+            if col + 1 < cols and not v_edges[row][col + 1]:
+                mark_outside(row, col + 1)
+
+        inside_cells = [
+            (row, col)
+            for row in range(rows)
+            for col in range(cols)
+            if (row, col) not in outside
+        ]
+        if not inside_cells:
+            return []
+
+        parent = list(range(rows * cols))
+
+        def cell_id(row: int, col: int) -> int:
+            return row * cols + col
+
+        def find(idx: int) -> int:
+            while parent[idx] != idx:
+                parent[idx] = parent[parent[idx]]
+                idx = parent[idx]
+            return idx
+
+        def union(left: int, right: int) -> None:
+            left_root = find(left)
+            right_root = find(right)
+            if left_root != right_root:
+                parent[right_root] = left_root
+
+        inside_set = set(inside_cells)
+        for row, col in inside_cells:
+            if (
+                col + 1 < cols
+                and (row, col + 1) in inside_set
+                and not v_edges[row][col + 1]
+            ):
+                union(cell_id(row, col), cell_id(row, col + 1))
+            if (
+                row + 1 < rows
+                and (row + 1, col) in inside_set
+                and not h_edges[row + 1][col]
+            ):
+                union(cell_id(row, col), cell_id(row + 1, col))
+
+        components: Dict[int, List[Tuple[int, int]]] = defaultdict(list)
+        for row, col in inside_cells:
+            components[find(cell_id(row, col))].append((row, col))
+
         cells: List[Cell] = []
-        for r_idx in range(len(ys) - 1):
-            for c_idx in range(len(xs) - 1):
-                cx0, cy0 = xs[c_idx], ys[r_idx]
-                cx1, cy1 = xs[c_idx + 1], ys[r_idx + 1]
-                cells.append(
-                    Cell(
-                        text="",
-                        row_index=r_idx,
-                        col_index=c_idx,
-                        bbox=BBox(cx0, cy0, cx1, cy1),
+        for coords in components.values():
+            min_row = min(row for row, _ in coords)
+            max_row = max(row for row, _ in coords)
+            min_col = min(col for _, col in coords)
+            max_col = max(col for _, col in coords)
+            expected_size = (max_row - min_row + 1) * (max_col - min_col + 1)
+
+            if len(coords) != expected_size:
+                for row, col in sorted(coords):
+                    cells.append(
+                        Cell(
+                            text="",
+                            row_index=row,
+                            col_index=col,
+                            bbox=BBox(
+                                v_xs[col],
+                                h_ys[row],
+                                v_xs[col + 1],
+                                h_ys[row + 1],
+                            ),
+                        )
                     )
+                continue
+
+            cells.append(
+                Cell(
+                    text="",
+                    row_index=min_row,
+                    col_index=min_col,
+                    bbox=BBox(
+                        v_xs[min_col],
+                        h_ys[min_row],
+                        v_xs[max_col + 1],
+                        h_ys[max_row + 1],
+                    ),
+                    rowspan=max_row - min_row + 1,
+                    colspan=max_col - min_col + 1,
                 )
+            )
+
+        cells.sort(key=lambda cell: (cell.row_index, cell.col_index))
         return cells
 
     def _assign_text_to_line_cells(self, cells: List[Cell], page: fitz.Page) -> List[Cell]:
