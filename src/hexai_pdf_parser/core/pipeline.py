@@ -31,6 +31,7 @@ from hexai_pdf_parser.tables.table_extractor import TableExtractor
 from hexai_pdf_parser.debug.table_visualizer import render_table_visualization
 from hexai_pdf_parser.debug.text_alignment_debug import render_text_alignment_debug_page
 from hexai_pdf_parser.extractors.text_extractor import TextExtractor
+from hexai_pdf_parser.page_normalizer import normalize_page_rotation
 
 
 # Persistent process pool for multi-processing execution backend
@@ -47,7 +48,6 @@ def _run_page_pipeline(
     text_alignment_debug_dir: str,
     render_dpi: int,
     seal_coords,
-    use_ml: bool,
     ml_model_path,
     ml_confidence: float,
     debug: bool,
@@ -84,7 +84,6 @@ def _run_page_pipeline(
     # b. Table extraction
     if table_extractor_factory is None:
         table_extractor = table_extractor_cls(
-            use_ml=use_ml,
             ml_model_path=ml_model_path,
             ml_confidence=ml_confidence,
             table_config=table_config,
@@ -258,7 +257,6 @@ def _process_page_process_worker(
     text_alignment_debug_dir: str,
     render_dpi: int,
     seal_coords,
-    use_ml: bool,
     ml_model_path,
     ml_confidence: float,
     debug: bool,
@@ -294,7 +292,6 @@ def _process_page_process_worker(
             text_alignment_debug_dir=text_alignment_debug_dir,
             render_dpi=render_dpi,
             seal_coords=seal_coords,
-            use_ml=use_ml,
             ml_model_path=ml_model_path,
             ml_confidence=ml_confidence,
             debug=debug,
@@ -326,7 +323,6 @@ class Pipeline:
         render_dpi: int = 200,
         seal_coords: Optional[List[dict]] = None,
         page_indices: Optional[List[int]] = None,
-        use_ml: bool = False,
         ml_model_path: Optional[str] = None,
         ml_confidence: float = 0.70,
         debug: bool = False,
@@ -340,7 +336,6 @@ class Pipeline:
         self.render_dpi = render_dpi
         self.seal_coords = seal_coords or []
         self.page_indices = page_indices
-        self.use_ml = use_ml
         self._ml_model_path = ml_model_path
         self._ml_confidence = ml_confidence
         self.debug = debug
@@ -360,7 +355,6 @@ class Pipeline:
     def _create_table_extractor(self):
         """Create the table extractor used for the current page."""
         return self._get_table_extractor_class()(
-            use_ml=self.use_ml,
             ml_model_path=self._ml_model_path,
             ml_confidence=self._ml_confidence,
             table_config=self._table_config,
@@ -471,7 +465,6 @@ class Pipeline:
                 text_alignment_debug_dir=text_alignment_debug_dir,
                 render_dpi=self.render_dpi,
                 seal_coords=self.seal_coords,
-                use_ml=self.use_ml,
                 ml_model_path=self._ml_model_path,
                 ml_confidence=self._ml_confidence,
                 debug=self.debug,
@@ -557,7 +550,6 @@ class Pipeline:
                             text_alignment_debug_dir,
                             self.render_dpi,
                             self.seal_coords,
-                            self.use_ml,
                             self._ml_model_path,
                             self._ml_confidence,
                             self.debug,

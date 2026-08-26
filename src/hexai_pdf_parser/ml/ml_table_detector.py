@@ -1,9 +1,8 @@
 """YOLO-based table region detector.
 
 This module wraps the bundled ``layoutanalysis.onnx`` model and extracts
-only the ``Table`` class regions.  It is used as the optional ML backend
-for table-region detection when the line-based extractor cannot find a
-table structure on its own.
+only the ``Table`` class regions.  The pipeline invokes it on pages that
+the recall-oriented rule pass identifies as table candidates.
 """
 
 from __future__ import annotations

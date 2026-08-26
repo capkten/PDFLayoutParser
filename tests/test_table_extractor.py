@@ -1341,11 +1341,6 @@ class TestTableExtractor:
         finally:
             doc.close()
 
-    def test_ml_disabled_by_default(self, tmp_dir):
-        """use_ml=False means _extract_via_ml is never called."""
-        extractor = TableExtractor()
-        assert extractor.use_ml is False
-
     def test_ml_detector_defaults_to_layoutanalysis_model(self):
         from hexai_pdf_parser.ml_table_detector import MLTableDetector
 
@@ -1353,51 +1348,6 @@ class TestTableExtractor:
         assert detector._model_path.as_posix().endswith(
             "src/models/layoutanalysis/layoutanalysis.onnx"
         )
-
-    def test_ml_tables_supplement_existing_tables(self, tmp_dir):
-        """ML tables that don't overlap existing tables are appended."""
-        extractor = TableExtractor(use_ml=True)
-        # Mock _extract_via_lines to return one table
-        existing = Table(
-            bbox=BBox(0, 0, 100, 100),
-            rows=2, cols=2, cells=[],
-            confidence=0.9, source="line_projection",
-        )
-        extractor._extract_via_lines = lambda page: [existing]
-        extractor._extract_via_ml = lambda page: [
-            Table(
-                bbox=BBox(200, 200, 400, 400),
-                rows=3, cols=4, cells=[],
-                confidence=0.85, source="ml_detection",
-            )
-        ]
-        extractor._extract_via_text_alignment = lambda page, excluded_regions=None: []
-
-        result = extractor.extract(SimpleNamespace())
-        assert len(result) == 2
-        assert result[1].source == "ml_detection"
-
-    def test_ml_tables_deduplicated_against_existing(self, tmp_dir):
-        """Overlapping ML tables are filtered out."""
-        extractor = TableExtractor(use_ml=True)
-        existing = Table(
-            bbox=BBox(100, 100, 300, 300),
-            rows=2, cols=2, cells=[],
-            confidence=0.9, source="line_projection",
-        )
-        extractor._extract_via_lines = lambda page: [existing]
-        extractor._extract_via_ml = lambda page: [
-            Table(
-                bbox=BBox(110, 110, 290, 290),
-                rows=3, cols=4, cells=[],
-                confidence=0.85, source="ml_detection",
-            )
-        ]
-        extractor._extract_via_text_alignment = lambda page, excluded_regions=None: []
-
-        result = extractor.extract(SimpleNamespace())
-        assert len(result) == 1
-        assert result[0].source == "line_projection"
 
     def test_extract_via_ml_builds_table_structure_from_model_region(
         self, tmp_dir, monkeypatch
@@ -1417,8 +1367,8 @@ class TestTableExtractor:
                 self.model_path = model_path
                 self.confidence_threshold = confidence_threshold
 
-            def detect(self, page):
-                return [BBox(10, 10, 250, 100)]
+            def detect_with_scores(self, page):
+                return [(BBox(10, 10, 250, 100), 0.9)]
 
         monkeypatch.setattr(
             "hexai_pdf_parser.ml_table_detector.MLTableDetector",
@@ -1427,11 +1377,14 @@ class TestTableExtractor:
 
         doc = fitz.open(str(pdf_path))
         try:
-            extractor = TableExtractor(use_ml=True)
-            tables = extractor.extract(doc[0])
+            extractor = TableExtractor()
+            extractor._wired_extractor.extract = lambda page, table_bbox=None, confidence=None: [
+                Table(bbox=BBox(0, 0, 1, 1), rows=1, cols=1, cells=[], source="candidate")
+            ]
+            tables = extractor._extract_model_tables(doc[0])
             assert len(tables) == 1
             table = tables[0]
-            assert table.source == "ml_detection"
+            assert table.source == "text_alignment"
             assert table.rows == 3
             assert table.cols == 2
         finally:

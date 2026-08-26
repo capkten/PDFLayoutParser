@@ -10,6 +10,7 @@ import os
 from typing import List, Optional
 
 from hexai_pdf_parser.core.models import ApiResult, BBox, Block, Document, Image, Line, RenderInfo, Table
+from hexai_pdf_parser.page_normalizer import normalize_page_rotation
 
 
 class PDFParser:
@@ -30,7 +31,6 @@ class PDFParser:
         *,
         render_dpi: int = 200,
         seal_coords: Optional[List[dict]] = None,
-        use_ml: bool = False,
         ml_model_path: Optional[str] = None,
         ml_confidence: float = 0.70,
         num_workers: Optional[int] = None,
@@ -49,7 +49,6 @@ class PDFParser:
 
         self._render_dpi = render_dpi
         self._seal_coords = seal_coords or []
-        self._use_ml = use_ml
         self._ml_model_path = ml_model_path
         self._ml_confidence = ml_confidence
         self._num_workers = num_workers
@@ -118,7 +117,6 @@ class PDFParser:
                 render_dpi=self._render_dpi,
                 seal_coords=self._seal_coords,
                 page_indices=page_indices,
-                use_ml=self._use_ml,
                 ml_model_path=self._ml_model_path,
                 ml_confidence=self._ml_confidence,
                 num_workers=self._num_workers,
@@ -158,7 +156,6 @@ class PDFParser:
             pdf_doc = _fitz.open(self._pdf_path)
             try:
                 table_extractor = TableExtractor(
-                    use_ml=self._use_ml,
                     ml_model_path=self._ml_model_path,
                     ml_confidence=self._ml_confidence,
                 )
@@ -206,7 +203,6 @@ class PDFParser:
             pdf_doc = _fitz.open(self._pdf_path)
             try:
                 extractor = TableExtractor(
-                    use_ml=self._use_ml,
                     ml_model_path=self._ml_model_path,
                     ml_confidence=self._ml_confidence,
                 )
@@ -497,7 +493,6 @@ class PDFParser:
             pdf_doc = _fitz.open(pdf_path)
             try:
                 extractor = TableExtractor(
-                    use_ml=self._use_ml,
                     ml_model_path=self._ml_model_path,
                     ml_confidence=self._ml_confidence,
                 )
@@ -543,7 +538,6 @@ class PDFParser:
                 raise ValueError("extract_table_structure requires a PDF file path")
 
             extractor = TableExtractor(
-                use_ml=self._use_ml,
                 ml_model_path=self._ml_model_path,
                 ml_confidence=self._ml_confidence,
             )

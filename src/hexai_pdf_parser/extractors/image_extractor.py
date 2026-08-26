@@ -8,6 +8,7 @@ from collections import defaultdict
 from typing import List
 
 import fitz
+from hexai_pdf_parser.page_normalizer import normalize_page_rotation
 
 from hexai_pdf_parser.core.models import BBox, Image
 

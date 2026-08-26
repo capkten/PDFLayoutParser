@@ -22,7 +22,6 @@ from hexai_pdf_parser.core.models import Table
 PDF_INPUT_DIR = r"C:\Users\92410\Desktop\git\hexai_pdf_parser\src\hexai_pdf_parser\data\zh_all_pages"
 OUTPUT_DIR = r"C:\Users\92410\Desktop\git\hexai_pdf_parser\src\hexai_pdf_parser\data\zh_all_pages\out_debug"
 RENDER_DPI = 200
-USE_ML = True
 # ==============================================================================
 
 # Color palette for table visualization
@@ -292,7 +291,6 @@ def batch_visualize_directory(
     input_dir: str = PDF_INPUT_DIR,
     output_dir: str = OUTPUT_DIR,
     dpi: int = RENDER_DPI,
-    use_ml: bool = USE_ML,
 ) -> list[str]:
     """Batch parse and visualize all PDF files in input_dir.
 
@@ -308,9 +306,6 @@ def batch_visualize_directory(
         Root output directory.
     dpi:
         Rendering resolution DPI.
-    use_ml:
-        Whether to enable YOLO table detector assistance.
-
     Returns
     -------
     list[str]:
@@ -351,7 +346,7 @@ def batch_visualize_directory(
         print(f"\n[table_visualizer] Processing: {pdf_file.name} -> {pdf_parent_dir}")
 
         try:
-            with PDFParser(str(pdf_file), render_dpi=dpi, use_ml=use_ml) as parser:
+            with PDFParser(str(pdf_file), render_dpi=dpi) as parser:
                 res = parser.parse()
                 if res.code != 1 or not res.data:
                     print(f"[table_visualizer] Error parsing {pdf_file.name}: {res.message}")
@@ -426,6 +421,4 @@ if __name__ == "__main__":
         input_dir=PDF_INPUT_DIR,
         output_dir=OUTPUT_DIR,
         dpi=RENDER_DPI,
-        use_ml=USE_ML,
     )
-
