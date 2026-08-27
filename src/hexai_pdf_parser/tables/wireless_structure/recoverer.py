@@ -17,7 +17,7 @@ from .header_topology import (
     refine_leaf_bands,
     rescue_sparse_body_bands,
 )
-from .logical_grid import build_logical_grid, materialize_empty_cells
+from .logical_grid import build_logical_grid, materialize_empty_cells, merge_header_spans
 from .merged_cells import merge_multiline_cells, merge_same_slot_fragments
 from .span_chain import region_spans
 from .text_runs import build_text_runs
@@ -100,6 +100,7 @@ def recover_cells_from_region(
         logical_rows, logical_columns, logical_cells = build_logical_grid(
             physical_rows, columns, cells
         )
+        logical_cells = merge_header_spans(logical_cells, header_cutoff)
         if _has_occupancy_conflict(logical_cells):
             return 0, 0, []
         logical_cells = materialize_empty_cells(

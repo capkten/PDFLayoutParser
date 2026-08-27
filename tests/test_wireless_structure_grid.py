@@ -2,6 +2,7 @@ from hexai_pdf_parser.tables.wireless_structure.grid import build_grid
 from hexai_pdf_parser.core.models import BBox
 from hexai_pdf_parser.tables.wireless_structure import logical_grid
 from hexai_pdf_parser.tables.wireless_structure.logical_grid import build_logical_grid
+from hexai_pdf_parser.tables.wireless_structure.recoverer import _has_occupancy_conflict
 
 
 def _candidate(text, x0, y0, column_id, flow):
@@ -12,6 +13,21 @@ def _candidate(text, x0, y0, column_id, flow):
         "column_id": column_id,
         "flow_start": flow,
         "flow_end": flow,
+    }
+
+
+def _logical_cell(cell_id, text, row, col_start, col_end=None, *, y=10):
+    col_end = col_start if col_end is None else col_end
+    return {
+        "cell_id": cell_id,
+        "text": text,
+        "bbox": [col_start * 20, y, (col_end + 1) * 20, y + 8],
+        "row_start": row,
+        "row_end": row,
+        "col_start": col_start,
+        "col_end": col_end,
+        "rowspan": 1,
+        "colspan": col_end - col_start + 1,
     }
 
 
@@ -121,3 +137,53 @@ def test_materialize_empty_cells_does_not_fill_existing_colspan_coverage():
         (1, 2, "分组"),
         (3, 1, ""),
     ]
+
+
+def test_merge_header_spans_extends_group_parents_and_the_single_stub_column():
+    cells = [
+        _logical_cell("P1", "年末数", 1, 2, 3, y=10),
+        _logical_cell("P2", "年初数", 1, 4, 5, y=10),
+        _logical_cell("S1", "项目", 2, 1, y=20),
+        _logical_cell("L2", "金额", 3, 2, y=30),
+        _logical_cell("L3", "坏账准备", 3, 3, y=30),
+        _logical_cell("L4", "金额", 3, 4, y=30),
+        _logical_cell("L5", "坏账准备", 3, 5, y=30),
+        _logical_cell("B1", "正文", 4, 1, y=50),
+    ]
+
+    result = logical_grid.merge_header_spans(cells, header_cutoff=40)
+
+    first_parent = next(cell for cell in result if cell["cell_id"] == "P1")
+    stub = next(cell for cell in result if cell["cell_id"] == "S1")
+    assert (first_parent["row_start"], first_parent["row_end"], first_parent["rowspan"]) == (1, 2, 2)
+    assert (stub["row_start"], stub["row_end"], stub["rowspan"]) == (1, 3, 3)
+    assert _has_occupancy_conflict(result) is False
+
+
+def test_merge_header_spans_keeps_parent_short_when_intermediate_slot_has_text():
+    cells = [
+        _logical_cell("P1", "父标题", 1, 2, 3, y=10),
+        _logical_cell("M2", "中间标题", 2, 2, y=20),
+        _logical_cell("L2", "叶一", 3, 2, y=30),
+        _logical_cell("L3", "叶二", 3, 3, y=30),
+    ]
+
+    result = logical_grid.merge_header_spans(cells, header_cutoff=40)
+
+    parent = next(cell for cell in result if cell["cell_id"] == "P1")
+    assert (parent["row_start"], parent["row_end"], parent["rowspan"]) == (1, 1, 1)
+
+
+def test_merge_header_spans_keeps_stub_short_when_its_column_has_another_header():
+    cells = [
+        _logical_cell("C1", "上层标题", 1, 1, y=10),
+        _logical_cell("P1", "父标题", 1, 2, 3, y=10),
+        _logical_cell("S1", "首列表头", 2, 1, y=20),
+        _logical_cell("L2", "叶一", 3, 2, y=30),
+        _logical_cell("L3", "叶二", 3, 3, y=30),
+    ]
+
+    result = logical_grid.merge_header_spans(cells, header_cutoff=40)
+
+    stub = next(cell for cell in result if cell["cell_id"] == "S1")
+    assert (stub["row_start"], stub["row_end"], stub["rowspan"]) == (2, 2, 1)
