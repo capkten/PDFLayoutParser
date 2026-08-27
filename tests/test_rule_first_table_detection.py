@@ -82,7 +82,7 @@ def test_rule_miss_does_not_call_model(monkeypatch):
 
 def test_model_failure_does_not_fall_back_to_rule_tables(monkeypatch):
     extractor = TableExtractor()
-    rule_table = _table("rule", 10)
+    rule_table = _table("line_projection", 10)
     _configure_rule_candidates(extractor, [rule_table])
 
     class FailingDetector:
@@ -96,7 +96,47 @@ def test_model_failure_does_not_fall_back_to_rule_tables(monkeypatch):
         raising=False,
     )
 
-    assert extractor.extract(_page()) == []
+    assert extractor.extract(_page()) == [rule_table]
+
+
+def test_empty_model_result_keeps_all_wired_tables(monkeypatch):
+    extractor = TableExtractor()
+    wired_tables = [_table("line_projection", 10), _table("line_projection", 200)]
+    _configure_rule_candidates(extractor, wired_tables)
+
+    class EmptyDetector:
+        def detect_with_scores(self, page):
+            return []
+
+    extractor._ml_detector = EmptyDetector()
+    monkeypatch.setattr(
+        "hexai_pdf_parser.tables.table_extractor.normalize_page_rotation",
+        lambda page: None,
+        raising=False,
+    )
+
+    assert extractor.extract(_page()) == wired_tables
+
+
+def test_model_only_result_is_augmented_with_unmatched_wired_tables(monkeypatch):
+    extractor = TableExtractor()
+    matched = _table("line_projection", 10)
+    unmatched = _table("line_projection", 200)
+    _configure_rule_candidates(extractor, [matched, unmatched])
+    extractor._wireless_extractor.extract_zebra = lambda *args, **kwargs: []
+
+    class PartialDetector:
+        def detect_with_scores(self, page):
+            return [(matched.bbox, 0.91)]
+
+    extractor._ml_detector = PartialDetector()
+    monkeypatch.setattr(
+        "hexai_pdf_parser.tables.table_extractor.normalize_page_rotation",
+        lambda page: None,
+        raising=False,
+    )
+
+    assert extractor.extract(_page()) == [matched, unmatched]
 
 
 def test_overlapping_model_region_prefers_rule_wired_table(monkeypatch):
