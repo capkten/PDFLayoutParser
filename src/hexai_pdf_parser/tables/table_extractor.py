@@ -38,6 +38,7 @@ import fitz
 import copy
 
 from hexai_pdf_parser.core.models import BBox, Cell, CellStructure, Table, TableStructure, TextBlock
+from hexai_pdf_parser.page_normalizer import normalize_page_rotation
 
 # Pre-compiled regex for numeric token classification (used per-word)
 _NUMERIC_RE = re.compile(

@@ -142,7 +142,7 @@ class MLTableDetector:
             all_words = page.get_text("words")
             if all_words:
                 results = [
-                    (self._expand_bbox_to_touching_words(bbox, all_words), score)
+                    (self._expand_bbox_to_touching_words(bbox, all_words, page=page), score)
                     for bbox, score in results
                 ]
         except Exception:
@@ -155,32 +155,39 @@ class MLTableDetector:
         bbox: BBox,
         words: List[Tuple[float, float, float, float, str]],
         margin: float = 3.0,
+        page: Optional[fitz.Page] = None,
     ) -> BBox:
         """Expand table bbox outward if boundary overlaps or cuts into text words."""
         if not words:
             return bbox
 
         x0, y0, x1, y1 = bbox.x0, bbox.y0, bbox.x1, bbox.y1
+
+        if page is not None:
+            try:
+                drawings = page.get_drawings()
+                for d in drawings:
+                    r = d.get("rect")
+                    if r:
+                        ix0 = max(x0, r.x0)
+                        iy0 = max(y0, r.y0)
+                        ix1 = min(x1, r.x1)
+                        iy1 = min(y1, r.y1)
+                        if ix1 > ix0 and iy1 > iy0:
+                            x0 = min(x0, r.x0)
+                            y0 = min(y0, r.y0)
+                            x1 = max(x1, r.x1)
+                            y1 = max(y1, r.y1)
+            except Exception:
+                pass
+
         expanded = True
         while expanded:
             expanded = False
             for w in words:
                 wx0, wy0, wx1, wy1 = w[0], w[1], w[2], w[3]
-                if wx1 < x0 - margin or wx0 > x1 + margin or wy1 < y0 - margin or wy0 > y1 + margin:
-                    continue
-
-                overlap_x = max(0.0, min(wx1, x1) - max(wx0, x0))
-                overlap_y = max(0.0, min(wy1, y1) - max(wy0, y0))
-
-                should_expand = False
-                if overlap_x > 0 and overlap_y > 0:
-                    should_expand = True
-                elif overlap_x > 0 and (wy0 >= y0 - margin and wy1 <= y1 + margin):
-                    should_expand = True
-                elif overlap_y > 0 and (wx0 >= x0 - margin and wx1 <= x1 + margin):
-                    should_expand = True
-
-                if should_expand:
+                # Direct intersection/overlap
+                if wx1 > x0 and wx0 < x1 and wy1 > y0 and wy0 < y1:
                     new_x0 = min(x0, wx0)
                     new_y0 = min(y0, wy0)
                     new_x1 = max(x1, wx1)
@@ -188,8 +195,16 @@ class MLTableDetector:
                     if new_x0 < x0 or new_y0 < y0 or new_x1 > x1 or new_y1 > y1:
                         x0, y0, x1, y1 = new_x0, new_y0, new_x1, new_y1
                         expanded = True
+                # Word on same row line just outside left/right boundary
+                elif (wy0 + wy1) / 2.0 >= y0 and (wy0 + wy1) / 2.0 <= y1:
+                    if 0.0 <= x0 - wx1 <= 20.0:
+                        x0 = min(x0, wx0)
+                        expanded = True
+                    elif 0.0 <= wx0 - x1 <= 15.0:
+                        x1 = max(x1, wx1)
+                        expanded = True
 
-        return BBox(x0=x0, y0=y0, x1=x1, y1=y1)
+        return BBox(x0=round(x0, 1), y0=round(y0, 1), x1=round(x1, 1), y1=round(y1, 1))
 
     # ------------------------------------------------------------------
     # ONNX session

@@ -96,7 +96,7 @@ class WirelessTableExtractor(BaseTableExtractor):
         if table_bbox is not None:
             filtered_bgs = [
                 bg for bg in row_backgrounds
-                if not (bg[1] < table_bbox.y0 - 5.0 or bg[0] > table_bbox.y1 - 2.0)
+                if not (bg[1] <= table_bbox.y0 + 2.0 or bg[0] >= table_bbox.y1 - 2.0)
                 and not (bg[1] > table_bbox.y1 + 15.0 and bg[2] == "white")
             ]
             if filtered_bgs:
@@ -155,6 +155,8 @@ class WirelessTableExtractor(BaseTableExtractor):
     ) -> Optional[Table]:
         table_y0 = min(bg[0] for bg in bg_group)
         table_y1 = max(bg[1] for bg in bg_group)
+        if table_bbox:
+            table_y1 = max(table_y1, table_bbox.y1)
 
         try:
             words = page.get_text("words")
@@ -206,7 +208,8 @@ class WirelessTableExtractor(BaseTableExtractor):
         except Exception:
             return []
 
-        row_rects: List[Tuple[float, float, str]] = []
+        blue_rects: List[List[Any]] = []
+        white_rects: List[List[Any]] = []
         for d in drawings:
             fill = d.get("fill")
             rect = d.get("rect")
@@ -219,24 +222,43 @@ class WirelessTableExtractor(BaseTableExtractor):
                 key = round(fill, 3)
 
             if self._is_color_match(key, LIGHT_BLUE):
-                row_rects.append((rect.y0, rect.y1, "blue"))
+                blue_rects.append([rect.y0, rect.y1, "blue"])
             elif self._is_color_match(key, WHITE):
-                row_rects.append((rect.y0, rect.y1, "white"))
+                white_rects.append([rect.y0, rect.y1, "white"])
 
-        if not row_rects:
+        if not blue_rects and not white_rects:
             return []
 
-        row_rects.sort(key=lambda x: x[0])
-        unique_rows: List[Tuple[float, float, str]] = []
-        seen_y_ranges: set = set()
+        # Merge vertically overlapping/adjacent blue rects into unified row intervals
+        blue_rects.sort(key=lambda x: x[0])
+        merged_blue: List[List[Any]] = []
+        for r in blue_rects:
+            if not merged_blue:
+                merged_blue.append(r)
+            else:
+                prev = merged_blue[-1]
+                if r[0] <= prev[1] + 2.0:
+                    prev[1] = max(prev[1], r[1])
+                else:
+                    merged_blue.append(r)
 
-        for y0, y1, color in row_rects:
-            y_key = (round(y0, 1), round(y1, 1))
-            if y_key not in seen_y_ranges:
-                seen_y_ranges.add(y_key)
-                unique_rows.append((y0, y1, color))
+        all_bgs = merged_blue + white_rects
+        all_bgs.sort(key=lambda x: x[0])
 
-        return unique_rows
+        merged_all: List[List[Any]] = []
+        for r in all_bgs:
+            if not merged_all:
+                merged_all.append(r)
+            else:
+                prev = merged_all[-1]
+                if prev[2] == r[2] and r[0] <= prev[1] + 2.0:
+                    prev[1] = max(prev[1], r[1])
+                elif r[0] < prev[1] - 2.0:
+                    continue
+                else:
+                    merged_all.append(r)
+
+        return [(r[0], r[1], r[2]) for r in merged_all]
 
     def _group_into_tables(self, bgs: List[Tuple[float, float, str]]) -> List[List[Tuple[float, float, str]]]:
         if not bgs:
@@ -268,25 +290,40 @@ class WirelessTableExtractor(BaseTableExtractor):
         page: fitz.Page,
         table_bbox: Optional[BBox] = None,
     ) -> List[_RowData]:
-        header_y_max = table_y0 - 1.0
+        h_lines: List[float] = []
         if page is not None:
             try:
                 drawings = page.get_drawings()
-                h_lines = []
-                y_min_bound = table_bbox.y0 - 2.0 if table_bbox else table_y0 - 40.0
+                y_min_bound = table_bbox.y0 - 2.0 if table_bbox else table_y0 - 50.0
                 for d in drawings:
                     for it in d.get("items", []):
                         if it[0] in ("l", "re"):
                             y = it[1].y if it[0] == "l" else it[1].y0
                             w = abs(it[2].x - it[1].x) if it[0] == "l" else it[1].width
-                            if y_min_bound <= y <= table_y0 + 2.0 and w >= 10.0:
-                                h_lines.append(y)
-                if h_lines:
-                    header_y_max = max(h_lines) + 1.0
+                            x0 = min(it[1].x, it[2].x) if it[0] == "l" else it[1].x0
+                            x1 = max(it[1].x, it[2].x) if it[0] == "l" else it[1].x1
+                            if table_bbox and (x1 < table_bbox.x0 - 5.0 or x0 > table_bbox.x1 + 5.0):
+                                continue
+                            if y_min_bound <= y <= table_y0 + 2.0 and w >= 20.0:
+                                h_lines.append(round(y, 1))
             except Exception:
                 pass
 
-        header_y_min = table_bbox.y0 - 2.0 if table_bbox else table_y0 - 45.0
+        unique_h_lines = sorted(list(set(h_lines)))
+        merged_h_lines = []
+        for hl in unique_h_lines:
+            if not merged_h_lines:
+                merged_h_lines.append(hl)
+            elif hl - merged_h_lines[-1] > 3.0:
+                merged_h_lines.append(hl)
+            else:
+                merged_h_lines[-1] = hl
+
+        header_y_max = table_y0 - 1.0
+        if merged_h_lines:
+            header_y_max = max(merged_h_lines) - 0.2
+
+        header_y_min = table_bbox.y0 - 2.0 if table_bbox else table_y0 - 50.0
         header_words = [
             w for w in words
             if header_y_min <= (w[1] + w[3]) / 2.0 <= header_y_max
@@ -300,36 +337,46 @@ class WirelessTableExtractor(BaseTableExtractor):
         if not header_words:
             return []
 
-        header_words.sort(key=lambda w: (w[1] + w[3]) / 2.0)
-        row_clusters: List[List[Tuple]] = []
-        current_cluster: List[Tuple] = [header_words[0]]
+        min_word_y = min(w[1] for w in header_words)
+        max_word_y = max(w[3] for w in header_words)
+        internal_lines = [l for l in merged_h_lines if min_word_y + 2.0 < l < max_word_y - 2.0]
 
-        for w in header_words[1:]:
-            prev_yc = (current_cluster[-1][1] + current_cluster[-1][3]) / 2.0
-            cur_yc = (w[1] + w[3]) / 2.0
-            if abs(cur_yc - prev_yc) <= 3.5:
-                current_cluster.append(w)
-            else:
-                row_clusters.append(current_cluster)
-                current_cluster = [w]
+        if internal_lines:
+            tiers: List[List[Tuple]] = []
+            bounds = [header_y_min] + internal_lines + [header_y_max + 1.0]
+            for b_idx in range(len(bounds) - 1):
+                t_min = bounds[b_idx]
+                t_max = bounds[b_idx + 1]
+                t_words = [w for w in header_words if t_min <= (w[1] + w[3]) / 2.0 < t_max]
+                if t_words:
+                    tiers.append(t_words)
 
-        if current_cluster:
-            row_clusters.append(current_cluster)
+            header_rows = []
+            for tier in tiers:
+                sorted_tier = sorted(tier, key=lambda w: (round((w[1] + w[3]) / 2.0 / 3.5), w[0]))
+                y0 = min(w[1] for w in sorted_tier)
+                y1 = max(w[3] for w in sorted_tier)
+                header_rows.append(_RowData(
+                    words=sorted_tier,
+                    y0=y0,
+                    y1=y1,
+                    color=None,
+                    is_header=True,
+                ))
+            return header_rows
 
-        header_rows = []
-        for cluster in row_clusters:
-            sorted_cluster = sorted(cluster, key=lambda w: w[0])
-            y0 = min(w[1] for w in sorted_cluster)
-            y1 = max(w[3] for w in sorted_cluster)
-            header_rows.append(_RowData(
-                words=sorted_cluster,
-                y0=y0,
-                y1=y1,
-                color=None,
-                is_header=True,
-            ))
-
-        return header_rows
+        # No internal dividing lines: all header words belong to a single header tier,
+        # allowing multi-line words in each column to be merged into that column's header cell.
+        sorted_words = sorted(header_words, key=lambda w: (round((w[1] + w[3]) / 2.0 / 3.5), w[0]))
+        y0 = min(w[1] for w in sorted_words)
+        y1 = max(w[3] for w in sorted_words)
+        return [_RowData(
+            words=sorted_words,
+            y0=y0,
+            y1=y1,
+            color=None,
+            is_header=True,
+        )]
 
     def _handle_dollar_signs(self, rows: List[_RowData]) -> List[_RowData]:
         for row in rows:
@@ -361,6 +408,7 @@ class WirelessTableExtractor(BaseTableExtractor):
         row_backgrounds: List[Tuple[float, float, str]],
     ) -> List[_RowData]:
         row_words: Dict[int, List[Tuple]] = defaultdict(list)
+        unassigned_words: List[Tuple] = []
 
         for w in words:
             w_yc = (w[1] + w[3]) / 2.0
@@ -371,6 +419,8 @@ class WirelessTableExtractor(BaseTableExtractor):
                     break
             if matched_idx is not None:
                 row_words[matched_idx].append(w)
+            else:
+                unassigned_words.append(w)
 
         data_rows = []
         for idx, (bg_y0, bg_y1, color) in enumerate(row_backgrounds):
@@ -383,6 +433,35 @@ class WirelessTableExtractor(BaseTableExtractor):
                 is_header=False,
             ))
 
+        if unassigned_words:
+            unassigned_words.sort(key=lambda w: (w[1] + w[3]) / 2.0)
+            clusters: List[List[Tuple]] = []
+            curr: List[Tuple] = [unassigned_words[0]]
+            for w in unassigned_words[1:]:
+                prev_y1 = max(cw[3] for cw in curr)
+                curr_y0 = w[1]
+                if curr_y0 - prev_y1 <= 6.0 or (w[1] + w[3]) / 2.0 - (curr[-1][1] + curr[-1][3]) / 2.0 <= 10.0:
+                    curr.append(w)
+                else:
+                    clusters.append(curr)
+                    curr = [w]
+            if curr:
+                clusters.append(curr)
+
+            for c in clusters:
+                c_y0 = min(w[1] for w in c)
+                c_y1 = max(w[3] for w in c)
+                row_data = _RowData(
+                    words=sorted(c, key=lambda w: (round((w[1] + w[3]) / 2.0 / 4.0), w[0])),
+                    y0=c_y0,
+                    y1=c_y1,
+                    color=None,
+                    is_header=False,
+                )
+                data_rows.append(row_data)
+
+            data_rows.sort(key=lambda r: r.y0)
+
         return data_rows
 
     def _detect_columns(
@@ -393,79 +472,96 @@ class WirelessTableExtractor(BaseTableExtractor):
         table_y0: float = 0.0,
         table_bbox: Optional[BBox] = None,
     ) -> List[Tuple[float, float]]:
-        header_cols = self._detect_columns_from_header_underlines(page, table_y0, table_bbox=table_bbox)
-        if header_cols and len(header_cols) >= 3:
+        header_cols = self._detect_columns_from_header_underlines(page, table_y0, table_bbox=table_bbox, words=words)
+        if header_cols and len(header_cols) >= 2:
             return header_cols
 
-        numeric_words = [
-            w for w in words
-            if any(ch.isdigit() for ch in w[4]) or w[4].strip() in {"$", "—", "-", "%"}
-        ]
-        if not numeric_words:
-            numeric_words = words
+        # Universal column detection via horizontal overlap
+        rows_by_y: Dict[float, List[Tuple]] = defaultdict(list)
+        for w in words:
+            mid_y = (w[1] + w[3]) / 2.0
+            matched_y = None
+            for ey in rows_by_y:
+                if abs(mid_y - ey) <= 3.5:
+                    matched_y = ey
+                    break
+            if matched_y is None:
+                matched_y = mid_y
+            rows_by_y[matched_y].append(w)
 
-        x_intervals = [(w[0], w[2]) for w in numeric_words]
-        x_intervals.sort(key=lambda x: x[0])
-
-        clusters: List[List[Tuple[float, float]]] = []
-        for x0, x1 in x_intervals:
-            if not clusters:
-                clusters.append([(x0, x1)])
-            else:
-                last_c = clusters[-1]
-                c_max_x1 = max(item[1] for item in last_c)
-                if x0 <= c_max_x1 + 8.0:
-                    last_c.append((x0, x1))
+        line_segments: List[Tuple[float, float]] = []
+        for ry, rwords in rows_by_y.items():
+            rwords.sort(key=lambda w: w[0])
+            cur: List[Tuple] = []
+            for w in rwords:
+                if not cur:
+                    cur.append(w)
                 else:
-                    clusters.append([(x0, x1)])
+                    if w[0] - cur[-1][2] <= 12.0:
+                        cur.append(w)
+                    else:
+                        line_segments.append((min(x[0] for x in cur), max(x[2] for x in cur)))
+                        cur = [w]
+            if cur:
+                line_segments.append((min(x[0] for x in cur), max(x[2] for x in cur)))
 
-        raw_columns = []
-        for c in clusters:
-            c_x0 = min(item[0] for item in c)
-            c_x1 = max(item[1] for item in c)
-            raw_columns.append((c_x0, c_x1))
-
-        if not raw_columns:
-            return []
-
-        merged_cols = [raw_columns[0]]
-        for col in raw_columns[1:]:
-            prev = merged_cols[-1]
-            if col[0] - prev[1] < 12.0:
-                merged_cols[-1] = (prev[0], max(prev[1], col[1]))
+        line_segments.sort(key=lambda s: s[0])
+        col_spans: List[List[float]] = []
+        for s in line_segments:
+            if not col_spans:
+                col_spans.append(list(s))
             else:
-                merged_cols.append(col)
+                merged = False
+                for cs in col_spans:
+                    if not (s[1] < cs[0] - 8.0 or s[0] > cs[1] + 8.0):
+                        cs[0] = min(cs[0], s[0])
+                        cs[1] = max(cs[1], s[1])
+                        merged = True
+                        break
+                if not merged:
+                    col_spans.append(list(s))
+
+        col_spans.sort(key=lambda s: s[0])
+        if len(col_spans) < 2:
+            return []
 
         table_x0 = table_bbox.x0 if table_bbox else min(w[0] for w in words)
         table_x1 = table_bbox.x1 if table_bbox else max(w[2] for w in words)
 
-        # Build continuous gutter-midpoint columns
         boundaries = []
-        for k in range(len(merged_cols) - 1):
-            prev_end = merged_cols[k][1]
-            next_start = merged_cols[k + 1][0]
-            if prev_end < next_start:
-                boundaries.append((prev_end + next_start) / 2.0)
+        for k in range(len(col_spans) - 1):
+            prev_end = col_spans[k][1]
+            next_start = col_spans[k + 1][0]
+            cur_col_words = [w for w in words if col_spans[k][0] - 5.0 <= (w[0] + w[2]) / 2.0 <= (prev_end + next_start) / 2.0]
+            next_col_words = [w for w in words if (prev_end + next_start) / 2.0 <= (w[0] + w[2]) / 2.0 <= (col_spans[k + 1][1] + (col_spans[k + 2][0] if k + 2 < len(col_spans) else col_spans[k + 1][1])) / 2.0]
+            max_cur_x1 = max([w[2] for w in cur_col_words] + [prev_end], default=prev_end)
+            min_next_x0 = min([w[0] for w in next_col_words] + [next_start], default=next_start)
+            if max_cur_x1 < min_next_x0:
+                bk = (max_cur_x1 + min_next_x0) / 2.0
             else:
-                boundaries.append((merged_cols[k][0] + merged_cols[k + 1][0]) / 2.0)
+                bk = max_cur_x1 + 1.5
+            boundaries.append(bk)
 
-        continuous_cols = []
+        columns = []
         curr_x = table_x0
         for b in boundaries:
-            continuous_cols.append((curr_x, b))
+            columns.append((curr_x, b))
             curr_x = b
-        continuous_cols.append((curr_x, table_x1))
-
-        return continuous_cols
+        columns.append((curr_x, table_x1))
+        return columns
 
     def _detect_columns_from_header_underlines(
-        self, page: fitz.Page, table_y0: float, table_bbox: Optional[BBox] = None
+        self,
+        page: fitz.Page,
+        table_y0: float,
+        table_bbox: Optional[BBox] = None,
+        words: Optional[List[Tuple]] = None,
     ) -> List[Tuple[float, float]]:
         drawings = page.get_drawings()
         h_lines = []
 
         y_min_bound = table_bbox.y0 - 2.0 if table_bbox else table_y0 - 40.0
-        y_max_bound = table_bbox.y0 + 60.0 if table_bbox else table_y0 + 5.0
+        y_max_bound = table_bbox.y1 + 2.0 if table_bbox else table_y0 + 600.0
 
         for d in drawings:
             for it in d.get("items", []):
@@ -499,22 +595,28 @@ class WirelessTableExtractor(BaseTableExtractor):
         if not lines_by_y:
             return []
 
-        best_y = max(lines_by_y.keys(), key=lambda y: (len(lines_by_y[y]), y))
-        segments = lines_by_y[best_y]
-        segments.sort(key=lambda s: s[0])
-
-        merged = []
-        for s in segments:
-            if not merged:
-                merged.append(list(s))
-            else:
-                if s[0] - merged[-1][1] <= 3.0:
-                    merged[-1][1] = max(merged[-1][1], s[1])
-                else:
+        merged_by_y: Dict[float, List[List[float]]] = {}
+        table_w = (table_bbox.x1 - table_bbox.x0) if table_bbox else 500.0
+        for y, segs in lines_by_y.items():
+            sorted_segs = sorted(segs, key=lambda s: s[0])
+            merged = []
+            for s in sorted_segs:
+                if not merged:
                     merged.append(list(s))
+                else:
+                    if s[0] - merged[-1][1] <= 3.0:
+                        merged[-1][1] = max(merged[-1][1], s[1])
+                    else:
+                        merged.append(list(s))
+            col_segs = [s for s in merged if s[1] - s[0] < table_w * 0.85]
+            if len(col_segs) >= 2:
+                merged_by_y[y] = col_segs
 
-        if len(merged) < 2:
+        if not merged_by_y:
             return []
+
+        best_y = max(merged_by_y.keys(), key=lambda y: (len(merged_by_y[y]), -y))
+        best_segments = merged_by_y[best_y]
 
         table_x0 = 30.0
         table_x1 = 600.0
@@ -522,16 +624,111 @@ class WirelessTableExtractor(BaseTableExtractor):
             table_x0 = table_bbox.x0
             table_x1 = table_bbox.x1
 
+        if words is None:
+            try:
+                words = page.get_text("words")
+            except Exception:
+                words = []
+
+        t_words = [
+            w for w in words
+            if (table_bbox is None or (table_bbox.y0 - 2.0 <= (w[1] + w[3]) / 2.0 <= table_bbox.y1 + 2.0 and table_bbox.x0 - 5.0 <= (w[0] + w[2]) / 2.0 <= table_bbox.x1 + 5.0))
+            and not (w[3] < table_y0 + 20.0 and (w[2] - w[0] > 100.0 or w[0] > 300.0 and any(k in w[4] for k in ['Ended', 'March', 'As of'])))
+        ]
+
+        last_u_end = best_segments[-1][1]
+        all_col_spans = [list(u) for u in best_segments]
+
+        if table_x1 - last_u_end > 30.0:
+            right_words = [w for w in t_words if (w[0] + w[2]) / 2.0 > last_u_end + 3.0]
+            right_header_words = [w for w in right_words if w[1] <= table_y0 + 5.0 and w[4].strip() not in ("$", "—", "-")]
+            right_numeric_words = [w for w in right_words if any(ch.isdigit() for ch in w[4]) or w[4].strip() in ("$", "—", "-")]
+
+            if right_header_words:
+                hw_x = [(w[0], w[2]) for w in right_header_words]
+                hw_x.sort(key=lambda x: x[0])
+                hw_clusters = []
+                for hx0, hx1 in hw_x:
+                    if not hw_clusters:
+                        hw_clusters.append([(hx0, hx1)])
+                    else:
+                        if hx0 <= max(item[1] for item in hw_clusters[-1]) + 8.0:
+                            hw_clusters[-1].append((hx0, hx1))
+                        else:
+                            hw_clusters.append([(hx0, hx1)])
+                for cl in hw_clusters:
+                    cl_x0 = min(item[0] for item in cl)
+                    cl_x1 = max(item[1] for item in cl)
+                    if cl_x0 > last_u_end + 3.0:
+                        all_col_spans.append([cl_x0, cl_x1])
+            elif right_numeric_words:
+                cand_x = [(w[0], w[2]) for w in right_numeric_words]
+                cand_x.sort(key=lambda x: x[0])
+                c_clusters = []
+                for cx0, cx1 in cand_x:
+                    if not c_clusters:
+                        c_clusters.append([(cx0, cx1)])
+                    else:
+                        if cx0 <= max(item[1] for item in c_clusters[-1]) + 5.0:
+                            c_clusters[-1].append((cx0, cx1))
+                        else:
+                            c_clusters.append([(cx0, cx1)])
+                for cl in c_clusters:
+                    cl_x0 = min(item[0] for item in cl)
+                    cl_x1 = max(item[1] for item in cl)
+                    if cl_x0 > last_u_end + 3.0:
+                        all_col_spans.append([cl_x0, cl_x1])
+
+        all_col_spans.sort(key=lambda s: s[0])
+
+        # Exclude multi-column spanning header titles when determining single-column text extents
+        data_words = [w for w in t_words if (w[1] + w[3]) / 2.0 >= table_y0 - 15.0]
+
+        first_col_x0 = all_col_spans[0][0]
+        col_words: List[List[Tuple]] = [[] for _ in range(len(all_col_spans))]
+        for w in data_words:
+            mid_x = (w[0] + w[2]) / 2.0
+            if mid_x < first_col_x0 - 15.0:
+                continue
+            best_ci = -1
+            best_dist = 9999.0
+            for ci, (sx0, sx1) in enumerate(all_col_spans):
+                if sx0 - 4.0 <= mid_x <= sx1 + 4.0:
+                    best_ci = ci
+                    break
+                smid = (sx0 + sx1) / 2.0
+                dist = abs(mid_x - smid)
+                if dist < best_dist:
+                    best_dist = dist
+                    best_ci = ci
+            if best_ci >= 0:
+                col_words[best_ci].append(w)
+
         boundaries = []
-        if merged[0][0] - table_x0 > 25.0:
-            b0 = merged[0][0] - 8.0
+        if all_col_spans[0][0] - table_x0 > 25.0:
+            stub_words = [w for w in t_words if w[2] < first_col_x0 - 15.0 and (w[1] + w[3]) / 2.0 >= table_y0 - 15.0]
+            max_stub_x1 = max([w[2] for w in stub_words], default=table_x0)
+            min_col1_x0 = min([w[0] for w in col_words[0]] + [first_col_x0], default=first_col_x0)
+            if max_stub_x1 < min_col1_x0:
+                b0 = (max_stub_x1 + min_col1_x0) / 2.0
+            else:
+                b0 = max_stub_x1 + 1.5
             boundaries.append(b0)
 
-        for k in range(len(merged) - 1):
-            prev_end = merged[k][1]
-            next_start = merged[k + 1][0]
-            bk = (prev_end + next_start) / 2.0
+        for k in range(len(all_col_spans) - 1):
+            prev_w = col_words[k]
+            next_w = col_words[k + 1]
+            max_cur = max([w[2] for w in prev_w] + [all_col_spans[k][1]], default=all_col_spans[k][1])
+            min_next = min([w[0] for w in next_w] + [all_col_spans[k + 1][0]], default=all_col_spans[k + 1][0])
+            if max_cur < min_next:
+                bk = (max_cur + min_next) / 2.0
+            else:
+                bk = max_cur + 1.5
             boundaries.append(bk)
+
+        last_w = col_words[-1]
+        max_last = max([w[2] for w in last_w] + [all_col_spans[-1][1]], default=all_col_spans[-1][1])
+        table_x1 = max(table_x1, max_last + 2.0)
 
         columns = []
         curr_x = table_x0
@@ -546,168 +743,116 @@ class WirelessTableExtractor(BaseTableExtractor):
         self,
         header_cells: List[Cell],
         columns: List[Tuple[float, float]],
+        page: Optional[fitz.Page] = None,
     ) -> Tuple[List[Cell], int]:
-        """Normalize multi-line column headers into single structured header rows."""
+        """Normalize multi-line column headers into structured header rows."""
         if not header_cells:
             return [], 0
 
-        has_spans = any(c.colspan > 1 for c in header_cells)
-        if not has_spans:
-            merged_header_cells: List[Cell] = []
-            col_cells: Dict[int, List[Cell]] = defaultdict(list)
-            for c in header_cells:
-                col_cells[c.col_index].append(c)
-
-            for ci, (cx0, cx1) in enumerate(columns):
-                cs = [c for c in col_cells.get(ci, []) if c.text.strip()]
-                if cs:
-                    cs.sort(key=lambda c: (c.row_index, c.bbox.y0))
-                    merged_text = " ".join(c.text.strip() for c in cs if c.text.strip()).strip()
-                    merged_bbox = BBox(
-                        min(c.bbox.x0 for c in cs),
-                        min(c.bbox.y0 for c in cs),
-                        max(c.bbox.x1 for c in cs),
-                        max(c.bbox.y1 for c in cs),
-                    )
-                    merged_header_cells.append(
-                        Cell(
-                            text=merged_text,
-                            row_index=0,
-                            col_index=ci,
-                            colspan=1,
-                            bbox=merged_bbox,
-                        )
-                    )
-                else:
-                    merged_header_cells.append(
-                        Cell(
-                            text="",
-                            row_index=0,
-                            col_index=ci,
-                            colspan=1,
-                            bbox=BBox(
-                                cx0,
-                                min(c.bbox.y0 for c in header_cells),
-                                cx1,
-                                max(c.bbox.y1 for c in header_cells),
-                            ),
-                        )
-                    )
-            return merged_header_cells, 1
-
-        # Multi-tier spanning header
-        spanning_rows = set(c.row_index for c in header_cells if c.colspan > 1)
-        max_span_row = max(spanning_rows)
-
-        span_partitions: List[Tuple[int, int]] = []
-        spanned_cols = set()
+        # Multi-tier header: preserve each distinct row_index (tier) as its own header row
+        rows_dict = defaultdict(list)
         for c in header_cells:
-            if c.row_index <= max_span_row and c.colspan > 1:
-                sc = c.col_index
-                ec = c.col_index + c.colspan - 1
-                span_partitions.append((sc, ec))
-                for ci in range(sc, ec + 1):
-                    spanned_cols.add(ci)
+            rows_dict[c.row_index].append(c)
 
-        for ci in range(len(columns)):
-            if ci not in spanned_cols:
-                span_partitions.append((ci, ci))
+        sorted_row_indices = sorted(rows_dict.keys())
+        num_tiers = len(sorted_row_indices)
 
-        span_partitions = sorted(list(set(span_partitions)))
+        if num_tiers <= 1:
+            out = []
+            for c in header_cells:
+                out.append(Cell(
+                    text=c.text,
+                    row_index=0,
+                    col_index=c.col_index,
+                    colspan=c.colspan,
+                    rowspan=1,
+                    bbox=c.bbox,
+                ))
+            return out, 1
 
-        tier0_cells = []
-        for sc, ec in span_partitions:
-            part_cells = [
-                c for c in header_cells
-                if c.row_index <= max_span_row
-                and c.text.strip()
-                and (
-                    (c.colspan > 1 and c.col_index == sc and c.col_index + c.colspan - 1 == ec)
-                    or (c.colspan == 1 and sc <= c.col_index <= ec)
-                )
-            ]
-            if part_cells:
-                part_cells.sort(key=lambda c: (round(c.bbox.y0 / 4.0), c.bbox.x0))
-                text = " ".join(c.text.strip() for c in part_cells if c.text.strip()).strip()
-                bbox_merged = BBox(
-                    min(c.bbox.x0 for c in part_cells),
-                    min(c.bbox.y0 for c in part_cells),
-                    max(c.bbox.x1 for c in part_cells),
-                    max(c.bbox.y1 for c in part_cells),
-                )
-                tier0_cells.append(
-                    Cell(
-                        text=text,
-                        row_index=0,
-                        col_index=sc,
-                        colspan=ec - sc + 1,
-                        bbox=bbox_merged,
+        drawings = page.get_drawings() if page else []
+        h_lines = []
+        for d in drawings:
+            for it in d.get("items", []):
+                if it[0] in ("l", "re"):
+                    y = it[1].y if it[0] == "l" else it[1].y0
+                    w = abs(it[2].x - it[1].x) if it[0] == "l" else it[1].width
+                    x0 = min(it[1].x, it[2].x) if it[0] == "l" else it[1].x0
+                    x1 = max(it[1].x, it[2].x) if it[0] == "l" else it[1].x1
+                    if w >= 10.0:
+                        h_lines.append((round(y, 1), x0, x1))
+
+        grid: List[List[Optional[Cell]]] = [[None for _ in range(len(columns))] for _ in range(num_tiers)]
+        for out_r, orig_r in enumerate(sorted_row_indices):
+            for c in rows_dict[orig_r]:
+                if c.text.strip():
+                    for ci in range(c.col_index, c.col_index + c.colspan):
+                        grid[out_r][ci] = c
+
+        merged_down = set()
+        for t in range(num_tiers - 1):
+            for ci, (cx0, cx1) in enumerate(columns):
+                c_top = grid[t][ci]
+                c_bot = grid[t + 1][ci]
+                if c_top and c_bot and c_top.colspan == 1 and c_bot.colspan == 1 and c_top is not c_bot:
+                    y_min = min(c_top.bbox.y1, c_bot.bbox.y0) - 2.0
+                    y_max = max(c_top.bbox.y1, c_bot.bbox.y0) + 4.0
+                    has_sep_line = any(
+                        y_min <= ly <= y_max and not (lx1 < cx0 + 5.0 or lx0 > cx1 - 5.0)
+                        for ly, lx0, lx1 in h_lines
                     )
-                )
-            else:
-                tier0_cells.append(
-                    Cell(
+                    if not has_sep_line:
+                        merged_text = (c_top.text + " " + c_bot.text).strip()
+                        merged_bbox = BBox(
+                            min(c_top.bbox.x0, c_bot.bbox.x0),
+                            min(c_top.bbox.y0, c_bot.bbox.y0),
+                            max(c_top.bbox.x1, c_bot.bbox.x1),
+                            max(c_top.bbox.y1, c_bot.bbox.y1),
+                        )
+                        c_top.text = merged_text
+                        c_top.rowspan = 2
+                        c_top.bbox = merged_bbox
+                        c_bot.text = ""
+                        merged_down.add((t + 1, ci))
+
+        output_cells = []
+        for out_r_idx, orig_r_idx in enumerate(sorted_row_indices):
+            cur_row_cells = rows_dict[orig_r_idx]
+
+            covered_cols = set()
+            non_empty = []
+            for c in cur_row_cells:
+                if (out_r_idx, c.col_index) in merged_down:
+                    continue
+                if c.text.strip():
+                    non_empty.append(c)
+                    for ci in range(c.col_index, c.col_index + c.colspan):
+                        covered_cols.add(ci)
+
+            for c in non_empty:
+                output_cells.append(Cell(
+                    text=c.text,
+                    row_index=out_r_idx,
+                    col_index=c.col_index,
+                    colspan=c.colspan,
+                    rowspan=c.rowspan,
+                    bbox=c.bbox,
+                ))
+
+            y0 = min(c.bbox.y0 for c in cur_row_cells)
+            y1 = max(c.bbox.y1 for c in cur_row_cells)
+            for ci in range(len(columns)):
+                if ci not in covered_cols and (out_r_idx, ci) not in merged_down:
+                    output_cells.append(Cell(
                         text="",
-                        row_index=0,
-                        col_index=sc,
-                        colspan=ec - sc + 1,
-                        bbox=BBox(
-                            columns[sc][0],
-                            min(c.bbox.y0 for c in header_cells),
-                            columns[ec][1],
-                            max(c.bbox.y1 for c in header_cells if c.row_index <= max_span_row),
-                        ),
-                    )
-                )
-
-        tier0_cells.sort(key=lambda c: c.col_index)
-
-        sub_cells = [c for c in header_cells if c.row_index > max_span_row]
-        if not sub_cells:
-            return tier0_cells, 1
-
-        merged_sub_cells = []
-        col_sub: Dict[int, List[Cell]] = defaultdict(list)
-        for c in sub_cells:
-            col_sub[c.col_index].append(c)
-
-        for ci, (cx0, cx1) in enumerate(columns):
-            cs = [c for c in col_sub.get(ci, []) if c.text.strip()]
-            if cs:
-                cs.sort(key=lambda c: (c.row_index, c.bbox.y0))
-                merged_text = " ".join(c.text.strip() for c in cs if c.text.strip()).strip()
-                merged_bbox = BBox(
-                    min(c.bbox.x0 for c in cs),
-                    min(c.bbox.y0 for c in cs),
-                    max(c.bbox.x1 for c in cs),
-                    max(c.bbox.y1 for c in cs),
-                )
-                merged_sub_cells.append(
-                    Cell(
-                        text=merged_text,
-                        row_index=1,
+                        row_index=out_r_idx,
                         col_index=ci,
                         colspan=1,
-                        bbox=merged_bbox,
-                    )
-                )
-            else:
-                merged_sub_cells.append(
-                    Cell(
-                        text="",
-                        row_index=1,
-                        col_index=ci,
-                        colspan=1,
-                        bbox=BBox(
-                            cx0,
-                            min(c.bbox.y0 for c in sub_cells),
-                            cx1,
-                            max(c.bbox.y1 for c in sub_cells),
-                        ),
-                    )
-                )
+                        bbox=BBox(columns[ci][0], y0, columns[ci][1], y1),
+                    ))
 
-        return tier0_cells + merged_sub_cells, 2
+        output_cells.sort(key=lambda c: (c.row_index, c.col_index))
+        return output_cells, len(sorted_row_indices)
 
     def _build_zebra_table(
         self,
@@ -736,7 +881,7 @@ class WirelessTableExtractor(BaseTableExtractor):
             )
             raw_header_cells.extend(rc)
 
-        norm_h_cells, num_h_rows = self._normalize_zebra_headers(raw_header_cells, columns)
+        norm_h_cells, num_h_rows = self._normalize_zebra_headers(raw_header_cells, columns, page=page)
 
         body_cells: List[Cell] = []
         for r_idx, dr in enumerate(data_rows):
@@ -792,7 +937,7 @@ class WirelessTableExtractor(BaseTableExtractor):
         page: Optional[fitz.Page] = None,
         is_header: bool = False,
     ) -> List[Cell]:
-        if not words:
+        if not words or not columns:
             return [
                 Cell(
                     text="",
@@ -803,198 +948,154 @@ class WirelessTableExtractor(BaseTableExtractor):
                 for col_idx, (col_x0, col_x1) in enumerate(columns)
             ]
 
-        span_lines: List[Tuple[float, float, int, int]] = []
-        if page is not None and is_header:
-            try:
-                drawings = page.get_drawings()
-                h_lines = []
-                for d in drawings:
-                    for it in d.get("items", []):
-                        if it[0] == "l":
-                            p1, p2 = it[1], it[2]
-                            if abs(p1.y - p2.y) <= 1.5:
-                                y = p1.y
-                                if row_y0 + 2.0 <= y <= row_y1 + 6.0:
-                                    h_lines.append((round(y, 1), min(p1.x, p2.x), max(p1.x, p2.x)))
-                        elif it[0] == "re":
-                            r = it[1]
-                            if r.height <= 3.0:
-                                y = r.y0
-                                if row_y0 + 2.0 <= y <= row_y1 + 6.0:
-                                    h_lines.append((round(y, 1), r.x0, r.x1))
+        if is_header:
+            h_words = sorted(words, key=lambda w: (round(w[1], 1), w[0]))
+            line_clusters = []
+            for w in h_words:
+                wy = (w[1] + w[3]) / 2.0
+                matched = False
+                for cl in line_clusters:
+                    cl_y = sum((item[1] + item[3]) / 2.0 for item in cl) / len(cl)
+                    if abs(wy - cl_y) <= 4.0:
+                        cl.append(w)
+                        matched = True
+                        break
+                if not matched:
+                    line_clusters.append([w])
 
-                lines_by_y: Dict[float, List[Tuple[float, float]]] = defaultdict(list)
-                for y, x0, x1 in h_lines:
-                    matched_y = None
-                    for ey in lines_by_y:
-                        if abs(y - ey) <= 2.0:
-                            matched_y = ey
-                            break
-                    if matched_y is None:
-                        matched_y = y
-                    lines_by_y[matched_y].append((x0, x1))
-
-                table_min_x = min(col[0] for col in columns)
-                table_max_x = max(col[1] for col in columns)
-                table_w = table_max_x - table_min_x
-
-                for y, segs in sorted(lines_by_y.items()):
-                    segs.sort(key=lambda s: s[0])
-                    merged = []
-                    for s in segs:
-                        if not merged:
-                            merged.append(list(s))
-                        else:
-                            if s[0] - merged[-1][1] <= 3.0:
-                                merged[-1][1] = max(merged[-1][1], s[1])
-                            else:
-                                merged.append(list(s))
-
-                    for lx0, lx1 in merged:
-                        if (lx1 - lx0) >= table_w * 0.95:
-                            continue
-                        sc = None
-                        ec = None
-                        for ci, (cx0, cx1) in enumerate(columns):
-                            col_w = max(1.0, cx1 - cx0)
-                            overlap = max(0.0, min(lx1, cx1) - max(lx0, cx0))
-                            if overlap / col_w >= 0.20:
-                                if sc is None:
-                                    sc = ci
-                                ec = ci
-                        if sc is not None and ec is not None and ec > sc:
-                            span_lines.append((lx0, lx1, sc, ec))
-            except Exception:
-                pass
-
-        if span_lines and is_header:
-            cells: List[Cell] = []
-            covered_cols = set()
-            used_words = set()
-
-            for lx0, lx1, sc, ec in span_lines:
-                line_words = [
-                    w for w in words
-                    if lx0 - 5.0 <= (w[0] + w[2]) / 2.0 <= lx1 + 5.0
-                ]
-                if not line_words:
-                    continue
-
-                sorted_lw = sorted(line_words, key=lambda w: w[0])
-                lw_clusters: List[List[Tuple]] = []
-                curr_c: List[Tuple] = [sorted_lw[0]]
-                for w in sorted_lw[1:]:
-                    if w[0] - curr_c[-1][2] <= 12.0:
-                        curr_c.append(w)
+            line_phrases = []
+            for cl in line_clusters:
+                cl.sort(key=lambda w: w[0])
+                cur_p = []
+                for w in cl:
+                    if not cur_p:
+                        cur_p.append(w)
                     else:
-                        lw_clusters.append(curr_c)
-                        curr_c = [w]
-                if curr_c:
-                    lw_clusters.append(curr_c)
+                        if w[0] - cur_p[-1][2] <= 12.0:
+                            cur_p.append(w)
+                        else:
+                            line_phrases.append(cur_p)
+                            cur_p = [w]
+                if cur_p:
+                    line_phrases.append(cur_p)
 
-                if len(lw_clusters) == 1:
-                    ws = lw_clusters[0]
-                    ws.sort(key=lambda w: (round((w[1] + w[3]) / 2.0 / 4.0), w[0]))
-                    text = " ".join(w[4].strip() for w in ws if w[4].strip()).strip()
-                    cells.append(Cell(
-                        text=text,
-                        row_index=row_idx,
-                        col_index=sc,
-                        colspan=ec - sc + 1,
-                        bbox=BBox(
-                            min(w[0] for w in ws),
-                            min(w[1] for w in ws),
-                            max(w[2] for w in ws),
-                            max(w[3] for w in ws),
-                        ),
-                    ))
-                    for w in ws:
-                        used_words.add(id(w))
-                    for c in range(sc, ec + 1):
-                        covered_cols.add(c)
-                else:
-                    for ws in lw_clusters:
-                        ws_xc = (min(w[0] for w in ws) + max(w[2] for w in ws)) / 2.0
-                        ci = self._find_column(ws_xc, columns)
-                        ws.sort(key=lambda w: (round((w[1] + w[3]) / 2.0 / 4.0), w[0]))
-                        text = " ".join(w[4].strip() for w in ws if w[4].strip()).strip()
-                        cells.append(Cell(
-                            text=text,
-                            row_index=row_idx,
-                            col_index=ci,
-                            colspan=1,
-                            bbox=BBox(
-                                min(w[0] for w in ws),
-                                min(w[1] for w in ws),
-                                max(w[2] for w in ws),
-                                max(w[3] for w in ws),
-                            ),
-                        ))
-                        for w in ws:
-                            used_words.add(id(w))
-                        covered_cols.add(ci)
-
-            remaining_words = [w for w in words if id(w) not in used_words]
-            col_words: Dict[int, List[Tuple]] = defaultdict(list)
-            for w in remaining_words:
-                w_xc = (w[0] + w[2]) / 2.0
-                ci = self._find_column(w_xc, columns)
-                col_words[ci].append(w)
-
-            for ci, (cx0, cx1) in enumerate(columns):
-                if ci in covered_cols:
+            merged_phrases = []
+            used = set()
+            for i, p1 in enumerate(line_phrases):
+                if i in used:
                     continue
-                ws = col_words.get(ci, [])
-                if not ws:
-                    cells.append(Cell(text="", row_index=row_idx, col_index=ci, bbox=BBox(cx0, row_y0, cx1, row_y1)))
-                else:
-                    ws.sort(key=lambda w: (round((w[1] + w[3]) / 2.0 / 4.0), w[0]))
-                    text = " ".join(w[4].strip() for w in ws if w[4].strip()).strip()
+                p1_x0 = min(w[0] for w in p1)
+                p1_x1 = max(w[2] for w in p1)
+                cur_words = list(p1)
+                used.add(i)
+                for j, p2 in enumerate(line_phrases):
+                    if j in used:
+                        continue
+                    p2_x0 = min(w[0] for w in p2)
+                    p2_x1 = max(w[2] for w in p2)
+                    overlap = min(p1_x1, p2_x1) - max(p1_x0, p2_x0)
+                    min_w = min(p1_x1 - p1_x0, p2_x1 - p2_x0)
+                    if overlap > 0.4 * min_w or abs((p1_x0 + p1_x1) / 2.0 - (p2_x0 + p2_x1) / 2.0) <= 20.0:
+                        cur_words.extend(p2)
+                        used.add(j)
+                merged_phrases.append(cur_words)
+
+            cells = []
+            covered_cols = set()
+            for p in merged_phrases:
+                p.sort(key=lambda w: (round(w[1], 1), w[0]))
+                p_text = " ".join(w[4] for w in p)
+                px0 = min(w[0] for w in p)
+                py0 = min(w[1] for w in p)
+                px1 = max(w[2] for w in p)
+                py1 = max(w[3] for w in p)
+
+                start_col = 0
+                for ci, (cx0, cx1) in enumerate(columns):
+                    if (px0 + min(px0 + 10.0, px1)) / 2.0 < cx1:
+                        start_col = ci
+                        break
+                end_col = start_col
+                for ci in range(start_col, len(columns)):
+                    cx0, cx1 = columns[ci]
+                    if px1 > cx0 + 5.0:
+                        end_col = ci
+                colspan = max(1, end_col - start_col + 1)
+                for ci in range(start_col, start_col + colspan):
+                    covered_cols.add(ci)
+                cells.append(Cell(
+                    text=p_text,
+                    row_index=row_idx,
+                    col_index=start_col,
+                    colspan=colspan,
+                    rowspan=1,
+                    bbox=BBox(columns[start_col][0], py0, columns[start_col + colspan - 1][1], py1),
+                ))
+
+            for ci in range(len(columns)):
+                if ci not in covered_cols:
                     cells.append(Cell(
-                        text=text,
+                        text="",
                         row_index=row_idx,
                         col_index=ci,
                         colspan=1,
-                        bbox=BBox(min(w[0] for w in ws), min(w[1] for w in ws), max(w[2] for w in ws), max(w[3] for w in ws)),
+                        rowspan=1,
+                        bbox=BBox(columns[ci][0], row_y0, columns[ci][1], row_y1),
                     ))
-
             cells.sort(key=lambda c: c.col_index)
             return cells
 
-        col_to_words: Dict[int, List[Tuple]] = defaultdict(list)
+        col_words = [[] for _ in range(len(columns))]
         for w in words:
-            x_center = (w[0] + w[2]) / 2.0
-            ci = self._find_column(x_center, columns)
-            col_to_words[ci].append(w)
+            mid_x = (w[0] + w[2]) / 2.0
+            matched_ci = -1
+            for ci, (cx0, cx1) in enumerate(columns):
+                if cx0 <= mid_x < cx1:
+                    matched_ci = ci
+                    break
+            if matched_ci >= 0:
+                col_words[matched_ci].append(w)
 
-        cells: List[Cell] = []
-        for col_idx, (col_x0, col_x1) in enumerate(columns):
-            words_in_col = col_to_words.get(col_idx, [])
-            if not words_in_col:
+        cells = []
+        for ci, (cx0, cx1) in enumerate(columns):
+            c_w = col_words[ci]
+            if not c_w:
                 cells.append(Cell(
                     text="",
                     row_index=row_idx,
-                    col_index=col_idx,
-                    bbox=BBox(col_x0, row_y0, col_x1, row_y1),
+                    col_index=ci,
+                    colspan=1,
+                    rowspan=1,
+                    bbox=BBox(cx0, row_y0, cx1, row_y1),
                 ))
                 continue
 
-            words_in_col.sort(key=lambda w: (round((w[1] + w[3]) / 2.0 / 4.0), w[0]))
-            text = " ".join(w[4].strip() for w in words_in_col if w[4].strip())
+            c_w.sort(key=lambda w: w[0])
+            dollar_words = [w for w in c_w if w[4] == '$']
+            non_dollar_words = [w for w in c_w if w[4] != '$']
+            if dollar_words and non_dollar_words:
+                ordered_w = dollar_words + non_dollar_words
+            else:
+                ordered_w = c_w
 
-            x0 = min(w[0] for w in words_in_col)
-            y0 = min(w[1] for w in words_in_col)
-            x1 = max(w[2] for w in words_in_col)
-            y1 = max(w[3] for w in words_in_col)
+            cell_text = " ".join(w[4] for w in ordered_w)
+            cell_text = re.sub(r'(\d+,\d+)\s+(\d+)', r'\1\2', cell_text)
+            cell_text = re.sub(r'(\(\d+,\d+)\s+(\d+)', r'\1\2', cell_text)
+            cell_text = re.sub(r'\$\s+', '$', cell_text)
+            cell_text = re.sub(r'\s+\)', ')', cell_text)
+            cell_text = re.sub(r'\(\s+', '(', cell_text)
+            cell_text = re.sub(r'\s+%', '%', cell_text)
 
+            cy0 = min(w[1] for w in c_w)
+            cy1 = max(w[3] for w in c_w)
             cells.append(Cell(
-                text=text,
+                text=cell_text,
                 row_index=row_idx,
-                col_index=col_idx,
+                col_index=ci,
                 colspan=1,
-                bbox=BBox(x0, y0, x1, y1),
+                rowspan=1,
+                bbox=BBox(cx0, cy0, cx1, cy1),
             ))
-
         return cells
 
     def _find_column(self, x: float, columns: List[Tuple[float, float]]) -> int:

@@ -188,8 +188,22 @@ def draw_tables_on_page(
         badge_w = min(page.rect.width - tb.x0, len(label) * 5.0 + 8.0)
         badge_h = 11.0
 
-        badge_y0 = max(0.0, tb.y0 - badge_h)
-        badge_y1 = badge_y0 + badge_h
+        # Check if placing badge above table overlaps text above table
+        candidate_badge_rect = fitz.Rect(tb.x0, max(0.0, tb.y0 - badge_h), tb.x0 + badge_w, tb.y0)
+        words_above = page.get_text("words")
+        overlaps_above = any(
+            candidate_badge_rect.intersects(fitz.Rect(w[0], w[1], w[2], w[3]))
+            for w in words_above
+        )
+
+        if overlaps_above:
+            # Draw inside the top of the table (top-left empty area)
+            badge_y0 = tb.y0
+            badge_y1 = tb.y0 + badge_h
+        else:
+            badge_y0 = max(0.0, tb.y0 - badge_h)
+            badge_y1 = badge_y0 + badge_h
+
         badge_rect = fitz.Rect(tb.x0, badge_y0, tb.x0 + badge_w, badge_y1)
 
         shape.draw_rect(badge_rect)
