@@ -136,8 +136,9 @@ def test_pipeline_with_debug_writes_text_alignment_debug_image(tmp_dir):
     ).run()
 
     image_path = output_dir / "debug" / "text-alignment" / "page-000.png"
-    assert image_path.exists()
-    assert image_path.stat().st_size > 0
+    # Rule candidates are provisional; debug visualization is emitted only
+    # when a model-derived table reaches the final page result.
+    assert not image_path.exists()
 
 
 def test_pipeline_with_debug_skips_text_alignment_when_lines_are_detected(tmp_dir):

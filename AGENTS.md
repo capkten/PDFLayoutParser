@@ -61,3 +61,7 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 ---
 
 **These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
+
+## Project development workflow
+
+For PDF table debugging, single-page runs, CodeGraph usage, visual verification, language-aware extraction, testing, and commit conventions, load [DEVELOPMENT_WORKFLOW.md](DEVELOPMENT_WORKFLOW.md) when needed.
