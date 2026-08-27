@@ -86,7 +86,7 @@ class MLTableDetector:
     def __init__(
         self,
         model_path: Optional[Union[str, Path]] = None,
-        confidence_threshold: float = 0.70,
+        confidence_threshold: float = 0.40,
         iou_threshold: float = 0.50,
         table_class_ids: Optional[set[int]] = None,
         input_size: int = 640,
@@ -163,21 +163,30 @@ class MLTableDetector:
 
         x0, y0, x1, y1 = bbox.x0, bbox.y0, bbox.x1, bbox.y1
 
+        p_x0, p_y0, p_x1, p_y1 = (
+            (float(page.rect.x0), float(page.rect.y0), float(page.rect.x1), float(page.rect.y1))
+            if page is not None else (-1e9, -1e9, 1e9, 1e9)
+        )
+
         if page is not None:
             try:
                 drawings = page.get_drawings()
                 for d in drawings:
                     r = d.get("rect")
                     if r:
-                        ix0 = max(x0, r.x0)
-                        iy0 = max(y0, r.y0)
-                        ix1 = min(x1, r.x1)
-                        iy1 = min(y1, r.y1)
+                        rx0 = max(p_x0, float(r.x0))
+                        ry0 = max(p_y0, float(r.y0))
+                        rx1 = min(p_x1, float(r.x1))
+                        ry1 = min(p_y1, float(r.y1))
+                        ix0 = max(x0, rx0)
+                        iy0 = max(y0, ry0)
+                        ix1 = min(x1, rx1)
+                        iy1 = min(y1, ry1)
                         if ix1 > ix0 and iy1 > iy0:
-                            x0 = min(x0, r.x0)
-                            y0 = min(y0, r.y0)
-                            x1 = max(x1, r.x1)
-                            y1 = max(y1, r.y1)
+                            x0 = min(x0, rx0)
+                            y0 = min(y0, ry0)
+                            x1 = max(x1, rx1)
+                            y1 = max(y1, ry1)
             except Exception:
                 pass
 
@@ -186,7 +195,7 @@ class MLTableDetector:
             expanded = False
             for w in words:
                 wx0, wy0, wx1, wy1 = w[0], w[1], w[2], w[3]
-                # Direct intersection/overlap
+                # Direct intersection/overlap only
                 if wx1 > x0 and wx0 < x1 and wy1 > y0 and wy0 < y1:
                     new_x0 = min(x0, wx0)
                     new_y0 = min(y0, wy0)
@@ -195,14 +204,12 @@ class MLTableDetector:
                     if new_x0 < x0 or new_y0 < y0 or new_x1 > x1 or new_y1 > y1:
                         x0, y0, x1, y1 = new_x0, new_y0, new_x1, new_y1
                         expanded = True
-                # Word on same row line just outside left/right boundary
-                elif (wy0 + wy1) / 2.0 >= y0 and (wy0 + wy1) / 2.0 <= y1:
-                    if 0.0 <= x0 - wx1 <= 20.0:
-                        x0 = min(x0, wx0)
-                        expanded = True
-                    elif 0.0 <= wx0 - x1 <= 15.0:
-                        x1 = max(x1, wx1)
-                        expanded = True
+
+        if page is not None:
+            x0 = max(p_x0, min(x0, p_x1))
+            y0 = max(p_y0, min(y0, p_y1))
+            x1 = max(p_x0, min(x1, p_x1))
+            y1 = max(p_y0, min(y1, p_y1))
 
         return BBox(x0=round(x0, 1), y0=round(y0, 1), x1=round(x1, 1), y1=round(y1, 1))
 

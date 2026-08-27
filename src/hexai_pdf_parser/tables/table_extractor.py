@@ -102,7 +102,7 @@ class TableExtractor:
         fallback_max_cols: int = 30,
         fallback_max_tables: int = 10,
         ml_model_path: Optional[str] = None,
-        ml_confidence: float = 0.70,
+        ml_confidence: float = 0.40,
         table_config: Optional[TableConfig] = None,
         debug_pipeline: bool = False,
     ):
@@ -189,6 +189,9 @@ class TableExtractor:
             if len(contained_children) >= 2:
                 # Parent encloses 2 or more distinct sub-tables -> suppress parent
                 suppressed.add(i)
+            elif len(contained_children) == 1:
+                # Single child: suppress redundant/partial child so extractor splits parent into complete sub-tables
+                suppressed.add(contained_children[0])
 
         return [item for idx, item in enumerate(items) if idx not in suppressed]
 
@@ -326,6 +329,7 @@ class TableExtractor:
         # Normalize grouped financial headers once, after all table rules.
         tables = [normalize_table_headers(t, page) for t in tables]
         tables = [normalize_complex_financial_header(t, page) for t in tables]
+        tables = [self._clamp_table_to_page(t, page) for t in tables]
 
         if self.debug_pipeline:
             self._last_pipeline_debug["text_alignment"] = copy.deepcopy(
@@ -336,6 +340,46 @@ class TableExtractor:
             ]
 
         return tables
+
+    @staticmethod
+    def _clamp_table_to_page(table: Table, page: fitz.Page) -> Table:
+        """Clamp table bounding box and all cells to the visible page boundaries."""
+        p_x0 = float(page.rect.x0)
+        p_y0 = float(page.rect.y0)
+        p_x1 = float(page.rect.x1)
+        p_y1 = float(page.rect.y1)
+
+        t_x0 = max(p_x0, min(table.bbox.x0, p_x1))
+        t_y0 = max(p_y0, min(table.bbox.y0, p_y1))
+        t_x1 = max(p_x0, min(table.bbox.x1, p_x1))
+        t_y1 = max(p_y0, min(table.bbox.y1, p_y1))
+        clamped_table_bbox = BBox(round(t_x0, 1), round(t_y0, 1), round(t_x1, 1), round(t_y1, 1))
+
+        clamped_cells: list[Cell] = []
+        for c in table.cells:
+            c_x0 = max(t_x0, min(c.bbox.x0, t_x1))
+            c_y0 = max(t_y0, min(c.bbox.y0, t_y1))
+            c_x1 = max(t_x0, min(c.bbox.x1, t_x1))
+            c_y1 = max(t_y0, min(c.bbox.y1, t_y1))
+            clamped_cells.append(
+                Cell(
+                    text=c.text,
+                    row_index=c.row_index,
+                    col_index=c.col_index,
+                    colspan=c.colspan,
+                    rowspan=c.rowspan,
+                    bbox=BBox(round(c_x0, 1), round(c_y0, 1), round(c_x1, 1), round(c_y1, 1)),
+                )
+            )
+
+        return Table(
+            bbox=clamped_table_bbox,
+            rows=table.rows,
+            cols=table.cols,
+            cells=clamped_cells,
+            confidence=table.confidence,
+            source=table.source,
+        )
 
     @staticmethod
     def _rect_to_dict(rect: fitz.Rect) -> dict:

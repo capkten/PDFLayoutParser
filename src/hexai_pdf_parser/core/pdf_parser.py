@@ -32,7 +32,7 @@ class PDFParser:
         render_dpi: int = 200,
         seal_coords: Optional[List[dict]] = None,
         ml_model_path: Optional[str] = None,
-        ml_confidence: float = 0.70,
+        ml_confidence: float = 0.40,
         num_workers: Optional[int] = None,
         backend: str = "thread",
         debug_pipeline: bool = False,
