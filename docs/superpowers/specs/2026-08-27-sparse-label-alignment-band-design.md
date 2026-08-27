@@ -1,59 +1,40 @@
-# Sparse Label Alignment Band Design
+# 稀疏标签对齐列带设计
 
-## Problem
+## 问题
 
-Page 189 contains two wireless financial tables recovered as four columns even
-though each table has three logical columns. The first inferred band contains
-left-aligned body labels. The adjacent weak band contains only the centered
-header and total labels. No row occupies both bands, and no physical vertical
-separator exists between them.
+第 189 页有两张无线表格被恢复成四列，但它们实际都只有三个逻辑列。当前推断出的第一列带包含左对齐的正文项目名称，相邻的弱列带只包含居中的表头和合计标签。没有任何一行同时占用这两个列带，并且二者之间不存在真实的竖向分隔线。
 
-This differs from the paired-CJK artifact handled for page 188: the page 189
-atoms are already complete multi-character spans. The error is caused by two
-alignment styles inside one logical label column, not by character splitting.
+这与第 188 页已经处理的成对 CJK 伪列不同。第 189 页的原子已经是完整的多字 Span，问题不是字符被拆分，而是同一个逻辑标签列中的两种对齐方式被识别成了两列。
 
-## Decision
+## 方案
 
-Add a separate column-band cleanup rule before header topology annotation and
-physical grid construction. The rule removes a weak alignment-only band when
-all of the following structural evidence is present:
+在表头拓扑标注和物理网格构建之前，增加一条独立的列带清理规则。当以下结构证据全部成立时，删除仅表达对齐方式的弱列带：
 
-- the candidate is immediately right of a stronger left label band;
-- the candidate has two or three supported y levels;
-- the candidate and left band have mutually exclusive row occupancy;
-- candidate levels lie outside the vertical range occupied by the left band,
-  representing header/footer alignment rather than a parallel body field;
-- the gap between the two bands is no more than 0.6 times the median font size;
-- a stable band exists to the right and its gap is at least both three times
-  the inner gap and 2.5 times the median font size;
-- the left band has at least two supported body levels.
+- 候选列带紧邻一个更强的左侧标签列带；
+- 候选列带只得到 2 至 3 个纵向层级的支持；
+- 候选列带与左侧列带的行占用完全互斥；
+- 候选列带所在层级位于左侧正文列带纵向范围之外，表达表头或表尾对齐，而不是并列的正文字段；
+- 两个列带之间的间距不超过中位字号的 0.6 倍；
+- 右侧还存在稳定列带，并且到右侧稳定列带的间距同时不小于内部间距的 3 倍和中位字号的 2.5 倍；
+- 左侧列带至少得到两个正文层级的支持。
 
-The rule is text-agnostic. It must not depend on words such as `项目` or `合计`.
-After removing the candidate, bands are renumbered. Existing assignment logic
-then maps its atoms to the remaining left band.
+该规则不依赖文本语义，不能使用“项目”“合计”等关键字。删除候选列带后重新编号，现有列分配逻辑会把候选列带中的原子归入保留的左侧列带。
 
-## Placement
+## 接入位置
 
-Implement the rule in `wireless_structure/columns.py` beside the paired-CJK
-band cleanup. Call it in `recoverer.py` after paired-CJK cleanup and before
-`refine_leaf_bands()` and `annotate_columns()`.
+规则实现在 `wireless_structure/columns.py`，与第 188 页的成对 CJK 列带清理逻辑并列。在 `recoverer.py` 中，先执行成对 CJK 清理，再执行本规则，之后才进入 `refine_leaf_bands()` 和 `annotate_columns()`。
 
-This keeps recovery boundary-first. No cells are merged after grid creation,
-and page words are not reread.
+这样可以继续保持边界优先：不在网格生成后合并单元格，也不重新读取 page words。
 
-## Safety Cases
+## 安全边界
 
-The rule must preserve:
+该规则必须保留以下情况：
 
-- a real pair of narrow columns that both contain text on the same row;
-- mutually exclusive sparse columns separated by a normal column gap;
-- the already-correct three-column table on page 189, whose centered labels
-  already overlap the body-label band;
-- the existing page 188 paired-CJK behavior.
+- 同一行中同时存在文本的两个真实窄列；
+- 虽然交替为空，但列间距属于正常列间距的两个真实稀疏列；
+- 第 189 页下方已经正确的三列表格，其中居中标签已经和正文标签列带重叠；
+- 第 188 页现有的成对 CJK 伪列处理行为。
 
-## Verification
+## 验证
 
-Use test-first coverage at both the band and recoverer levels. Re-run page 189
-from `fix/zh_all_table_pages.pdf` and verify table shapes `6x3`, `4x3`, and
-`4x3`, complete non-overlapping occupancy, and the visualization. Run all
-wireless-structure tests plus `git diff --check`.
+在列带层和恢复器层先增加失败测试，再实现最小修复。重新运行 `fix/zh_all_table_pages.pdf` 第 189 页，确认三张表分别为 `6x3`、`4x3`、`4x3`，全部网格槽位占用完整且互不重叠，并检查可视化图片。最后运行全部无线结构测试以及 `git diff --check`。
