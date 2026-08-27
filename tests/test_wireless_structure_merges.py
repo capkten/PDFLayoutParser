@@ -69,3 +69,32 @@ def test_merge_multiline_cells_keeps_independent_project_rows_separate():
     result = merge_multiline_cells([first, second], header_cutoff=None)
 
     assert [item["text"] for item in result] == ["项目一", "项目二"]
+
+
+def test_merge_multiline_cells_accepts_one_font_size_vertical_gap():
+    first = _cell("单项金额不重大但按", flow=1, row=1, y0=10, y1=20, source_line=1)
+    second = _cell("信用风险特征组合后", flow=2, row=2, y0=29.48, y1=39.48, source_line=2)
+
+    result = merge_multiline_cells([first, second], header_cutoff=None)
+
+    assert len(result) == 1
+    assert result[0]["text"] == "单项金额不重大但按\n信用风险特征组合后"
+
+
+def test_merge_same_slot_fragments_joins_wide_spaced_single_cjk_pair():
+    left = _cell("合", flow=1, row=1, x0=10, x1=20)
+    right = _cell("计", flow=2, row=1, x0=41, x1=51, source_line=1)
+
+    result = merge_same_slot_fragments([left, right], header_cutoff=None)
+
+    assert len(result) == 1
+    assert result[0]["text"] == "合计"
+
+
+def test_merge_same_slot_fragments_does_not_join_wide_multi_character_labels():
+    left = _cell("比例", flow=1, row=1, x0=10, x1=20)
+    right = _cell("坏账准备", flow=2, row=1, x0=41, x1=71, source_line=1)
+
+    result = merge_same_slot_fragments([left, right], header_cutoff=None)
+
+    assert [item["text"] for item in result] == ["比例", "坏账准备"]

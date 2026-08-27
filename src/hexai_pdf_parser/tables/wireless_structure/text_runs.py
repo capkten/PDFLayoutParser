@@ -12,6 +12,8 @@ from .span_chain import _union
 _CJK = re.compile(r"[\u3400-\u9fff]")
 _LATIN = re.compile(r"[A-Za-z]")
 _NUMERIC = re.compile(r"^\(?[+\-–—−]?\d[\d,]*(?:\.\d+)?%?\)?$")
+_SEPARATOR_CHARS = set("-_=—–─━＝□■▪▫")
+_PLACEHOLDER_CHARS = set("-—–")
 
 
 def script_kind(text: str) -> str:
@@ -28,6 +30,65 @@ def _center_y(item: dict[str, Any]) -> float:
     return (item["bbox"][1] + item["bbox"][3]) / 2.0
 
 
+def _separator_text(item: dict[str, Any]) -> str:
+    text = "".join(str(item.get("text", "")).split())
+    return text if text and all(char in _SEPARATOR_CHARS for char in text) else ""
+
+
+def _is_placeholder(item: dict[str, Any]) -> bool:
+    text = _separator_text(item)
+    return 1 <= len(text) <= 3 and all(char in _PLACEHOLDER_CHARS for char in text)
+
+
+def _filter_separator_spans(spans: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Remove wide text-rendered separator lines, but keep body dash values."""
+    if not spans:
+        return []
+
+    rows: list[list[dict[str, Any]]] = []
+    for span in sorted(spans, key=lambda item: (_center_y(item), item["bbox"][0])):
+        row = next(
+            (
+                candidate
+                for candidate in reversed(rows)
+                if abs(_center_y(span) - sum(_center_y(item) for item in candidate) / len(candidate)) <= 2.4
+            ),
+            None,
+        )
+        if row is None:
+            row = []
+            rows.append(row)
+        row.append(span)
+
+    filtered: list[dict[str, Any]] = []
+    for row in rows:
+        kept: list[dict[str, Any]] = []
+        index = 0
+        ordered = sorted(row, key=lambda item: item["bbox"][0])
+        while index < len(ordered):
+            span = ordered[index]
+            separator = _separator_text(span)
+            if len(separator) > 3:
+                index += 1
+                continue
+            if separator:
+                group = [span]
+                next_index = index + 1
+                while next_index < len(ordered):
+                    candidate = ordered[next_index]
+                    if not _separator_text(candidate) or candidate["bbox"][0] - group[-1]["bbox"][2] > 2.0:
+                        break
+                    group.append(candidate)
+                    next_index += 1
+                if len(group) > 1 and sum(len(_separator_text(item)) for item in group) > 3:
+                    index = next_index
+                    continue
+            kept.append(span)
+            index += 1
+        filtered.extend(kept)
+    return filtered
+
+
 def _same_native_line(left: dict[str, Any], right: dict[str, Any]) -> bool:
     return (
         left["source_position"][:2] == right["source_position"][:2]
@@ -39,6 +100,8 @@ def _normal_word_gap(spans: Sequence[dict[str, Any]]) -> float | None:
     gaps: list[float] = []
     ordered = sorted(spans, key=lambda item: item["flow"])
     for left, right in zip(ordered, ordered[1:]):
+        if _is_placeholder(left) or _is_placeholder(right):
+            continue
         if not _same_native_line(left, right):
             continue
         if abs(_center_y(left) - _center_y(right)) > max(
@@ -56,7 +119,7 @@ def _normal_word_gap(spans: Sequence[dict[str, Any]]) -> float | None:
 
 def _join_gap_limit(left: dict[str, Any], right: dict[str, Any], normal_gap: float | None) -> float:
     fallback = max(3.5, min(left["font_size"], right["font_size"]) * 0.8)
-    return fallback if normal_gap is None else max(1.5, normal_gap * 2.0)
+    return fallback if normal_gap is None else min(fallback, max(1.5, normal_gap))
 
 
 def _can_join(group: Sequence[dict[str, Any]], candidate: dict[str, Any], normal_gap: float | None) -> bool:
@@ -68,6 +131,8 @@ def _can_join(group: Sequence[dict[str, Any]], candidate: dict[str, Any], normal
     ):
         return False
     gap = candidate["bbox"][0] - previous["bbox"][2]
+    if gap > 0 and (_is_placeholder(previous) or _is_placeholder(candidate)):
+        return False
     if (
         gap > 0.8
         and _NUMERIC.fullmatch(previous["text"].strip())
@@ -92,6 +157,9 @@ def _join_text(group: Sequence[dict[str, Any]]) -> str:
 
 def build_text_runs(spans: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
     """Merge only same-line native fragments; do not pair bilingual content."""
+    if not spans:
+        return []
+    spans = _filter_separator_spans(spans)
     if not spans:
         return []
     normal_gap = _normal_word_gap(spans)

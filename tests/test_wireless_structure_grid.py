@@ -1,4 +1,6 @@
 from hexai_pdf_parser.tables.wireless_structure.grid import build_grid
+from hexai_pdf_parser.core.models import BBox
+from hexai_pdf_parser.tables.wireless_structure import logical_grid
 from hexai_pdf_parser.tables.wireless_structure.logical_grid import build_logical_grid
 
 
@@ -48,3 +50,74 @@ def test_build_logical_grid_compresses_rows_covered_by_rowspan():
     assert logical_cells[0]["source_row_start"] == 1
     assert logical_cells[0]["source_row_end"] == 2
     assert logical_cells[0]["row_start"] == 1
+    assert logical_cells[0]["row_end"] == 1
+    assert logical_cells[0]["rowspan"] == 1
+
+
+def test_materialize_empty_cells_fills_every_unoccupied_logical_slot():
+    logical_rows = [{"id": 1, "source_rows": [1]}, {"id": 2, "source_rows": [2]}]
+    physical_rows = [{"id": 1, "y": 10}, {"id": 2, "y": 30}]
+    columns = [
+        {"id": 1, "x0": 10, "x1": 20},
+        {"id": 2, "x0": 40, "x1": 50},
+        {"id": 3, "x0": 70, "x1": 80},
+    ]
+    cells = [
+        {
+            "cell_id": "T1",
+            "text": "金额",
+            "bbox": [40, 5, 50, 15],
+            "row_start": 1,
+            "row_end": 1,
+            "col_start": 2,
+            "col_end": 2,
+            "rowspan": 1,
+            "colspan": 1,
+        }
+    ]
+
+    result = logical_grid.materialize_empty_cells(
+        logical_rows, physical_rows, columns, cells, BBox(0, 0, 90, 40)
+    )
+
+    assert len(result) == 6
+    assert {(cell["row_start"], cell["col_start"]) for cell in result} == {
+        (1, 1), (1, 2), (1, 3), (2, 1), (2, 2), (2, 3)
+    }
+    empty = next(cell for cell in result if cell["row_start"] == 1 and cell["col_start"] == 1)
+    assert empty["text"] == ""
+    assert empty["rowspan"] == empty["colspan"] == 1
+    assert empty["bbox"] == [0, 0, 30, 20]
+
+
+def test_materialize_empty_cells_does_not_fill_existing_colspan_coverage():
+    logical_rows = [{"id": 1, "source_rows": [1]}]
+    physical_rows = [{"id": 1, "y": 10}]
+    columns = [
+        {"id": 1, "x0": 10, "x1": 20},
+        {"id": 2, "x0": 40, "x1": 50},
+        {"id": 3, "x0": 70, "x1": 80},
+    ]
+    cells = [
+        {
+            "cell_id": "T1",
+            "text": "分组",
+            "bbox": [10, 5, 50, 15],
+            "row_start": 1,
+            "row_end": 1,
+            "col_start": 1,
+            "col_end": 2,
+            "rowspan": 1,
+            "colspan": 2,
+        }
+    ]
+
+    result = logical_grid.materialize_empty_cells(
+        logical_rows, physical_rows, columns, cells, BBox(0, 0, 90, 20)
+    )
+
+    assert len(result) == 2
+    assert [(cell["col_start"], cell["colspan"], cell["text"]) for cell in result] == [
+        (1, 2, "分组"),
+        (3, 1, ""),
+    ]

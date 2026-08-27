@@ -3417,7 +3417,11 @@ class TableExtractor:
         self, page: fitz.Page, region_bbox: BBox
     ) -> tuple[int, int, List[Cell]]:
         """Recover a table grid from text inside a trusted table region."""
-        return self._zh_wireless._extract_cells_from_region(page, region_bbox)
+        from hexai_pdf_parser.tables.wireless_structure.recoverer import (
+            recover_cells_from_region,
+        )
+
+        return recover_cells_from_region(page, region_bbox)
 
     def _prune_empty_columns(
         self, cells: List[Cell], num_cols: int

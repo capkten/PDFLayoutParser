@@ -9,6 +9,7 @@ from typing import Any, Sequence
 _VALUE_ONLY = re.compile(r"^[\s$¥£€HKRMB,'’()\-–—.\d%]+$")
 _LIST_CONTINUATION = re.compile(r"^[\s\-–—•·]")
 _INLINE_MARKER = re.compile(r"^[*#†‡\-–—]+$")
+_SINGLE_CJK = re.compile(r"^[\u3400-\u9fff]$")
 
 
 def _horizontal_overlap(left: Sequence[float], right: Sequence[float]) -> float:
@@ -32,6 +33,20 @@ def _same_native_inline(left: dict[str, Any], right: dict[str, Any]) -> bool:
         <= max(2.0, min(left["font_size"], right["font_size"]) * 0.35)
         and right["bbox"][0] - left["bbox"][2]
         <= max(4.0, min(left["font_size"], right["font_size"]) * 0.75)
+    )
+
+
+def _same_slot_single_cjk(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    return (
+        _SINGLE_CJK.fullmatch(left["text"]) is not None
+        and _SINGLE_CJK.fullmatch(right["text"]) is not None
+        and left.get("source_blocks") == right.get("source_blocks")
+        and left.get("source_line_start") == right.get("source_line_start")
+        and _native_continuous(left, right)
+        and abs((left["bbox"][1] + left["bbox"][3]) / 2 - (right["bbox"][1] + right["bbox"][3]) / 2)
+        <= max(2.0, min(left["font_size"], right["font_size"]) * 0.35)
+        and right["bbox"][0] - left["bbox"][2]
+        <= min(left["font_size"], right["font_size"]) * 2.1
     )
 
 
@@ -73,7 +88,11 @@ def merge_same_slot_fragments(
                 _native_continuous(current, candidate)
                 and (_INLINE_MARKER.fullmatch(current["text"]) or _INLINE_MARKER.fullmatch(candidate["text"]))
             )
-            if _same_slot(current, candidate) and (_same_native_inline(current, candidate) or inline_marker):
+            if _same_slot(current, candidate) and (
+                _same_native_inline(current, candidate)
+                or _same_slot_single_cjk(current, candidate)
+                or inline_marker
+            ):
                 current = _merge_pair(current, candidate, "", "same_slot_native_inline")
                 pending.pop(index)
                 continue
@@ -103,7 +122,7 @@ def _can_merge_multiline(
     if _horizontal_overlap(previous["bbox"], candidate["bbox"]) < minimum_width * 0.45:
         return False
     gap = candidate["bbox"][1] - previous["bbox"][3]
-    return gap <= max(6.0, min(previous["font_size"], candidate["font_size"]) * 0.72)
+    return gap <= max(6.0, min(previous["font_size"], candidate["font_size"]))
 
 
 def merge_multiline_cells(

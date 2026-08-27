@@ -56,11 +56,16 @@ def test_wireless_extractor_skips_zebra_for_chinese_page(monkeypatch):
         lambda page, bbox: (1, 1, [Cell("中文", 0, 0, bbox)]),
     )
 
+    monkeypatch.setattr(
+        "hexai_pdf_parser.tables.extractors.wireless_table_extractor.recover_cells_from_region",
+        lambda page, bbox: (1, 1, [Cell("中文", 0, 0, bbox)]),
+    )
+
     tables = extractor.extract(
         object(), table_bbox=BBox(0, 0, 100, 100), page_language="zh"
     )
 
-    assert tables[0].source == "text_alignment"
+    assert tables[0].source == "wireless_span_recovery"
     assert not zebra_called
 
 
@@ -76,6 +81,59 @@ def test_wireless_extractor_keeps_zebra_for_english_page(monkeypatch):
     )
 
     assert tables == [zebra_table]
+
+
+def test_wireless_extractor_uses_new_recovery_for_mixed_page(monkeypatch):
+    extractor = WirelessTableExtractor()
+
+    def fail_legacy(*args, **kwargs):
+        raise AssertionError("legacy wireless recovery must not be called")
+
+    monkeypatch.setattr(extractor, "extract_cells_from_region", fail_legacy)
+    monkeypatch.setattr(
+        "hexai_pdf_parser.tables.extractors.wireless_table_extractor.recover_cells_from_region",
+        lambda page, bbox: (1, 1, [Cell("mixed", 0, 0, bbox)]),
+    )
+
+    tables = extractor.extract(
+        object(), table_bbox=BBox(0, 0, 100, 100), page_language="mixed"
+    )
+
+    assert tables[0].source == "wireless_span_recovery"
+
+
+def test_native_span_table_skips_legacy_word_rebuild(monkeypatch):
+    from hexai_pdf_parser.table_header_normalizer import normalize_table_headers
+
+    extractor = WirelessTableExtractor()
+    bbox = BBox(0, 0, 100, 100)
+    cells = [
+        Cell("比例", 0, 0, BBox(10, 10, 30, 20)),
+        Cell("坏账准备", 0, 1, BBox(40, 10, 80, 20)),
+    ]
+    monkeypatch.setattr(
+        "hexai_pdf_parser.tables.extractors.wireless_table_extractor.recover_cells_from_region",
+        lambda page, region: (1, 2, cells),
+    )
+
+    table = extractor.extract(
+        object(), table_bbox=bbox, page_language="mixed"
+    )[0]
+    get_text_calls = []
+
+    def record_get_text(*args, **kwargs):
+        get_text_calls.append((args, kwargs))
+        return []
+
+    page = SimpleNamespace(get_text=record_get_text)
+
+    result = normalize_table_headers(table, page)
+
+    assert [(cell.text, cell.col_index) for cell in result.cells] == [
+        ("比例", 0),
+        ("坏账准备", 1),
+    ]
+    assert get_text_calls == []
 
 
 def make_synthetic_text_alignment_pdf(

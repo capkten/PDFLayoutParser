@@ -68,7 +68,10 @@ def _compute_cell_grid_rects(table: Table) -> list[tuple[Cell, fitz.Rect]]:
     if table.rows <= 0 or table.cols <= 0:
         return [(c, fitz.Rect(c.bbox.x0, c.bbox.y0, c.bbox.x1, c.bbox.y1)) for c in table.cells]
 
-    if table.source in ("line_projection", "zebra_background", "wireless", "ml_detection") or len(table.cells) == table.rows * table.cols:
+    if table.source in ("line_projection", "zebra_background", "wireless", "ml_detection") or (
+        len(table.cells) == table.rows * table.cols
+        and table.source != "wireless_span_recovery"
+    ):
         return [(c, fitz.Rect(c.bbox.x0, c.bbox.y0, c.bbox.x1, c.bbox.y1)) for c in table.cells]
 
     row_tops: dict[int, float] = {}
