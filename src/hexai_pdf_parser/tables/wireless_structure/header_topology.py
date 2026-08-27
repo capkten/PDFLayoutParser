@@ -565,6 +565,87 @@ def _infer_centered_parent_span(
     return []
 
 
+def _infer_two_leaf_parent_spans(
+    atoms: Sequence[dict[str, Any]],
+    bands: Sequence[dict[str, Any]],
+    header_cutoff: float,
+) -> dict[int, list[int]]:
+    """Map a complete parent tier to non-overlapping two-leaf groups."""
+    header = [
+        atom
+        for atom in atoms
+        if _center_y(atom) <= header_cutoff and not _is_note_reference_atom(atom)
+    ]
+    levels = _levels(header)
+    assignment_bands = _header_leaf_bands(bands)
+    inferred: dict[int, list[int]] = {}
+
+    for parent_index, parent_level in enumerate(levels[:-1]):
+        parents = sorted(
+            (
+                atom
+                for atom in header
+                if abs(_center_y(atom) - parent_level) < 1.2
+                and not _is_temporal_leaf_header(atom)
+            ),
+            key=lambda atom: atom["bbox"][0],
+        )
+        parent_columns = [assign_column(atom, assignment_bands) for atom in parents]
+        if (
+            not parents
+            or any(column is None for column in parent_columns)
+            or len(set(parent_columns)) != len(parent_columns)
+        ):
+            continue
+
+        for leaf_level in levels[parent_index + 1 :]:
+            leaves = [
+                atom
+                for atom in header
+                if abs(_center_y(atom) - leaf_level) < 1.2
+                and not _is_structural_header_atom(atom)
+            ]
+            leaf_columns = [assign_column(atom, assignment_bands) for atom in leaves]
+            if (
+                len(leaves) != len(parents) * 2
+                or any(column is None for column in leaf_columns)
+                or len(set(leaf_columns)) != len(leaf_columns)
+            ):
+                continue
+            leaf_ids = sorted(int(column) for column in leaf_columns if column is not None)
+            if leaf_ids != list(range(leaf_ids[0], leaf_ids[-1] + 1)):
+                continue
+
+            pairs = [
+                leaf_ids[index : index + 2]
+                for index in range(0, len(leaf_ids), 2)
+            ]
+            tier_mapping: dict[int, list[int]] = {}
+            for parent, parent_column, pair in zip(parents, parent_columns, pairs):
+                if parent_column not in pair:
+                    break
+                first = next(band for band in bands if band["id"] == pair[0])
+                last = next(band for band in bands if band["id"] == pair[-1])
+                group_width = last["x1"] - first["x0"]
+                group_center = (first["x0"] + last["x1"]) / 2.0
+                parent_center = (parent["bbox"][0] + parent["bbox"][2]) / 2.0
+                direct = {
+                    int(band["id"])
+                    for band in assignment_bands
+                    if _meaningful_header_band_overlap(parent, band)
+                }
+                aligned = abs(group_center - parent_center) <= max(
+                    4.0, group_width * 0.08
+                )
+                if not aligned and not set(pair).issubset(direct):
+                    break
+                tier_mapping[id(parent)] = pair
+            else:
+                inferred.update(tier_mapping)
+                break
+    return inferred
+
+
 
 def _header_leaf_bands(bands: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
     """返回可定义表头叶子列的列带，保留附注窄列的物理网格位置。"""
@@ -600,6 +681,11 @@ def _assign_dash_body_atoms_to_right_aligned_tracks(atoms: Sequence[dict[str, An
 
 def annotate_columns(atoms: Sequence[dict[str, Any]], bands: Sequence[dict[str, Any]], header_cutoff: float | None, region: BBox | None = None) -> None:
     """Attach leaf column positions; header atoms intersecting multiple leaves become colspans."""
+    two_leaf_parent_spans = (
+        _infer_two_leaf_parent_spans(atoms, bands, header_cutoff)
+        if header_cutoff is not None
+        else {}
+    )
     for atom in atoms:
         in_header = header_cutoff is not None and _center_y(atom) <= header_cutoff
         assignment_bands = _header_leaf_bands(bands) if in_header and not _is_note_reference_atom(atom) else bands
@@ -641,7 +727,11 @@ def annotate_columns(atoms: Sequence[dict[str, Any]], bands: Sequence[dict[str, 
             atom["column_end"] = column_id
         # 数值正文已把一个父带拆成多个叶子列时，居中的年份/期间表头不一定
         # 真正覆盖每个叶子带。仍按其相对父带中心恢复 colspan，不能误判成首列。
-        inferred_parent_span = _infer_centered_parent_span(atom, atoms, bands, header_cutoff) if header_cutoff is not None else []
+        inferred_parent_span = two_leaf_parent_spans.get(id(atom), [])
+        if not inferred_parent_span and header_cutoff is not None:
+            inferred_parent_span = _infer_centered_parent_span(
+                atom, atoms, bands, header_cutoff
+            )
         if inferred_parent_span:
             intersecting = inferred_parent_span
         parent_band = next((band for band in bands if band["id"] == column_id), None)

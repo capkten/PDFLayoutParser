@@ -102,6 +102,100 @@ def test_refine_leaf_bands_ignores_a_neighbor_header_that_only_grazes_band_edge(
     ]
 
 
+def test_annotate_columns_pairs_a_complete_parent_tier_with_two_leaf_groups():
+    bands = [
+        {"id": 1, "x0": 102.5, "x1": 210.5},
+        {"id": 2, "x0": 217.7, "x1": 266.4},
+        {"id": 3, "x0": 268.9, "x1": 286.9},
+        {"id": 4, "x0": 306.7, "x1": 349.9},
+        {"id": 5, "x0": 348.6, "x1": 366.6},
+        {"id": 6, "x0": 388.1, "x1": 414.6},
+        {"id": 7, "x0": 414.6, "x1": 441.1},
+        {"id": 8, "x0": 447.8, "x1": 498.6},
+        {"id": 9, "x0": 502.7, "x1": 520.7},
+    ]
+    parents = [
+        _atom("年初数", 239.4, 10, 266.4, 18, 1),
+        _atom("本年增加", 313.9, 10, 349.9, 18, 2),
+        _atom("本年减少", 392.1, 10, 428.1, 18, 3),
+        _atom("年末数", 471.6, 10, 498.6, 18, 4),
+    ]
+    leaves = [
+        _atom("金额", 230.3, 30, 248.3, 38, 6),
+        _atom("比例", 268.9, 30, 286.9, 38, 7),
+        _atom("金额", 306.7, 30, 324.7, 38, 8),
+        _atom("比例", 348.6, 30, 366.6, 38, 9),
+        _atom("金额", 388.1, 30, 406.1, 38, 10),
+        _atom("比例", 423.1, 30, 441.1, 38, 11),
+        _atom("金额", 460.4, 30, 478.4, 38, 12),
+        _atom("比例", 502.7, 30, 520.7, 38, 13),
+    ]
+
+    annotate_columns(
+        [*parents, _atom("企业名称", 138.5, 20, 174.5, 28, 5), *leaves],
+        bands,
+        header_cutoff=40,
+    )
+
+    assert [
+        (atom["column_start"], atom["column_end"], atom["colspan"])
+        for atom in parents
+    ] == [(2, 3, 2), (4, 5, 2), (6, 7, 2), (8, 9, 2)]
+
+
+def test_annotate_columns_pairs_short_parents_over_unequal_leaf_widths():
+    bands = [
+        {"id": 1, "x0": 92.5, "x1": 218.5},
+        {"id": 2, "x0": 218.5, "x1": 308.2},
+        {"id": 3, "x0": 314.6, "x1": 356.6},
+        {"id": 4, "x0": 371.7, "x1": 451.1},
+        {"id": 5, "x0": 453.6, "x1": 495.6},
+    ]
+    parents = [
+        _atom("年末数", 276.7, 10, 308.2, 18, 1),
+        _atom("年初数", 416.3, 10, 447.8, 18, 2),
+    ]
+    leaves = [
+        _atom("金额", 259.9, 30, 280.9, 38, 4),
+        _atom("坏账准备", 314.6, 30, 356.6, 38, 5),
+        _atom("金额", 392.7, 30, 413.7, 38, 6),
+        _atom("坏账准备", 453.6, 30, 495.6, 38, 7),
+    ]
+
+    annotate_columns(
+        [*parents, _atom("项目", 148.0, 20, 169.0, 28, 3), *leaves],
+        bands,
+        header_cutoff=40,
+    )
+
+    assert [
+        (atom["column_start"], atom["column_end"], atom["colspan"])
+        for atom in parents
+    ] == [(2, 3, 2), (4, 5, 2)]
+
+
+def test_annotate_columns_does_not_force_pair_an_incomplete_leaf_tier():
+    bands = [
+        {"id": 1, "x0": 10, "x1": 40},
+        {"id": 2, "x0": 50, "x1": 80},
+        {"id": 3, "x0": 90, "x1": 120},
+        {"id": 4, "x0": 130, "x1": 160},
+    ]
+    parents = [
+        _atom("父一", 52, 10, 78, 18, 1),
+        _atom("父二", 132, 10, 158, 18, 2),
+    ]
+    leaves = [
+        _atom("叶一", 52, 30, 78, 38, 3),
+        _atom("叶二", 92, 30, 118, 38, 4),
+        _atom("叶三", 132, 30, 158, 38, 5),
+    ]
+
+    annotate_columns([*parents, *leaves], bands, header_cutoff=40)
+
+    assert [atom["colspan"] for atom in parents] == [1, 1]
+
+
 def test_rescue_sparse_body_bands_keeps_a_clear_inner_track():
     bands = [
         {"id": 1, "x0": 10, "x1": 30, "support": 4, "y_support": 2},
