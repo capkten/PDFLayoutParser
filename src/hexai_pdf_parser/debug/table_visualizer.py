@@ -68,7 +68,7 @@ def _compute_cell_grid_rects(table: Table) -> list[tuple[Cell, fitz.Rect]]:
     if table.rows <= 0 or table.cols <= 0:
         return [(c, fitz.Rect(c.bbox.x0, c.bbox.y0, c.bbox.x1, c.bbox.y1)) for c in table.cells]
 
-    if table.source == "line_projection":
+    if table.source in ("line_projection", "zebra_background", "wireless", "ml_detection") or len(table.cells) == table.rows * table.cols:
         return [(c, fitz.Rect(c.bbox.x0, c.bbox.y0, c.bbox.x1, c.bbox.y1)) for c in table.cells]
 
     row_tops: dict[int, float] = {}
@@ -148,47 +148,69 @@ def _compute_cell_grid_rects(table: Table) -> list[tuple[Cell, fitz.Rect]]:
     return results
 
 
+LAYOUT_TEXT_COLOR = (0.15, 0.65, 0.35)       # Emerald green for natural text blocks
+LAYOUT_TEXT_FILL = (0.15, 0.65, 0.35)        # Emerald green for text badge fill
+
+
 def draw_tables_on_page(
     page: fitz.Page,
     tables: Sequence[Table],
-    draw_text_boxes: bool = True,
+    draw_text_boxes: bool = False,
+    layout_elements: Optional[Sequence[Any]] = None,
+    blocks: Optional[Sequence[Any]] = None,
 ) -> None:
-    """Draw table bounding boxes, tags, score badges, full cell grids, and text boxes onto a fitz.Page."""
-    if not tables:
-        return
-
+    """Draw table bounding boxes, tags, score badges, full cell grids, and natural reading order text blocks."""
     shape = page.new_shape()
+
+    # 1. Draw natural reading order text blocks outside tables (pure green box, no "Text" badge)
+    if layout_elements:
+        for le in layout_elements:
+            if getattr(le, "type", "") == "text":
+                tb = le.bbox
+                shape.draw_rect(fitz.Rect(tb.x0, tb.y0, tb.x1, tb.y1))
+                shape.finish(color=LAYOUT_TEXT_COLOR, width=1.0)
+    elif blocks:
+        for b in blocks:
+            tb = b.bbox
+            shape.draw_rect(fitz.Rect(tb.x0, tb.y0, tb.x1, tb.y1))
+            shape.finish(color=LAYOUT_TEXT_COLOR, width=1.0)
+
+    # 2. Draw tables: cell grids + text inside cells + table borders
+    page_words = page.get_text("words")
     for idx, table in enumerate(tables):
         tb = table.bbox
         table_rect = fitz.Rect(tb.x0, tb.y0, tb.x1, tb.y1)
 
-        # 1. Compute and draw full 2D Cell Grid boundaries
+        # 2a. Draw full 2D Cell Grid boundaries (Blue) & cell text blocks (Green)
         cell_grid_pairs = _compute_cell_grid_rects(table)
         for cell, grid_rect in cell_grid_pairs:
-            # Draw outer 2D cell grid
             shape.draw_rect(grid_rect)
             shape.finish(color=CELL_BORDER_COLOR, width=0.8)
 
-            # Draw inner text bounding box if different from grid
-            if draw_text_boxes and cell.text.strip():
-                cb = cell.bbox
-                text_rect = fitz.Rect(cb.x0, cb.y0, cb.x1, cb.y1)
-                # If text box is smaller than grid cell, outline it with subtle amber border
-                if abs(text_rect.width - grid_rect.width) > 3.0 or abs(text_rect.height - grid_rect.height) > 3.0:
-                    shape.draw_rect(text_rect)
-                    shape.finish(color=TEXT_BORDER_COLOR, width=0.5)
+            if cell.text.strip():
+                cell_words = [
+                    w for w in page_words
+                    if cell.bbox.x0 - 2.0 <= (w[0] + w[2]) / 2.0 <= cell.bbox.x1 + 2.0
+                    and cell.bbox.y0 - 2.0 <= (w[1] + w[3]) / 2.0 <= cell.bbox.y1 + 2.0
+                ]
+                if cell_words:
+                    wx0 = min(w[0] for w in cell_words)
+                    wy0 = min(w[1] for w in cell_words)
+                    wx1 = max(w[2] for w in cell_words)
+                    wy1 = max(w[3] for w in cell_words)
+                    shape.draw_rect(fitz.Rect(wx0, wy0, wx1, wy1))
+                    shape.finish(color=LAYOUT_TEXT_COLOR, width=0.8)
 
-        # 2. Draw table outer rectangle
+        # 2b. Draw table outer rectangle
         shape.draw_rect(table_rect)
         shape.finish(color=TABLE_BORDER_COLOR, width=2.0)
 
-        # 3. Draw left label badge (Index, source, shape)
+        # 2c. Draw left label badge (Index, source, shape)
         label = _format_table_label(table, idx)
         font_size = 7.5
         badge_w = min(page.rect.width - tb.x0, len(label) * 5.0 + 8.0)
         badge_h = 11.0
 
-        # Check if placing badge above table overlaps text above table
         candidate_badge_rect = fitz.Rect(tb.x0, max(0.0, tb.y0 - badge_h), tb.x0 + badge_w, tb.y0)
         words_above = page.get_text("words")
         overlaps_above = any(
@@ -197,7 +219,6 @@ def draw_tables_on_page(
         )
 
         if overlaps_above:
-            # Draw inside the top of the table (top-left empty area)
             badge_y0 = tb.y0
             badge_y1 = tb.y0 + badge_h
         else:
@@ -205,7 +226,6 @@ def draw_tables_on_page(
             badge_y1 = badge_y0 + badge_h
 
         badge_rect = fitz.Rect(tb.x0, badge_y0, tb.x0 + badge_w, badge_y1)
-
         shape.draw_rect(badge_rect)
         shape.finish(fill=TABLE_BADGE_FILL, color=TABLE_BORDER_COLOR)
         shape.insert_text(
@@ -215,7 +235,7 @@ def draw_tables_on_page(
             color=TABLE_TEXT_COLOR,
         )
 
-        # 4. Draw right score badge (Confidence metric)
+        # 2d. Draw right score badge (Confidence metric)
         score = _get_table_score(table)
         score_text = f"Score: {score:.2f}"
         score_w = len(score_text) * 5.2 + 8.0
@@ -228,13 +248,12 @@ def draw_tables_on_page(
 
         score_rect = fitz.Rect(score_x0, badge_y0, score_x1, badge_y1)
 
-        # Color coding by score level
         if score >= 0.90:
-            score_fill = (0.13, 0.60, 0.32)  # Emerald Green
+            score_fill = (0.13, 0.60, 0.32)
         elif score >= 0.75:
-            score_fill = (0.12, 0.50, 0.85)  # Sky Blue
+            score_fill = (0.12, 0.50, 0.85)
         else:
-            score_fill = (0.88, 0.50, 0.12)  # Amber Orange
+            score_fill = (0.88, 0.50, 0.12)
 
         shape.draw_rect(score_rect)
         shape.finish(fill=score_fill, color=score_fill)
