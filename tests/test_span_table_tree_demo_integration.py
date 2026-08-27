@@ -29,6 +29,7 @@ def test_page_184_region_builds_seven_leaf_columns_and_json_png(tmp_path):
     grid = next(child for child in tree["children"] if child["kind"] == "grid")
     assert len(grid["children"]) >= 2
     assert [(cell["col_index"], cell["colspan"]) for cell in grid["children"][0]["children"]] == [(1, 3), (4, 3)]
+    assert all(cell["bbox"]["y1"] < grid["children"][1]["bbox"]["y0"] for cell in grid["children"][0]["children"])
     assert [cell["col_index"] for cell in grid["children"][1]["children"]] == list(range(7))
     body = next(child for child in tree["children"] if child["kind"] == "body")
     assert all(

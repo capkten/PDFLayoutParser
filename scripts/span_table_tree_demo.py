@@ -190,7 +190,19 @@ def build_table_tree(nodes: Sequence[TreeNode], table_bbox: BBox) -> TreeNode:
         stub = TreeNode("leaf_column", text=leaf_nodes[0].text if leaf_nodes else "项目", bbox=leaf_nodes[0].bbox if leaf_nodes else table_bbox)
     root.children.append(stub)
     groups = []
-    group_sources = [node for node in prior_row if node is not stub_source] if stub_source is not None else []
+    group_sources = []
+    if leaf_row:
+        first_leaf_x = leaf_row[0].bbox.x0
+        for candidate_row in reversed(rows[:header_row_index]):
+            group_sources.extend(
+                node
+                for node in candidate_row
+                if not _is_separator(node)
+                and node is not stub_source
+                and node.bbox is not None
+                and node.bbox.x0 >= first_leaf_x
+            )
+        group_sources.sort(key=lambda node: node.bbox.x0)
     for label, leaves in (("年末数", left_leaves), ("年初数", right_leaves)):
         if not leaves:
             continue

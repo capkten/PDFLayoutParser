@@ -254,6 +254,8 @@ Are rowspan/colspan relations plausible?
 
 The unified logical grid now includes both header rows. `年末数` and `年初数` are serialized as header cells with `colspan=3`; `项目` and all six leaf headers occupy the second header row. The PNG green grid begins at the top group-header row and continues through the body.
 
+The group-header source lookup now searches all effective rows before the leaf-header row, rather than only the immediately preceding row. This preserves the native `年末数`/`年初数` bboxes when an intervening `项目` or separator row is present.
+
 Command:
 
 ```powershell
