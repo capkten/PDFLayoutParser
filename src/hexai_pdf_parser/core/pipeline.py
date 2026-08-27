@@ -31,6 +31,7 @@ from hexai_pdf_parser.tables.table_extractor import TableExtractor
 from hexai_pdf_parser.debug.table_visualizer import render_table_visualization
 from hexai_pdf_parser.debug.text_alignment_debug import render_text_alignment_debug_page
 from hexai_pdf_parser.extractors.text_extractor import TextExtractor
+from hexai_pdf_parser.page_normalizer import normalize_page_rotation
 
 
 # Persistent process pool for multi-processing execution backend

@@ -10,6 +10,7 @@ import os
 from typing import List, Optional
 
 from hexai_pdf_parser.core.models import ApiResult, BBox, Block, Document, Image, Line, RenderInfo, Table
+from hexai_pdf_parser.page_normalizer import normalize_page_rotation
 
 
 class PDFParser:
