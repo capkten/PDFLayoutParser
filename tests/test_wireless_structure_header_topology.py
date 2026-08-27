@@ -78,6 +78,30 @@ def test_refine_leaf_bands_splits_a_parent_band_using_repeated_numeric_tracks():
     assert [(band["x0"], band["x1"]) for band in refined] == [(20, 35), (60, 75)]
 
 
+def test_refine_leaf_bands_ignores_a_neighbor_header_that_only_grazes_band_edge():
+    bands = [
+        {"id": 1, "x0": 306.0, "x1": 350.0, "support": 4, "y_support": 4},
+        {"id": 2, "x0": 348.6, "x1": 367.0, "support": 4, "y_support": 4},
+    ]
+    atoms = [
+        _atom("本年增加", 313.0, 10, 350.0, 18, 1),
+        _atom("金额", 306.7, 20, 324.7, 28, 2),
+        _atom("比例", 348.6, 20, 366.6, 28, 3),
+        _atom("100", 312.0, 55, 321.4, 63, 4),
+        _atom("51%", 353.9, 55, 363.3, 63, 5),
+        _atom("200", 312.0, 75, 321.4, 83, 6),
+        _atom("52%", 353.9, 75, 363.3, 83, 7),
+    ]
+
+    refined, _ = refine_leaf_bands(atoms, bands)
+
+    assert len(refined) == 2
+    assert [(band["x0"], band["x1"]) for band in refined] == [
+        (306.0, 350.0),
+        (348.6, 367.0),
+    ]
+
+
 def test_rescue_sparse_body_bands_keeps_a_clear_inner_track():
     bands = [
         {"id": 1, "x0": 10, "x1": 30, "support": 4, "y_support": 2},

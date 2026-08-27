@@ -145,6 +145,15 @@ def _can_join(group: Sequence[dict[str, Any]], candidate: dict[str, Any], normal
         <= candidate["bbox"][0]
         <= previous["bbox"][2] + previous["font_size"] * 0.45
     )
+    if (
+        not superscript
+        and _CJK.search(previous["text"])
+        and (
+            _NUMERIC.fullmatch(candidate["text"].strip())
+            or _is_placeholder(candidate)
+        )
+    ):
+        return False
     native_line = _same_native_line(previous, candidate)
     normal_gap_join = native_line and -0.8 <= gap <= _join_gap_limit(previous, candidate, normal_gap)
     return superscript or normal_gap_join

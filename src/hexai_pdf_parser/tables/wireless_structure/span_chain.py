@@ -14,7 +14,7 @@ from hexai_pdf_parser.core.models import BBox
 from hexai_pdf_parser.tables.wireless_table_recovery import NativeSpan
 
 
-_PACKED_NUMERIC_FIELDS = re.compile(r"^[\s\d,().+\-–—−]+$")
+_PACKED_NUMERIC_FIELDS = re.compile(r"^[\s\d,().%+\-–—−]+$")
 
 
 def _bbox_list(box: BBox) -> list[float]:
@@ -53,25 +53,43 @@ def _native_dict(span: NativeSpan) -> dict[str, Any]:
 def _split_packed_numeric_fields(span: dict[str, Any]) -> list[dict[str, Any]]:
     text = str(span.get("text", ""))
     char_boxes = list(span.get("char_boxes") or [])
-    if not _PACKED_NUMERIC_FIELDS.fullmatch(text) or len(char_boxes) < len(text):
+    while char_boxes and str(char_boxes[0].get("text", "")).isspace():
+        char_boxes.pop(0)
+    while char_boxes and str(char_boxes[-1].get("text", "")).isspace():
+        char_boxes.pop()
+    if (
+        not _PACKED_NUMERIC_FIELDS.fullmatch(text)
+        or "".join(str(char.get("text", "")) for char in char_boxes) != text
+    ):
         return [span]
 
-    split_at = None
-    for index, char in enumerate(text[:-1]):
-        if not char.isspace() or text[index + 1].isspace():
+    split_points = [0]
+    gap_limit = max(3.0, float(span.get("font_size") or 0) * 0.45)
+    index = 0
+    while index < len(text):
+        if not text[index].isspace():
+            index += 1
             continue
-        gap = char_boxes[index + 1]["bbox"][0] - char_boxes[index]["bbox"][2]
-        if gap >= max(3.0, float(span.get("font_size") or 0) * 0.45):
-            split_at = index + 1
-            break
-    if split_at is None:
+        whitespace_start = index
+        while index < len(text) and text[index].isspace():
+            index += 1
+        whitespace_end = index
+        if whitespace_start == 0 or whitespace_end == len(text):
+            continue
+        gaps = [
+            char_boxes[right]["bbox"][0] - char_boxes[right - 1]["bbox"][2]
+            for right in range(whitespace_start, whitespace_end + 1)
+        ]
+        if max(gaps) >= gap_limit:
+            split_points.append(whitespace_end)
+    if len(split_points) == 1:
         return [span]
+    split_points.append(len(text))
 
     fragments: list[dict[str, Any]] = []
     block_index, line_index, span_index = span["source_position"]
-    for fragment_index, (start, end) in enumerate(
-        ((0, split_at), (split_at, len(text)))
-    ):
+    ranges = list(zip(split_points, split_points[1:]))
+    for fragment_index, (start, end) in enumerate(ranges):
         fragment_text = text[start:end].strip()
         glyph_boxes = [
             char_boxes[index]
@@ -92,7 +110,7 @@ def _split_packed_numeric_fields(span: dict[str, Any]) -> list[dict[str, Any]]:
                     span_index * 100 + fragment_index * 2,
                 ],
                 "source_fragment_index": fragment_index,
-                "source_fragment_count": 2,
+                "source_fragment_count": len(ranges),
             }
         )
     return fragments

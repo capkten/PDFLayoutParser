@@ -303,7 +303,8 @@ def _split_by_lowest_header_children(
     for level in reversed(_levels(header)):
         row = [
             item for item in header
-            if abs(_center_y(item) - level) < 0.5 and _header_intersects(item, band)
+            if abs(_center_y(item) - level) < 0.5
+            and _meaningful_header_band_overlap(item, band)
         ]
         groups = _components(row)
         if len(groups) < 2:

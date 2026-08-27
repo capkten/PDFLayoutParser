@@ -26,6 +26,20 @@ def test_build_text_runs_merges_adjacent_chinese_fragments_on_one_native_line():
     assert result[0]["merge_kind"] == "same_line"
 
 
+def test_build_text_runs_keeps_chinese_label_and_numeric_field_separate():
+    atoms = [
+        _atom("广东锦龙发展股份有限公司", 95.8, 221.8, 9, (2, 3, 0)),
+        _atom("304,623,048.00", 221.8, 314.7, 10, (2, 3, 1)),
+    ]
+
+    result = build_text_runs(atoms)
+
+    assert [item["text"] for item in result] == [
+        "广东锦龙发展股份有限公司",
+        "304,623,048.00",
+    ]
+
+
 def test_build_text_runs_keeps_currency_and_adjacent_numeric_fields_separate():
     atoms = [_atom("$", 10, 16, 1, (2, 3, 0)), _atom("100", 17, 34, 2, (2, 3, 1)), _atom("200", 36, 53, 3, (2, 3, 2))]
     result = build_text_runs(atoms)
