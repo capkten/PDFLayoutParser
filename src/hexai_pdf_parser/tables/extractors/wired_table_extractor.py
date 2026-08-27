@@ -111,6 +111,16 @@ class WiredTableExtractor(BaseTableExtractor):
                         v_lines.append(((x1 + x2) / 2.0, min(y1, y2), (x1 + x2) / 2.0, max(y1, y2)))
 
                 elif item[0] == "re":
+                    # White fill-only rectangles are invisible on the page and
+                    # commonly represent page borders rather than table rules.
+                    if (
+                        d.get("color") is None
+                        and isinstance(d.get("fill"), (tuple, list))
+                        and len(d["fill"]) == 3
+                        and all(channel >= 0.99 for channel in d["fill"])
+                    ):
+                        continue
+
                     rect = item[1]
                     x0, y0 = float(rect.x0), float(rect.y0)
                     x1, y1 = float(rect.x1), float(rect.y1)
