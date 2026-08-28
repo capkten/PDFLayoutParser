@@ -2,7 +2,7 @@
 
 ## 背景与根因
 
-`output/zh_all_table_pages_rerun_20260827/tables/page-191.png` 下方表格中，`与本公司/关系`、`业务/性质`、`法定/代表人` 和 `本公司实/际控制人` 是同一字段的上下换行文本，但当前结果被恢复为不同逻辑行。
+`output/zh_all_table_pages_rerun_20260827/tables/page-191.png` 下方表格中，`注册/地址`、`与本公司/关系`、`业务/性质`、`法定/代表人` 和 `本公司实/际控制人` 是同一字段的上下换行文本，但当前结果被恢复为不同逻辑行。
 
 这些文本在 PDF native source 中分别满足同一 source line、flow 连续、横向重叠和紧密垂直间距。当前 `build_text_runs()` 只组合视觉同一行的 span，随后物理网格按全表 y 中心聚类。其他列的居中文本插入中间物理行后，目标文本分别落在 `R1/R3` 和 `R4/R6`。网格后的 `merge_multiline_cells()` 又要求物理行严格相邻，因此拒绝合并。
 
@@ -72,8 +72,8 @@ native spans
 
 ### 正例
 
-- 在 `tests/test_wireless_structure_text_runs.py` 构造与页面 191 一致的交错布局，验证四组文本在 `build_text_runs()` 内组合，并检查文本、bbox、flow、span_refs 和 `merge_kind`。
-- 在 `tests/test_wireless_structure_recoverer.py` 构造 7 列、两层表头和两条数据记录，验证最终结构为 `3x7`，四组文本各自只占一个 `1x1` Cell，且 occupancy 无冲突。
+- 在 `tests/test_wireless_structure_text_runs.py` 构造与页面 191 一致的交错布局，验证五组文本在 `build_text_runs()` 内组合，并检查文本、bbox、flow、span_refs 和 `merge_kind`。
+- 在 `tests/test_wireless_structure_recoverer.py` 构造 7 列、单层表头和两条数据记录，验证最终结构为 `3x7`，五组文本各自只占一个 `1x1` Cell，且 occupancy 无冲突。
 
 ### 反例
 
@@ -93,7 +93,7 @@ output/page_191_wrapped_field_merge_20260828/
 - 页面语言仍走 `zh`/native-span 路径。
 - 页面表格数量和相邻表格边界不变。
 - 下方目标表格 source 为 `wireless_span_recovery`，结构为 `3x7`。
-- 四组换行文本各自成为一个 Cell；所有未覆盖槽位仍按 `1x1` 空 Cell 物化。
+- 五组换行文本各自成为一个 Cell；所有未覆盖槽位仍按 `1x1` 空 Cell 物化。
 - occupancy 无冲突，组内/组间线框正确，相邻表格未误并。
 - 最终 PNG 中不再出现由换行字段产生的伪水平分割线。
 
