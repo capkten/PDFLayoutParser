@@ -52,6 +52,27 @@ def test_extract_lines_accepts_visible_fill_only_rules():
     assert v_lines == [(10.25, 20.0, 10.25, 80.0)]
 
 
+def test_extract_lines_recovers_rules_tiled_as_tiny_images():
+    extractor = WiredTableExtractor()
+    page = SimpleNamespace(
+        get_drawings=lambda: [],
+        get_image_info=lambda **_kwargs: [
+            {"bbox": (x, 20.0, x + 1.0, 21.0), "width": 1, "height": 1}
+            for x in range(10, 111)
+        ] + [
+            {"bbox": (60.0, y, 61.0, y + 1.0), "width": 1, "height": 1}
+            for y in range(20, 81)
+        ] + [
+            {"bbox": (200.0, 200.0, 202.0, 202.0), "width": 2, "height": 2}
+        ],
+    )
+
+    h_lines, v_lines = extractor._extract_lines_from_drawings(page)
+
+    assert h_lines == [(10.0, 20.5, 111.0, 20.5)]
+    assert v_lines == [(60.5, 20.0, 60.5, 81.0)]
+
+
 def test_extract_lines_compares_fill_only_rules_with_page_background():
     extractor = WiredTableExtractor()
     gray_samples = bytes([128, 128, 128] * 100)

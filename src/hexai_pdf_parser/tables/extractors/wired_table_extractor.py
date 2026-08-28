@@ -136,7 +136,75 @@ class WiredTableExtractor(BaseTableExtractor):
                     elif w <= self.line_tolerance and h >= 3.0:
                         v_lines.append(((x0 + x1) / 2.0, y0, (x0 + x1) / 2.0, y1))
 
+        image_h, image_v = self._extract_lines_from_tiled_images(
+            page, clip_bbox=clip_bbox
+        )
+        h_lines.extend(image_h)
+        v_lines.extend(image_v)
+
         return h_lines, v_lines
+
+    def _extract_lines_from_tiled_images(
+        self, page: fitz.Page, clip_bbox: Optional[BBox] = None
+    ) -> Tuple[List[Tuple[float, float, float, float]], List[Tuple[float, float, float, float]]]:
+        """Recover rules encoded as contiguous one/two-pixel image tiles."""
+        try:
+            image_infos = page.get_image_info(xrefs=True)
+        except Exception:
+            return [], []
+
+        tiles: list[tuple[float, float, float, float]] = []
+        for info in image_infos:
+            try:
+                x0, y0, x1, y1 = (float(value) for value in info["bbox"])
+                width = float(info.get("width", x1 - x0))
+                height = float(info.get("height", y1 - y0))
+            except (KeyError, TypeError, ValueError):
+                continue
+            if width > 2.0 or height > 2.0 or x1 <= x0 or y1 <= y0:
+                continue
+            if clip_bbox and (
+                x1 < clip_bbox.x0 - 2.0
+                or x0 > clip_bbox.x1 + 2.0
+                or y1 < clip_bbox.y0 - 2.0
+                or y0 > clip_bbox.y1 + 2.0
+            ):
+                continue
+            tiles.append((x0, y0, x1, y1))
+
+        horizontal: list[tuple[float, float, float, float]] = []
+        vertical: list[tuple[float, float, float, float]] = []
+
+        def add_runs(groups, horizontal_run: bool) -> None:
+            for key, segments in groups.items():
+                segments.sort()
+                start, end = segments[0]
+                count = 1
+                for seg_start, seg_end in segments[1:]:
+                    if seg_start <= end + 1.5:
+                        end = max(end, seg_end)
+                        count += 1
+                    else:
+                        if count >= 10 and end - start >= 20.0:
+                            if horizontal_run:
+                                horizontal.append((start, key, end, key))
+                            else:
+                                vertical.append((key, start, key, end))
+                        start, end, count = seg_start, seg_end, 1
+                if count >= 10 and end - start >= 20.0:
+                    if horizontal_run:
+                        horizontal.append((start, key, end, key))
+                    else:
+                        vertical.append((key, start, key, end))
+
+        horizontal_groups: defaultdict[float, list[tuple[float, float]]] = defaultdict(list)
+        vertical_groups: defaultdict[float, list[tuple[float, float]]] = defaultdict(list)
+        for x0, y0, x1, y1 in tiles:
+            horizontal_groups[round((y0 + y1) / 2.0, 1)].append((x0, x1))
+            vertical_groups[round((x0 + x1) / 2.0, 1)].append((y0, y1))
+        add_runs(horizontal_groups, True)
+        add_runs(vertical_groups, False)
+        return horizontal, vertical
 
     @staticmethod
     def _estimate_page_background_color(page: fitz.Page) -> Tuple[float, float, float]:
