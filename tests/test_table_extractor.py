@@ -136,6 +136,66 @@ def test_native_span_table_skips_legacy_word_rebuild(monkeypatch):
     assert get_text_calls == []
 
 
+def test_hybrid_wired_table_recovers_only_tall_body_cell(monkeypatch):
+    extractor = TableExtractor()
+    bbox = BBox(100, 100, 400, 400)
+    wired_cells = [
+        Cell("项目", 0, 0, BBox(100, 100, 250, 130)),
+        Cell("金额", 0, 1, BBox(250, 100, 320, 130)),
+        Cell("说明", 0, 2, BBox(320, 100, 400, 130)),
+        Cell("多条项目", 1, 0, BBox(100, 130, 250, 370)),
+        Cell("多条金额", 1, 1, BBox(250, 130, 320, 370)),
+        Cell("", 1, 2, BBox(320, 130, 400, 370)),
+        Cell("合计", 2, 0, BBox(100, 370, 250, 400)),
+        Cell("99.00", 2, 1, BBox(250, 370, 320, 400)),
+        Cell("", 2, 2, BBox(320, 370, 400, 400)),
+    ]
+    wired = Table(bbox=bbox, rows=3, cols=3, cells=wired_cells, source="line_projection")
+
+    recovered = [
+        Cell("项目一", 0, 0, BBox(100, 140, 250, 155)),
+        Cell("10.00", 0, 1, BBox(250, 140, 320, 155)),
+        Cell("项目二", 1, 0, BBox(100, 180, 250, 195)),
+        Cell("20.00", 1, 1, BBox(250, 180, 320, 195)),
+    ]
+    monkeypatch.setattr(
+        "hexai_pdf_parser.tables.table_extractor.recover_cells_from_region",
+        lambda page, region: (2, 2, recovered),
+    )
+
+    result = extractor._recover_hybrid_wired_table(object(), wired, "zh")
+
+    assert result is not None
+    assert result.source == "hybrid_line_span_recovery"
+    assert result.rows == 4
+    assert result.cols == 3
+    assert [(c.text, c.row_index, c.col_index) for c in result.cells] == [
+        ("项目", 0, 0), ("金额", 0, 1), ("说明", 0, 2),
+        ("项目一", 1, 0), ("10.00", 1, 1), ("", 1, 2),
+        ("项目二", 2, 0), ("20.00", 2, 1), ("", 2, 2),
+        ("合计", 3, 0), ("99.00", 3, 1), ("", 3, 2),
+    ]
+
+
+def test_hybrid_wired_table_keeps_normal_height_grid(monkeypatch):
+    extractor = TableExtractor()
+    cells = [
+        Cell("h", 0, 0, BBox(0, 0, 50, 20)),
+        Cell("v", 0, 1, BBox(50, 0, 100, 20)),
+        Cell("a", 1, 0, BBox(0, 20, 50, 45)),
+        Cell("1.00", 1, 1, BBox(50, 20, 100, 45)),
+        Cell("b", 2, 0, BBox(0, 45, 50, 70)),
+        Cell("2.00", 2, 1, BBox(50, 45, 100, 70)),
+    ]
+    table = Table(BBox(0, 0, 100, 70), 3, 2, cells, source="line_projection")
+    monkeypatch.setattr(
+        "hexai_pdf_parser.tables.table_extractor.recover_cells_from_region",
+        lambda page, region: (_ for _ in ()).throw(AssertionError("must not recover")),
+    )
+
+    assert extractor._recover_hybrid_wired_table(object(), table, "zh") is table
+
+
 def make_synthetic_text_alignment_pdf(
     path: str | Path,
     rows: list[tuple[float, list[tuple[float, str]]]],

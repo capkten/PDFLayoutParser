@@ -187,3 +187,110 @@ def test_build_text_runs_keeps_vertically_overlapping_fields_separate():
     result = build_text_runs(atoms)
 
     assert [item["text"] for item in result] == ["字段甲", "字段乙", "中间列"]
+
+
+def test_build_text_runs_merges_consecutive_vertical_blocks_with_right_witness():
+    atoms = [
+        _atom("上半字段", 100, 160, 0, (1, 2, 0), y=10),
+        _atom("下半字段", 100, 160, 1, (2, 0, 0), y=24),
+        _atom("右侧字段", 240, 300, 2, (3, 0, 0), y=17),
+    ]
+
+    result = build_text_runs(atoms)
+
+    assert [item["text"] for item in result] == [
+        "上半字段\n下半字段",
+        "右侧字段",
+    ]
+    assert result[0]["flow_start"] == 1
+    assert result[0]["flow_end"] == 2
+    assert result[0]["span_refs"] == ["S0", "S1"]
+    assert result[0]["source_blocks"] == [1, 2]
+    assert result[0]["merge_kind"] == "wrapped_field"
+
+
+def test_build_text_runs_merges_three_line_flow_chain_with_right_witness():
+    atoms = [
+        _atom("第一行", 100, 160, 0, (1, 0, 0), y=10),
+        _atom("第二行", 100, 160, 1, (2, 0, 0), y=24),
+        _atom("第三行", 120, 160, 2, (3, 0, 0), y=38),
+        _atom("右侧字段", 240, 300, 3, (4, 0, 0), y=24),
+    ]
+
+    result = build_text_runs(atoms)
+
+    assert [item["text"] for item in result] == [
+        "第一行\n第二行\n第三行",
+        "右侧字段",
+    ]
+    assert result[0]["flow_start"] == 1
+    assert result[0]["flow_end"] == 3
+    assert result[0]["span_refs"] == ["S0", "S1", "S2"]
+
+
+def test_build_text_runs_keeps_consecutive_amount_rows_separate_with_right_witness():
+    atoms = [
+        _atom("100.00", 100, 150, 0, (1, 0, 0), y=10),
+        _atom("200.00", 100, 150, 1, (2, 0, 0), y=24),
+        _atom("右侧", 240, 280, 2, (3, 0, 0), y=17),
+    ]
+
+    assert [item["text"] for item in build_text_runs(atoms)] == [
+        "100.00",
+        "200.00",
+        "右侧",
+    ]
+
+
+def test_build_text_runs_requires_strict_flow_continuity_for_wrapped_blocks():
+    atoms = [
+        _atom("上半字段", 100, 160, 0, (1, 0, 0), y=10),
+        _atom("跳过字段", 20, 70, 1, (2, 0, 0), y=50),
+        _atom("下半字段", 100, 160, 2, (3, 0, 0), y=24),
+        _atom("右侧字段", 240, 300, 3, (4, 0, 0), y=17),
+    ]
+
+    assert "上半字段\n下半字段" not in {
+        item["text"] for item in build_text_runs(atoms)
+    }
+
+
+def test_build_text_runs_keeps_two_rows_when_right_side_has_independent_peers():
+    atoms = [
+        _atom("左一", 100, 140, 0, (1, 0, 0), y=10),
+        _atom("右一", 240, 280, 1, (2, 0, 0), y=10),
+        _atom("左二", 100, 140, 2, (3, 0, 0), y=24),
+        _atom("右二", 240, 280, 3, (4, 0, 0), y=24),
+    ]
+
+    assert [item["text"] for item in build_text_runs(atoms)] == [
+        "左一",
+        "右一",
+        "左二",
+        "右二",
+    ]
+
+
+def test_build_text_runs_merges_spaced_single_cjk_on_one_native_line():
+    atoms = [
+        _atom("项", 71.1, 81.6, 0, (1, 0, 0), y=10),
+        _atom("目", 92.2, 102.7, 1, (1, 0, 1), y=10),
+        _atom("中间列", 220, 280, 2, (2, 0, 0), y=10),
+    ]
+
+    result = build_text_runs(atoms)
+
+    assert [item["text"] for item in result] == ["项目", "中间列"]
+    assert result[0]["span_refs"] == ["S0", "S1"]
+
+
+def test_build_text_runs_keeps_widely_spaced_single_cjk_fields_separate():
+    atoms = [
+        _atom("年", 10, 20, 0, (1, 0, 0), y=10),
+        _atom("月", 39, 49, 1, (1, 0, 1), y=10),
+        _atom("金额", 100, 130, 2, (2, 0, 0), y=10),
+    ]
+
+    result = build_text_runs(atoms)
+
+    assert [item["text"] for item in result] == ["年", "月", "金额"]

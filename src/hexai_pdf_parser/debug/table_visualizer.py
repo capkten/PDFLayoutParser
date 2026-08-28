@@ -15,6 +15,7 @@ except ImportError:
     import fitz
 
 from hexai_pdf_parser.core.models import Table
+from hexai_pdf_parser.page_normalizer import normalize_page_rotation
 
 # ==============================================================================
 # 路径与参数配置区域（可直接在此修改路径）
@@ -201,8 +202,15 @@ def draw_tables_on_page(
                     wy0 = min(w[1] for w in cell_words)
                     wx1 = max(w[2] for w in cell_words)
                     wy1 = max(w[3] for w in cell_words)
-                    shape.draw_rect(fitz.Rect(wx0, wy0, wx1, wy1))
-                    shape.finish(color=LAYOUT_TEXT_COLOR, width=0.8)
+                    text_rect = fitz.Rect(
+                        max(wx0, grid_rect.x0),
+                        max(wy0, grid_rect.y0),
+                        min(wx1, grid_rect.x1),
+                        min(wy1, grid_rect.y1),
+                    )
+                    if not text_rect.is_empty:
+                        shape.draw_rect(text_rect)
+                        shape.finish(color=LAYOUT_TEXT_COLOR, width=0.8)
 
         # 2b. Draw table outer rectangle
         shape.draw_rect(table_rect)
@@ -302,6 +310,7 @@ def render_table_visualization(
 
     if isinstance(source, fitz.Page):
         # Draw directly on the provided page
+        normalize_page_rotation(source)
         draw_tables_on_page(source, tables)
         pix = source.get_pixmap(matrix=matrix, alpha=False)
         pix.save(output_path)
@@ -312,6 +321,9 @@ def render_table_visualization(
     doc = fitz.open(source)
     try:
         page = doc[idx]
+        # Tables are extracted after rotation normalization; use the same
+        # coordinate system when reopening the source for the overlay.
+        normalize_page_rotation(page)
         draw_tables_on_page(page, tables)
         pix = page.get_pixmap(matrix=matrix, alpha=False)
         pix.save(output_path)

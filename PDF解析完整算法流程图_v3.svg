@@ -1,0 +1,259 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2400" height="2280" viewBox="0 0 2400 2280">
+  <defs>
+    <style>
+      .title{font:700 40px 'Microsoft YaHei',sans-serif;fill:#152238}
+      .subtitle{font:18px 'Microsoft YaHei',sans-serif;fill:#516078}
+      .lane-title{font:700 26px 'Microsoft YaHei',sans-serif;fill:#152238}
+      .head{font:700 21px 'Microsoft YaHei',sans-serif;fill:#1d2b42}
+      .text{font:17px 'Microsoft YaHei',sans-serif;fill:#26364e}
+      .small{font:15px 'Microsoft YaHei',sans-serif;fill:#52637b}
+      .lane{fill:#fbfcfe;stroke:#c7d0dc;stroke-width:2;rx:18}
+      .input{fill:#edf5ff;stroke:#3979b8;stroke-width:2;rx:14}
+      .region{fill:#eff9f6;stroke:#378a76;stroke-width:2;rx:14}
+      .model{fill:#f3efff;stroke:#765db2;stroke-width:2;rx:14}
+      .wired{fill:#f0f9f2;stroke:#408b57;stroke-width:2;rx:14}
+      .wireless{fill:#fff6ea;stroke:#c97b24;stroke-width:2;rx:14}
+      .template{fill:#f6f1ff;stroke:#805bad;stroke-width:2;rx:14}
+      .validate{fill:#fff2f2;stroke:#b95757;stroke-width:2;rx:14}
+      .output{fill:#eef5ff;stroke:#5879ad;stroke-width:2;rx:14}
+      .manual{fill:#fff8e5;stroke:#b48324;stroke-width:2;rx:14}
+      .step{fill:#f4f7fb;stroke:#8796aa;stroke-width:2;rx:14}
+      .connector{stroke:#56677e;stroke-width:3;fill:none;stroke-linecap:round;stroke-linejoin:round}
+      .arrow{stroke:#56677e;stroke-width:3;fill:none;stroke-linecap:round;stroke-linejoin:round;marker-end:url(#arrow)}
+      .fallback{stroke:#ad5636;stroke-width:3;stroke-dasharray:9 7;fill:none;stroke-linecap:round;stroke-linejoin:round;marker-end:url(#arrow-red)}
+      .loop{stroke:#718095;stroke-width:2.5;stroke-dasharray:8 6;fill:none;stroke-linecap:round;stroke-linejoin:round;marker-end:url(#arrow)}
+      .reuse{stroke:#3170ad;stroke-width:2.5;stroke-dasharray:8 6;fill:none;stroke-linecap:round;stroke-linejoin:round;marker-end:url(#arrow)}
+      .pass{font:700 15px 'Microsoft YaHei',sans-serif;fill:#2e7d45}
+      .fail{font:700 15px 'Microsoft YaHei',sans-serif;fill:#9d4d31}
+      .label-bg{fill:#fff;stroke:#dce2ea;stroke-width:1;opacity:.97;rx:5}
+      .junction{fill:#66768c}
+    </style>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#66768c"/>
+    </marker>
+    <marker id="arrow-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#b55c35"/>
+    </marker>
+  </defs>
+
+  <rect width="2400" height="2280" fill="#fff"/>
+  <text x="1200" y="58" text-anchor="middle" class="title">原生 PDF 解析完整算法流程 v3（不使用通用版面分析模型）</text>
+  <text x="1200" y="92" text-anchor="middle" class="subtitle">原生对象提取 → Span 特征预处理与表格页筛选 → YOLOv8-OBB 表格检测 → 有线优先 / 无线回退 / 模板兜底 → 统一二维结构</text>
+
+  <!-- A. 原生页面对象层 -->
+  <rect x="40" y="120" width="2320" height="245" class="lane"/>
+  <text x="70" y="160" class="lane-title">A. 原生页面对象层</text>
+
+  <rect x="70" y="195" width="280" height="125" class="input"/>
+  <text x="210" y="232" text-anchor="middle" class="head">PDF 输入</text>
+  <text x="210" y="264" text-anchor="middle" class="text">文档元数据、页面</text>
+  <text x="210" y="294" text-anchor="middle" class="small">当前范围：可解析原生 PDF</text>
+
+  <rect x="400" y="195" width="500" height="125" class="input"/>
+  <text x="650" y="232" text-anchor="middle" class="head">页面对象提取（PyMuPDF）</text>
+  <text x="650" y="264" text-anchor="middle" class="text">Span/字体/原始顺序 · 嵌入图片 · 矢量绘图</text>
+  <text x="650" y="294" text-anchor="middle" class="small">保留 xref、bbox、绘图路径和 sort=False 顺序</text>
+
+  <rect x="950" y="195" width="360" height="125" class="input"/>
+  <text x="1130" y="232" text-anchor="middle" class="head">页面渲染</text>
+  <text x="1130" y="264" text-anchor="middle" class="text">统一 DPI 的页面图像</text>
+  <text x="1130" y="294" text-anchor="middle" class="small">供 OBB 检测与诊断可视化使用</text>
+
+  <rect x="1360" y="195" width="460" height="125" class="input"/>
+  <text x="1590" y="232" text-anchor="middle" class="head">坐标与对象规范化</text>
+  <text x="1590" y="264" text-anchor="middle" class="text">PDF / 像素坐标互转、旋转、裁剪</text>
+  <text x="1590" y="294" text-anchor="middle" class="small">建立稳定对象 ID 和可追溯引用</text>
+
+  <rect x="1870" y="195" width="460" height="125" class="output"/>
+  <text x="2100" y="232" text-anchor="middle" class="head">Page Object IR</text>
+  <text x="2100" y="264" text-anchor="middle" class="text">统一页面对象</text>
+  <text x="2100" y="294" text-anchor="middle" class="small">供后续模块共享</text>
+
+  <path d="M350 258H400M900 258H950M1310 258H1360M1820 258H1870" class="arrow"/>
+
+  <!-- B. 页面区域构建 -->
+  <rect x="40" y="390" width="2320" height="520" class="lane"/>
+  <text x="70" y="430" class="lane-title">B. 页面区域构建（规则区域全页执行；表格检测按页筛选）</text>
+
+  <rect x="70" y="490" width="400" height="200" class="region"/>
+  <text x="270" y="530" text-anchor="middle" class="head">页眉 / 页脚规则识别</text>
+  <text x="100" y="565" class="text">• 顶部/底部位置带</text>
+  <text x="100" y="595" class="text">• 跨页重复文本或对象指纹</text>
+  <text x="100" y="625" class="text">• 页码、日期、公司名、字体样式一致性</text>
+  <text x="100" y="660" class="small">封面、章节首页和异常页单独降权处理</text>
+
+  <rect x="510" y="490" width="350" height="200" class="input"/>
+  <text x="685" y="530" text-anchor="middle" class="head">Span 特征预处理</text>
+  <text x="685" y="570" text-anchor="middle" class="text">原始顺序 · 空间关系 · 字体样式</text>
+  <text x="685" y="610" text-anchor="middle" class="small">输出共享 Span Feature IR</text>
+
+  <rect x="900" y="490" width="330" height="200" class="validate"/>
+  <text x="1065" y="530" text-anchor="middle" class="head">表格页逻辑筛选</text>
+  <text x="1065" y="570" text-anchor="middle" class="text">是否存在候选表格？</text>
+  <text x="1065" y="610" text-anchor="middle" class="small">基于共享 Span 特征</text>
+
+  <rect x="1270" y="490" width="430" height="200" class="model"/>
+  <text x="1485" y="530" text-anchor="middle" class="head">表格区域检测</text>
+  <text x="1300" y="565" class="text">• YOLOv8-OBB 在渲染页检测</text>
+  <text x="1300" y="595" class="text">• 输出旋转框/多边形、类别、置信度</text>
+  <text x="1300" y="625" class="text">• 映射回 PDF 后裁取原生对象</text>
+  <text x="1300" y="660" class="small">仅检测表格区域，不做通用版面分类</text>
+
+  <rect x="1740" y="490" width="590" height="200" class="region"/>
+  <text x="2035" y="530" text-anchor="middle" class="head">图片 / 图形区域确定</text>
+  <text x="1770" y="562" class="text">1. 嵌入位图：image block / xref 原生 bbox</text>
+  <text x="1770" y="592" class="text">2. drawing 路径按距离、密度、包围区聚类</text>
+  <text x="1770" y="622" class="text">3. 位图 + 矢量 + 标题/图注形成 figure 候选</text>
+  <text x="1770" y="652" class="text">4. 过滤图标、水印、背景、重复 logo</text>
+  <text x="1770" y="680" class="small">整页位图标为 scanned/background</text>
+
+  <rect x="610" y="740" width="520" height="95" class="validate"/>
+  <text x="870" y="778" text-anchor="middle" class="head">区域冲突消解</text>
+  <text x="870" y="810" text-anchor="middle" class="small">汇合现有区域；无表格页不产生 table 区域</text>
+  <rect x="1210" y="740" width="990" height="95" class="output"/>
+  <text x="1705" y="797" text-anchor="middle" class="head">Page Region IR：header / footer / table / figure / residual body</text>
+
+  <!-- 标题下方独立总线：全页规则分支不受表格页筛选影响 -->
+  <path d="M2100 320V465H270V490M685 465V490M2035 465V490" class="arrow"/>
+  <circle cx="270" cy="465" r="5" class="junction"/>
+  <circle cx="685" cy="465" r="5" class="junction"/>
+  <circle cx="2035" cy="465" r="5" class="junction"/>
+  <path d="M860 590H900M1230 590H1270" class="arrow"/>
+  <rect x="1238" y="565" width="38" height="24" class="label-bg"/><text x="1257" y="582" text-anchor="middle" class="pass">是</text>
+
+  <!-- 非表格页跳过 OBB，但仍完成区域汇合 -->
+  <path d="M1065 690V700H1180V725H1080V740" class="fallback"/>
+  <rect x="1072" y="696" width="122" height="24" class="label-bg"/><text x="1133" y="713" text-anchor="middle" class="fail">否：跳过 OBB</text>
+
+  <path d="M270 690V715H750V740M1485 690V715H870V740M2035 690V720H990V740" class="arrow"/>
+  <path d="M1130 788H1210" class="arrow"/>
+
+
+  <!-- C. 表格结构恢复 -->
+  <rect x="40" y="935" width="2320" height="875" class="lane"/>
+  <text x="70" y="975" class="lane-title">C. 表格结构恢复协调器（混合表并入有线分支）</text>
+
+  <rect x="1010" y="1015" width="380" height="100" class="output"/>
+  <text x="1200" y="1050" text-anchor="middle" class="head">表格区域原生对象</text>
+  <text x="1200" y="1080" text-anchor="middle" class="text">Span / 线条 / 图形 / bbox</text>
+  <text x="1200" y="1103" text-anchor="middle" class="small">生成模板指纹候选，但不立即套用</text>
+
+  <rect x="1025" y="1145" width="350" height="85" class="validate"/>
+  <text x="1200" y="1180" text-anchor="middle" class="head">线证据是否充分？</text>
+  <text x="1200" y="1208" text-anchor="middle" class="small">覆盖率、交点、闭合度；断线和局部线仍可进入</text>
+
+  <!-- Page Region IR：含 table 进入 C；无 table 走右侧专用旁路 -->
+  <path d="M1705 835V900H1200V1015M1200 1115V1145" class="arrow"/>
+  <rect x="1480" y="872" width="100" height="24" class="label-bg"/><text x="1530" y="889" text-anchor="middle" class="pass">包含 table</text>
+
+  <!-- 三列恢复器 -->
+  <rect x="120" y="1290" width="600" height="160" class="wired"/>
+  <text x="420" y="1330" text-anchor="middle" class="head">有线表格恢复器</text>
+  <text x="165" y="1365" class="text">真实线条清理与连接</text>
+  <text x="165" y="1395" class="text">交点 / 网格 / 文本映射 / 合并格</text>
+  <text x="165" y="1425" class="small">混合表优先：线作边界，文本补局部缺口</text>
+
+  <rect x="900" y="1290" width="600" height="160" class="wireless"/>
+  <text x="1200" y="1330" text-anchor="middle" class="head">无线表格恢复器</text>
+  <text x="945" y="1365" class="text">复用 Span Feature IR</text>
+  <text x="945" y="1395" class="text">候选单元格 → 行列角色 → 合并格</text>
+  <text x="945" y="1425" class="small">线段可作提示，但不依赖完整线网格</text>
+
+  <rect x="1680" y="1290" width="600" height="160" class="template"/>
+  <text x="1980" y="1330" text-anchor="middle" class="head">模板匹配与恢复（第三兜底）</text>
+  <text x="1725" y="1365" class="text">候选键：发行人 / 报告类型 / 语言 / 表题</text>
+  <text x="1725" y="1395" class="text">锚点、列轨迹、线型、相对位置</text>
+  <text x="1725" y="1425" class="small">容忍缩放、平移、裁剪；模板必须版本化</text>
+
+  <!-- 三列校验器 -->
+  <rect x="170" y="1490" width="500" height="95" class="validate"/>
+  <text x="420" y="1528" text-anchor="middle" class="head">有线结果校验</text>
+  <text x="420" y="1560" text-anchor="middle" class="small">文本覆盖、冲突、行列合理性</text>
+  <rect x="950" y="1490" width="500" height="95" class="validate"/>
+  <text x="1200" y="1528" text-anchor="middle" class="head">无线结果校验</text>
+  <text x="1200" y="1560" text-anchor="middle" class="small">映射率、列稳定性、占位冲突</text>
+  <rect x="1730" y="1490" width="500" height="95" class="validate"/>
+  <text x="1980" y="1528" text-anchor="middle" class="head">模板结果校验</text>
+  <text x="1980" y="1560" text-anchor="middle" class="small">结构约束、文本覆盖、财务一致性</text>
+
+  <!-- 判断分流、校验连接和列间回退通道 -->
+  <path d="M1200 1230V1255H420V1290" class="arrow"/>
+  <rect x="785" y="1243" width="42" height="24" class="label-bg"/><text x="806" y="1260" text-anchor="middle" class="pass">是</text>
+  <path d="M1200 1230V1290" class="fallback"/>
+  <rect x="1215" y="1246" width="112" height="24" class="label-bg"/><text x="1271" y="1263" text-anchor="middle" class="fail">否：直接无线</text>
+  <path d="M420 1450V1490M1200 1450V1490M1980 1450V1490" class="arrow"/>
+  <path d="M670 1538H800V1370H900" class="fallback"/>
+  <rect x="690" y="1518" width="114" height="24" class="label-bg"/><text x="747" y="1535" text-anchor="middle" class="fail">失败/低置信</text>
+  <path d="M1450 1538H1580V1370H1680" class="fallback"/>
+  <rect x="1485" y="1518" width="58" height="24" class="label-bg"/><text x="1514" y="1535" text-anchor="middle" class="fail">失败</text>
+
+  <!-- Span Feature IR 专用数据通道；置于 C 层背景之后以保证完整可见 -->
+  <path d="M685 690V710H560V920H820V1410H900" class="reuse"/>
+  <rect x="720" y="1322" width="170" height="24" class="label-bg"/><text x="805" y="1339" text-anchor="middle" class="small">Span Feature IR 复用</text>
+
+  <!-- 成功汇合与失败日志 -->
+  <rect x="960" y="1640" width="480" height="95" class="output"/>
+  <text x="1200" y="1678" text-anchor="middle" class="head">统一 Table IR</text>
+  <text x="1200" y="1710" text-anchor="middle" class="text">rows / columns / cells / rowspan / colspan</text>
+  <rect x="1680" y="1640" width="600" height="95" class="manual"/>
+  <text x="1980" y="1678" text-anchor="middle" class="head">模板校验失败：打印错误日志</text>
+  <text x="1980" y="1710" text-anchor="middle" class="small">保留失败状态与候选对象，写入问题清单</text>
+
+  <path d="M420 1585V1615M1200 1585V1615M1980 1585V1615" class="arrow"/>
+  <path d="M420 1615H1980" class="connector"/>
+  <path d="M1200 1615V1640" class="arrow"/>
+  <circle cx="420" cy="1615" r="4" class="junction"/>
+  <circle cx="1200" cy="1615" r="5" class="junction"/>
+  <circle cx="1980" cy="1615" r="4" class="junction"/>
+  <rect x="460" y="1588" width="90" height="24" class="label-bg"/><text x="505" y="1605" text-anchor="middle" class="pass">校验通过</text>
+  <rect x="1240" y="1588" width="90" height="24" class="label-bg"/><text x="1285" y="1605" text-anchor="middle" class="pass">校验通过</text>
+  <rect x="1815" y="1588" width="114" height="24" class="label-bg"/><text x="1872" y="1605" text-anchor="middle" class="pass">模板校验通过</text>
+  <path d="M2230 1538H2250V1615H2100V1640" class="fallback"/>
+  <rect x="2110" y="1592" width="114" height="24" class="label-bg"/><text x="2167" y="1609" text-anchor="middle" class="fail">模板校验失败</text>
+
+
+  <!-- D. 输出质量门 -->
+  <rect x="40" y="1840" width="2320" height="210" class="lane"/>
+  <text x="70" y="1880" class="lane-title">D. 统一输出与质量门</text>
+
+  <rect x="80" y="1930" width="380" height="90" class="output"/>
+  <text x="270" y="1983" text-anchor="middle" class="head">二维矩阵与阅读顺序</text>
+  <rect x="520" y="1930" width="380" height="90" class="validate"/>
+  <text x="710" y="1965" text-anchor="middle" class="head">结构与财务一致性校验</text>
+  <text x="710" y="1997" text-anchor="middle" class="small">重叠、缺列、金额列、合计关系</text>
+  <rect x="960" y="1930" width="380" height="90" class="output"/>
+  <text x="1150" y="1983" text-anchor="middle" class="head">置信度与问题清单</text>
+  <rect x="1400" y="1930" width="380" height="90" class="output"/>
+  <text x="1590" y="1983" text-anchor="middle" class="head">JSON / HTML / Excel</text>
+  <rect x="1840" y="1930" width="380" height="90" class="output"/>
+  <text x="2030" y="1983" text-anchor="middle" class="head">页面级结构化输出</text>
+
+  <path d="M1200 1735V1805H270V1930M460 1975H520M900 1975H960M1340 1975H1400M1780 1975H1840" class="arrow"/>
+
+  <!-- 两条右侧旁路在 D 层背景之后绘制，确保落点完整可见 -->
+  <path d="M2200 788H2320V1975H2220" class="fallback"/>
+  <rect x="2182" y="850" width="166" height="24" class="label-bg"/><text x="2265" y="867" text-anchor="middle" class="fail">无 table：跳过 C 层</text>
+  <path d="M1980 1735V1815H2220V1910H1150V1930" class="fallback"/>
+  <rect x="2040" y="1882" width="132" height="24" class="label-bg"/><text x="2106" y="1899" text-anchor="middle" class="fail">写入问题清单</text>
+
+  <!-- E. 工程闭环 -->
+  <rect x="40" y="2080" width="2320" height="180" class="lane"/>
+  <text x="70" y="2120" class="lane-title">E. 工程闭环</text>
+
+  <rect x="70" y="2150" width="380" height="70" class="step"/>
+  <text x="260" y="2193" text-anchor="middle" class="head">中间快照</text>
+  <rect x="520" y="2150" width="380" height="70" class="step"/>
+  <text x="710" y="2193" text-anchor="middle" class="head">失败 / 修复可视化</text>
+  <rect x="970" y="2150" width="380" height="70" class="step"/>
+  <text x="1160" y="2182" text-anchor="middle" class="head">结构金标</text>
+  <text x="1160" y="2207" text-anchor="middle" class="small">区域 / 单元格 / 行列 / 合并格</text>
+  <rect x="1420" y="2150" width="380" height="70" class="step"/>
+  <text x="1610" y="2193" text-anchor="middle" class="head">港股 / A股 / SEC 回归集</text>
+  <rect x="1870" y="2150" width="380" height="70" class="step"/>
+  <text x="2060" y="2182" text-anchor="middle" class="head">模块指标</text>
+  <text x="2060" y="2207" text-anchor="middle" class="small">整表完全正确率</text>
+
+  <path d="M450 2185H520M900 2185H970M1350 2185H1420M1800 2185H1870" class="arrow"/>
+  <!-- 工程反馈使用 x=2270 独立通道回到问题清单 -->
+  <path d="M2250 2185H2270V2065H1150V2020" class="loop"/>
+</svg>

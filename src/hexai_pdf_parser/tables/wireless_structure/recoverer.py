@@ -73,6 +73,14 @@ def _has_occupancy_conflict(cells: list[dict[str, Any]]) -> bool:
     return False
 
 
+def _commit_header_spans_or_keep_base(
+    cells: list[dict[str, Any]], header_cutoff: float | None
+) -> list[dict[str, Any]]:
+    base = [dict(cell) for cell in cells]
+    proposed = merge_header_spans([dict(cell) for cell in base], header_cutoff)
+    return base if _has_occupancy_conflict(proposed) else proposed
+
+
 def recover_cells_from_region(
     page: fitz.Page,
     region_bbox: BBox,
@@ -106,9 +114,11 @@ def recover_cells_from_region(
         logical_rows, logical_columns, logical_cells = build_logical_grid(
             physical_rows, columns, cells
         )
-        logical_cells = merge_header_spans(logical_cells, header_cutoff)
         if _has_occupancy_conflict(logical_cells):
             return 0, 0, []
+        logical_cells = _commit_header_spans_or_keep_base(
+            logical_cells, header_cutoff
+        )
         logical_cells = materialize_empty_cells(
             logical_rows,
             physical_rows,

@@ -91,7 +91,25 @@ class WiredTableExtractor(BaseTableExtractor):
             return [], []
 
         background_color = self._estimate_page_background_color(page)
+        type3_char_regions = self._get_type3_character_regions(page)
         for d in drawings:
+            if self._drawing_is_inside_character_region(d, type3_char_regions):
+                continue
+            # Ignore rules that are transparent or visually identical to the
+            # page background. Keep visible black/colored rules, including
+            # dashed vector rules used by real financial tables.
+            opacity = d.get("opacity")
+            if opacity is not None:
+                try:
+                    if float(opacity) <= 0.0:
+                        continue
+                except (TypeError, ValueError):
+                    pass
+            stroke_color = d.get("color")
+            if stroke_color is not None and self._colors_are_similar(
+                stroke_color, background_color
+            ):
+                continue
             if d.get("color") is None:
                 fill_color = d.get("fill")
                 if fill_color is None or self._colors_are_similar(
@@ -143,6 +161,88 @@ class WiredTableExtractor(BaseTableExtractor):
         v_lines.extend(image_v)
 
         return h_lines, v_lines
+
+    @staticmethod
+    def _get_type3_character_regions(page: fitz.Page) -> List[BBox]:
+        """Rebuild local visual boxes for Type3 glyphs with broken font metrics."""
+        try:
+            type3_fonts = {
+                str(name)
+                for font in page.get_fonts(full=True)
+                if len(font) >= 5 and str(font[2]).lower() == "type3"
+                for name in (font[3], font[4])
+                if name
+            }
+            raw = page.get_text("rawdict")
+        except (AttributeError, KeyError, TypeError, ValueError):
+            return []
+        if not type3_fonts:
+            return []
+
+        regions: List[BBox] = []
+        for block in raw.get("blocks", []):
+            for line in block.get("lines", []):
+                direction = line.get("dir", (1.0, 0.0))
+                if abs(float(direction[0])) < abs(float(direction[1])):
+                    continue
+                for span in line.get("spans", []):
+                    if str(span.get("font", "")) not in type3_fonts:
+                        continue
+                    try:
+                        size = float(span.get("size", 0.0))
+                    except (TypeError, ValueError):
+                        continue
+                    if size <= 0.0:
+                        continue
+                    chars = span.get("chars", [])
+                    for index, char in enumerate(chars):
+                        try:
+                            origin_x, origin_y = (float(value) for value in char["origin"])
+                        except (KeyError, TypeError, ValueError):
+                            continue
+                        advance = size
+                        if index + 1 < len(chars):
+                            try:
+                                next_x = float(chars[index + 1]["origin"][0])
+                                candidate = next_x - origin_x
+                                if 0.2 * size <= candidate <= 3.0 * size:
+                                    advance = candidate
+                            except (KeyError, TypeError, ValueError):
+                                pass
+                        regions.append(
+                            BBox(
+                                origin_x,
+                                origin_y - 1.15 * size,
+                                origin_x + advance,
+                                origin_y + 0.25 * size,
+                            )
+                        )
+        return regions
+
+    @staticmethod
+    def _drawing_is_inside_character_region(
+        drawing: dict, regions: List[BBox]
+    ) -> bool:
+        rect = drawing.get("rect")
+        if rect is None:
+            return False
+        try:
+            x0, y0, x1, y1 = (
+                float(rect.x0),
+                float(rect.y0),
+                float(rect.x1),
+                float(rect.y1),
+            )
+        except (AttributeError, TypeError, ValueError):
+            return False
+        tolerance = 1.0
+        return any(
+            region.x0 - tolerance <= x0
+            and region.y0 - tolerance <= y0
+            and x1 <= region.x1 + tolerance
+            and y1 <= region.y1 + tolerance
+            for region in regions
+        )
 
     def _extract_lines_from_tiled_images(
         self, page: fitz.Page, clip_bbox: Optional[BBox] = None

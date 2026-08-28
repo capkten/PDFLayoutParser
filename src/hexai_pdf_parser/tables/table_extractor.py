@@ -77,6 +77,7 @@ from hexai_pdf_parser.tables.extractors import (
 )
 from hexai_pdf_parser.page_normalizer import normalize_page_rotation
 from hexai_pdf_parser.tables.wireless_table_recovery import recover_wireless_tables
+from hexai_pdf_parser.tables.wireless_structure.recoverer import recover_cells_from_region
 
 
 @dataclass
@@ -257,6 +258,11 @@ class TableExtractor:
             return list(wired_tables or [])
 
         tables: List[Table] = []
+        if page_language in {"zh", "mixed"}:
+            wired_tables = [
+                self._recover_hybrid_wired_table(page, table, page_language)
+                for table in (wired_tables or [])
+            ]
         included_wired: set[int] = set()
         for bbox, score in model_items:
             overlapping_wired = [
@@ -290,6 +296,168 @@ class TableExtractor:
             if id(table) not in included_wired
         )
         return tables
+
+    def _recover_hybrid_wired_table(
+        self, page: fitz.Page, table: Table, page_language: str
+    ) -> Table:
+        """Recover only an unusually tall wired body row with native spans.
+
+        Financial tables often retain outer/column rules while omitting body
+        row rules.  Keep the wired header/footer and replace just that body
+        band when native-span recovery returns a compatible set of rows.
+        """
+        if page_language not in {"zh", "mixed"} or table.source != "line_projection":
+            return table
+        row_cells: Dict[int, List[Cell]] = defaultdict(list)
+        for cell in table.cells:
+            row_cells[cell.row_index].append(cell)
+        if len(row_cells) < 3:
+            return table
+
+        heights = {
+            row: max(cell.bbox.y1 - cell.bbox.y0 for cell in cells)
+            for row, cells in row_cells.items()
+        }
+        body_row = max(heights, key=heights.get)
+        other_heights = [height for row, height in heights.items() if row != body_row]
+        if not other_heights or heights[body_row] < max(60.0, 3.0 * max(other_heights)):
+            return table
+
+        body_cells = row_cells[body_row]
+        body_bbox = BBox(
+            min(cell.bbox.x0 for cell in body_cells),
+            min(cell.bbox.y0 for cell in body_cells),
+            max(cell.bbox.x1 for cell in body_cells),
+            max(cell.bbox.y1 for cell in body_cells),
+        )
+        recovered_rows, _recovered_cols, recovered = recover_cells_from_region(
+            page, body_bbox
+        )
+        if recovered_rows < 2 or not recovered:
+            return table
+
+        column_edges = sorted(
+            {
+                edge
+                for cell in body_cells
+                for edge in (cell.bbox.x0, cell.bbox.x1)
+            }
+        )
+        if len(column_edges) < 2:
+            return table
+
+        def target_column(cell: Cell) -> int | None:
+            center = (cell.bbox.x0 + cell.bbox.x1) / 2.0
+            for index in range(len(column_edges) - 1):
+                if column_edges[index] - 2.0 <= center <= column_edges[index + 1] + 2.0:
+                    return index
+            return None
+
+        mapped: List[Cell] = []
+        for cell in recovered:
+            column = target_column(cell)
+            if column is None:
+                return table
+            mapped.append(
+                Cell(
+                    text=cell.text,
+                    row_index=body_row + cell.row_index,
+                    col_index=column,
+                    rowspan=cell.rowspan,
+                    colspan=cell.colspan,
+                    bbox=cell.bbox,
+                )
+            )
+
+        row_bounds = [body_bbox.y0]
+        for row_offset in range(recovered_rows - 1):
+            current = [cell for cell in mapped if cell.row_index == body_row + row_offset]
+            following = [cell for cell in mapped if cell.row_index == body_row + row_offset + 1]
+            if not current or not following:
+                return table
+            current_bottom = max(cell.bbox.y1 for cell in current)
+            following_top = min(cell.bbox.y0 for cell in following)
+            row_bounds.append((current_bottom + following_top) / 2.0)
+        row_bounds.append(body_bbox.y1)
+
+        mapped = [
+            Cell(
+                text=cell.text,
+                row_index=cell.row_index,
+                col_index=cell.col_index,
+                rowspan=cell.rowspan,
+                colspan=cell.colspan,
+                bbox=BBox(
+                    column_edges[cell.col_index],
+                    row_bounds[cell.row_index - body_row],
+                    column_edges[min(cell.col_index + cell.colspan, len(column_edges) - 1)],
+                    row_bounds[min(cell.row_index - body_row + cell.rowspan, recovered_rows)],
+                ),
+            )
+            for cell in mapped
+        ]
+
+        fixed_cells = []
+        for cell in table.cells:
+            if cell.row_index == body_row:
+                continue
+            row_index = (
+                cell.row_index + recovered_rows - 1
+                if cell.row_index > body_row
+                else cell.row_index
+            )
+            fixed_cells.append(
+                Cell(
+                    text=cell.text,
+                    row_index=row_index,
+                    col_index=cell.col_index,
+                    rowspan=cell.rowspan,
+                    colspan=cell.colspan,
+                    bbox=cell.bbox,
+                )
+            )
+        for row_offset in range(recovered_rows):
+            occupied = {cell.col_index for cell in mapped if cell.row_index == body_row + row_offset}
+            for column in range(len(column_edges) - 1):
+                if column in occupied:
+                    continue
+                mapped.append(
+                    Cell(
+                        text="",
+                        row_index=body_row + row_offset,
+                        col_index=column,
+                        bbox=BBox(
+                            column_edges[column],
+                            row_bounds[row_offset],
+                            column_edges[column + 1],
+                            row_bounds[row_offset + 1],
+                        ),
+                    )
+                )
+
+        all_cells = sorted(
+            fixed_cells + mapped,
+            key=lambda cell: (cell.row_index, cell.col_index),
+        )
+        occupied: set[tuple[int, int]] = set()
+        for cell in all_cells:
+            for row in range(cell.row_index, cell.row_index + max(1, cell.rowspan)):
+                for column in range(cell.col_index, cell.col_index + max(1, cell.colspan)):
+                    slot = (row, column)
+                    if slot in occupied:
+                        return table
+                    occupied.add(slot)
+
+        return Table(
+            bbox=table.bbox,
+            rows=table.rows - 1 + recovered_rows,
+            cols=table.cols,
+            cells=all_cells,
+            confidence=table.confidence,
+            source="hybrid_line_span_recovery",
+            h_lines=table.h_lines,
+            v_lines=table.v_lines,
+        )
 
     def extract(self, page: fitz.Page) -> List[Table]:
         """Detect rule candidates, then use the model for final table results."""

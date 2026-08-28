@@ -1,4 +1,4 @@
-"""Region-scoped document-tree experiment for native-PDF span tables."""
+"""基于原生 PDF 文本 span 的局部文档树实验。\n\n本实验将原生顺序、几何位置和恢复出的文档树分开处理：原生顺序用于判断文本先后及合并关系；bbox 用于视觉行分组和列归属；TreeNode 用于表达表头、列、单元格、rowspan 和 colspan。\n\n这是独立的验证 demo，只输出 JSON 树和标注 PNG，不修改生产表格提取器。"""
 
 from __future__ import annotations
 
@@ -43,7 +43,7 @@ def _union(nodes: Iterable[TreeNode]) -> BBox:
 
 
 def build_text_nodes(spans: Sequence[NativeSpan]) -> list[TreeNode]:
-    """Convert spans to nodes without changing native content-stream order."""
+    """恢复出的文档树中的一个节点。\n\ntext 节点对应原生 PDF span，或从 span 拆出的短语；其余节点类型由本 demo 引入，用于表达 table、header_group、leaf_column、body、row、cell 和 grid。span 拆分后仍保留 order_start/order_end，使字符级几何信息可以提高列定位精度，同时不生成新的内容流顺序。"""
     nodes = [
         TreeNode(
             kind="text",
@@ -75,10 +75,10 @@ def _phrase_node(parent: TreeNode, text: str, boxes: list[BBox]) -> TreeNode:
 
 
 def expand_wide_node(node: TreeNode) -> list[TreeNode]:
-    """Split a span by character geometry while retaining its native order."""
+    """返回能够包含所有节点 bbox 的最小矩形。"""
     if node.bbox is None or node.order_start is None:
         return [node]
-    # The demo receives character boxes through a private attachment set below.
+    # demo 通过下面设置的私有属性接收字符 bbox。
     chars = getattr(node, "_characters", None)
     if not chars or len(chars) < 2:
         return [node]
@@ -135,7 +135,7 @@ def _is_separator(node: TreeNode) -> bool:
 
 
 def build_table_tree(nodes: Sequence[TreeNode], table_bbox: BBox) -> TreeNode:
-    """Build a small hierarchical table tree from ordered phrase nodes."""
+    """将原生 span 转成文本节点，同时不改变顺序。\n\n私有属性 _characters 只作为 expand_wide_node 的临时输入，不参与 JSON 序列化。"""
     rows = _rows(nodes)
     header_candidates = [
         (row_index, [node for node in row if not _is_separator(node)])
@@ -164,9 +164,9 @@ def build_table_tree(nodes: Sequence[TreeNode], table_bbox: BBox) -> TreeNode:
             None,
         )
 
-    # The left-most header is the stub column. The other leaves are split at
-    # the largest gap, which is sufficient for the two repeated column groups
-    # in the demo page and does not use body occupancy to delete sparse leaves.
+    # 最左侧表头是 stub 列，其余叶子列在最大间隙处分组。
+    # 这种方式足以处理本 demo 页面的两组重复列。
+    # 不根据 body 是否有值来删列，因此稀疏列仍会保留。
     if stub_source is not None:
         candidate_leaves = leaf_nodes
     else:
@@ -250,7 +250,7 @@ def flatten_tree_cells(root: TreeNode) -> list[TreeNode]:
 
 
 def _apply_ordered_rowspans(body: TreeNode) -> None:
-    """Join same-column text when its native-order run precedes the right side."""
+    """创建一个短语节点，并继承源 span 的原生顺序。"""
     rows = body.children
     index = 0
     while index < len(rows):

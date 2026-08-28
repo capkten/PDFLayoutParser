@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import fitz
 import pytest
 
 from hexai_pdf_parser.core.models import BBox
@@ -105,6 +106,121 @@ def test_extract_lines_compares_fill_only_rules_with_page_background():
 
     assert h_lines == []
     assert v_lines == [(10.25, 20.0, 10.25, 80.0)]
+
+
+def test_extract_lines_ignores_invisible_or_background_colored_dashed_rules():
+    extractor = WiredTableExtractor()
+    page = SimpleNamespace(
+        get_pixmap=lambda **_kwargs: SimpleNamespace(
+            width=10, height=10, n=3, samples=bytes([255, 255, 255] * 100)
+        ),
+        get_drawings=lambda: [
+            {
+                "color": (1.0, 1.0, 1.0),
+                "fill": None,
+                "opacity": 1.0,
+                "dashes": "[1 1] 0",
+                "items": [("l", SimpleNamespace(x=10.0, y=20.0), SimpleNamespace(x=110.0, y=20.0))],
+            },
+            {
+                "color": (0.0, 0.0, 0.0),
+                "fill": None,
+                "opacity": 0.0,
+                "dashes": "[1 1] 0",
+                "items": [("l", SimpleNamespace(x=10.0, y=30.0), SimpleNamespace(x=110.0, y=30.0))],
+            },
+        ],
+    )
+
+    h_lines, v_lines = extractor._extract_lines_from_drawings(page)
+
+    assert h_lines == []
+    assert v_lines == []
+
+
+def test_extract_lines_keeps_visible_black_dashed_rules():
+    extractor = WiredTableExtractor()
+    page = SimpleNamespace(
+        get_drawings=lambda: [
+            {
+                "color": (0.0, 0.0, 0.0),
+                "fill": None,
+                "opacity": 1.0,
+                "dashes": "[1 1] 0",
+                "items": [("l", SimpleNamespace(x=10.0, y=20.0), SimpleNamespace(x=110.0, y=20.0))],
+            }
+        ],
+    )
+
+    h_lines, v_lines = extractor._extract_lines_from_drawings(page)
+
+    assert h_lines == [(10.0, 20.0, 110.0, 20.0)]
+    assert v_lines == []
+
+
+def test_extract_lines_ignores_type3_glyph_drawings_but_keeps_table_rules():
+    extractor = WiredTableExtractor()
+    glyph_drawing = {
+        "rect": fitz.Rect(10.5, 10.5, 19.5, 20.5),
+        "color": None,
+        "fill": (0.0, 0.0, 0.0),
+        "items": [
+            ("l", fitz.Point(11.0, 12.0), fitz.Point(19.0, 12.0)),
+            ("l", fitz.Point(15.0, 11.0), fitz.Point(15.0, 20.0)),
+        ],
+    }
+    table_drawing = {
+        "rect": fitz.Rect(0.0, 40.0, 100.0, 100.0),
+        "color": (0.0, 0.0, 0.0),
+        "fill": None,
+        "items": [
+            ("l", fitz.Point(0.0, 40.0), fitz.Point(100.0, 40.0)),
+            ("l", fitz.Point(0.0, 70.0), fitz.Point(100.0, 70.0)),
+            ("l", fitz.Point(0.0, 100.0), fitz.Point(100.0, 100.0)),
+            ("l", fitz.Point(0.0, 40.0), fitz.Point(0.0, 100.0)),
+            ("l", fitz.Point(100.0, 40.0), fitz.Point(100.0, 100.0)),
+        ],
+    }
+    page = SimpleNamespace(
+        get_fonts=lambda **_kwargs: [(1, "n/a", "Type3", "T54", "T54", "", 0)],
+        get_text=lambda _kind: {
+            "blocks": [
+                {
+                    "lines": [
+                        {
+                            "dir": (1.0, 0.0),
+                            "spans": [
+                                {
+                                    "font": "T54",
+                                    "size": 10.0,
+                                    "chars": [
+                                        {
+                                            "c": "A",
+                                            "origin": (10.0, 20.0),
+                                            "bbox": (10.0, -80.0, 20.0, 120.0),
+                                        }
+                                    ],
+                                }
+                            ],
+                        }
+                    ]
+                }
+            ]
+        },
+        get_drawings=lambda: [glyph_drawing, table_drawing],
+    )
+
+    h_lines, v_lines = extractor._extract_lines_from_drawings(page)
+
+    assert h_lines == [
+        (0.0, 40.0, 100.0, 40.0),
+        (0.0, 70.0, 100.0, 70.0),
+        (0.0, 100.0, 100.0, 100.0),
+    ]
+    assert v_lines == [
+        (0.0, 40.0, 0.0, 100.0),
+        (100.0, 40.0, 100.0, 100.0),
+    ]
 
 
 def test_find_table_regions_ignores_horizontal_lines_without_vertical_intersections():

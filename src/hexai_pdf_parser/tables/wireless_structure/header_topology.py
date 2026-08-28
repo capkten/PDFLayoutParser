@@ -485,7 +485,11 @@ def rescue_sparse_body_bands(atoms: Sequence[dict[str, Any]], bands: Sequence[di
         left_gap = atom["bbox"][0] - max(item["bbox"][2] for item in left_mates)
         right_gap = min(item["bbox"][0] for item in right_mates) - atom["bbox"][2]
         line_height = max(
-            atom["bbox"][3] - atom["bbox"][1],
+            float(item.get("font_size") or 0.0)
+            for item in [atom, *left_mates, *right_mates]
+        )
+        line_height = max(
+            line_height,
             max(item["bbox"][3] - item["bbox"][1] for item in left_mates + right_mates),
         )
         # This is a column-gap test, not a column-count heuristic.  Prevent
@@ -692,6 +696,14 @@ def annotate_columns(atoms: Sequence[dict[str, Any]], bands: Sequence[dict[str, 
         column_id = assign_column(atom, assignment_bands)
         if _is_temporal_leaf_header(atom):
             column_id = _temporal_leaf_column(atom, bands)
+        elif in_header:
+            material_bands = [
+                int(band["id"])
+                for band in bands
+                if _meaningful_header_band_overlap(atom, band)
+            ]
+            if len(material_bands) == 1:
+                column_id = material_bands[0]
         atom["column_id"] = column_id
         atom["column_start"] = column_id
         atom["column_end"] = column_id

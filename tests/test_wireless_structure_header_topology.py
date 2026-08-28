@@ -41,6 +41,34 @@ def test_annotate_columns_does_not_turn_a_boundary_touch_into_colspan():
     assert atoms[0]["colspan"] == 1
 
 
+def test_annotate_columns_assigns_header_to_materially_overlapping_sparse_body_band():
+    bands = [
+        {"id": 1, "x0": 71, "x1": 120},
+        {"id": 2, "x0": 234, "x1": 366, "kind": "sparse_body"},
+        {"id": 3, "x0": 395, "x1": 518},
+    ]
+    atoms = [_atom("中央多行表头", 227, 107, 367, 132, 1)]
+
+    annotate_columns(atoms, bands, header_cutoff=148)
+
+    assert atoms[0]["column_start"] == 2
+    assert atoms[0]["column_end"] == 2
+    assert atoms[0]["colspan"] == 1
+
+
+def test_annotate_columns_does_not_force_sparse_band_on_multiple_material_overlaps():
+    bands = [
+        {"id": 1, "x0": 10, "x1": 30},
+        {"id": 2, "x0": 40, "x1": 70, "kind": "sparse_body"},
+        {"id": 3, "x0": 80, "x1": 110},
+    ]
+    atoms = [_atom("跨列标题", 45, 10, 95, 20, 1)]
+
+    annotate_columns(atoms, bands, header_cutoff=25)
+
+    assert atoms[0]["column_start"] != 2
+
+
 def test_infer_header_cutoff_uses_the_earliest_large_header_body_gap():
     atoms = [
         _atom("表头一", 10, 10, 30, 18, 1),
@@ -211,3 +239,57 @@ def test_rescue_sparse_body_bands_keeps_a_clear_inner_track():
 
     assert len(refined) == 3
     assert any(band.get("kind") == "sparse_body" for band in refined)
+
+
+def test_rescue_sparse_body_bands_uses_line_height_for_wrapped_inner_field():
+    bands = [
+        {"id": 1, "x0": 71, "x1": 120, "support": 2, "y_support": 2},
+        {"id": 2, "x0": 395, "x1": 518, "support": 3, "y_support": 3},
+    ]
+    atoms = [
+        _atom("左列", 72, 157, 120, 169, 1),
+        _atom("中央多行\n字段内容\n末行", 234, 142, 366, 185, 2),
+        _atom("右列多行字段", 395, 157, 518, 170, 3),
+    ]
+
+    refined = rescue_sparse_body_bands(atoms, bands, header_cutoff=148)
+
+    assert len(refined) == 3
+    assert [(band["x0"], band["x1"]) for band in refined] == [
+        (71, 120),
+        (234, 366),
+        (395, 518),
+    ]
+
+
+def test_rescue_sparse_body_bands_does_not_split_nearby_wrapped_phrase():
+    bands = [
+        {"id": 1, "x0": 10, "x1": 30, "support": 2, "y_support": 2},
+        {"id": 2, "x0": 90, "x1": 110, "support": 2, "y_support": 2},
+    ]
+    atoms = [
+        _atom("左", 10, 40, 30, 50, 1),
+        _atom("同一短语\n续行", 34, 28, 66, 62, 2),
+        _atom("右", 70, 40, 90, 50, 3),
+    ]
+
+    refined = rescue_sparse_body_bands(atoms, bands, header_cutoff=20)
+
+    assert len(refined) == 2
+
+
+def test_rescue_sparse_body_bands_accepts_none_font_size_with_line_bbox_fallback():
+    bands = [
+        {"id": 1, "x0": 71, "x1": 120, "support": 2, "y_support": 2},
+        {"id": 2, "x0": 395, "x1": 518, "support": 3, "y_support": 3},
+    ]
+    atoms = [
+        _atom("左列", 72, 157, 120, 169, 1),
+        _atom("中央多行\n字段内容", 234, 142, 366, 185, 2),
+        _atom("右列", 395, 157, 518, 170, 3),
+    ]
+    atoms[1]["font_size"] = None
+
+    refined = rescue_sparse_body_bands(atoms, bands, header_cutoff=148)
+
+    assert len(refined) == 3

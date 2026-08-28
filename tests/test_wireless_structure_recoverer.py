@@ -76,6 +76,76 @@ def test_final_occupancy_rejects_unresolved_duplicate_slot():
     assert recoverer._has_occupancy_conflict(duplicate_cells) is True
 
 
+def test_header_span_conflict_keeps_conflict_free_base_grid(monkeypatch):
+    base = [
+        {"cell_id": "A", "row_start": 1, "row_end": 1, "col_start": 1, "col_end": 1},
+        {"cell_id": "B", "row_start": 1, "row_end": 1, "col_start": 2, "col_end": 2},
+    ]
+    conflicting = [dict(item) for item in base]
+    conflicting[0].update(col_end=2, colspan=2)
+    monkeypatch.setattr(recoverer, "merge_header_spans", lambda cells, cutoff: conflicting)
+
+    result = recoverer._commit_header_spans_or_keep_base(base, header_cutoff=20)
+
+    assert result == base
+    assert recoverer._has_occupancy_conflict(result) is False
+
+
+def test_header_span_without_conflict_commits_proposed_grid(monkeypatch):
+    base = [
+        {"cell_id": "A", "row_start": 1, "row_end": 1, "col_start": 1, "col_end": 1},
+        {"cell_id": "B", "row_start": 1, "row_end": 1, "col_start": 2, "col_end": 2},
+    ]
+    proposed = [dict(item) for item in base]
+    proposed[0]["rowspan"] = 2
+    proposed[0]["row_end"] = 2
+    monkeypatch.setattr(recoverer, "merge_header_spans", lambda cells, cutoff: proposed)
+
+    result = recoverer._commit_header_spans_or_keep_base(base, header_cutoff=20)
+
+    assert result == proposed
+
+
+def test_recoverer_materializes_complete_grid_after_header_span_conflict(monkeypatch):
+    region = BBox(0, 0, 160, 70)
+    spans = [
+        NativeSpan(text, BBox(x0, y, x0 + 20, y + 10), "SimSun", 10, order)
+        for order, (y, x0, text) in enumerate(
+            [
+                (10, 10, "项目"),
+                (10, 100, "金额"),
+                (30, 10, "甲"),
+                (30, 100, "10"),
+                (50, 10, "乙"),
+            ]
+        )
+    ]
+    monkeypatch.setattr(
+        recoverer,
+        "collect_native_spans",
+        lambda page, allowed_regions: spans,
+    )
+
+    def conflicting_spans(cells, cutoff):
+        proposed = [dict(cell) for cell in cells]
+        proposed[0].update(col_end=2, colspan=2)
+        return proposed
+
+    monkeypatch.setattr(recoverer, "merge_header_spans", conflicting_spans)
+
+    rows, columns, cells = recover_cells_from_region(object(), region)
+
+    occupied = [
+        (row, column)
+        for cell in cells
+        for row in range(cell.row_index, cell.row_index + cell.rowspan)
+        for column in range(cell.col_index, cell.col_index + cell.colspan)
+    ]
+    assert (rows, columns, len(cells)) == (3, 2, 6)
+    assert len(occupied) == len(set(occupied)) == rows * columns
+    assert next(cell for cell in cells if cell.row_index == 2 and cell.col_index == 1).text == ""
+
+
 def test_recover_cells_from_region_materializes_missing_empty_slot(monkeypatch):
     region = BBox(0, 0, 160, 70)
     spans = [
