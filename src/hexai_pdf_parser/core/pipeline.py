@@ -324,7 +324,7 @@ class Pipeline:
         seal_coords: Optional[List[dict]] = None,
         page_indices: Optional[List[int]] = None,
         ml_model_path: Optional[str] = None,
-        ml_confidence: float = 0.70,
+        ml_confidence: float = 0.40,
         debug: bool = False,
         debug_pipeline: bool = False,
         table_config: Optional[TableConfig] = None,

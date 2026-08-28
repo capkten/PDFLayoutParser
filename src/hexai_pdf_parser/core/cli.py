@@ -63,8 +63,8 @@ def main() -> int:
     parser.add_argument(
         "--ml-confidence",
         type=float,
-        default=0.70,
-        help="Confidence threshold for ML table detection (default: 0.70)",
+        default=0.40,
+        help="Confidence threshold for ML table detection (default: 0.40)",
     )
     parser.add_argument(
         "--table-config",

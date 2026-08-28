@@ -84,7 +84,7 @@ def postprocess_yolo_layout(
     output: np.ndarray,
     orig_size: tuple[int, int],
     label_list: list[str] | None = None,
-    confidence_threshold: float = 0.70,
+    confidence_threshold: float = 0.40,
     iou_threshold: float = 0.50,
     input_size: int = 640,
 ) -> list[dict[str, Any]]:
