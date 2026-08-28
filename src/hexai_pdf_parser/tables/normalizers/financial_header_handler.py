@@ -164,6 +164,9 @@ def normalize_complex_financial_header(table: Table, page: fitz.Page) -> Table:
     cleaning the header fragments. Other grouped financial tables still use the
     existing grouped-header promotion helpers.
     """
+    if table.source == "wireless_span_recovery":
+        return table
+
     from hexai_pdf_parser.tables.normalizers.table_header_normalizer import (
         _looks_like_grouped_financial_header,
         _promote_grouped_header,

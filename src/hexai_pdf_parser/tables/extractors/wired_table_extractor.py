@@ -90,10 +90,14 @@ class WiredTableExtractor(BaseTableExtractor):
         except Exception:
             return [], []
 
+        background_color = self._estimate_page_background_color(page)
         for d in drawings:
-            # Physical lines must have an explicit stroke border color (color is not None)
             if d.get("color") is None:
-                continue
+                fill_color = d.get("fill")
+                if fill_color is None or self._colors_are_similar(
+                    fill_color, background_color
+                ):
+                    continue
 
             items = d.get("items", [])
             for item in items:
@@ -133,6 +137,52 @@ class WiredTableExtractor(BaseTableExtractor):
                         v_lines.append(((x0 + x1) / 2.0, y0, (x0 + x1) / 2.0, y1))
 
         return h_lines, v_lines
+
+    @staticmethod
+    def _estimate_page_background_color(page: fitz.Page) -> Tuple[float, float, float]:
+        fallback = (1.0, 1.0, 1.0)
+        try:
+            pix = page.get_pixmap(
+                matrix=fitz.Matrix(0.1, 0.1), colorspace=fitz.csRGB, alpha=False
+            )
+            if pix.width <= 0 or pix.height <= 0 or pix.n < 3:
+                return fallback
+
+            samples = pix.samples
+            stride = getattr(pix, "stride", pix.width * pix.n)
+            colors = []
+            for y_ratio in (0.05, 0.5, 0.95):
+                y = min(pix.height - 1, int((pix.height - 1) * y_ratio))
+                for x_ratio in (0.05, 0.5, 0.95):
+                    x = min(pix.width - 1, int((pix.width - 1) * x_ratio))
+                    offset = y * stride + x * pix.n
+                    colors.append(
+                        tuple(
+                            min(255, ((samples[offset + channel] + 8) // 16) * 16)
+                            for channel in range(3)
+                        )
+                    )
+
+            dominant = max(colors, key=colors.count)
+            return tuple(channel / 255.0 for channel in dominant)
+        except Exception:
+            return fallback
+
+    @staticmethod
+    def _colors_are_similar(
+        color: object,
+        background: Tuple[float, float, float],
+        tolerance: float = 0.04,
+    ) -> bool:
+        if not isinstance(color, (tuple, list)) or len(color) < 3:
+            return False
+        try:
+            return max(
+                abs(float(color[channel]) - background[channel])
+                for channel in range(3)
+            ) <= tolerance
+        except (TypeError, ValueError):
+            return False
 
     def _merge_h_lines(
         self, lines: List[Tuple[float, float, float, float]]

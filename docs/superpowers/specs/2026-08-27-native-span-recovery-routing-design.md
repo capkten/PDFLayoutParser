@@ -10,14 +10,14 @@
 
 ## 设计
 
-- native-span 恢复生成的表使用独立 source：`native_span_recovery`。
+- native-span 恢复生成的表复用现有独立 source：`wireless_span_recovery`。
 - `_rebuild_text_aligned_table()` 继续只处理 legacy `text_alignment` 表，不改变旧路径兼容性。
 - native-span 表仍经过通用及财务表头语义规范化，但不再从 page words 重建行列。
 - 英文无线表格、有线表格及其他 source 的行为保持不变。
 
 ## 验证
 
-- 单元测试证明 `zh`、`mixed` 调用 native-span 恢复并返回 `native_span_recovery`。
+- 单元测试证明 `zh`、`mixed` 调用 native-span 恢复并返回 `wireless_span_recovery`。
 - 单元测试证明 native-span 表经过 `normalize_table_headers()` 时不调用 page word 重建，并保留原始网格和“比例”“坏账准备”等独立 span 文本。
 - 保留 legacy `text_alignment` 重建测试，防止兼容路径被误删。
 - 重跑 `fix/zh_all_table_pages.pdf` 第 184 页，检查语言、source、行列数、结构化 JSON 和可视化 PNG。

@@ -9,7 +9,11 @@ import fitz
 from hexai_pdf_parser.core.models import BBox, Cell
 from hexai_pdf_parser.tables.wireless_table_recovery import collect_native_spans
 
-from .columns import infer_column_bands
+from .columns import (
+    infer_column_bands,
+    prune_paired_cjk_artifact_bands,
+    prune_sparse_alignment_artifact_bands,
+)
 from .continuations import merge_column_continuations
 from .grid import build_grid
 from .header_topology import (
@@ -79,6 +83,8 @@ def recover_cells_from_region(
         spans = region_spans(native_spans, region_bbox)
         atoms = build_text_runs(spans)
         bands = infer_column_bands(atoms, region_bbox)
+        bands = prune_paired_cjk_artifact_bands(atoms, bands)
+        bands = prune_sparse_alignment_artifact_bands(atoms, bands)
         if not atoms or len(bands) < 2:
             return 0, 0, []
 

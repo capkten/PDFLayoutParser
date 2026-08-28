@@ -1,9 +1,89 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from hexai_pdf_parser.core.models import BBox
 from hexai_pdf_parser.tables.extractors.wired_table_extractor import WiredTableExtractor
+
+
+def test_extract_lines_ignores_white_fill_only_page_border():
+    extractor = WiredTableExtractor()
+    page = SimpleNamespace(
+        get_drawings=lambda: [
+            {"color": None, "fill": (1.0, 1.0, 1.0), "items": [("re", SimpleNamespace(x0=24.0, y0=24.0, x1=571.0, y1=24.5))]},
+            {"color": None, "fill": (1.0, 1.0, 1.0), "items": [("re", SimpleNamespace(x0=24.0, y0=817.5, x1=571.0, y1=818.0))]},
+            {"color": None, "fill": (1.0, 1.0, 1.0), "items": [("re", SimpleNamespace(x0=24.0, y0=24.0, x1=24.5, y1=818.0))]},
+            {"color": None, "fill": (1.0, 1.0, 1.0), "items": [("re", SimpleNamespace(x0=571.0, y0=24.0, x1=571.5, y1=818.0))]},
+        ]
+    )
+
+    h_lines, v_lines = extractor._extract_lines_from_drawings(page)
+
+    assert h_lines == []
+    assert v_lines == []
+
+
+def test_extract_lines_accepts_visible_fill_only_rules():
+    extractor = WiredTableExtractor()
+    page = SimpleNamespace(
+        get_drawings=lambda: [
+            {
+                "color": None,
+                "fill": (0.0, 0.0, 0.0),
+                "items": [
+                    ("re", SimpleNamespace(x0=10.0, y0=20.0, x1=110.0, y1=20.5))
+                ],
+            },
+            {
+                "color": None,
+                "fill": (0.0, 0.0, 0.0),
+                "items": [
+                    ("re", SimpleNamespace(x0=10.0, y0=20.0, x1=10.5, y1=80.0))
+                ],
+            },
+        ]
+    )
+
+    h_lines, v_lines = extractor._extract_lines_from_drawings(page)
+
+    assert h_lines == [(10.0, 20.25, 110.0, 20.25)]
+    assert v_lines == [(10.25, 20.0, 10.25, 80.0)]
+
+
+def test_extract_lines_compares_fill_only_rules_with_page_background():
+    extractor = WiredTableExtractor()
+    gray_samples = bytes([128, 128, 128] * 100)
+    page = SimpleNamespace(
+        get_pixmap=lambda **_kwargs: SimpleNamespace(
+            width=10,
+            height=10,
+            n=3,
+            samples=gray_samples,
+        ),
+        get_drawings=lambda: [
+            {
+                "color": None,
+                "fill": (128 / 255, 128 / 255, 128 / 255),
+                "items": [
+                    ("re", SimpleNamespace(x0=10.0, y0=20.0, x1=110.0, y1=20.5))
+                ],
+            },
+            {
+                "color": None,
+                "fill": (0.0, 0.0, 0.0),
+                "items": [
+                    ("re", SimpleNamespace(x0=10.0, y0=20.0, x1=10.5, y1=80.0))
+                ],
+            },
+        ],
+    )
+
+    h_lines, v_lines = extractor._extract_lines_from_drawings(page)
+
+    assert h_lines == []
+    assert v_lines == [(10.25, 20.0, 10.25, 80.0)]
 
 
 def test_find_table_regions_ignores_horizontal_lines_without_vertical_intersections():

@@ -101,3 +101,128 @@ def test_recover_cells_from_region_materializes_missing_empty_slot(monkeypatch):
     empty = next(cell for cell in cells if cell.row_index == 2 and cell.col_index == 1)
     assert empty.text == ""
     assert empty.rowspan == empty.colspan == 1
+
+
+def test_recover_cells_merges_wrapped_fields_before_physical_rows(monkeypatch):
+    region = BBox(90, 0, 490, 120)
+    raw = [
+        (18.5, 103, 145, "企业名称"),
+        (10, 168, 189, "注册"),
+        (27, 168, 189, "地址"),
+        (18.5, 220, 262, "主营业务"),
+        (10, 289, 331, "与本公司"),
+        (27, 299.5, 320.5, "关系"),
+        (10, 339, 360, "业务"),
+        (27, 339, 360, "性质"),
+        (10, 379, 400, "法定"),
+        (27, 374, 405.5, "代表人"),
+        (18.5, 422, 485, "组织机构代码"),
+        (70, 92, 124, "杨志茂"),
+        (70, 160, 181, "---"),
+        (70, 233, 254, "---"),
+        (61.5, 289, 331, "本公司实"),
+        (78.5, 289, 331, "际控制人"),
+        (70, 342, 358, "---"),
+        (70, 382, 403, "---"),
+        (70, 446, 467, "---"),
+        (100, 92, 157, "广东锦龙发展"),
+        (100, 168, 189, "清远"),
+        (100, 198, 285, "实业投资、房地产"),
+        (100, 294, 326, "母公司"),
+        (100, 339, 360, "上市"),
+        (100, 379, 401, "杨志茂"),
+        (100, 427, 485, "61797180-0"),
+    ]
+    spans = [
+        NativeSpan(text, BBox(x0, y, x1, y + 10), "SimSun", 10.5, order)
+        for order, (y, x0, x1, text) in enumerate(raw)
+    ]
+    monkeypatch.setattr(
+        "hexai_pdf_parser.tables.wireless_structure.recoverer.collect_native_spans",
+        lambda page, allowed_regions: spans,
+    )
+
+    rows, columns, cells = recover_cells_from_region(object(), region)
+
+    assert (rows, columns, len(cells)) == (3, 7, 21)
+    occupied = {
+        (row, column)
+        for cell in cells
+        for row in range(cell.row_index, cell.row_index + cell.rowspan)
+        for column in range(cell.col_index, cell.col_index + cell.colspan)
+    }
+    assert len(occupied) == rows * columns
+    assert next(cell for cell in cells if cell.row_index == 0 and cell.col_index == 1).text == "注册\n地址"
+    assert next(cell for cell in cells if cell.row_index == 0 and cell.col_index == 3).text == "与本公司\n关系"
+    assert next(cell for cell in cells if cell.row_index == 0 and cell.col_index == 4).text == "业务\n性质"
+    assert next(cell for cell in cells if cell.row_index == 0 and cell.col_index == 5).text == "法定\n代表人"
+    assert next(cell for cell in cells if cell.row_index == 1 and cell.col_index == 3).text == "本公司实\n际控制人"
+
+
+def test_recover_cells_from_region_removes_paired_cjk_artifact_column(monkeypatch):
+    region = BBox(90, 0, 470, 110)
+    raw = [
+        (10, 170, 180.5, "项"),
+        (10, 191, 201.5, "目"),
+        (10, 306, 348, "本年金额"),
+        (10, 401, 443, "上年金额"),
+        (30, 100, 142, "职工薪酬"),
+        (30, 306, 370, "100"),
+        (30, 401, 463, "90"),
+        (50, 100, 174, "聘请中介机构费"),
+        (50, 306, 370, "200"),
+        (50, 401, 463, "180"),
+        (70, 100, 121, "其他"),
+        (70, 306, 370, "300"),
+        (70, 401, 463, "270"),
+        (90, 170, 180.5, "合"),
+        (90, 191, 201.5, "计"),
+        (90, 306, 370, "600"),
+        (90, 401, 463, "540"),
+    ]
+    spans = [
+        NativeSpan(text, BBox(x0, y, x1, y + 10), "SimSun", 10.5, order)
+        for order, (y, x0, x1, text) in enumerate(raw)
+    ]
+    monkeypatch.setattr(
+        "hexai_pdf_parser.tables.wireless_structure.recoverer.collect_native_spans",
+        lambda page, allowed_regions: spans,
+    )
+
+    rows, columns, cells = recover_cells_from_region(object(), region)
+
+    assert (rows, columns, len(cells)) == (5, 3, 15)
+    assert next(cell for cell in cells if cell.row_index == 0 and cell.col_index == 0).text == "项目"
+    assert next(cell for cell in cells if cell.row_index == 4 and cell.col_index == 0).text == "合计"
+
+
+def test_recover_cells_from_region_removes_sparse_alignment_column(monkeypatch):
+    region = BBox(90, 0, 470, 90)
+    raw = [
+        (10, 168, 189, "项目"),
+        (10, 300, 340, "本年金额"),
+        (10, 400, 440, "上年金额"),
+        (30, 100, 142, "正文一"),
+        (30, 300, 340, "100"),
+        (30, 400, 440, "90"),
+        (50, 100, 163, "正文二"),
+        (50, 300, 340, "200"),
+        (50, 400, 440, "180"),
+        (70, 168, 189, "合计"),
+        (70, 300, 340, "300"),
+        (70, 400, 440, "270"),
+    ]
+    spans = [
+        NativeSpan(text, BBox(x0, y, x1, y + 10), "SimSun", 10.5, order)
+        for order, (y, x0, x1, text) in enumerate(raw)
+    ]
+    monkeypatch.setattr(
+        "hexai_pdf_parser.tables.wireless_structure.recoverer.collect_native_spans",
+        lambda page, allowed_regions: spans,
+    )
+
+    rows, columns, cells = recover_cells_from_region(object(), region)
+
+    assert (rows, columns, len(cells)) == (4, 3, 12)
+    assert next(cell for cell in cells if cell.row_index == 0 and cell.col_index == 0).text == "项目"
+    assert next(cell for cell in cells if cell.row_index == 3 and cell.col_index == 0).text == "合计"
