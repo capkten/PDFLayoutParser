@@ -542,7 +542,13 @@ class WiredTableExtractor(BaseTableExtractor):
         h_lines: List[Tuple[float, float, float, float]],
         v_lines: List[Tuple[float, float, float, float]],
     ) -> List[Cell]:
-        h_ys = sorted(set(round(line[1], 1) for line in h_lines))
+        h_ys = sorted(
+            {
+                round(bbox.y0, 1),
+                round(bbox.y1, 1),
+                *(round(line[1], 1) for line in h_lines),
+            }
+        )
         v_xs = sorted(
             {
                 round(bbox.x0, 1),
@@ -557,7 +563,12 @@ class WiredTableExtractor(BaseTableExtractor):
         rows = len(h_ys) - 1
         cols = len(v_xs) - 1
         tol = self.line_tolerance
+        effective_h_lines = list(h_lines)
         effective_v_lines = list(v_lines)
+        if not any(abs(line[1] - bbox.y0) <= tol for line in h_lines):
+            effective_h_lines.append((bbox.x0, bbox.y0, bbox.x1, bbox.y0))
+        if not any(abs(line[1] - bbox.y1) <= tol for line in h_lines):
+            effective_h_lines.append((bbox.x0, bbox.y1, bbox.x1, bbox.y1))
         if not any(abs(line[0] - bbox.x0) <= tol for line in v_lines):
             effective_v_lines.append((bbox.x0, bbox.y0, bbox.x0, bbox.y1))
         if not any(abs(line[0] - bbox.x1) <= tol for line in v_lines):
@@ -565,7 +576,7 @@ class WiredTableExtractor(BaseTableExtractor):
 
         def has_h_segment(y: float, x0: float, x1: float) -> bool:
             span = x1 - x0
-            for lx0, ly, lx1, _ in h_lines:
+            for lx0, ly, lx1, _ in effective_h_lines:
                 if abs(ly - y) > tol:
                     continue
                 overlap = min(lx1, x1 + tol) - max(lx0, x0 - tol)
