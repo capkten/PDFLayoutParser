@@ -164,8 +164,124 @@ def _join_text(group: Sequence[dict[str, Any]]) -> str:
     return "".join(item["text"] for item in group)
 
 
+def _horizontal_overlap(left: Sequence[float], right: Sequence[float]) -> float:
+    return max(0.0, min(left[2], right[2]) - max(left[0], right[0]))
+
+
+def _same_source_line(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    return (
+        left["source_blocks"] == right["source_blocks"]
+        and left["source_line_start"] == left["source_line_end"]
+        and right["source_line_start"] == right["source_line_end"]
+        and left["source_line_start"] == right["source_line_start"]
+        and right["flow_start"] == left["flow_end"] + 1
+    )
+
+
+def _is_wrapped_field_pair(
+    left: dict[str, Any],
+    right: dict[str, Any],
+    runs: Sequence[dict[str, Any]],
+) -> bool:
+    if not _same_source_line(left, right):
+        return False
+    if (
+        left["font"] != right["font"]
+        or left["bold"] != right["bold"]
+        or left["script"] != right["script"]
+    ):
+        return False
+    if (
+        _NUMERIC.fullmatch(left["text"].strip())
+        or _NUMERIC.fullmatch(right["text"].strip())
+        or _is_placeholder(left)
+        or _is_placeholder(right)
+    ):
+        return False
+
+    left_center = _center_y(left)
+    right_center = _center_y(right)
+    if right_center <= left_center or right["bbox"][1] < left["bbox"][3]:
+        return False
+    minimum_width = min(
+        left["bbox"][2] - left["bbox"][0],
+        right["bbox"][2] - right["bbox"][0],
+    )
+    if _horizontal_overlap(left["bbox"], right["bbox"]) < minimum_width * 0.45:
+        return False
+    if right["bbox"][1] - left["bbox"][3] > max(
+        6.0, min(left["font_size"], right["font_size"])
+    ):
+        return False
+
+    between = [
+        item
+        for item in runs
+        if item is not left
+        and item is not right
+        and left_center < _center_y(item) < right_center
+    ]
+    if not between:
+        return False
+    return all(
+        _horizontal_overlap(left["bbox"], item["bbox"])
+        < min(minimum_width, item["bbox"][2] - item["bbox"][0]) * 0.45
+        and _horizontal_overlap(right["bbox"], item["bbox"])
+        < min(minimum_width, item["bbox"][2] - item["bbox"][0]) * 0.45
+        for item in between
+    )
+
+
+def _merge_wrapped_field_runs(
+    runs: Sequence[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    ordered = sorted((dict(item) for item in runs), key=lambda item: item["flow_start"])
+    candidates = [
+        (index, index + 1)
+        for index in range(len(ordered) - 1)
+        if _is_wrapped_field_pair(ordered[index], ordered[index + 1], ordered)
+    ]
+    use_count = Counter(index for pair in candidates for index in pair)
+    pair_by_start = {
+        left: right
+        for left, right in candidates
+        if use_count[left] == 1 and use_count[right] == 1
+    }
+
+    result: list[dict[str, Any]] = []
+    index = 0
+    while index < len(ordered):
+        right_index = pair_by_start.get(index)
+        if right_index is None:
+            result.append(ordered[index])
+            index += 1
+            continue
+        left = ordered[index]
+        right = ordered[right_index]
+        merged = dict(left)
+        merged.update(
+            text=left["text"] + "\n" + right["text"],
+            bbox=_union([left, right]),
+            span_refs=[*left["span_refs"], *right["span_refs"]],
+            flow_start=left["flow_start"],
+            flow_end=right["flow_end"],
+            char_boxes=[*left.get("char_boxes", []), *right.get("char_boxes", [])],
+            source_blocks=sorted(
+                set(left["source_blocks"]) | set(right["source_blocks"])
+            ),
+            source_line_start=min(
+                left["source_line_start"], right["source_line_start"]
+            ),
+            source_line_end=max(left["source_line_end"], right["source_line_end"]),
+            merge_kind="wrapped_field",
+        )
+        result.append(merged)
+        index = right_index + 1
+    return sorted(result, key=lambda item: (item["flow_start"], item["flow_end"]))
+
+
 def build_text_runs(spans: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Merge only same-line native fragments; do not pair bilingual content."""
+    """Merge source-continuous native fragments into complete field atoms."""
     if not spans:
         return []
     spans = _filter_separator_spans(spans)
@@ -216,4 +332,4 @@ def build_text_runs(spans: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
                     "normal_word_gap": normal_gap,
                 }
             )
-    return sorted(result, key=lambda item: (item["flow_start"], item["flow_end"]))
+    return _merge_wrapped_field_runs(result)
