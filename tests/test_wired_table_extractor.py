@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import fitz
 import pytest
 
-from hexai_pdf_parser.core.models import BBox
+from hexai_pdf_parser.core.models import BBox, Cell
 from hexai_pdf_parser.tables.extractors.wired_table_extractor import WiredTableExtractor
 
 
@@ -384,3 +384,20 @@ def test_build_cells_accepts_visually_touching_lines_with_small_coordinate_gap()
         h_line=(0.0, 10.0, 100.0, 10.0),
         v_line=(50.5, 10.5, 50.5, 20.0),
     )
+
+
+def test_merge_oversegmented_line_columns_recomputes_colspan_after_pruning():
+    extractor = WiredTableExtractor()
+    cells = [
+        Cell("merged", 0, 1, BBox(10.0, 0.0, 40.0, 10.0), colspan=3),
+        Cell("", 0, 2, BBox(20.0, 0.0, 30.0, 10.0)),
+        Cell("", 0, 3, BBox(30.0, 0.0, 40.0, 10.0)),
+        Cell("next", 0, 4, BBox(40.0, 0.0, 50.0, 10.0)),
+    ]
+
+    result = extractor._merge_oversegmented_line_columns(cells)
+
+    assert [(cell.text, cell.col_index, cell.colspan) for cell in result] == [
+        ("merged", 0, 1),
+        ("next", 1, 1),
+    ]

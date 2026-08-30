@@ -106,6 +106,9 @@ def normalize_table_headers(table: Table, page: fitz.Page) -> Table:
     *page* is reserved for future page-text-based detection.
     """
     table = _normalize_generic_table(table)
+    if table.source == "line_projection":
+        return table
+
     rebuilt = _rebuild_text_aligned_table(table, page)
     if rebuilt is not None:
         table = rebuilt

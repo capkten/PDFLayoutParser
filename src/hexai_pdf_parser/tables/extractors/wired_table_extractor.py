@@ -779,8 +779,14 @@ class WiredTableExtractor(BaseTableExtractor):
 
         pruned = []
         for c in cells:
-            if ci_map.get(c.col_index, -1) != -1:
-                c.col_index = ci_map[c.col_index]
-                pruned.append(c)
+            new_start = ci_map.get(c.col_index, -1)
+            if new_start == -1:
+                continue
+
+            original_span = range(c.col_index, c.col_index + max(1, c.colspan))
+            kept_span = sum(1 for old_ci in original_span if ci_map.get(old_ci, -1) != -1)
+            c.col_index = new_start
+            c.colspan = max(1, kept_span)
+            pruned.append(c)
 
         return pruned
