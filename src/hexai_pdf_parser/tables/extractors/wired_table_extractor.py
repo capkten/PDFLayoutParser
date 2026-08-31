@@ -548,6 +548,25 @@ class WiredTableExtractor(BaseTableExtractor):
         h_lines: List[Tuple[float, float, float, float]],
         v_lines: List[Tuple[float, float, float, float]],
     ) -> List[Cell]:
+        existing_v_xs = [line[0] for line in v_lines]
+        if existing_v_xs:
+            start_groups: Dict[float, List[Tuple[float, float, float, float]]] = defaultdict(list)
+            for line in h_lines:
+                start_groups[round(line[0], 1)].append(line)
+            left_v_x = min(existing_v_xs)
+            for start_x, supporting_lines in start_groups.items():
+                if (
+                    len(supporting_lines) < 3
+                    or start_x <= bbox.x0 + self.line_tolerance
+                    or start_x >= left_v_x - self.line_tolerance
+                ):
+                    continue
+                v_lines = [
+                    *v_lines,
+                    (start_x, bbox.y0, start_x, bbox.y1),
+                ]
+                break
+
         h_ys = sorted(
             {
                 round(bbox.y0, 1),

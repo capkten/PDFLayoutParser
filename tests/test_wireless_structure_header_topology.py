@@ -1,4 +1,5 @@
 from hexai_pdf_parser.tables.wireless_structure.header_topology import (
+    _infer_complete_child_group_span,
     annotate_columns,
     infer_header_cutoff,
     refine_leaf_bands,
@@ -200,6 +201,171 @@ def test_annotate_columns_pairs_short_parents_over_unequal_leaf_widths():
         (atom["column_start"], atom["column_end"], atom["colspan"])
         for atom in parents
     ] == [(2, 3, 2), (4, 5, 2)]
+
+
+def test_annotate_columns_pairs_parent_when_one_leaf_header_wraps_vertically():
+    bands = [
+        {"id": 1, "x0": 72.4, "x1": 167.1},
+        {"id": 2, "x0": 199.2, "x1": 277.7},
+        {"id": 3, "x0": 284.7, "x1": 321.6},
+        {"id": 4, "x0": 339.8, "x1": 385.3},
+        {"id": 5, "x0": 431.9, "x1": 451.1},
+        {"id": 6, "x0": 462.6, "x1": 520.1},
+    ]
+    parents = [
+        _atom("账面余额", 235.5, 319, 277.7, 328, 1),
+        _atom("坏账准备", 367.0, 319, 409.3, 328, 2),
+    ]
+    leaves = [
+        _atom("金额", 233.2, 340, 254.3, 351, 3),
+        _atom("比例(%)", 284.7, 340, 321.6, 351, 4),
+        _atom("金额", 361.8, 340, 382.9, 351, 5),
+        _atom("预期信用损", 396.0, 333, 448.8, 344, 6),
+        _atom("失率(%)", 414.2, 347, 451.1, 358, 7),
+        _atom("账面", 496.5, 325, 517.7, 336, 8),
+        _atom("价值", 496.5, 339, 517.7, 350, 9),
+    ]
+
+    annotate_columns([*parents, *leaves], bands, header_cutoff=360)
+
+    assert [
+        (atom["column_start"], atom["column_end"], atom["colspan"])
+        for atom in parents
+    ] == [(2, 3, 2), (4, 5, 2)]
+
+
+def test_annotate_columns_allows_parent_center_offset_for_unequal_leaf_widths():
+    bands = [
+        {"id": 2, "x0": 197.8, "x1": 277.5},
+        {"id": 3, "x0": 284.7, "x1": 321.6},
+        {"id": 4, "x0": 343.4, "x1": 388.9},
+        {"id": 5, "x0": 437.1, "x1": 456.3},
+    ]
+    parents = [
+        _atom("父一", 235.2, 517, 277.5, 527, 1),
+        _atom("父二", 369.7, 517, 411.9, 527, 2),
+    ]
+    leaves = [
+        _atom("叶一", 231.8, 539, 252.9, 549, 3),
+        _atom("叶二", 284.7, 539, 321.6, 549, 4),
+        _atom("叶三", 365.4, 539, 386.5, 549, 5),
+        _atom("叶四上", 401.2, 532, 454.0, 543, 6),
+        _atom("叶四下", 419.5, 547, 456.3, 557, 7),
+    ]
+
+    annotate_columns([*parents, *leaves], bands, header_cutoff=560)
+
+    assert [
+        (atom["column_start"], atom["column_end"], atom["colspan"])
+        for atom in parents
+    ] == [(2, 3, 2), (4, 5, 2)]
+
+
+def test_annotate_columns_infers_top_parent_from_mixed_child_spans():
+    bands = [
+        {"id": 1, "x0": 72.4, "x1": 167.1},
+        {"id": 2, "x0": 199.2, "x1": 277.7},
+        {"id": 3, "x0": 284.7, "x1": 321.6},
+        {"id": 4, "x0": 339.8, "x1": 385.3},
+        {"id": 5, "x0": 431.9, "x1": 451.1},
+        {"id": 6, "x0": 462.6, "x1": 520.1},
+    ]
+    atoms = [
+        _atom("期末余额", 334.8, 301.1, 377.0, 311.6, 1),
+        _atom("类别", 72.4, 323.3, 98.8, 333.8, 2),
+        _atom("账面余额", 235.5, 318.1, 277.7, 328.7, 3),
+        _atom("坏账准备", 367.0, 318.1, 409.3, 328.7, 4),
+        _atom("账面", 496.5, 324.9, 517.7, 336.0, 5),
+        _atom("金额", 233.2, 340.2, 254.3, 350.7, 6),
+        _atom("比例(%)", 284.7, 339.4, 321.6, 351.5, 7),
+        _atom("金额", 361.8, 340.2, 382.9, 350.7, 8),
+        _atom("预期信用损", 396.0, 333.5, 448.8, 344.0, 9),
+        _atom("失率(%)", 414.2, 347.0, 451.1, 358.3, 10),
+        _atom("价值", 496.5, 339.0, 517.7, 350.0, 11),
+    ]
+
+    annotate_columns(atoms, bands, header_cutoff=360)
+
+    assert (atoms[0]["column_start"], atoms[0]["column_end"], atoms[0]["colspan"]) == (2, 6, 5)
+    assert (atoms[4]["column_start"], atoms[4]["column_end"], atoms[4]["colspan"]) == (6, 6, 1)
+    assert (atoms[8]["column_start"], atoms[8]["column_end"], atoms[8]["colspan"]) == (5, 5, 1)
+
+
+def test_annotate_columns_rejects_top_parent_when_child_coverage_is_incomplete():
+    bands = [
+        {"id": 1, "x0": 72.4, "x1": 167.1},
+        {"id": 2, "x0": 199.2, "x1": 277.7},
+        {"id": 3, "x0": 284.7, "x1": 321.6},
+        {"id": 4, "x0": 339.8, "x1": 385.3},
+        {"id": 5, "x0": 431.9, "x1": 451.1},
+        {"id": 6, "x0": 462.6, "x1": 520.1},
+    ]
+    atoms = [
+        _atom("期末余额", 334.8, 301.1, 377.0, 311.6, 1),
+        _atom("类别", 72.4, 323.3, 98.8, 333.8, 2),
+        _atom("账面余额", 235.5, 318.1, 277.7, 328.7, 3),
+        _atom("坏账准备", 367.0, 318.1, 409.3, 328.7, 4),
+        _atom("金额", 233.2, 340.2, 254.3, 350.7, 5),
+        _atom("比例(%)", 284.7, 339.4, 321.6, 351.5, 6),
+        _atom("金额", 361.8, 340.2, 382.9, 350.7, 7),
+        _atom("预期信用损", 396.0, 333.5, 448.8, 344.0, 8),
+        _atom("失率(%)", 414.2, 347.0, 451.1, 358.3, 9),
+    ]
+
+    annotate_columns(atoms, bands, header_cutoff=360)
+
+    assert atoms[0]["colspan"] == 1
+
+
+def test_annotate_columns_rejects_top_parent_when_target_slot_has_peer_text():
+    bands = [
+        {"id": 1, "x0": 0, "x1": 20},
+        {"id": 2, "x0": 20, "x1": 40},
+        {"id": 3, "x0": 40, "x1": 60},
+        {"id": 4, "x0": 60, "x1": 80},
+        {"id": 5, "x0": 80, "x1": 100},
+    ]
+    atoms = [
+        _atom("顶层", 45, 0, 55, 10, 1),
+        _atom("同层标题", 45, 0, 55, 10, 2),
+        _atom("组一", 20, 20, 40, 30, 3),
+        _atom("组二", 60, 20, 80, 30, 4),
+        _atom("叶一", 5, 40, 15, 50, 5),
+        _atom("叶二", 25, 40, 35, 50, 6),
+        _atom("叶三", 45, 40, 55, 50, 7),
+        _atom("叶四", 65, 40, 75, 50, 8),
+        _atom("终端", 85, 20, 95, 30, 9),
+    ]
+
+    annotate_columns(atoms, bands, header_cutoff=55)
+
+    assert atoms[0]["colspan"] == 1
+
+
+def test_complete_child_group_rejects_peer_that_overlaps_target_band():
+    bands = [
+        {"id": 1, "x0": 0, "x1": 20},
+        {"id": 2, "x0": 20, "x1": 40},
+        {"id": 3, "x0": 40, "x1": 60},
+        {"id": 4, "x0": 60, "x1": 80},
+        {"id": 5, "x0": 80, "x1": 100},
+        {"id": 6, "x0": 100, "x1": 120},
+    ]
+    parent = _atom("顶层", 65, 0, 75, 10, 1)
+    peer = _atom("边界文字", 0, 0, 30, 10, 2)
+    child_one = _atom("组一", 25, 20, 35, 30, 3)
+    child_two = _atom("组二", 65, 20, 75, 30, 4)
+    terminal = _atom("终端", 105, 20, 115, 30, 5)
+
+    inferred = _infer_complete_child_group_span(
+        parent,
+        [parent, peer, child_one, child_two, terminal],
+        bands,
+        header_cutoff=35,
+        inferred_spans={id(child_one): [2, 3], id(child_two): [4, 5]},
+    )
+
+    assert inferred == []
 
 
 def test_annotate_columns_does_not_force_pair_an_incomplete_leaf_tier():

@@ -425,6 +425,29 @@ def test_build_cells_synthesizes_missing_top_and_bottom_edges():
     assert sorted({cell.bbox.y1 for cell in cells}) == [10.0, 20.0, 30.0]
 
 
+def test_build_cells_recovers_repeated_horizontal_start_as_missing_leading_boundary():
+    extractor = WiredTableExtractor()
+    cells = extractor._build_cells_for_region(
+        bbox=BBox(88.0, 0.0, 500.0, 100.0),
+        h_lines=[
+            (88.0, 0.0, 500.0, 0.0),
+            (120.0, 1.0, 500.0, 1.0),
+            (250.0, 20.0, 500.0, 20.0),
+            (120.0, 40.0, 500.0, 40.0),
+            (120.0, 60.0, 500.0, 60.0),
+            (120.0, 80.0, 500.0, 80.0),
+            (120.0, 100.0, 500.0, 100.0),
+        ],
+        v_lines=[
+            (250.0, 1.0, 250.0, 100.0),
+            (350.0, 1.0, 350.0, 100.0),
+            (430.0, 1.0, 430.0, 100.0),
+        ],
+    )
+
+    assert any(cell.bbox.x0 == 120.0 and cell.bbox.x1 == 250.0 for cell in cells)
+
+
 def test_build_cells_accepts_visually_touching_lines_with_small_coordinate_gap():
     extractor = WiredTableExtractor(line_tolerance=2.0)
     cells = extractor._build_cells_for_region(

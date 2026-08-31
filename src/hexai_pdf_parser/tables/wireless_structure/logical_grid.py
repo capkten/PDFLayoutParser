@@ -8,26 +8,12 @@ from hexai_pdf_parser.core.models import BBox
 
 
 def _row_components(row_count: int, cells: Sequence[dict[str, Any]]) -> list[list[int]]:
-    parent = list(range(row_count + 1))
-
-    def find(value: int) -> int:
-        while parent[value] != value:
-            parent[value] = parent[parent[value]]
-            value = parent[value]
-        return value
-
-    def join(left: int, right: int) -> None:
-        left_root, right_root = find(left), find(right)
-        if left_root != right_root:
-            parent[right_root] = left_root
-
-    for cell in cells:
-        for row in range(cell["row_start"] + 1, cell["row_end"] + 1):
-            join(cell["row_start"], row)
-
+    # A surviving cell start marks a structural row; only continuation-only
+    # physical rows may collapse into the preceding logical row.
+    row_starts = {int(cell["row_start"]) for cell in cells}
     groups: list[list[int]] = []
     for row in range(1, row_count + 1):
-        if groups and find(groups[-1][0]) == find(row):
+        if groups and row not in row_starts:
             groups[-1].append(row)
         else:
             groups.append([row])

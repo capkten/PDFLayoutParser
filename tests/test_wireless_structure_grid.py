@@ -70,6 +70,45 @@ def test_build_logical_grid_compresses_rows_covered_by_rowspan():
     assert logical_cells[0]["rowspan"] == 1
 
 
+def test_build_logical_grid_redivides_chained_multiline_header_rows():
+    physical_rows = [
+        {"id": 1, "y": 10},
+        {"id": 2, "y": 20},
+        {"id": 3, "y": 30},
+        {"id": 4, "y": 40},
+    ]
+    columns = [
+        {"id": column, "x0": column * 20, "x1": column * 20 + 10}
+        for column in range(1, 7)
+    ]
+    cells = [
+        _logical_cell("TITLE", "期末余额", 1, 1, 6, y=10),
+        _logical_cell("P2", "账面余额", 2, 2, y=20),
+        _logical_cell("L2", "金额", 3, 2, y=30),
+        _logical_cell("P4", "坏账准备", 2, 4, y=20),
+        _logical_cell("L4", "金额", 3, 4, y=30),
+        {
+            **_logical_cell("V6", "账面\n价值", 2, 6, y=20),
+            "row_end": 3,
+            "rowspan": 2,
+        },
+        {
+            **_logical_cell("R5", "预期信用损失\n率(%)", 3, 5, y=30),
+            "row_end": 4,
+            "rowspan": 2,
+        },
+    ]
+
+    rows, _, logical_cells = build_logical_grid(physical_rows, columns, cells)
+
+    assert [row["source_rows"] for row in rows] == [[1], [2], [3, 4]]
+    assert _has_occupancy_conflict(logical_cells) is False
+    book_value = next(cell for cell in logical_cells if cell["cell_id"] == "V6")
+    loss_rate = next(cell for cell in logical_cells if cell["cell_id"] == "R5")
+    assert (book_value["row_start"], book_value["row_end"], book_value["rowspan"]) == (2, 3, 2)
+    assert (loss_rate["row_start"], loss_rate["row_end"], loss_rate["rowspan"]) == (3, 3, 1)
+
+
 def test_materialize_empty_cells_fills_every_unoccupied_logical_slot():
     logical_rows = [{"id": 1, "source_rows": [1]}, {"id": 2, "source_rows": [2]}]
     physical_rows = [{"id": 1, "y": 10}, {"id": 2, "y": 30}]

@@ -569,6 +569,193 @@ def _infer_centered_parent_span(
     return []
 
 
+def _infer_wrapped_two_leaf_parent_spans(
+    header: Sequence[dict[str, Any]],
+    bands: Sequence[dict[str, Any]],
+    assignment_bands: Sequence[dict[str, Any]],
+    parent_level: float,
+    parents: Sequence[dict[str, Any]],
+) -> dict[int, list[int]]:
+    """Pair parents when a child label is split across vertical header atoms.
+
+    A wrapped child can occupy two nearby y-levels, so requiring all child
+    labels to share one exact level makes an otherwise complete 1:2 tier look
+    incomplete.  Grouping evidence by already inferred leaf column keeps this
+    fallback geometric and leaves the final text merge to the normal cell
+    pipeline.
+    """
+    if not parents:
+        return {}
+
+    atoms_by_column: dict[int, list[dict[str, Any]]] = {}
+    for atom in header:
+        if _center_y(atom) <= parent_level + 2.4:
+            continue
+        if _is_structural_header_atom(atom) or _is_note_reference_atom(atom):
+            continue
+        column = assign_column(atom, assignment_bands)
+        if column is not None:
+            atoms_by_column.setdefault(int(column), []).append(atom)
+
+    available_columns = sorted(atoms_by_column)
+    expected_leaf_count = len(parents) * 2
+    band_by_id = {int(band["id"]): band for band in bands}
+    assignment_ids = {int(band["id"]) for band in assignment_bands}
+    if expected_leaf_count < 2:
+        return {}
+
+    parent_columns = [assign_column(parent, assignment_bands) for parent in parents]
+    if any(column is None for column in parent_columns):
+        return {}
+
+    for start in range(len(available_columns) - expected_leaf_count + 1):
+        candidate = available_columns[start : start + expected_leaf_count]
+        if candidate != list(range(candidate[0], candidate[-1] + 1)):
+            continue
+        if not all(column in assignment_ids and column in band_by_id for column in candidate):
+            continue
+
+        pairs = [candidate[index : index + 2] for index in range(0, len(candidate), 2)]
+        if any(parent_column not in pair for parent_column, pair in zip(parent_columns, pairs)):
+            continue
+
+        inferred: dict[int, list[int]] = {}
+        for parent, pair in zip(parents, pairs):
+            first = band_by_id[pair[0]]
+            last = band_by_id[pair[-1]]
+            group_width = last["x1"] - first["x0"]
+            group_center = (first["x0"] + last["x1"]) / 2.0
+            parent_center = (parent["bbox"][0] + parent["bbox"][2]) / 2.0
+            if abs(group_center - parent_center) > max(4.0, group_width * 0.10):
+                break
+            if any(not atoms_by_column.get(column) for column in pair):
+                break
+            inferred[id(parent)] = pair
+        else:
+            return inferred
+    return {}
+
+
+def _infer_complete_child_group_span(
+    atom: dict[str, Any],
+    atoms: Sequence[dict[str, Any]],
+    assignment_bands: Sequence[dict[str, Any]],
+    header_cutoff: float,
+    inferred_spans: dict[int, list[int]],
+) -> list[int]:
+    """Infer a wide parent from complete mixed child coverage.
+
+    A child is not required to have a colspan: a terminal header such as a
+    vertically centred ``账面价值`` still contributes one column.  Known
+    grouped children are kept as units, while uncovered single-column header
+    evidence becomes terminal units.  Only complete, contiguous unit runs
+    whose overall centre uniquely matches the parent are accepted.
+    """
+    if _is_temporal_leaf_header(atom) or _is_structural_header_atom(atom):
+        return []
+
+    parent_center_y = _center_y(atom)
+    lower = [
+        item
+        for item in atoms
+        if parent_center_y + 4.0 < _center_y(item) <= header_cutoff
+        and not _is_structural_header_atom(item)
+        and not _is_note_reference_atom(item)
+    ]
+    if len(lower) < 2:
+        return []
+
+    band_by_id = {int(band["id"]): band for band in assignment_bands}
+    parent_column = assign_column(atom, assignment_bands)
+    if parent_column is None:
+        return []
+
+    grouped_units: list[list[int]] = []
+    grouped_columns: set[int] = set()
+    for child in lower:
+        span = sorted({int(column) for column in inferred_spans.get(id(child), [])})
+        if not span or span != list(range(span[0], span[-1] + 1)):
+            continue
+        if not all(column in band_by_id for column in span):
+            continue
+        grouped_units.append(span)
+        grouped_columns.update(span)
+
+    ordered_grouped_units = sorted(grouped_units, key=lambda span: span[0])
+    if not ordered_grouped_units:
+        return []
+    if any(
+        right[0] <= left[-1]
+        for left, right in zip(ordered_grouped_units, ordered_grouped_units[1:])
+    ):
+        return []
+
+    terminal_columns: set[int] = set()
+    for child in lower:
+        column = assign_column(child, assignment_bands)
+        if column is not None and column not in grouped_columns:
+            terminal_columns.add(int(column))
+    units = [*ordered_grouped_units, *([column] for column in sorted(terminal_columns))]
+    units.sort(key=lambda span: span[0])
+    if len(units) < 2 or any(
+        right[0] <= left[-1] for left, right in zip(units, units[1:])
+    ):
+        return []
+
+    viable: list[tuple[float, int, list[int]]] = []
+    for start in range(len(units)):
+        end = start
+        while end < len(units):
+            if end > start and units[end][0] != units[end - 1][-1] + 1:
+                break
+            if end - start + 1 >= 2:
+                span = list(range(units[start][0], units[end][-1] + 1))
+                if len(span) >= 3 and parent_column in span:
+                    first = band_by_id[span[0]]
+                    last = band_by_id[span[-1]]
+                    group_width = last["x1"] - first["x0"]
+                    group_center = (first["x0"] + last["x1"]) / 2.0
+                    parent_center = (atom["bbox"][0] + atom["bbox"][2]) / 2.0
+                    error = abs(group_center - parent_center)
+                    if error > max(4.0, group_width * 0.10):
+                        end += 1
+                        continue
+                    occupied_by_peer = False
+                    for peer in atoms:
+                        if peer is atom or abs(_center_y(peer) - parent_center_y) > 2.4:
+                            continue
+                        if _is_note_reference_atom(peer):
+                            continue
+                        peer_span = sorted(
+                            {
+                                int(column)
+                                for column in inferred_spans.get(id(peer), [])
+                            }
+                        )
+                        if not peer_span:
+                            peer_span = [
+                                int(band["id"])
+                                for band in assignment_bands
+                                if _meaningful_header_band_overlap(peer, band)
+                            ]
+                        if not peer_span:
+                            peer_column = assign_column(peer, assignment_bands)
+                            peer_span = [] if peer_column is None else [peer_column]
+                        if set(span).intersection(peer_span):
+                            occupied_by_peer = True
+                            break
+                    if not occupied_by_peer:
+                        viable.append((error, -len(span), span))
+            end += 1
+
+    if not viable:
+        return []
+    viable.sort(key=lambda item: (item[0], item[1]))
+    if len(viable) > 1 and viable[1][0] - viable[0][0] <= 4.0:
+        return []
+    return viable[0][2]
+
+
 def _infer_two_leaf_parent_spans(
     atoms: Sequence[dict[str, Any]],
     bands: Sequence[dict[str, Any]],
@@ -602,6 +789,7 @@ def _infer_two_leaf_parent_spans(
         ):
             continue
 
+        tier_inferred = False
         for leaf_level in levels[parent_index + 1 :]:
             leaves = [
                 atom
@@ -646,7 +834,18 @@ def _infer_two_leaf_parent_spans(
                 tier_mapping[id(parent)] = pair
             else:
                 inferred.update(tier_mapping)
+                tier_inferred = True
                 break
+        if not tier_inferred:
+            inferred.update(
+                _infer_wrapped_two_leaf_parent_spans(
+                    header,
+                    bands,
+                    assignment_bands,
+                    parent_level,
+                    parents,
+                )
+            )
     return inferred
 
 
@@ -743,6 +942,14 @@ def annotate_columns(atoms: Sequence[dict[str, Any]], bands: Sequence[dict[str, 
         if not inferred_parent_span and header_cutoff is not None:
             inferred_parent_span = _infer_centered_parent_span(
                 atom, atoms, bands, header_cutoff
+            )
+        if not inferred_parent_span and header_cutoff is not None:
+            inferred_parent_span = _infer_complete_child_group_span(
+                atom,
+                atoms,
+                assignment_bands,
+                header_cutoff,
+                two_leaf_parent_spans,
             )
         if inferred_parent_span:
             intersecting = inferred_parent_span
