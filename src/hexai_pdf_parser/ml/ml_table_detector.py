@@ -161,49 +161,28 @@ class MLTableDetector:
         if not words:
             return bbox
 
-        x0, y0, x1, y1 = bbox.x0, bbox.y0, bbox.x1, bbox.y1
+        original_x0, original_y0 = bbox.x0, bbox.y0
+        original_x1, original_y1 = bbox.x1, bbox.y1
+        x0, y0, x1, y1 = original_x0, original_y0, original_x1, original_y1
 
         p_x0, p_y0, p_x1, p_y1 = (
             (float(page.rect.x0), float(page.rect.y0), float(page.rect.x1), float(page.rect.y1))
             if page is not None else (-1e9, -1e9, 1e9, 1e9)
         )
 
-        if page is not None:
-            try:
-                drawings = page.get_drawings()
-                for d in drawings:
-                    r = d.get("rect")
-                    if r:
-                        rx0 = max(p_x0, float(r.x0))
-                        ry0 = max(p_y0, float(r.y0))
-                        rx1 = min(p_x1, float(r.x1))
-                        ry1 = min(p_y1, float(r.y1))
-                        ix0 = max(x0, rx0)
-                        iy0 = max(y0, ry0)
-                        ix1 = min(x1, rx1)
-                        iy1 = min(y1, ry1)
-                        if ix1 > ix0 and iy1 > iy0:
-                            x0 = min(x0, rx0)
-                            y0 = min(y0, ry0)
-                            x1 = max(x1, rx1)
-                            y1 = max(y1, ry1)
-            except Exception:
-                pass
-
-        expanded = True
-        while expanded:
-            expanded = False
-            for w in words:
-                wx0, wy0, wx1, wy1 = w[0], w[1], w[2], w[3]
-                # Direct intersection/overlap only
-                if wx1 > x0 and wx0 < x1 and wy1 > y0 and wy0 < y1:
-                    new_x0 = min(x0, wx0)
-                    new_y0 = min(y0, wy0)
-                    new_x1 = max(x1, wx1)
-                    new_y1 = max(y1, wy1)
-                    if new_x0 < x0 or new_y0 < y0 or new_x1 > x1 or new_y1 > y1:
-                        x0, y0, x1, y1 = new_x0, new_y0, new_x1, new_y1
-                        expanded = True
+        for w in words:
+            wx0, wy0, wx1, wy1 = w[0], w[1], w[2], w[3]
+            # Only words intersecting the original detection bbox may expand it.
+            if (
+                wx1 > original_x0
+                and wx0 < original_x1
+                and wy1 > original_y0
+                and wy0 < original_y1
+            ):
+                x0 = min(x0, wx0)
+                y0 = min(y0, wy0)
+                x1 = max(x1, wx1)
+                y1 = max(y1, wy1)
 
         if page is not None:
             x0 = max(p_x0, min(x0, p_x1))

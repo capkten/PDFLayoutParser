@@ -55,6 +55,12 @@ class WiredTableExtractor(BaseTableExtractor):
 
             cells = self._assign_text_to_line_cells(cells, page)
             cells = self._merge_oversegmented_line_columns(cells)
+            if (
+                len(cells) == 1
+                and cells[0].rowspan == 1
+                and cells[0].colspan == 1
+            ):
+                continue
 
             row_count = max((c.row_index for c in cells), default=-1) + 1
             col_count = max((c.col_index for c in cells), default=-1) + 1
@@ -90,10 +96,32 @@ class WiredTableExtractor(BaseTableExtractor):
         except Exception:
             return [], []
 
+        background_color = self._estimate_page_background_color(page)
+        type3_char_regions = self._get_type3_character_regions(page)
         for d in drawings:
-            # Physical lines must have an explicit stroke border color (color is not None)
-            if d.get("color") is None:
+            if self._drawing_is_inside_character_region(d, type3_char_regions):
                 continue
+            # Ignore rules that are transparent or visually identical to the
+            # page background. Keep visible black/colored rules, including
+            # dashed vector rules used by real financial tables.
+            opacity = d.get("opacity")
+            if opacity is not None:
+                try:
+                    if float(opacity) <= 0.0:
+                        continue
+                except (TypeError, ValueError):
+                    pass
+            stroke_color = d.get("color")
+            if stroke_color is not None and self._colors_are_similar(
+                stroke_color, background_color
+            ):
+                continue
+            if d.get("color") is None:
+                fill_color = d.get("fill")
+                if fill_color is None or self._colors_are_similar(
+                    fill_color, background_color
+                ):
+                    continue
 
             items = d.get("items", [])
             for item in items:
@@ -132,7 +160,203 @@ class WiredTableExtractor(BaseTableExtractor):
                     elif w <= self.line_tolerance and h >= 3.0:
                         v_lines.append(((x0 + x1) / 2.0, y0, (x0 + x1) / 2.0, y1))
 
+        image_h, image_v = self._extract_lines_from_tiled_images(
+            page, clip_bbox=clip_bbox
+        )
+        h_lines.extend(image_h)
+        v_lines.extend(image_v)
+
         return h_lines, v_lines
+
+    @staticmethod
+    def _get_type3_character_regions(page: fitz.Page) -> List[BBox]:
+        """Rebuild local visual boxes for Type3 glyphs with broken font metrics."""
+        try:
+            type3_fonts = {
+                str(name)
+                for font in page.get_fonts(full=True)
+                if len(font) >= 5 and str(font[2]).lower() == "type3"
+                for name in (font[3], font[4])
+                if name
+            }
+            raw = page.get_text("rawdict")
+        except (AttributeError, KeyError, TypeError, ValueError):
+            return []
+        if not type3_fonts:
+            return []
+
+        regions: List[BBox] = []
+        for block in raw.get("blocks", []):
+            for line in block.get("lines", []):
+                direction = line.get("dir", (1.0, 0.0))
+                if abs(float(direction[0])) < abs(float(direction[1])):
+                    continue
+                for span in line.get("spans", []):
+                    if str(span.get("font", "")) not in type3_fonts:
+                        continue
+                    try:
+                        size = float(span.get("size", 0.0))
+                    except (TypeError, ValueError):
+                        continue
+                    if size <= 0.0:
+                        continue
+                    chars = span.get("chars", [])
+                    for index, char in enumerate(chars):
+                        try:
+                            origin_x, origin_y = (float(value) for value in char["origin"])
+                        except (KeyError, TypeError, ValueError):
+                            continue
+                        advance = size
+                        if index + 1 < len(chars):
+                            try:
+                                next_x = float(chars[index + 1]["origin"][0])
+                                candidate = next_x - origin_x
+                                if 0.2 * size <= candidate <= 3.0 * size:
+                                    advance = candidate
+                            except (KeyError, TypeError, ValueError):
+                                pass
+                        regions.append(
+                            BBox(
+                                origin_x,
+                                origin_y - 1.15 * size,
+                                origin_x + advance,
+                                origin_y + 0.25 * size,
+                            )
+                        )
+        return regions
+
+    @staticmethod
+    def _drawing_is_inside_character_region(
+        drawing: dict, regions: List[BBox]
+    ) -> bool:
+        rect = drawing.get("rect")
+        if rect is None:
+            return False
+        try:
+            x0, y0, x1, y1 = (
+                float(rect.x0),
+                float(rect.y0),
+                float(rect.x1),
+                float(rect.y1),
+            )
+        except (AttributeError, TypeError, ValueError):
+            return False
+        tolerance = 1.0
+        return any(
+            region.x0 - tolerance <= x0
+            and region.y0 - tolerance <= y0
+            and x1 <= region.x1 + tolerance
+            and y1 <= region.y1 + tolerance
+            for region in regions
+        )
+
+    def _extract_lines_from_tiled_images(
+        self, page: fitz.Page, clip_bbox: Optional[BBox] = None
+    ) -> Tuple[List[Tuple[float, float, float, float]], List[Tuple[float, float, float, float]]]:
+        """Recover rules encoded as contiguous one/two-pixel image tiles."""
+        try:
+            image_infos = page.get_image_info(xrefs=True)
+        except Exception:
+            return [], []
+
+        tiles: list[tuple[float, float, float, float]] = []
+        for info in image_infos:
+            try:
+                x0, y0, x1, y1 = (float(value) for value in info["bbox"])
+                width = float(info.get("width", x1 - x0))
+                height = float(info.get("height", y1 - y0))
+            except (KeyError, TypeError, ValueError):
+                continue
+            if width > 2.0 or height > 2.0 or x1 <= x0 or y1 <= y0:
+                continue
+            if clip_bbox and (
+                x1 < clip_bbox.x0 - 2.0
+                or x0 > clip_bbox.x1 + 2.0
+                or y1 < clip_bbox.y0 - 2.0
+                or y0 > clip_bbox.y1 + 2.0
+            ):
+                continue
+            tiles.append((x0, y0, x1, y1))
+
+        horizontal: list[tuple[float, float, float, float]] = []
+        vertical: list[tuple[float, float, float, float]] = []
+
+        def add_runs(groups, horizontal_run: bool) -> None:
+            for key, segments in groups.items():
+                segments.sort()
+                start, end = segments[0]
+                count = 1
+                for seg_start, seg_end in segments[1:]:
+                    if seg_start <= end + 1.5:
+                        end = max(end, seg_end)
+                        count += 1
+                    else:
+                        if count >= 10 and end - start >= 20.0:
+                            if horizontal_run:
+                                horizontal.append((start, key, end, key))
+                            else:
+                                vertical.append((key, start, key, end))
+                        start, end, count = seg_start, seg_end, 1
+                if count >= 10 and end - start >= 20.0:
+                    if horizontal_run:
+                        horizontal.append((start, key, end, key))
+                    else:
+                        vertical.append((key, start, key, end))
+
+        horizontal_groups: defaultdict[float, list[tuple[float, float]]] = defaultdict(list)
+        vertical_groups: defaultdict[float, list[tuple[float, float]]] = defaultdict(list)
+        for x0, y0, x1, y1 in tiles:
+            horizontal_groups[round((y0 + y1) / 2.0, 1)].append((x0, x1))
+            vertical_groups[round((x0 + x1) / 2.0, 1)].append((y0, y1))
+        add_runs(horizontal_groups, True)
+        add_runs(vertical_groups, False)
+        return horizontal, vertical
+
+    @staticmethod
+    def _estimate_page_background_color(page: fitz.Page) -> Tuple[float, float, float]:
+        fallback = (1.0, 1.0, 1.0)
+        try:
+            pix = page.get_pixmap(
+                matrix=fitz.Matrix(0.1, 0.1), colorspace=fitz.csRGB, alpha=False
+            )
+            if pix.width <= 0 or pix.height <= 0 or pix.n < 3:
+                return fallback
+
+            samples = pix.samples
+            stride = getattr(pix, "stride", pix.width * pix.n)
+            colors = []
+            for y_ratio in (0.05, 0.5, 0.95):
+                y = min(pix.height - 1, int((pix.height - 1) * y_ratio))
+                for x_ratio in (0.05, 0.5, 0.95):
+                    x = min(pix.width - 1, int((pix.width - 1) * x_ratio))
+                    offset = y * stride + x * pix.n
+                    colors.append(
+                        tuple(
+                            min(255, ((samples[offset + channel] + 8) // 16) * 16)
+                            for channel in range(3)
+                        )
+                    )
+
+            dominant = max(colors, key=colors.count)
+            return tuple(channel / 255.0 for channel in dominant)
+        except Exception:
+            return fallback
+
+    @staticmethod
+    def _colors_are_similar(
+        color: object,
+        background: Tuple[float, float, float],
+        tolerance: float = 0.04,
+    ) -> bool:
+        if not isinstance(color, (tuple, list)) or len(color) < 3:
+            return False
+        try:
+            return max(
+                abs(float(color[channel]) - background[channel])
+                for channel in range(3)
+            ) <= tolerance
+        except (TypeError, ValueError):
+            return False
 
     def _merge_h_lines(
         self, lines: List[Tuple[float, float, float, float]]
@@ -324,7 +548,32 @@ class WiredTableExtractor(BaseTableExtractor):
         h_lines: List[Tuple[float, float, float, float]],
         v_lines: List[Tuple[float, float, float, float]],
     ) -> List[Cell]:
-        h_ys = sorted(set(round(line[1], 1) for line in h_lines))
+        existing_v_xs = [line[0] for line in v_lines]
+        if existing_v_xs:
+            start_groups: Dict[float, List[Tuple[float, float, float, float]]] = defaultdict(list)
+            for line in h_lines:
+                start_groups[round(line[0], 1)].append(line)
+            left_v_x = min(existing_v_xs)
+            for start_x, supporting_lines in start_groups.items():
+                if (
+                    len(supporting_lines) < 3
+                    or start_x <= bbox.x0 + self.line_tolerance
+                    or start_x >= left_v_x - self.line_tolerance
+                ):
+                    continue
+                v_lines = [
+                    *v_lines,
+                    (start_x, bbox.y0, start_x, bbox.y1),
+                ]
+                break
+
+        h_ys = sorted(
+            {
+                round(bbox.y0, 1),
+                round(bbox.y1, 1),
+                *(round(line[1], 1) for line in h_lines),
+            }
+        )
         v_xs = sorted(
             {
                 round(bbox.x0, 1),
@@ -339,7 +588,12 @@ class WiredTableExtractor(BaseTableExtractor):
         rows = len(h_ys) - 1
         cols = len(v_xs) - 1
         tol = self.line_tolerance
+        effective_h_lines = list(h_lines)
         effective_v_lines = list(v_lines)
+        if not any(abs(line[1] - bbox.y0) <= tol for line in h_lines):
+            effective_h_lines.append((bbox.x0, bbox.y0, bbox.x1, bbox.y0))
+        if not any(abs(line[1] - bbox.y1) <= tol for line in h_lines):
+            effective_h_lines.append((bbox.x0, bbox.y1, bbox.x1, bbox.y1))
         if not any(abs(line[0] - bbox.x0) <= tol for line in v_lines):
             effective_v_lines.append((bbox.x0, bbox.y0, bbox.x0, bbox.y1))
         if not any(abs(line[0] - bbox.x1) <= tol for line in v_lines):
@@ -347,7 +601,7 @@ class WiredTableExtractor(BaseTableExtractor):
 
         def has_h_segment(y: float, x0: float, x1: float) -> bool:
             span = x1 - x0
-            for lx0, ly, lx1, _ in h_lines:
+            for lx0, ly, lx1, _ in effective_h_lines:
                 if abs(ly - y) > tol:
                     continue
                 overlap = min(lx1, x1 + tol) - max(lx0, x0 - tol)
@@ -550,8 +804,14 @@ class WiredTableExtractor(BaseTableExtractor):
 
         pruned = []
         for c in cells:
-            if ci_map.get(c.col_index, -1) != -1:
-                c.col_index = ci_map[c.col_index]
-                pruned.append(c)
+            new_start = ci_map.get(c.col_index, -1)
+            if new_start == -1:
+                continue
+
+            original_span = range(c.col_index, c.col_index + max(1, c.colspan))
+            kept_span = sum(1 for old_ci in original_span if ci_map.get(old_ci, -1) != -1)
+            c.col_index = new_start
+            c.colspan = max(1, kept_span)
+            pruned.append(c)
 
         return pruned

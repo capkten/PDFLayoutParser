@@ -12,6 +12,7 @@ import fitz
 from hexai_pdf_parser.core.models import BBox, Cell, Table
 from hexai_pdf_parser.tables.base_table_extractor import BaseTableExtractor
 from hexai_pdf_parser.extractors.language_detector import detect_page_language
+from hexai_pdf_parser.tables.wireless_structure.recoverer import recover_cells_from_region
 
 
 # Color constants for English zebra row backgrounds
@@ -233,9 +234,32 @@ class WirelessTableExtractor(BaseTableExtractor):
             if general_tables:
                 return general_tables
 
-        # 3. 中文及其他文本对齐与表头引导无线表格提取 (如 850 页 Exhibit 表、A股三线表等)
+            # Preserve the historical English fallback when specialized
+            # English extraction finds no table.
+            if table_bbox is not None:
+                row_count, col_count, cells = self.extract_cells_from_region(page, table_bbox)
+                if row_count >= 1 and col_count >= 1 and cells:
+                    conf_score = round(confidence, 4) if confidence is not None else 0.85
+                    return [
+                        Table(
+                            bbox=table_bbox,
+                            rows=row_count,
+                            cols=col_count,
+                            cells=cells,
+                            confidence=conf_score,
+                            source="text_alignment",
+                        )
+                    ]
+            return []
+
+        # 3. 中文/混合页面走新的 native-span 结构恢复逻辑。
         if table_bbox is not None:
-            row_count, col_count, cells = self.extract_cells_from_region(page, table_bbox)
+            if page_language in {"zh", "mixed"}:
+                row_count, col_count, cells = recover_cells_from_region(page, table_bbox)
+                table_source = "wireless_span_recovery"
+            else:
+                row_count, col_count, cells = self.extract_cells_from_region(page, table_bbox)
+                table_source = "text_alignment"
             if row_count >= 1 and col_count >= 1 and cells:
                 conf_score = round(confidence, 4) if confidence is not None else 0.85
                 return [
@@ -245,7 +269,7 @@ class WirelessTableExtractor(BaseTableExtractor):
                         cols=col_count,
                         cells=cells,
                         confidence=conf_score,
-                        source="text_alignment",
+                        source=table_source,
                     )
                 ]
 
