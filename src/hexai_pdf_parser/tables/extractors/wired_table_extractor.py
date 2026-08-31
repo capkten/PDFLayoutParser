@@ -55,6 +55,12 @@ class WiredTableExtractor(BaseTableExtractor):
 
             cells = self._assign_text_to_line_cells(cells, page)
             cells = self._merge_oversegmented_line_columns(cells)
+            if (
+                len(cells) == 1
+                and cells[0].rowspan == 1
+                and cells[0].colspan == 1
+            ):
+                continue
 
             row_count = max((c.row_index for c in cells), default=-1) + 1
             col_count = max((c.col_index for c in cells), default=-1) + 1

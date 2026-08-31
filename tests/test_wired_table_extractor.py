@@ -319,6 +319,69 @@ def test_find_table_regions_accepts_one_internal_vertical_line():
     assert len(region_v) == 1
 
 
+def test_extract_rejects_single_cell_wire_frame():
+    rectangle = fitz.Rect(10.0, 20.0, 110.0, 50.0)
+    left_edge = 10.4
+    right_edge = 109.6
+    page = SimpleNamespace(
+        get_drawings=lambda: [
+            {
+                "color": (0.0, 0.0, 0.0),
+                "fill": None,
+                "items": [
+                    ("l", fitz.Point(rectangle.x0, rectangle.y0), fitz.Point(rectangle.x1, rectangle.y0)),
+                    ("l", fitz.Point(rectangle.x0, rectangle.y1), fitz.Point(rectangle.x1, rectangle.y1)),
+                    ("l", fitz.Point(left_edge, rectangle.y0), fitz.Point(left_edge, rectangle.y1)),
+                    ("l", fitz.Point(right_edge, rectangle.y0), fitz.Point(right_edge, rectangle.y1)),
+                ],
+            }
+        ],
+        get_fonts=lambda **_kwargs: [],
+        get_image_info=lambda **_kwargs: [],
+        get_text=lambda kind: (
+            [(25.0, 28.0, 45.0, 38.0, "value", 0, 0, 0)]
+            if kind == "words"
+            else {"blocks": []}
+        ),
+    )
+
+    assert WiredTableExtractor().extract(page) == []
+
+
+def test_extract_keeps_multi_cell_wire_table():
+    rectangle = fitz.Rect(10.0, 20.0, 110.0, 50.0)
+    page = SimpleNamespace(
+        get_drawings=lambda: [
+            {
+                "color": (0.0, 0.0, 0.0),
+                "fill": None,
+                "items": [
+                    ("l", fitz.Point(rectangle.x0, rectangle.y0), fitz.Point(rectangle.x1, rectangle.y0)),
+                    ("l", fitz.Point(rectangle.x0, rectangle.y1), fitz.Point(rectangle.x1, rectangle.y1)),
+                    ("l", fitz.Point(rectangle.x0, rectangle.y0), fitz.Point(rectangle.x0, rectangle.y1)),
+                    ("l", fitz.Point(rectangle.x1, rectangle.y0), fitz.Point(rectangle.x1, rectangle.y1)),
+                    ("l", fitz.Point(60.0, 20.0), fitz.Point(60.0, 50.0)),
+                ],
+            }
+        ],
+        get_fonts=lambda **_kwargs: [],
+        get_image_info=lambda **_kwargs: [],
+        get_text=lambda kind: (
+            [
+                (20.0, 28.0, 35.0, 38.0, "left", 0, 0, 0),
+                (75.0, 28.0, 90.0, 38.0, "right", 0, 0, 0),
+            ]
+            if kind == "words"
+            else {"blocks": []}
+        ),
+    )
+
+    tables = WiredTableExtractor().extract(page)
+
+    assert len(tables) == 1
+    assert (tables[0].rows, tables[0].cols) == (1, 2)
+
+
 def test_build_cells_respects_partial_line_segments_and_merges_missing_edges():
     extractor = WiredTableExtractor()
     cells = extractor._build_cells_for_region(
