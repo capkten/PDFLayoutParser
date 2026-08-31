@@ -1460,6 +1460,143 @@ class TestTableExtractor:
         finally:
             doc.close()
 
+    def test_zebra_header_promotes_centered_group_label_to_child_band(self):
+        from hexai_pdf_parser.tables.extractors.wireless_table_extractor import _RowData
+
+        extractor = WirelessTableExtractor()
+        columns = [(0.0, 40.0), (40.0, 80.0), (80.0, 120.0), (120.0, 160.0)]
+        header = [
+            Cell("Average Balance for the", 0, 0, BBox(55.0, 0.0, 105.0, 10.0)),
+            Cell("Three Months", 1, 1, BBox(40.0, 10.0, 80.0, 20.0), colspan=1),
+            Cell("Six Months", 1, 2, BBox(80.0, 10.0, 120.0, 20.0), colspan=1),
+        ]
+        normalized, _ = extractor._normalize_zebra_headers(header, columns)
+        title = next(c for c in normalized if c.text.startswith("Average"))
+        assert (title.col_index, title.colspan) == (1, 2)
+
+    def test_detect_columns_preserves_percentage_column_between_currency_amounts(
+        self, monkeypatch
+    ):
+        extractor = WirelessTableExtractor()
+        base_columns = [
+            (32.0, 135.0),
+            (135.0, 193.8),
+            (193.8, 237.45),
+            (237.45, 263.3),
+            (263.3, 297.2),
+        ]
+        words = [
+            (157.5, 100.0, 161.6, 110.0, "$"),
+            (172.4, 100.0, 191.0, 110.0, "8,125"),
+            (209.2, 100.0, 217.5, 110.0, "64"),
+            (219.5, 100.0, 225.8, 110.0, "%"),
+            (227.6, 100.0, 231.6, 110.0, "$"),
+            (243.3, 100.0, 260.8, 110.0, "6,801"),
+            (278.7, 100.0, 286.6, 110.0, "63"),
+            (288.6, 100.0, 294.6, 110.0, "%"),
+        ]
+        monkeypatch.setattr(
+            extractor,
+            "_detect_columns_from_header_underlines",
+            lambda page, table_y0, table_bbox=None, words=None: base_columns,
+        )
+
+        columns = extractor._detect_columns(
+            words,
+            None,
+            object(),
+            table_y0=100.0,
+            table_bbox=BBox(32.0, 95.0, 297.2, 120.0),
+        )
+
+        assert len(columns) == 5
+        assert columns[1][1] == pytest.approx(193.8)
+        assert columns[2][1] == pytest.approx(227.6)
+        assert columns[3][0] == pytest.approx(227.6)
+
+    def test_currency_column_cleanup_merges_narrow_empty_boundary_slivers(self):
+        extractor = WirelessTableExtractor()
+        columns = [
+            (90.0, 300.5),
+            (300.5, 306.0),
+            (306.0, 370.3),
+            (370.3, 374.3),
+            (374.3, 444.1),
+            (444.1, 448.1),
+            (448.1, 518.0),
+            (518.0, 522.0),
+        ]
+        words = [
+            (90.0, 100.0, 120.0, 110.0, "Cash"),
+            (306.1, 100.0, 311.6, 110.0, "$"),
+            (344.2, 100.0, 368.9, 110.0, "3,958"),
+            (379.9, 100.0, 385.4, 110.0, "$"),
+            (418.0, 100.0, 442.7, 110.0, "7,643"),
+            (453.7, 100.0, 459.2, 110.0, "$"),
+            (491.9, 100.0, 516.6, 110.0, "7,468"),
+        ]
+
+        cleaned = extractor._merge_standalone_currency_columns(columns, words)
+
+        assert cleaned == [
+            (90.0, 300.5),
+            (300.5, 370.3),
+            (370.3, 444.1),
+            (444.1, 522.0),
+        ]
+
+    def test_currency_column_cleanup_recognizes_fused_currency_amount_tokens(self):
+        extractor = WirelessTableExtractor()
+        columns = [
+            (90.0, 300.5),
+            (300.5, 306.0),
+            (306.0, 370.3),
+            (370.3, 374.3),
+            (374.3, 444.1),
+        ]
+        words = [
+            (90.0, 100.0, 120.0, 110.0, "Cash"),
+            (306.1, 100.0, 368.9, 110.0, "$3,958"),
+            (379.9, 100.0, 385.4, 110.0, "$"),
+            (418.0, 100.0, 442.7, 110.0, "7,643"),
+        ]
+
+        cleaned = extractor._merge_standalone_currency_columns(columns, words)
+
+        assert cleaned == [
+            (90.0, 300.5),
+            (300.5, 370.3),
+            (370.3, 444.1),
+        ]
+
+    def test_currency_column_cleanup_merges_header_fragment_before_currency_amount(
+        self,
+    ):
+        extractor = WirelessTableExtractor()
+        columns = [
+            (90.0, 300.5),
+            (300.5, 306.0),
+            (306.0, 370.3),
+            (370.3, 374.3),
+            (374.3, 444.1),
+            (444.1, 448.1),
+            (448.1, 518.0),
+        ]
+        words = [
+            (446.2, 100.0, 456.2, 110.0, "31,"),
+            (453.7, 100.0, 459.2, 110.0, "$"),
+            (491.9, 100.0, 516.6, 110.0, "7,468"),
+        ]
+
+        cleaned = extractor._merge_standalone_currency_columns(columns, words)
+
+        assert cleaned == [
+            (90.0, 300.5),
+            (300.5, 370.3),
+            (370.3, 444.1),
+            (444.1, 518.0),
+        ]
+
     def test_extract_cells_from_region_extends_obvious_rowspan(
         self, tmp_dir
     ):

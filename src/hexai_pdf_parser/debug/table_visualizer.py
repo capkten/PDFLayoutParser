@@ -160,6 +160,10 @@ def draw_tables_on_page(
     blocks: Optional[Sequence[Any]] = None,
 ) -> None:
     """Draw table bounding boxes, tags, score badges, full cell grids, and natural reading order text blocks."""
+    try:
+        page.clean_contents()
+    except Exception:
+        pass
     shape = page.new_shape()
 
     # 1. Draw natural reading order text blocks outside tables (pure green box, no "Text" badge)

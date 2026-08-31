@@ -30,6 +30,115 @@ class _RowData:
 
 
 class WirelessTableExtractor(BaseTableExtractor):
+
+    @staticmethod
+    def _merge_standalone_currency_columns(columns: List[Tuple[float, float]], words: List[Tuple]) -> List[Tuple[float, float]]:
+        """Merge OCR-only ``$`` columns with the immediately following amount column."""
+        cols = list(columns)
+        i = 0
+        while i < len(cols):
+            x0, x1 = cols[i]
+            tokens = [str(w[4]).strip() for w in (words or []) if x0 <= w[0] < x1]
+            if (
+                i > 0
+                and x1 - x0 <= 8.0
+                and not any("%" in token for token in tokens)
+            ):
+                next_tokens = (
+                    [
+                        str(w[4]).strip()
+                        for w in (words or [])
+                        if cols[i + 1][0] <= w[0] < cols[i + 1][1]
+                    ]
+                    if i < len(cols) - 1
+                    else []
+                )
+                if any(
+                    token == "$" or re.match(r"^\$[\d(]", token)
+                    for token in next_tokens
+                ):
+                    cols[i] = (x0, cols[i + 1][1])
+                    del cols[i + 1]
+                    continue
+                if i == len(cols) - 1:
+                    cols[i - 1] = (cols[i - 1][0], x1)
+                    del cols[i]
+                    continue
+            if tokens and all(token == "$" for token in tokens):
+                if i == len(cols) - 1:
+                    i += 1
+                    continue
+                cols[i] = (x0, cols[i + 1][1])
+                del cols[i + 1]
+            elif i > 0 and tokens and not any(ch.isdigit() for token in tokens for ch in token):
+                next_tokens = [
+                    str(w[4]).strip()
+                    for w in (words or [])
+                    if i < len(cols) - 1 and cols[i + 1][0] <= w[0] < cols[i + 1][1]
+                ]
+                if i < len(cols) - 1 and any(ch.isdigit() for token in next_tokens for ch in token):
+                    cols[i] = (x0, cols[i + 1][1])
+                    del cols[i + 1]
+                    continue
+            else:
+                i += 1
+        return cols
+
+    @staticmethod
+    def _adjust_columns_for_currency(columns: List[Tuple[float, float]], words: List[Tuple]) -> List[Tuple[float, float]]:
+        """微调列分界线，确保位于各金额列左边缘的 '$' 完整归入右侧金额列，避免被划分到左侧列。"""
+        new_cols = list(columns)
+        for k in range(len(new_cols) - 1):
+            c_left = new_cols[k]
+            c_right = new_cols[k + 1]
+            bk = c_left[1]
+            misplaced_dollars = []
+            for w in words:
+                if w[4] == "$" and c_left[0] < (w[0] + w[2]) / 2.0 < bk:
+                    row_words_left = [lw for lw in words if abs((lw[1] + lw[3]) / 2.0 - (w[1] + w[3]) / 2.0) <= 3.0 and c_left[0] <= (lw[0] + lw[2]) / 2.0 < bk]
+                    if all(lw[2] <= w[0] + 0.1 for lw in row_words_left if lw != w):
+                        row_words_right = [rw for rw in words if abs((rw[1] + rw[3]) / 2.0 - (w[1] + w[3]) / 2.0) <= 3.0 and bk <= (rw[0] + rw[2]) / 2.0 <= c_right[1]]
+                        if any(any(ch.isdigit() for ch in rw[4]) for rw in row_words_right):
+                            misplaced_dollars.append(w)
+            if misplaced_dollars:
+                min_dollar_x0 = min(w[0] for w in misplaced_dollars)
+                left_words = [w for w in words if c_left[0] <= (w[0] + w[2]) / 2.0 < min_dollar_x0 and w not in misplaced_dollars and w[2] <= min_dollar_x0 + 0.5 and any(ch.isalnum() for ch in w[4])]
+                left_data_words = [w for w in left_words if any(ch.isdigit() for ch in w[4])]
+                max_left_x1 = max([w[2] for w in (left_data_words or left_words)], default=c_left[0])
+                new_bk = (max_left_x1 + min_dollar_x0) / 2.0
+                new_cols[k] = (c_left[0], new_bk)
+                new_cols[k + 1] = (new_bk, c_right[1])
+        return new_cols
+
+    @staticmethod
+    def _promote_grouped_header_cells(cells: List[Cell], columns: List[Tuple[float, float]], header_rows: int) -> None:
+        """Apply one topology-based colspan rule to all English wireless paths."""
+        if header_rows < 2:
+            return
+        for row_index in range(header_rows - 1):
+            upper = [c for c in cells if c.row_index == row_index and c.text.strip()]
+            lower = sorted([c for c in cells if c.row_index == row_index + 1 and c.text.strip()], key=lambda c: c.col_index)
+            if len(upper) != 1 or len(lower) < 2:
+                continue
+            title = upper[0]
+            center = (title.bbox.x0 + title.bbox.x1) / 2.0
+            data_lower = [c for c in lower if c.col_index > 0]
+            runs: List[List[Cell]] = []
+            for child in data_lower:
+                if not runs or child.col_index == runs[-1][-1].col_index + max(1, runs[-1][-1].colspan):
+                    if not runs:
+                        runs.append([])
+                    runs[-1].append(child)
+                else:
+                    runs.append([child])
+            run = next((r for r in runs if columns[r[0].col_index][0] <= center <= columns[r[-1].col_index + max(1, r[-1].colspan) - 1][1]), None)
+            if run is None or len(run) < 2:
+                continue
+            start = run[0].col_index
+            end = run[-1].col_index + max(1, run[-1].colspan)
+            title.col_index = start
+            title.colspan = end - start
+            title.bbox = BBox(columns[start][0], title.bbox.y0, columns[end - 1][1], title.bbox.y1)
     """Extracts wireless tables: zebra colored background bands, 3-line tables, and borderless text-alignment."""
 
     def __init__(
@@ -54,6 +163,62 @@ class WirelessTableExtractor(BaseTableExtractor):
             page_language = detect_page_language(page)
 
         if page_language == "en":
+            if table_bbox is None:
+                # 检查页面是否存在多个独立的无线表格水平线段簇（如左右双栏排版各自包含独立表格）
+                try:
+                    drawings = page.get_drawings() if page else []
+                    h_segs = []
+                    for d in drawings:
+                        for it in d.get("items", []):
+                            if it[0] in ("l", "re"):
+                                y = it[1].y if it[0] == "l" else it[1].y0
+                                w = abs(it[2].x - it[1].x) if it[0] == "l" else it[1].width
+                                h = abs(it[2].y - it[1].y) if it[0] == "l" else it[1].height
+                                x0 = min(it[1].x, it[2].x) if it[0] == "l" else it[1].x0
+                                x1 = max(it[1].x, it[2].x) if it[0] == "l" else it[1].x1
+                                if h <= 3.0 and w >= 20.0:
+                                    h_segs.append((x0, x1, y))
+                    if len(h_segs) >= 4:
+                        col_clusters = []
+                        for s in sorted(h_segs, key=lambda s: s[0]):
+                            matched_cl = None
+                            for cl in col_clusters:
+                                cl_x0 = min(item[0] for item in cl)
+                                cl_x1 = max(item[1] for item in cl)
+                                if max(cl_x0, s[0]) < min(cl_x1, s[1]) + 20.0:
+                                    matched_cl = cl
+                                    break
+                            if matched_cl is not None:
+                                matched_cl.append(s)
+                            else:
+                                col_clusters.append([s])
+                        if len(col_clusters) >= 2:
+                            split_tables = []
+                            page_words = page.get_text("words")
+                            for cl in col_clusters:
+                                if len(cl) >= 2:
+                                    cl_x0 = min(s[0] for s in cl) - 5.0
+                                    cl_x1 = max(s[1] for s in cl) + 5.0
+                                    cl_y0 = min(s[2] for s in cl)
+                                    cl_y1 = max(s[2] for s in cl)
+                                    related_words = [
+                                        w for w in page_words
+                                        if cl_x0 - 5.0 <= (w[0] + w[2]) / 2.0 <= cl_x1 + 5.0
+                                        and cl_y0 - 30.0 <= (w[1] + w[3]) / 2.0 <= cl_y1 + 5.0
+                                    ]
+                                    if related_words:
+                                        t_x0 = min(min(w[0] for w in related_words), cl_x0)
+                                        t_x1 = max(max(w[2] for w in related_words), cl_x1)
+                                        t_y0 = min(w[1] for w in related_words)
+                                        t_y1 = max(max(w[3] for w in related_words), cl_y1)
+                                        region_bbox = BBox(t_x0, t_y0, t_x1, t_y1)
+                                        t_res = self.extract_general_wireless(page, table_bbox=region_bbox, confidence=confidence)
+                                        split_tables.extend(t_res)
+                            if split_tables:
+                                return split_tables
+                except Exception:
+                    pass
+
             # 1. 斑马底色无线表格处理逻辑 (Zebra Background Wireless Tables)
             zebra_tables = self.extract_zebra(
                 page, table_bbox=table_bbox, confidence=confidence
@@ -266,53 +431,65 @@ class WirelessTableExtractor(BaseTableExtractor):
                         merged_sub_rows.append(cur_row)
                 sub_rows = merged_sub_rows
 
-            # 2. 列的确定: 优先使用项目统一的标准列检测器
-            columns = self._detect_columns(
-                words=sub_words,
-                data_rows=None,
+            # 2. 列的确定: 优先使用基于下划线几何与垂直空白投影的标准列检测器
+            columns = self._detect_columns_from_header_underlines(
                 page=page,
                 table_y0=sub_y0,
                 table_bbox=sub_bbox,
+                words=sub_words,
             )
+            if not columns or len(columns) < 2:
+                columns = self._detect_columns(
+                    words=sub_words,
+                    data_rows=None,
+                    page=page,
+                    table_y0=sub_y0,
+                    table_bbox=sub_bbox,
+                )
             if not columns or len(columns) < 2:
                 continue
 
             # 检查表头下划线并在各层表头无内横线时聚合单层表头 (Rule 2.2 & Rule 2.3)
-            sub_h = [l for l in h_lines if sub_bbox.x0 - 5.0 <= (l[1] + l[2]) / 2.0 <= sub_bbox.x1 + 5.0 and sub_y0 - 2.0 <= l[0] <= sub_y0 + 50.0]
+            sub_h = [
+                (l[1], l[2], l[0])
+                for l in h_lines
+                if sub_bbox.x0 - 5.0 <= (l[1] + l[2]) / 2.0 <= sub_bbox.x1 + 5.0
+                and sub_y0 - 2.0 <= l[0] <= sub_y1 + 2.0
+            ]
             sub_lines_by_y: Dict[float, List[Tuple[float, float, float]]] = defaultdict(list)
             for l in sub_h:
                 matched_y = None
                 for ey in sub_lines_by_y:
-                    if abs(l[0] - ey) <= 2.0:
+                    if abs(l[2] - ey) <= 2.0:
                         matched_y = ey
                         break
                 if matched_y is None:
-                    matched_y = l[0]
+                    matched_y = l[2]
                 sub_lines_by_y[matched_y].append(l)
 
             # 水平线段几何融合 (Rule: gap <= 3.0pt 视为同一条线)
             sub_fused_lines_by_y: Dict[float, List[Tuple[float, float, float]]] = {}
             for y, segs in sub_lines_by_y.items():
-                sorted_s = sorted(segs, key=lambda s: s[1])
+                sorted_s = sorted(segs, key=lambda s: s[0])
                 fused = [sorted_s[0]]
                 for s in sorted_s[1:]:
                     prev = fused[-1]
-                    if s[1] - prev[2] <= 3.0:
-                        fused[-1] = (prev[0], min(prev[1], s[1]), max(prev[2], s[2]))
+                    if s[0] - prev[1] <= 3.0:
+                        fused[-1] = (min(prev[0], s[0]), max(prev[1], s[1]), prev[2])
                     else:
                         fused.append(s)
                 sub_fused_lines_by_y[y] = fused
             raw_header_levels = sorted([
                 y for y, segs in sub_fused_lines_by_y.items()
-                if len(segs) >= 2 or max(s[2] for s in segs) - min(s[1] for s in segs) >= 25.0
+                if len(segs) >= 2 or max(s[1] for s in segs) - min(s[0] for s in segs) >= 25.0
             ])
             header_line_levels = []
             sub_w = sub_bbox.x1 - sub_bbox.x0
             for hy in raw_header_levels:
                 header_line_levels.append(hy)
                 segs = sub_fused_lines_by_y[hy]
-                min_x = min(s[1] for s in segs)
-                max_w = max(s[2] for s in segs) - min(s[1] for s in segs)
+                min_x = min(s[0] for s in segs)
+                max_w = max(s[1] for s in segs) - min(s[0] for s in segs)
                 if min_x <= sub_bbox.x0 + 15.0 and max_w >= sub_w * 0.75:
                     break
 
@@ -367,164 +544,226 @@ class WirelessTableExtractor(BaseTableExtractor):
             # 3. 单元格矩阵构建：纯几何按列投影与上层表头跨列构建
             grid_cells: Dict[Tuple[int, int], Cell] = {}
             for r_idx, rw in enumerate(sub_rows):
-                is_upper_header_tier = (r_idx < header_tier_count - 1) if header_tier_count > 1 else False
+                is_header_tier = (r_idx < header_tier_count)
 
-                col_words: Dict[int, List[Tuple]] = defaultdict(list)
-                for w in rw:
-                    w_mid = (w[0] + w[2]) / 2.0
-                    assigned_col = None
-                    for ci, (cx0, cx1) in enumerate(columns):
-                        if cx0 <= w_mid < cx1:
-                            assigned_col = ci
-                            break
-                    if assigned_col is None:
-                        assigned_col = min(range(len(columns)), key=lambda ci: abs(w_mid - (columns[ci][0] + columns[ci][1]) / 2.0))
-                    col_words[assigned_col].append(w)
+                if is_header_tier:
+                    # 表头行：纯几何局部跨列识别与单列多行词完整聚合（避免覆盖丢失）
+                    rw_y1 = max(w[3] for w in rw)
+                    closest_y_lines = defaultdict(list)
+                    for x0, x1, y in sub_h:
+                        if rw_y1 - 2.0 <= y <= rw_y1 + 10.0:
+                            matched_y = None
+                            for ey in closest_y_lines:
+                                if abs(y - ey) <= 1.5:
+                                    matched_y = ey
+                                    break
+                            if matched_y is None:
+                                matched_y = y
+                            closest_y_lines[matched_y].append((x0, x1))
 
-                # 上层表头（Tier 0 .. K-2）：按下划线融合段构建跨列大标题
-                if is_upper_header_tier:
-                    row_mid_y = sum((w[1] + w[3]) / 2.0 for w in rw) / len(rw)
-                    matched_line_level = None
-                    for hy in header_line_levels:
-                        if hy >= row_mid_y - 2.0:
-                            matched_line_level = hy
-                            break
-                    has_tier_seg = (matched_line_level is not None and matched_line_level < max(header_line_levels) - 2.0)
-                    tier_fused_segs = sub_fused_lines_by_y.get(matched_line_level, []) if has_tier_seg else []
+                    row_under_segs = []
+                    if closest_y_lines:
+                        best_y = min(closest_y_lines.keys())
+                        sorted_segs = sorted(closest_y_lines[best_y], key=lambda s: s[0])
+                        for s in sorted_segs:
+                            if not row_under_segs:
+                                row_under_segs.append(list(s))
+                            else:
+                                if s[0] - row_under_segs[-1][1] <= 3.0:
+                                    row_under_segs[-1][1] = max(row_under_segs[-1][1], s[1])
+                                else:
+                                    row_under_segs.append(list(s))
 
-                    if tier_fused_segs:
-                        for seg in tier_fused_segs:
-                            sx0, sx1 = seg[1], seg[2]
-                            matched_cols = []
-                            for ci in range(num_cols):
-                                cx0, cx1 = grid_x[ci], grid_x[ci + 1]
-                                col_w = cx1 - cx0
-                                ov = max(0.0, min(sx1, cx1) - max(sx0, cx0))
-                                if ov >= 8.0 or (col_w > 0 and ov / col_w >= 0.25):
-                                    matched_cols.append(ci)
-                            if not matched_cols:
-                                continue
+                    # 1. 优先识别专属局部跨列下划线
+                    spanning_cols = set()
+                    for seg in row_under_segs:
+                        if seg[0] <= grid_x[0] + 5.0 and seg[1] >= grid_x[-1] - 5.0:
+                            continue
+                        matched_cols = [
+                            ci for ci in range(num_cols)
+                            if seg[0] - 2.0 <= (grid_x[ci] + grid_x[ci + 1]) / 2.0 <= seg[1] + 2.0
+                        ]
+                        if 2 <= len(matched_cols) < num_cols:
                             sc = min(matched_cols)
                             ec = max(matched_cols)
-                            colspan = max(1, ec - sc + 1)
-
-                            seg_words = [w for w in rw if max(sx0 - 8.0, w[0]) < min(sx1 + 8.0, w[2])]
+                            colspan = ec - sc + 1
+                            seg_words = [
+                                w for w in rw
+                                if seg[0] - 5.0 <= (w[0] + w[2]) / 2.0 <= seg[1] + 5.0
+                            ]
                             if seg_words:
-                                # 按物理留白通道聚类为独立大标题簇
-                                word_clusters: List[List[Tuple]] = []
-                                for w in sorted(seg_words, key=lambda w: (round(w[1] / 3.0), w[0])):
-                                    matched_cl = None
-                                    for cl in word_clusters:
-                                        cl_x0 = min(cw[0] for cw in cl)
-                                        cl_x1 = max(cw[2] for cw in cl)
-                                        if not (w[2] < cl_x0 - 8.0 or w[0] > cl_x1 + 8.0):
-                                            matched_cl = cl
-                                            break
-                                    if matched_cl is not None:
-                                        matched_cl.append(w)
-                                    else:
-                                        word_clusters.append([w])
-
-                                for cl in word_clusters:
-                                    cl_x0 = min(w[0] for w in cl)
-                                    cl_x1 = max(w[2] for w in cl)
-                                    cl_matched_cols = []
-                                    for ci in range(num_cols):
-                                        cx0, cx1 = grid_x[ci], grid_x[ci + 1]
-                                        col_w = cx1 - cx0
-                                        ov = max(0.0, min(cl_x1, cx1) - max(cl_x0, cx0))
-                                        if ov >= 5.0 or (col_w > 0 and ov / col_w >= 0.25):
-                                            cl_matched_cols.append(ci)
-                                    if not cl_matched_cols:
-                                        cl_matched_cols = [min(range(num_cols), key=lambda ci: abs((cl_x0 + cl_x1) / 2.0 - (grid_x[ci] + grid_x[ci + 1]) / 2.0))]
-                                    cl_sc = min(cl_matched_cols)
-                                    cl_ec = max(cl_matched_cols)
-                                    cl_colspan = max(1, cl_ec - cl_sc + 1)
-                                    cl.sort(key=lambda w: (round(w[1] / 3.0), w[0]))
-                                    txt = " ".join(w[4] for w in cl).strip().replace("$ ", "$")
-                                    grid_cells[(r_idx, cl_sc)] = Cell(
+                                seg_rows = defaultdict(list)
+                                for w in seg_words:
+                                    my = round((w[1] + w[3]) / 2.0, 1)
+                                    matched_y = next((ey for ey in seg_rows if abs(my - ey) <= 3.0), None)
+                                    if matched_y is None:
+                                        matched_y = my
+                                    seg_rows[matched_y].append(w)
+                                is_single_phrase_per_row = True
+                                for ry, rwords in seg_rows.items():
+                                    rwords.sort(key=lambda w: w[0])
+                                    p_count = 0
+                                    cur_p = []
+                                    for w in rwords:
+                                        if not cur_p:
+                                            cur_p.append(w)
+                                            p_count = 1
+                                        else:
+                                            if w[0] - cur_p[-1][2] <= 5.0:
+                                                cur_p.append(w)
+                                            else:
+                                                p_count += 1
+                                                cur_p = [w]
+                                    if p_count >= 2:
+                                        is_single_phrase_per_row = False
+                                        break
+                                if is_single_phrase_per_row:
+                                    seg_words.sort(key=lambda w: (round(w[1] / 3.0), w[0]))
+                                    txt = " ".join(w[4] for w in seg_words).strip().replace("$ ", "$")
+                                    grid_cells[(r_idx, sc)] = Cell(
                                         row_index=r_idx,
-                                        col_index=cl_sc,
+                                        col_index=sc,
                                         rowspan=1,
-                                        colspan=cl_colspan,
+                                        colspan=colspan,
                                         text=txt,
-                                        bbox=BBox(round(grid_x[cl_sc], 1), round(grid_y[r_idx], 1), round(grid_x[cl_sc + cl_colspan], 1), round(grid_y[r_idx + 1], 1)),
+                                        bbox=BBox(round(grid_x[sc], 1), round(grid_y[r_idx], 1), round(grid_x[sc + colspan], 1), round(grid_y[r_idx + 1], 1)),
                                     )
-                    for ci in range(num_cols):
-                        covered = any(
-                            (r_idx, oc) in grid_cells and oc <= ci < oc + grid_cells[(r_idx, oc)].colspan
-                            for oc in range(ci + 1)
-                        )
-                        if not covered:
-                            cw = col_words.get(ci, [])
-                            if cw:
-                                cw.sort(key=lambda w: (round(w[1] / 3.0), w[0]))
-                                txt = " ".join(w[4] for w in cw).strip().replace("$ ", "$")
-                                grid_cells[(r_idx, ci)] = Cell(
-                                    row_index=r_idx,
-                                    col_index=ci,
-                                    rowspan=1,
-                                    colspan=1,
-                                    text=txt,
-                                    bbox=BBox(round(grid_x[ci], 1), round(grid_y[r_idx], 1), round(grid_x[ci + 1], 1), round(grid_y[r_idx + 1], 1)),
-                                )
-                else:
-                    # 表头底层与表体数据行：纯几何判定无法避让自动跨列合并（Colspan Merging）
-                    # 若一行中只有一个连续短语且其水平几何延伸穿过了列线（如 Percentage attributable to non-U.S. operations、Three Months Ended June 2024、Equity Type），设为跨列合并单元格
-                    rw_sorted = sorted(rw, key=lambda w: w[0])
-                    clusters = []
-                    for w in rw_sorted:
-                        if not clusters:
-                            clusters.append([w])
-                        else:
-                            if w[0] - clusters[-1][-1][2] <= 8.0:
-                                clusters[-1].append(w)
-                            else:
-                                clusters.append([w])
+                                    for ci in range(sc, ec + 1):
+                                        spanning_cols.add(ci)
 
-                    is_single_spanning = False
-                    if len(clusters) == 1:
-                        cl = clusters[0]
-                        px0 = min(w[0] for w in cl)
-                        px1 = max(w[2] for w in cl)
-                        sc = 0
-                        while sc < num_cols - 1 and px0 > grid_x[sc + 1] - 2.0:
-                            sc += 1
-                        ec = sc
-                        while ec < num_cols - 1 and px1 > grid_x[ec + 1] + 3.0:
-                            ec += 1
-                        # 若仅有一个短语且跨过了列线，其作为通栏标题应跨越到整行末尾，避免被局部列线截断文字
-                        if ec > sc:
-                            colspan = num_cols - sc
-                        else:
-                            colspan = 1
-                        if colspan > 1:
-                            is_single_spanning = True
-                            cl.sort(key=lambda w: (round(w[1] / 3.0), w[0]))
-                            txt = " ".join(w[4] for w in cl).strip().replace("$ ", "$")
-                            grid_cells[(r_idx, sc)] = Cell(
+                    # 2. 规则 L27：无下划线或全宽底线时的纯几何中点投影跨列判定
+                    remaining_words = [w for w in rw if not any(ci in spanning_cols for ci in range(num_cols) if grid_x[ci] <= (w[0] + w[2]) / 2.0 < grid_x[ci + 1])]
+                    if remaining_words:
+                        rem_rows = defaultdict(list)
+                        for w in remaining_words:
+                            my = round((w[1] + w[3]) / 2.0, 1)
+                            matched_y = next((ey for ey in rem_rows if abs(my - ey) <= 3.0), None)
+                            if matched_y is None:
+                                matched_y = my
+                            rem_rows[matched_y].append(w)
+
+                        for ry, rwords in rem_rows.items():
+                            rwords.sort(key=lambda w: w[0])
+                            # 按水平间隙聚类出独立短语
+                            p_list = []
+                            cur_p = []
+                            for w in rwords:
+                                if not cur_p:
+                                    cur_p.append(w)
+                                else:
+                                    if w[0] - cur_p[-1][2] <= 6.0:
+                                        cur_p.append(w)
+                                    else:
+                                        p_list.append(cur_p)
+                                        cur_p = [w]
+                            if cur_p:
+                                p_list.append(cur_p)
+
+                            for cl in p_list:
+                                cl_x0 = min(w[0] for w in cl)
+                                cl_x1 = max(w[2] for w in cl)
+                                # 检查覆盖哪些数据列的几何中点（排除行标签列 Col 0）
+                                cl_matched_cols = [
+                                    ci for ci in range(1, num_cols)
+                                    if ci not in spanning_cols
+                                    and (cl_x0 - 15.0 <= (grid_x[ci] + grid_x[ci + 1]) / 2.0 <= cl_x1 + 15.0 or max(cl_x0, grid_x[ci]) < min(cl_x1, grid_x[ci + 1]))
+                                ]
+                                if 2 <= len(cl_matched_cols) < num_cols:
+                                    sc = min(cl_matched_cols)
+                                    ec = max(cl_matched_cols)
+                                    colspan = ec - sc + 1
+                                    # 收集该列带内的全部词
+                                    band_words = [
+                                        w for w in rw
+                                        if grid_x[sc] - 2.0 <= (w[0] + w[2]) / 2.0 <= grid_x[ec + 1] + 2.0
+                                    ]
+                                    band_words.sort(key=lambda w: (round(w[1] / 3.0), w[0]))
+                                    txt = " ".join(w[4] for w in band_words).strip().replace("$ ", "$")
+                                    grid_cells[(r_idx, sc)] = Cell(
+                                        row_index=r_idx,
+                                        col_index=sc,
+                                        rowspan=1,
+                                        colspan=colspan,
+                                        text=txt,
+                                        bbox=BBox(round(grid_x[sc], 1), round(grid_y[r_idx], 1), round(grid_x[sc + colspan], 1), round(grid_y[r_idx + 1], 1)),
+                                    )
+                                    for ci in range(sc, ec + 1):
+                                        spanning_cols.add(ci)
+
+                    # 3. 其余未跨列的列，按列区间完整聚合多行词
+                    for ci in range(num_cols):
+                        if ci in spanning_cols:
+                            continue
+                        col_words = [
+                            w for w in rw
+                            if grid_x[ci] <= (w[0] + w[2]) / 2.0 < grid_x[ci + 1]
+                        ]
+                        if col_words:
+                            col_words.sort(key=lambda w: (round(w[1] / 3.0), w[0]))
+                            txt = " ".join(w[4] for w in col_words).strip().replace("$ ", "$")
+                            grid_cells[(r_idx, ci)] = Cell(
                                 row_index=r_idx,
-                                col_index=sc,
+                                col_index=ci,
                                 rowspan=1,
-                                colspan=colspan,
+                                colspan=1,
                                 text=txt,
-                                bbox=BBox(round(grid_x[sc], 1), round(grid_y[r_idx], 1), round(grid_x[sc + colspan], 1), round(grid_y[r_idx + 1], 1)),
+                                bbox=BBox(round(grid_x[ci], 1), round(grid_y[r_idx], 1), round(grid_x[ci + 1], 1), round(grid_y[r_idx + 1], 1)),
+                            )
+                        else:
+                            grid_cells[(r_idx, ci)] = Cell(
+                                row_index=r_idx,
+                                col_index=ci,
+                                rowspan=1,
+                                colspan=1,
+                                text="",
+                                bbox=BBox(round(grid_x[ci], 1), round(grid_y[r_idx], 1), round(grid_x[ci + 1], 1), round(grid_y[r_idx + 1], 1)),
+                            )
+                    continue
+                else:
+                    # 表体数据行：按列投影，若为单行通栏标题则设为跨列
+                    col_words: Dict[int, List[Tuple]] = defaultdict(list)
+                    for w in rw:
+                        w_mid = (w[0] + w[2]) / 2.0
+                        assigned_col = next((ci for ci in range(num_cols) if grid_x[ci] <= w_mid < grid_x[ci + 1]), None)
+                        if assigned_col is None:
+                            assigned_col = min(range(num_cols), key=lambda ci: abs(w_mid - (grid_x[ci] + grid_x[ci + 1]) / 2.0))
+                        col_words[assigned_col].append(w)
+
+                    for ci in range(num_cols):
+                        cw = col_words.get(ci, [])
+                        if cw:
+                            cw.sort(key=lambda w: (round(w[1] / 3.0), w[0]))
+                            txt = " ".join(w[4] for w in cw).strip().replace("$ ", "$")
+                            grid_cells[(r_idx, ci)] = Cell(
+                                row_index=r_idx,
+                                col_index=ci,
+                                rowspan=1,
+                                colspan=1,
+                                text=txt,
+                                bbox=BBox(round(grid_x[ci], 1), round(grid_y[r_idx], 1), round(grid_x[ci + 1], 1), round(grid_y[r_idx + 1], 1)),
+                            )
+                        else:
+                            grid_cells[(r_idx, ci)] = Cell(
+                                row_index=r_idx,
+                                col_index=ci,
+                                rowspan=1,
+                                colspan=1,
+                                text="",
+                                bbox=BBox(round(grid_x[ci], 1), round(grid_y[r_idx], 1), round(grid_x[ci + 1], 1), round(grid_y[r_idx + 1], 1)),
                             )
 
-                    if not is_single_spanning:
-                        for ci in range(num_cols):
-                            cw = col_words.get(ci, [])
-                            if cw:
-                                cw.sort(key=lambda w: (round(w[1] / 3.0), w[0]))
-                                txt = " ".join(w[4] for w in cw).strip().replace("$ ", "$")
-                                grid_cells[(r_idx, ci)] = Cell(
-                                    row_index=r_idx,
-                                    col_index=ci,
-                                    rowspan=1,
-                                    colspan=1,
-                                    text=txt,
-                                    bbox=BBox(round(grid_x[ci], 1), round(grid_y[r_idx], 1), round(grid_x[ci + 1], 1), round(grid_y[r_idx + 1], 1)),
-                                )
+            self._promote_grouped_header_cells(list(grid_cells.values()), columns, max(2, header_tier_count))
+            rebuilt_grid_cells: Dict[Tuple[int, int], Cell] = {}
+            for cell in grid_cells.values():
+                if (cell.row_index, cell.col_index) not in rebuilt_grid_cells or cell.text.strip():
+                    rebuilt_grid_cells[(cell.row_index, cell.col_index)] = cell
+            grid_cells = rebuilt_grid_cells
+
+            for key, cell in list(grid_cells.items()):
+                for title in (c for c in grid_cells.values() if c.row_index == 0 and c.text.strip() and c.colspan > 1):
+                    if cell is not title and cell.row_index == title.row_index and title.col_index <= key[1] < title.col_index + title.colspan:
+                        del grid_cells[key]
+                        break
 
             # 补齐未填充的单元格，保证完整的 2D 网格结构
             cells: List[Cell] = []
@@ -537,8 +776,8 @@ class WirelessTableExtractor(BaseTableExtractor):
                         c += cell.colspan
                     else:
                         covered = any(
-                            (r, oc) in grid_cells and oc <= c < oc + grid_cells[(r, oc)].colspan
-                            for oc in range(c)
+                            cell.row_index == r and cell.col_index <= c < cell.col_index + cell.colspan
+                            for cell in grid_cells.values()
                         )
                         if not covered:
                             empty_box = BBox(grid_x[c], grid_y[r], grid_x[c + 1], grid_y[r + 1])
@@ -713,8 +952,15 @@ class WirelessTableExtractor(BaseTableExtractor):
         for dr in data_rows:
             all_words_for_cols.extend(dr.words)
 
-        columns = self._detect_columns(all_words_for_cols, data_rows, page, table_y0=table_y0, table_bbox=table_bbox)
-        if len(columns) < 2:
+        columns = self._detect_columns_from_header_underlines(
+            page=page,
+            table_y0=table_y0,
+            table_bbox=table_bbox,
+            words=all_words_for_cols,
+        )
+        if not columns or len(columns) < 2:
+            columns = self._detect_columns(all_words_for_cols, data_rows, page, table_y0=table_y0, table_bbox=table_bbox)
+        if not columns or len(columns) < 2:
             return None
 
         return self._build_zebra_table(
@@ -1016,6 +1262,39 @@ class WirelessTableExtractor(BaseTableExtractor):
         # 1. 优先使用表头/表尾物理下划线确定的列划分 (Rule 2.1 - 2.3)
         header_cols = self._detect_columns_from_header_underlines(page, table_y0, table_bbox=table_bbox, words=words)
         if header_cols and len(header_cols) >= 2:
+            # A currency marker normally starts an amount column. When it is
+            # preceded by a percentage token in the same physical header
+            # interval, it instead starts the following amount column.
+            body_words = [
+                word for word in (words or [])
+                if (
+                    str(word[4]).strip() == "$"
+                    or re.match(r"^\$[\d(]", str(word[4]).strip())
+                )
+                and word[0] >= header_cols[1][0]
+            ]
+            original_cols = list(header_cols)
+            for x0 in sorted({round(float(word[0]), 1) for word in body_words}):
+                ci = next(
+                    (i for i, (cx0, cx1) in enumerate(original_cols) if cx0 <= x0 <= cx1),
+                    None,
+                )
+                if ci is None:
+                    continue
+                interval_words = [
+                    word for word in (words or [])
+                    if original_cols[ci][0] <= word[0] < original_cols[ci][1]
+                ]
+                has_percentage_before = any(
+                    word[0] < x0 and "%" in str(word[4])
+                    for word in interval_words
+                )
+                if has_percentage_before and ci < len(original_cols) - 1:
+                    header_cols[ci] = (original_cols[ci][0], x0)
+                    header_cols[ci + 1] = (x0, original_cols[ci + 1][1])
+                elif ci > 0:
+                    header_cols[ci - 1] = (original_cols[ci - 1][0], x0)
+                    header_cols[ci] = (x0, original_cols[ci][1])
             return header_cols
 
         # 2. Background column intervals (e.g. zebra tables with per-column background rects)
@@ -1131,7 +1410,7 @@ class WirelessTableExtractor(BaseTableExtractor):
         # 若某列在数据行或全表文字中文字出现率为 0（全空列），将其向左合并，消除表体悬空间隙
         words_to_check = []
         if data_rows:
-            for dr in data_rows:
+            for dr in (data_rows or []):
                 words_to_check.extend(dr.words)
         elif words:
             words_to_check = words
@@ -1157,6 +1436,43 @@ class WirelessTableExtractor(BaseTableExtractor):
                     pruned_cols[0] = (table_bbox.x0, pruned_cols[0][1])
                     pruned_cols[-1] = (pruned_cols[-1][0], table_bbox.x1)
                 columns = pruned_cols
+
+        # Currency is a hard cell anchor: an amount cell containing ``$`` must
+        # include the symbol and its number.  Move the left boundary of that
+        # numeric column to the symbol's left edge so a column cut can never
+        # occur between ``$`` and the amount.
+        body_words = [word for row in (data_rows or []) for word in row.words]
+        dollar_words = [
+            word for word in body_words
+            if str(word[4]).strip() == "$" or str(word[4]).strip().startswith("$")
+        ]
+        for dollar in dollar_words:
+            x0 = float(dollar[0])
+            for ci, (cx0, cx1) in enumerate(columns):
+                if cx0 <= x0 <= cx1:
+                    if ci > 0:
+                        columns[ci - 1] = (columns[ci - 1][0], x0)
+                    columns[ci] = (x0, cx1)
+                    break
+
+        ci = 0
+        while ci < len(columns) - 1:
+            x0, x1 = columns[ci]
+            tokens = [w[4].strip() for w in (words or []) if x0 <= w[0] < x1]
+            if tokens and all(token == "$" for token in tokens):
+                columns[ci] = (x0, columns[ci + 1][1])
+                del columns[ci + 1]
+            else:
+                ci += 1
+        # 确保列分界线严格单调递增且相邻列无缝相接，彻底清除旧列线残留
+        clean_bounds = [table_x0]
+        for c in columns[:-1]:
+            b = c[1]
+            if b > clean_bounds[-1] + 2.0:
+                clean_bounds.append(b)
+        clean_bounds.append(table_x1)
+        if len(clean_bounds) >= 3:
+            columns = [(clean_bounds[i], clean_bounds[i + 1]) for i in range(len(clean_bounds) - 1)]
 
         return columns
 
@@ -1199,13 +1515,12 @@ class WirelessTableExtractor(BaseTableExtractor):
         table_x1 = table_bbox.x1 if table_bbox else (max(w[2] for w in words) if words else 600.0)
         table_w = table_x1 - table_x0
 
-        # 1. 表头部分下划线检测 (排除从最左侧开始的项目列整行分隔线)
+        # 1. 表头部分下划线检测 (排除从最左侧开始贯穿整张表格的整行底部分隔线)
         header_h_lines = [
             l for l in h_lines
             if table_x0 - 5.0 <= (l[0] + l[1]) / 2.0 <= table_x1 + 5.0
             and table_y0 - 2.0 <= l[2] <= table_y0 + 60.0
-            and (l[1] - l[0]) < table_w * 0.45
-            and l[0] >= table_x0 + table_w * 0.15
+            and not (l[0] <= table_x0 + 5.0 and l[1] >= table_x1 - 5.0)
         ]
         lines_by_y: Dict[float, List[Tuple[float, float]]] = defaultdict(list)
         for x0, x1, y in header_h_lines:
@@ -1226,13 +1541,12 @@ class WirelessTableExtractor(BaseTableExtractor):
                 if not merged:
                     merged.append(list(s))
                 else:
-                    if s[0] - merged[-1][1] <= 1.0:
+                    if s[0] - merged[-1][1] <= 3.0:
                         merged[-1][1] = max(merged[-1][1], s[1])
                     else:
                         merged.append(list(s))
-            # 融合后过滤毛刺碎片 (宽度 >= 15.0pt 且 < 0.45 * table_w)
-            col_segs = [s for s in merged if 15.0 <= s[1] - s[0] < table_w * 0.45]
-            if len(col_segs) >= 2:
+            col_segs = [s for s in merged if not (s[0] <= table_x0 + 5.0 and s[1] >= table_x1 - 5.0)]
+            if col_segs:
                 merged_by_y[y] = col_segs
 
         # 2. 如果表头部分没有下划线，表尾存在，则列的划分按照表尾进行划分
@@ -1241,150 +1555,126 @@ class WirelessTableExtractor(BaseTableExtractor):
                 l for l in h_lines
                 if table_x0 - 5.0 <= (l[0] + l[1]) / 2.0 <= table_x1 + 5.0
                 and l[2] > table_y0 + 50.0
-                and (l[1] - l[0]) < table_w * 0.45
-                and l[0] >= table_x0 + table_w * 0.15
+                and not (l[0] <= table_x0 + 5.0 and l[1] >= table_x1 - 5.0)
             ]
             if footer_h_lines:
                 sorted_footer = sorted(footer_h_lines, key=lambda l: l[0])
                 merged_footer_segs: List[List[float]] = []
                 for x0, x1, _ in sorted_footer:
-                    if x1 - x0 >= table_w * 0.45 or x1 - x0 < 15.0:
-                        continue
                     if not merged_footer_segs:
                         merged_footer_segs.append([x0, x1])
                     else:
-                        if x0 <= merged_footer_segs[-1][1] + 1.0:
+                        if x0 <= merged_footer_segs[-1][1] + 3.0:
                             merged_footer_segs[-1][1] = max(merged_footer_segs[-1][1], x1)
                         else:
                             merged_footer_segs.append([x0, x1])
-                if len(merged_footer_segs) >= 2:
-                    merged_by_y[table_y0 + 999.0] = merged_footer_segs
+                col_footer = [s for s in merged_footer_segs if not (s[0] <= table_x0 + 5.0 and s[1] >= table_x1 - 5.0)]
+                if col_footer:
+                    merged_by_y[table_y0 + 999.0] = col_footer
 
         t_words = [
             w for w in (words if words else [])
             if (table_bbox is None or (table_bbox.y0 - 2.0 <= (w[1] + w[3]) / 2.0 <= table_bbox.y1 + 2.0 and table_bbox.x0 - 5.0 <= (w[0] + w[2]) / 2.0 <= table_bbox.x1 + 5.0))
         ]
 
-        # Rule 4.1: 全空列剪枝（Empty Column Pruning）
-        # 对每组候选下划线段，过滤掉在表体中没有数字/单词的伪列
-        valid_merged_by_y = {}
-        for y, segs in merged_by_y.items():
-            data_words_for_y = [w for w in t_words if (w[1] + w[3]) / 2.0 >= y - 10.0]
-            pruned_segs = []
-            for s in segs:
-                has_content = any(
-                    s[0] - 8.0 <= (w[0] + w[2]) / 2.0 <= s[1] + 8.0 and any(ch.isalnum() for ch in w[4])
-                    for w in data_words_for_y
-                )
-                if has_content:
-                    pruned_segs.append(s)
-            if len(pruned_segs) >= 2:
-                valid_merged_by_y[y] = pruned_segs
-
-        if valid_merged_by_y:
-            best_y = max(valid_merged_by_y.keys(), key=lambda y: (len(valid_merged_by_y[y]), y))
-            best_segments = valid_merged_by_y[best_y]
-        elif merged_by_y:
-            best_y = max(merged_by_y.keys(), key=lambda y: (len(merged_by_y[y]), y))
+        if merged_by_y:
+            best_y = max(merged_by_y.keys(), key=lambda y: (len(merged_by_y[y]), -abs(y - table_y0)))
             best_segments = merged_by_y[best_y]
         else:
             return []
 
-        if not best_segments or len(best_segments) < 2:
+        if not best_segments:
             return []
 
         # 3. 宽下划线段内基于数据行留白通道的通用子列细分（Sub-column Decomposition）
         refined_col_spans = []
+        data_words = [w for w in t_words if (w[1] + w[3]) / 2.0 >= best_y - 2.0]
         for s in sorted(best_segments, key=lambda s: s[0]):
             sx0, sx1 = s[0], s[1]
             sw = sx1 - sx0
-            if sw >= 45.0:
-                sub_words = [
-                    w for w in t_words
-                    if sx0 - 2.0 <= (w[0] + w[2]) / 2.0 <= sx1 + 2.0
-                    and (w[1] + w[3]) / 2.0 >= best_y - 2.0
-                    and (w[2] - w[0]) < sw * 0.8
-                ]
-                # 按行分组
-                rows_sub = defaultdict(list)
-                for w in sub_words:
-                    mid_y = (w[1] + w[3]) / 2.0
-                    matched_y = None
-                    for ey in rows_sub:
-                        if abs(mid_y - ey) <= 3.5:
-                            matched_y = ey
-                            break
-                    if matched_y is None:
-                        matched_y = mid_y
-                    rows_sub[matched_y].append(w)
+            sub_words = [
+                w for w in data_words
+                if sx0 - 2.0 <= (w[0] + w[2]) / 2.0 <= sx1 + 2.0
+                and (w[2] - w[0]) < sw * 0.8
+            ]
+            # 按行分组查找数据项垂直留白通道
+            rows_sub = defaultdict(list)
+            for w in sub_words:
+                mid_y = (w[1] + w[3]) / 2.0
+                matched_y = next((ey for ey in rows_sub if abs(mid_y - ey) <= 3.5), None)
+                if matched_y is None:
+                    matched_y = mid_y
+                rows_sub[matched_y].append(w)
 
-                gaps = []
-                for ry, rwords in rows_sub.items():
-                    rwords.sort(key=lambda w: w[0])
-                    items = []
-                    cur = []
-                    for w in rwords:
-                        if not cur:
+            gaps = []
+            for ry, rwords in rows_sub.items():
+                rwords.sort(key=lambda w: w[0])
+                items = []
+                cur = []
+                for w in rwords:
+                    if not cur:
+                        cur.append(w)
+                    else:
+                        if cur[-1][4] == "$" and any(ch.isdigit() for ch in w[4]):
+                            cur.append(w)
+                        elif w[0] - cur[-1][2] <= 3.0:
                             cur.append(w)
                         else:
-                            if w[0] - cur[-1][2] <= 8.0:
-                                cur.append(w)
-                            else:
-                                items.append((min(x[0] for x in cur), max(x[2] for x in cur)))
-                                cur = [w]
-                    if cur:
-                        items.append((min(x[0] for x in cur), max(x[2] for x in cur)))
-                    if len(items) >= 2:
-                        for k in range(len(items) - 1):
-                            gaps.append((items[k][1], items[k + 1][0]))
+                            items.append((min(x[0] for x in cur), max(x[2] for x in cur)))
+                            cur = [w]
+                if cur:
+                    items.append((min(x[0] for x in cur), max(x[2] for x in cur)))
+                if len(items) >= 2:
+                    for k in range(len(items) - 1):
+                        gaps.append((items[k][1], items[k + 1][0]))
 
-                sorted_gaps = sorted(gaps, key=lambda g: (g[0] + g[1]) / 2.0)
-                gap_clusters = []
-                for g in sorted_gaps:
-                    mid = (g[0] + g[1]) / 2.0
-                    if not gap_clusters:
-                        gap_clusters.append([g])
-                    else:
-                        prev_mid = sum((x[0] + x[1]) / 2.0 for x in gap_clusters[-1]) / len(gap_clusters[-1])
-                        if abs(mid - prev_mid) <= 15.0:
-                            gap_clusters[-1].append(g)
-                        else:
-                            gap_clusters.append([g])
-
-                valid_gap_clusters = [gc for gc in gap_clusters if len(gc) >= 4]
-                if valid_gap_clusters:
-                    cuts = [sx0]
-                    for gc in valid_gap_clusters:
-                        max_left = max(g[0] for g in gc)
-                        min_right = min(g[1] for g in gc)
-                        if max_left < min_right:
-                            cuts.append((max_left + min_right) / 2.0)
-                        else:
-                            cuts.append(sum((g[0] + g[1]) / 2.0 for g in gc) / len(gc))
-                    cuts.append(sx1)
-                    for ci in range(len(cuts) - 1):
-                        refined_col_spans.append([cuts[ci], cuts[ci + 1]])
+            gap_clusters = []
+            for g in sorted(gaps, key=lambda g: (g[0] + g[1]) / 2.0):
+                g_mid = (g[0] + g[1]) / 2.0
+                gc = next((c for c in gap_clusters if abs(g_mid - sum((x[0] + x[1]) / 2.0 for x in c) / len(c)) <= 10.0), None)
+                if gc is not None:
+                    gc.append(g)
                 else:
-                    refined_col_spans.append([sx0, sx1])
+                    gap_clusters.append([g])
+
+            valid_gap_clusters = [gc for gc in gap_clusters if len(gc) >= max(2, len(rows_sub) // 5)]
+            if valid_gap_clusters:
+                cuts = [sx0]
+                for gc in valid_gap_clusters:
+                    max_left = max(g[0] for g in gc)
+                    min_right = min(g[1] for g in gc)
+                    if max_left < min_right:
+                        cuts.append((max_left + min_right) / 2.0)
+                    else:
+                        cuts.append(sum((g[0] + g[1]) / 2.0 for g in gc) / len(gc))
+                cuts.append(sx1)
+                for ci in range(len(cuts) - 1):
+                    refined_col_spans.append([cuts[ci], cuts[ci + 1]])
             else:
                 refined_col_spans.append([sx0, sx1])
 
         all_col_spans = refined_col_spans
-
-        # 数据词 (y >= best_y - 2.0 且单个词宽 < 80.0) 按列归属，避免包含跨列大标题子词
-        data_words = [w for w in t_words if (w[1] + w[3]) / 2.0 >= best_y - 2.0 and (w[2] - w[0] < 80.0)]
-
         first_col_x0 = all_col_spans[0][0]
 
+        # 行标签列与第 1 数据列的分界线：严格依据行标签最长文本右边缘与数据列左边缘之间的物理空白中点
         boundaries = []
-        if all_col_spans[0][0] - table_x0 > 25.0:
-            stub_words = [w for w in data_words if w[2] < first_col_x0 - 5.0]
-            max_stub_x1 = max([w[2] for w in stub_words], default=table_x0)
+        stub_words = [w for w in data_words if w[2] < first_col_x0 - 2.0 and any(ch.isalnum() for ch in w[4])]
+        if stub_words:
+            max_stub_x1 = max(w[2] for w in stub_words)
             b0 = (max_stub_x1 + first_col_x0) / 2.0
             boundaries.append(b0)
 
         for k in range(len(all_col_spans) - 1):
-            bk = (all_col_spans[k][1] + all_col_spans[k + 1][0]) / 2.0
+            col_k_span = all_col_spans[k]
+            col_next_span = all_col_spans[k + 1]
+            left_words = [w for w in data_words if col_k_span[0] - 2.0 <= (w[0] + w[2]) / 2.0 <= col_k_span[1] + 2.0]
+            right_words = [w for w in data_words if col_next_span[0] - 2.0 <= (w[0] + w[2]) / 2.0 <= col_next_span[1] + 2.0]
+            max_left_x1 = max([w[2] for w in left_words], default=col_k_span[1])
+            min_right_x0 = min([w[0] for w in right_words], default=col_next_span[0])
+            if max_left_x1 < min_right_x0:
+                bk = (max_left_x1 + min_right_x0) / 2.0
+            else:
+                bk = (col_k_span[1] + col_next_span[0]) / 2.0
             boundaries.append(bk)
 
         columns = []
@@ -1394,7 +1684,33 @@ class WirelessTableExtractor(BaseTableExtractor):
             curr_x = b
         columns.append((curr_x, table_x1))
 
-        return columns
+        # 规则指南第 56 条：如果同一个单元格含有两个 $ 则后列线需要调整到第二个 $ 前面
+        adj_columns = list(columns)
+        for ci in range(len(adj_columns) - 1):
+            cx0, cx1 = adj_columns[ci]
+            rows_with_two_dollars = []
+            for w in data_words:
+                if w[4] == "$" and cx0 <= (w[0] + w[2]) / 2.0 < cx1:
+                    mid_y = (w[1] + w[3]) / 2.0
+                    row_dollars = [
+                        dw for dw in data_words
+                        if dw[4] == "$" and cx0 <= (dw[0] + dw[2]) / 2.0 < cx1 and abs((dw[1] + dw[3]) / 2.0 - mid_y) <= 3.0
+                    ]
+                    if len(row_dollars) >= 2:
+                        row_dollars.sort(key=lambda dw: dw[0])
+                        rows_with_two_dollars.append(row_dollars[1])
+            if rows_with_two_dollars:
+                min_second_dollar_x0 = min(dw[0] for dw in rows_with_two_dollars)
+                left_words = [
+                    w for w in data_words
+                    if cx0 <= (w[0] + w[2]) / 2.0 < min_second_dollar_x0 and w[2] <= min_second_dollar_x0 + 0.5 and any(ch.isalnum() for ch in w[4])
+                ]
+                max_left_x1 = max([w[2] for w in left_words], default=cx0)
+                new_bk = (max_left_x1 + min_second_dollar_x0) / 2.0
+                adj_columns[ci] = (cx0, new_bk)
+                adj_columns[ci + 1] = (new_bk, adj_columns[ci + 1][1])
+
+        return adj_columns
 
 
 
@@ -1447,6 +1763,59 @@ class WirelessTableExtractor(BaseTableExtractor):
                 if c.text.strip():
                     for ci in range(c.col_index, c.col_index + c.colspan):
                         grid[out_r][ci] = c
+
+        # Promote an upper-level group label when the next header tier contains
+        # multiple contiguous child columns beneath it.  The label's glyph box
+        # is usually narrower than the group band, so text-overlap alone cannot
+        # determine colspan (e.g. "Average Balance for the").
+        for t in range(num_tiers - 1):
+            next_nonempty = [
+                c for c in rows_dict[sorted_row_indices[t + 1]] if c.text.strip()
+            ]
+            for top in rows_dict[sorted_row_indices[t]]:
+                if not top.text.strip() or top.colspan > 1:
+                    continue
+                top_mid = (top.bbox.x0 + top.bbox.x1) / 2.0
+                tier_children = [
+                    c for c in next_nonempty
+                    if c.bbox.y0 >= top.bbox.y1
+                ]
+                if not tier_children:
+                    continue
+                tier_children.sort(key=lambda c: c.col_index)
+                runs: List[List[Cell]] = []
+                for child in tier_children:
+                    if not runs or child.col_index > runs[-1][-1].col_index + max(1, runs[-1][-1].colspan):
+                        runs.append([child])
+                    else:
+                        runs[-1].append(child)
+                run = next(
+                    (r for r in runs
+                     if columns[r[0].col_index][0] <= top_mid <= columns[r[-1].col_index + max(1, r[-1].colspan) - 1][1]),
+                    None,
+                )
+                if not run:
+                    continue
+                child_start = run[0].col_index
+                child_end = max(c.col_index + max(1, c.colspan) - 1 for c in run)
+                covered = run
+                if len(covered) < 2 or child_end <= child_start:
+                    continue
+                # Do not absorb a separately aligned left/stub label.
+                band_x0 = columns[child_start][0]
+                band_x1 = columns[child_end][1]
+                if top_mid < band_x0 or top_mid > band_x1:
+                    continue
+                has_separator = any(
+                    top.bbox.y1 - 2.0 <= ly <= run[0].bbox.y0 + 2.0
+                    and not (lx1 < band_x0 + 3.0 or lx0 > band_x1 - 3.0)
+                    for ly, lx0, lx1 in h_lines
+                )
+                if has_separator:
+                    continue
+                top.col_index = child_start
+                top.colspan = child_end - child_start + 1
+                top.bbox = BBox(top.bbox.x0, top.bbox.y0, top.bbox.x1, top.bbox.y1)
 
         merged_down = set()
         for t in range(num_tiers - 1):
@@ -1558,6 +1927,8 @@ class WirelessTableExtractor(BaseTableExtractor):
         all_cells = norm_h_cells + body_cells
         if not all_cells:
             return None
+
+        self._promote_grouped_header_cells(all_cells, columns, num_h_rows)
 
         all_cells, col_count = self._prune_empty_columns(all_cells, len(columns))
 
