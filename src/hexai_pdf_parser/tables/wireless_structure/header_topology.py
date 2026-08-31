@@ -91,6 +91,22 @@ def _header_cutoff(atoms: Sequence[dict[str, Any]]) -> float | None:
         preceding = [level for level in levels if level < first_checkmark - 1.0]
         if preceding:
             return (preceding[-1] + first_checkmark) / 2.0
+    # Repeated non-structural numeric rows are strong body evidence.  A wrapped
+    # body note can create a later sparse level and a larger gap, so this must be
+    # checked before the generic large-gap heuristic.
+    numeric_body_levels = []
+    for index, level in enumerate(levels[1:], 1):
+        row = [item for item in atoms if abs(_center_y(item) - level) < 0.5]
+        if any(
+            _is_numeric_body_atom(item)
+            and not _is_structural_header_atom(item)
+            and not _is_temporal_leaf_header(item)
+            for item in row
+        ):
+            numeric_body_levels.append(index)
+    if len(numeric_body_levels) >= 2:
+        first_body_index = numeric_body_levels[0]
+        return (levels[first_body_index - 1] + levels[first_body_index]) / 2.0
     # In a dense, multi-row header the first large gap is the body boundary.
     # Do not use the globally largest gap: bilingual body rows can create later
     # gaps of the same size and hide a parent header's numeric leaf columns.
