@@ -3,6 +3,8 @@
 from hexai_pdf_parser.tables.table_extractor import TableExtractor
 from hexai_pdf_parser.tables.base_table_extractor import BaseTableExtractor
 from hexai_pdf_parser.tables.extractors import (
+    ChineseTableExtractor,
+    EnglishTableExtractor,
     WiredTableExtractor,
     WirelessTableExtractor,
 )
@@ -20,6 +22,8 @@ from hexai_pdf_parser.tables.wireless_table_recovery import recover_wireless_tab
 __all__ = [
     "TableExtractor",
     "BaseTableExtractor",
+    "EnglishTableExtractor",
+    "ChineseTableExtractor",
     "WiredTableExtractor",
     "WirelessTableExtractor",
     "normalize_table_headers",

@@ -39,6 +39,8 @@ _LEGACY_MODULE_MAP = {
     "table_template_engine": "hexai_pdf_parser.tables.table_template_engine",
     "wireless_table_recovery": "hexai_pdf_parser.tables.wireless_table_recovery",
     "wired_table_extractor": "hexai_pdf_parser.tables.extractors.wired_table_extractor",
+    "english_table_extractor": "hexai_pdf_parser.tables.extractors.english_table_extractor",
+    "chinese_table_extractor": "hexai_pdf_parser.tables.extractors.chinese_table_extractor",
     "wireless_table_extractor": "hexai_pdf_parser.tables.extractors.wireless_table_extractor",
     "financial_header_handler": "hexai_pdf_parser.tables.normalizers.financial_header_handler",
     "ml_table_detector": "hexai_pdf_parser.ml.ml_table_detector",
@@ -113,6 +115,10 @@ from hexai_pdf_parser.core.models import (
 # Extractors & Builders
 from hexai_pdf_parser.extractors.text_extractor import TextExtractor
 from hexai_pdf_parser.tables.table_extractor import TableExtractor
+from hexai_pdf_parser.tables.extractors import (
+    ChineseTableExtractor,
+    EnglishTableExtractor,
+)
 from hexai_pdf_parser.extractors.image_extractor import ImageExtractor
 from hexai_pdf_parser.extractors.layout_mapper import LayoutMapper
 from hexai_pdf_parser.extractors.layout_builder import LayoutBuilder
@@ -171,6 +177,8 @@ __all__ = [
     # Extractors & Builders
     "TextExtractor",
     "TableExtractor",
+    "EnglishTableExtractor",
+    "ChineseTableExtractor",
     "ImageExtractor",
     "LayoutMapper",
     "LayoutBuilder",
