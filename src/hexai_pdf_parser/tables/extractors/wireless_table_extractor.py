@@ -1,5 +1,6 @@
 """Unified Wireless Table Extractor (Zebra background rows, 3-line header guides & text projection)."""
 
+from hexai_pdf_parser.tables.wireless_structure import continuations
 from __future__ import annotations
 
 import re
@@ -1816,10 +1817,59 @@ class WirelessTableExtractor(BaseTableExtractor):
                     if max_left < min_right:
                         cuts.append((max_left + min_right) / 2.0)
                     else:
-                        cuts.append(sum((g[0] + g[1]) / 2.0 for g in gc) / len(gc))
-                cuts.append(sx1)
-                for ci in range(len(cuts) - 1):
-                    refined_col_spans.append([cuts[ci], cuts[ci + 1]])
+                        if cx0 <= max(item[1] for item in c_clusters[-1]) + 5.0:
+                            c_clusters[-1].append((cx0, cx1))
+                        else:
+                            c_clusters.append([(cx0, cx1)])
+                for cl in c_clusters:
+                    cl_x0 = min(item[0] for item in cl)
+                    cl_x1 = max(item[1] for item in cl)
+                    if cl_x0 > last_u_end + 3.0:
+                        all_col_spans.append([cl_x0, cl_x1])
+
+        all_col_spans.sort(key=lambda s: s[0])
+
+        # Footer/header rules may expose only the trailing numeric columns.
+        # Preserve repeated text-aligned columns that precede that rule grid.
+        underlined_first_x0 = all_col_spans[0][0]
+        leading_spans = self._infer_repeated_leading_text_spans(
+            t_words,
+            first_col_x0=underlined_first_x0,
+            table_y0=table_y0,
+        )
+        if len(leading_spans) >= 2:
+            all_col_spans = leading_spans + all_col_spans
+
+        # Exclude multi-column spanning header titles when determining single-column text extents
+        data_words = [w for w in t_words if (w[1] + w[3]) / 2.0 >= table_y0 - 15.0]
+
+        first_col_x0 = all_col_spans[0][0]
+        col_words: List[List[Tuple]] = [[] for _ in range(len(all_col_spans))]
+        for w in data_words:
+            mid_x = (w[0] + w[2]) / 2.0
+            if mid_x < first_col_x0 - 15.0:
+                continue
+            best_ci = -1
+            best_dist = 9999.0
+            for ci, (sx0, sx1) in enumerate(all_col_spans):
+                if sx0 - 4.0 <= mid_x <= sx1 + 4.0:
+                    best_ci = ci
+                    break
+                smid = (sx0 + sx1) / 2.0
+                dist = abs(mid_x - smid)
+                if dist < best_dist:
+                    best_dist = dist
+                    best_ci = ci
+            if best_ci >= 0:
+                col_words[best_ci].append(w)
+
+        boundaries = []
+        if all_col_spans[0][0] - table_x0 > 25.0:
+            stub_words = [w for w in t_words if w[2] < first_col_x0 - 15.0 and (w[1] + w[3]) / 2.0 >= table_y0 - 15.0]
+            max_stub_x1 = max([w[2] for w in stub_words], default=table_x0)
+            min_col1_x0 = all_col_spans[0][0]
+            if max_stub_x1 < min_col1_x0:
+                b0 = (max_stub_x1 + min_col1_x0) / 2.0
             else:
                 refined_col_spans.append([sx0, sx1])
 
@@ -1904,6 +1954,85 @@ class WirelessTableExtractor(BaseTableExtractor):
         return adj_columns
 
 
+
+    @staticmethod
+    def _infer_repeated_leading_text_spans(
+        words: List[Tuple],
+        first_col_x0: float,
+        table_y0: float,
+    ) -> List[List[float]]:
+        """Find repeated text intervals before the first explicit rule column."""
+        leading_words = [
+            word
+            for word in words
+            if word[2] < first_col_x0 - 15.0
+            and (word[1] + word[3]) / 2.0 >= table_y0 - 15.0
+        ]
+        if not leading_words:
+            return []
+
+        rows: List[List[Tuple]] = []
+        for word in sorted(leading_words, key=lambda item: ((item[1] + item[3]) / 2.0, item[0])):
+            mid_y = (word[1] + word[3]) / 2.0
+            matched_row = None
+            for row in rows:
+                row_mid = sum((item[1] + item[3]) / 2.0 for item in row) / len(row)
+                if abs(mid_y - row_mid) <= 3.5:
+                    matched_row = row
+                    break
+            if matched_row is None:
+                rows.append([word])
+            else:
+                matched_row.append(word)
+
+        segments: List[Tuple[float, float, int]] = []
+        for row_index, row in enumerate(rows):
+            current = []
+            for word in sorted(row, key=lambda item: item[0]):
+                if current and word[0] - current[-1][2] > 6.0:
+                    segments.append((current[0][0], current[-1][2], row_index))
+                    current = []
+                current.append(word)
+            if current:
+                segments.append((current[0][0], current[-1][2], row_index))
+
+        clusters: List[Dict[str, object]] = []
+        for x0, x1, row_index in sorted(segments):
+            matched = None
+            for cluster in clusters:
+                if not (x1 < cluster["x0"] or x0 > cluster["x1"]):
+                    matched = cluster
+                    break
+            if matched is None:
+                clusters.append({"x0": x0, "x1": x1, "rows": {row_index}})
+            else:
+                matched["x0"] = min(matched["x0"], x0)
+                matched["x1"] = max(matched["x1"], x1)
+                matched["rows"].add(row_index)
+
+        min_support = max(2, int(len(rows) * 0.15))
+        repeated = [
+            cluster
+            for cluster in sorted(clusters, key=lambda item: item["x0"])
+            if len(cluster["rows"]) >= min_support
+        ]
+        if len(repeated) < 2:
+            return []
+
+        cooccurring = [repeated[0]]
+        for cluster in repeated[1:]:
+            if any(
+                len(cluster["rows"] & previous["rows"]) >= 2
+                for previous in cooccurring
+            ):
+                cooccurring.append(cluster)
+        if len(cooccurring) < 2:
+            return []
+
+        return [
+            [float(cluster["x0"]), float(cluster["x1"])]
+            for cluster in cooccurring
+        ]
 
     def _normalize_zebra_headers(
         self,

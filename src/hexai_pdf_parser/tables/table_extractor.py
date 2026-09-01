@@ -77,6 +77,9 @@ from hexai_pdf_parser.tables.extractors import (
 )
 from hexai_pdf_parser.page_normalizer import normalize_page_rotation
 from hexai_pdf_parser.tables.wireless_table_recovery import recover_wireless_tables
+from hexai_pdf_parser.tables.wireless_structure.hybrid_body import (
+    recover_hybrid_body_cells,
+)
 from hexai_pdf_parser.tables.wireless_structure.recoverer import recover_cells_from_region
 
 
@@ -344,12 +347,6 @@ class TableExtractor:
             max(cell.bbox.x1 for cell in body_cells),
             max(cell.bbox.y1 for cell in body_cells),
         )
-        recovered_rows, _recovered_cols, recovered = recover_cells_from_region(
-            page, body_bbox
-        )
-        if recovered_rows < 2 or not recovered:
-            return table
-
         column_edges = sorted(
             {
                 edge
@@ -360,23 +357,28 @@ class TableExtractor:
         if len(column_edges) < 2:
             return table
 
-        def target_column(cell: Cell) -> int | None:
-            center = (cell.bbox.x0 + cell.bbox.x1) / 2.0
-            for index in range(len(column_edges) - 1):
-                if column_edges[index] - 2.0 <= center <= column_edges[index + 1] + 2.0:
-                    return index
-            return None
+        recovered_rows, recovered_cols, recovered = recover_hybrid_body_cells(
+            page, body_bbox, column_edges
+        )
+        if (
+            recovered_rows < 2
+            or not recovered
+            or recovered_cols > len(column_edges) - 1
+        ):
+            return table
 
         mapped: List[Cell] = []
         for cell in recovered:
-            column = target_column(cell)
-            if column is None:
+            if (
+                cell.col_index < 0
+                or cell.col_index + max(1, cell.colspan) > len(column_edges) - 1
+            ):
                 return table
             mapped.append(
                 Cell(
                     text=cell.text,
                     row_index=body_row + cell.row_index,
-                    col_index=column,
+                    col_index=cell.col_index,
                     rowspan=cell.rowspan,
                     colspan=cell.colspan,
                     bbox=cell.bbox,
@@ -431,7 +433,14 @@ class TableExtractor:
                 )
             )
         for row_offset in range(recovered_rows):
-            occupied = {cell.col_index for cell in mapped if cell.row_index == body_row + row_offset}
+            occupied = {
+                column
+                for cell in mapped
+                if cell.row_index == body_row + row_offset
+                for column in range(
+                    cell.col_index, cell.col_index + max(1, cell.colspan)
+                )
+            }
             for column in range(len(column_edges) - 1):
                 if column in occupied:
                     continue

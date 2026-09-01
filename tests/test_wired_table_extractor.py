@@ -348,6 +348,68 @@ def test_extract_rejects_single_cell_wire_frame():
     assert WiredTableExtractor().extract(page) == []
 
 
+def test_extract_collapses_filled_path_edges_before_single_cell_filter():
+    page = SimpleNamespace(
+        get_drawings=lambda: [
+            {
+                "type": "f",
+                "color": None,
+                "fill": (0.0, 0.0, 0.0),
+                "rect": fitz.Rect(10.0, 20.0, 110.0, 20.48),
+                "items": [
+                    ("l", fitz.Point(10.0, 20.0), fitz.Point(110.0, 20.0)),
+                    ("l", fitz.Point(110.0, 20.48), fitz.Point(10.0, 20.48)),
+                ],
+            },
+            {
+                "type": "f",
+                "color": None,
+                "fill": (0.0, 0.0, 0.0),
+                "rect": fitz.Rect(10.0, 50.0, 110.0, 50.48),
+                "items": [
+                    ("l", fitz.Point(10.0, 50.0), fitz.Point(110.0, 50.0)),
+                    ("l", fitz.Point(110.0, 50.48), fitz.Point(10.0, 50.48)),
+                ],
+            },
+            {
+                "color": None,
+                "fill": (0.0, 0.0, 0.0),
+                "items": [("re", fitz.Rect(10.0, 20.48, 10.48, 50.0))],
+            },
+            {
+                "color": None,
+                "fill": (0.0, 0.0, 0.0),
+                "items": [("re", fitz.Rect(109.52, 20.48, 110.0, 50.0))],
+            },
+        ],
+        get_fonts=lambda **_kwargs: [],
+        get_image_info=lambda **_kwargs: [],
+        get_text=lambda kind: (
+            [(25.0, 28.0, 45.0, 38.0, "value", 0, 0, 0)]
+            if kind == "words"
+            else {"blocks": []}
+        ),
+    )
+
+    extractor = WiredTableExtractor()
+    h_lines, v_lines = extractor._extract_lines_from_drawings(page)
+
+    assert len(h_lines) == 2
+    for line, expected_y in zip(h_lines, (20.24, 50.24)):
+        assert line[0] == pytest.approx(10.0)
+        assert line[1] == pytest.approx(expected_y)
+        assert line[2] == pytest.approx(110.0)
+        assert line[3] == pytest.approx(expected_y)
+
+    assert len(v_lines) == 2
+    for line, expected_x in zip(v_lines, (10.24, 109.76)):
+        assert line[0] == pytest.approx(expected_x)
+        assert line[1] == pytest.approx(20.48)
+        assert line[2] == pytest.approx(expected_x)
+        assert line[3] == pytest.approx(50.0)
+    assert extractor.extract(page) == []
+
+
 def test_extract_keeps_multi_cell_wire_table():
     rectangle = fitz.Rect(10.0, 20.0, 110.0, 50.0)
     page = SimpleNamespace(
