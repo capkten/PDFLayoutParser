@@ -1,12 +1,13 @@
 """Unified Wireless Table Extractor (Zebra background rows, 3-line header guides & text projection)."""
 
-from hexai_pdf_parser.tables.wireless_structure import continuations
 from __future__ import annotations
 
 import re
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
+
+from hexai_pdf_parser.tables.wireless_structure import continuations
 
 import fitz
 
@@ -1817,16 +1818,14 @@ class WirelessTableExtractor(BaseTableExtractor):
                     if max_left < min_right:
                         cuts.append((max_left + min_right) / 2.0)
                     else:
-                        if cx0 <= max(item[1] for item in c_clusters[-1]) + 5.0:
-                            c_clusters[-1].append((cx0, cx1))
-                        else:
-                            c_clusters.append([(cx0, cx1)])
-                for cl in c_clusters:
-                    cl_x0 = min(item[0] for item in cl)
-                    cl_x1 = max(item[1] for item in cl)
-                    if cl_x0 > last_u_end + 3.0:
-                        all_col_spans.append([cl_x0, cl_x1])
+                        cuts.append(sum((g[0] + g[1]) / 2.0 for g in gc) / len(gc))
+                cuts.append(sx1)
+                for ci in range(len(cuts) - 1):
+                    refined_col_spans.append([cuts[ci], cuts[ci + 1]])
+            else:
+                refined_col_spans.append([sx0, sx1])
 
+        all_col_spans = refined_col_spans
         all_col_spans.sort(key=lambda s: s[0])
 
         # Footer/header rules may expose only the trailing numeric columns.
@@ -1862,19 +1861,6 @@ class WirelessTableExtractor(BaseTableExtractor):
                     best_ci = ci
             if best_ci >= 0:
                 col_words[best_ci].append(w)
-
-        boundaries = []
-        if all_col_spans[0][0] - table_x0 > 25.0:
-            stub_words = [w for w in t_words if w[2] < first_col_x0 - 15.0 and (w[1] + w[3]) / 2.0 >= table_y0 - 15.0]
-            max_stub_x1 = max([w[2] for w in stub_words], default=table_x0)
-            min_col1_x0 = all_col_spans[0][0]
-            if max_stub_x1 < min_col1_x0:
-                b0 = (max_stub_x1 + min_col1_x0) / 2.0
-            else:
-                refined_col_spans.append([sx0, sx1])
-
-        all_col_spans = refined_col_spans
-        first_col_x0 = all_col_spans[0][0]
 
         # 行标签列与第 1 数据列的分界线：严格依据行标签最长文本右边缘与数据列左边缘之间的物理空白中点
         boundaries = []
