@@ -549,3 +549,52 @@ def test_merge_oversegmented_line_columns_recomputes_colspan_after_pruning():
         ("merged", 0, 1),
         ("next", 1, 1),
     ]
+
+
+def test_merge_oversegmented_line_columns_preserves_independent_empty_column():
+    extractor = WiredTableExtractor()
+    cells = [
+        Cell("left", 0, 0, BBox(0.0, 0.0, 20.0, 10.0)),
+        Cell("", 0, 1, BBox(20.0, 0.0, 29.4, 10.0)),
+        Cell("right", 0, 2, BBox(29.4, 0.0, 60.0, 10.0)),
+        Cell("left", 1, 0, BBox(0.0, 10.0, 20.0, 20.0)),
+        Cell("", 1, 1, BBox(20.0, 10.0, 29.4, 20.0)),
+        Cell("right", 1, 2, BBox(29.4, 10.0, 60.0, 20.0)),
+    ]
+
+    result = extractor._merge_oversegmented_line_columns(cells)
+
+    assert [(cell.text, cell.col_index, cell.colspan) for cell in result] == [
+        ("left", 0, 1),
+        ("", 1, 1),
+        ("right", 2, 1),
+        ("left", 0, 1),
+        ("", 1, 1),
+        ("right", 2, 1),
+    ]
+
+
+def test_assign_text_to_line_cells_splits_word_at_physical_column_boundary():
+    extractor = WiredTableExtractor()
+    cells = [
+        Cell("", 0, 0, BBox(220.11, 138.13, 233.28, 149.86)),
+        Cell("", 0, 1, BBox(233.28, 138.13, 242.72, 149.86)),
+    ]
+    word = (223.976, 142.236, 241.712, 145.953, "减：专项", 0, 0, 0)
+    raw_chars = [
+        {"c": "减", "bbox": (223.976, 142.236, 227.694, 145.953)},
+        {"c": "：", "bbox": (227.694, 142.236, 231.412, 145.953)},
+        {"c": "专", "bbox": (234.277, 142.236, 237.995, 145.953)},
+        {"c": "项", "bbox": (237.995, 142.236, 241.712, 145.953)},
+    ]
+    page = SimpleNamespace(
+        get_text=lambda kind: (
+            [word]
+            if kind == "words"
+            else {"blocks": [{"lines": [{"spans": [{"chars": raw_chars}]}]}]}
+        )
+    )
+
+    result = extractor._assign_text_to_line_cells(cells, page)
+
+    assert [cell.text for cell in result] == ["减：", "专项"]
