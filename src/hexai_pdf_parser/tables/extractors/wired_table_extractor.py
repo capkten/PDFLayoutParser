@@ -62,6 +62,10 @@ class WiredTableExtractor(BaseTableExtractor):
             ):
                 continue
 
+            # 过滤单列伪表格：只有 1 列且最多 1 个文本单元格的下划线/边框不构成独立有线表格
+            if sum(1 for c in cells if c.text.strip()) <= 1 and max((c.col_index for c in cells), default=0) == 0:
+                continue
+
             row_count = max((c.row_index for c in cells), default=-1) + 1
             col_count = max((c.col_index for c in cells), default=-1) + 1
 

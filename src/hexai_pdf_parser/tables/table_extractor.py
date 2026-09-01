@@ -260,6 +260,9 @@ class TableExtractor:
         except Exception:
             return list(wired_tables or [])
 
+        if not model_items:
+            return list(wired_tables or [])
+
         tables: List[Table] = []
         valid_wired_tables = list(wired_tables or [])
         if page_language in {"zh", "mixed"}:
@@ -286,7 +289,9 @@ class TableExtractor:
                 confidence=score,
                 page_language=page_language,
             )
-            if not region_tables:
+            if region_tables:
+                included_wired.update(id(table) for table in overlapping_wired)
+            else:
                 if overlapping_wired:
                     region_tables = overlapping_wired
                     included_wired.update(id(table) for table in overlapping_wired)
@@ -311,6 +316,7 @@ class TableExtractor:
             table
             for table in valid_wired_tables
             if id(table) not in included_wired
+            and not any(self._bbox_overlaps(table.bbox, t.bbox) for t in tables)
         )
         return tables
 
