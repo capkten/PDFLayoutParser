@@ -6,6 +6,7 @@ import re
 from collections import Counter
 from typing import Any, Sequence
 
+from .columns import assign_column
 from .span_chain import _union
 
 
@@ -131,7 +132,9 @@ def _can_join(group: Sequence[dict[str, Any]], candidate: dict[str, Any], normal
     ):
         return False
     gap = candidate["bbox"][0] - previous["bbox"][2]
-    if gap > 0 and (_is_placeholder(previous) or _is_placeholder(candidate)):
+    native_line = _same_native_line(previous, candidate)
+    inline_punct = native_line and (len(candidate["text"].strip()) == 1 or len(previous["text"].strip()) == 1) and gap <= 1.0
+    if gap > 0 and not inline_punct and (_is_placeholder(previous) or _is_placeholder(candidate)):
         return False
     if (
         gap > 0.8
@@ -147,6 +150,7 @@ def _can_join(group: Sequence[dict[str, Any]], candidate: dict[str, Any], normal
     )
     if (
         not superscript
+        and not inline_punct
         and _CJK.search(previous["text"])
         and (
             _NUMERIC.fullmatch(candidate["text"].strip())
@@ -154,7 +158,6 @@ def _can_join(group: Sequence[dict[str, Any]], candidate: dict[str, Any], normal
         )
     ):
         return False
-    native_line = _same_native_line(previous, candidate)
     normal_gap_join = native_line and -0.8 <= gap <= _join_gap_limit(previous, candidate, normal_gap)
     spaced_single_cjk = (
         native_line
@@ -175,59 +178,60 @@ def _horizontal_overlap(left: Sequence[float], right: Sequence[float]) -> float:
 
 
 def _right_witnesses(
-    left: dict[str, Any], right: dict[str, Any], runs: Sequence[dict[str, Any]]
+    chain: Sequence[dict[str, Any]],
+    candidate: dict[str, Any],
+    runs: Sequence[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    y0 = min(left["bbox"][1], right["bbox"][1])
-    y1 = max(left["bbox"][3], right["bbox"][3])
-    x1 = max(left["bbox"][2], right["bbox"][2])
+    y0 = min(chain[0]["bbox"][1], candidate["bbox"][1]) - 2.0
+    y1 = max(chain[-1]["bbox"][3], candidate["bbox"][3]) + max(candidate.get("font_size", 10.0), 10.0) * 4.0
+    x1 = max(item["bbox"][2] for item in chain + [candidate])
     return [
         item
         for item in runs
-        if item is not left
-        and item is not right
-        and item["flow_start"] > right["flow_end"]
+        if item not in chain
+        and item is not candidate
+        and item["flow_start"] > candidate["flow_end"]
         and item["bbox"][0] >= x1 + 8.0
         and min(y1, item["bbox"][3]) > max(y0, item["bbox"][1])
     ]
 
 
-def _is_wrapped_field_pair(
-    left: dict[str, Any],
-    right: dict[str, Any],
+def _is_wrapped_chain_pair(
+    chain: Sequence[dict[str, Any]],
+    candidate: dict[str, Any],
     runs: Sequence[dict[str, Any]],
 ) -> bool:
-    if right["flow_start"] != left["flow_end"] + 1:
+    left = chain[-1]
+    if candidate["flow_start"] != left["flow_end"] + 1:
         return False
-    if (
-        left["font"] != right["font"]
-        or left["bold"] != right["bold"]
-        or left["script"] != right["script"]
-    ):
+    if left.get("bold") != candidate.get("bold"):
+        return False
+    if abs(left.get("font_size", 10.0) - candidate.get("font_size", 10.0)) > 1.0:
         return False
     if (
         _NUMERIC.fullmatch(left["text"].strip())
-        or _NUMERIC.fullmatch(right["text"].strip())
+        or _NUMERIC.fullmatch(candidate["text"].strip())
         or _is_placeholder(left)
-        or _is_placeholder(right)
+        or _is_placeholder(candidate)
     ):
         return False
 
     left_center = _center_y(left)
-    right_center = _center_y(right)
-    if right_center <= left_center or right["bbox"][1] < left["bbox"][3]:
+    candidate_center = _center_y(candidate)
+    if candidate_center <= left_center or candidate["bbox"][1] < left["bbox"][3]:
         return False
     minimum_width = min(
         left["bbox"][2] - left["bbox"][0],
-        right["bbox"][2] - right["bbox"][0],
+        candidate["bbox"][2] - candidate["bbox"][0],
     )
-    if _horizontal_overlap(left["bbox"], right["bbox"]) < minimum_width * 0.45:
+    if _horizontal_overlap(left["bbox"], candidate["bbox"]) < minimum_width * 0.45:
         return False
-    if right["bbox"][1] - left["bbox"][3] > max(
-        6.0, min(left["font_size"], right["font_size"])
+    if candidate["bbox"][1] - left["bbox"][3] > max(
+        6.0, min(left["font_size"], candidate["font_size"])
     ):
         return False
 
-    witnesses = _right_witnesses(left, right, runs)
+    witnesses = _right_witnesses(chain, candidate, runs)
     if not witnesses:
         return False
     return True
@@ -242,8 +246,8 @@ def _merge_wrapped_field_runs(
     while index < len(ordered):
         chain = [ordered[index]]
         cursor = index + 1
-        while cursor < len(ordered) and _is_wrapped_field_pair(
-            chain[-1], ordered[cursor], ordered
+        while cursor < len(ordered) and _is_wrapped_chain_pair(
+            chain, ordered[cursor], ordered
         ):
             chain.append(ordered[cursor])
             cursor += 1
@@ -324,3 +328,97 @@ def build_text_runs(spans: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
                 }
             )
     return _merge_wrapped_field_runs(result)
+
+
+def _same_native_line_run(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    return (
+        left.get("source_blocks") == right.get("source_blocks")
+        and left.get("source_line_start") == left.get("source_line_end")
+        and right.get("source_line_start") == right.get("source_line_end")
+        and left.get("source_line_start") == right.get("source_line_start")
+        and right["flow_start"] == left["flow_end"] + 1
+    )
+
+
+def _can_join_same_band_native_line(
+    previous: dict[str, Any],
+    candidate: dict[str, Any],
+    previous_band: int | None,
+    candidate_band: int | None,
+) -> bool:
+    if previous_band is None or previous_band != candidate_band:
+        return False
+    if previous.get("script") != "latin" or candidate.get("script") != "latin":
+        return False
+    if not _same_native_line_run(previous, candidate):
+        return False
+    if abs(_center_y(previous) - _center_y(candidate)) > max(
+        2.4, min(previous["font_size"], candidate["font_size"]) * 0.38
+    ):
+        return False
+    gap = candidate["bbox"][0] - previous["bbox"][2]
+    return -0.8 <= gap <= max(
+        30.0, min(previous["font_size"], candidate["font_size"]) * 3.5
+    )
+
+
+def _merge_same_band_native_line_group(
+    group: Sequence[dict[str, Any]],
+) -> dict[str, Any]:
+    merged = dict(group[0])
+    merged.update(
+        text=" ".join(item["text"].strip() for item in group),
+        bbox=_union(group),
+        span_refs=[span for item in group for span in item["span_refs"]],
+        flow_start=group[0]["flow_start"],
+        flow_end=group[-1]["flow_end"],
+        char_boxes=[char for item in group for char in item.get("char_boxes", [])],
+        source_blocks=sorted(
+            {block for item in group for block in item["source_blocks"]}
+        ),
+        source_line_start=group[0]["source_line_start"],
+        source_line_end=group[-1]["source_line_end"],
+        merge_kind="same_band_native_line",
+    )
+    return merged
+
+
+def merge_same_band_native_line_runs(
+    runs: Sequence[dict[str, Any]], bands: Sequence[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Join wide-spaced Latin fragments only after a coarse band is known."""
+    if not runs or not bands:
+        return [dict(item) for item in runs]
+
+    ordered = sorted(
+        (dict(item) for item in runs),
+        key=lambda item: item["flow_start"],
+    )
+    result: list[dict[str, Any]] = []
+    current: list[dict[str, Any]] = []
+    current_band: int | None = None
+    for item in ordered:
+        item_band = assign_column(item, bands)
+        if current and not _can_join_same_band_native_line(
+            current[-1], item, current_band, item_band
+        ):
+            result.append(
+                _merge_same_band_native_line_group(current)
+                if len(current) > 1
+                else current[0]
+            )
+            current = []
+            current_band = None
+        if not current:
+            current = [item]
+            current_band = item_band
+        else:
+            current.append(item)
+
+    if current:
+        result.append(
+            _merge_same_band_native_line_group(current)
+            if len(current) > 1
+            else current[0]
+        )
+    return result

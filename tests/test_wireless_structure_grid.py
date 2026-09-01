@@ -70,6 +70,28 @@ def test_build_logical_grid_compresses_rows_covered_by_rowspan():
     assert logical_cells[0]["rowspan"] == 1
 
 
+def test_build_logical_grid_groups_rows_inside_a_multiline_first_column_record():
+    physical_rows = [{"id": row, "y": row * 10} for row in range(1, 6)]
+    columns = [{"id": column, "x0": column * 20, "x1": column * 20 + 10} for column in range(1, 4)]
+    cells = [
+        _logical_cell("HEADER", "表头", 1, 1, 3, y=10),
+        {
+            **_logical_cell("NAME", "FRASERS PROPERTY\nTHAILAND INDUSTRIAL\nFREEHOLD", 2, 1, y=20),
+            "row_end": 4,
+            "rowspan": 3,
+        },
+        _logical_cell("TYPE", "押金及保证金", 3, 2, y=30),
+        _logical_cell("AMOUNT", "1,637,322.45", 4, 3, y=40),
+        _logical_cell("NEXT", "下一单位", 5, 1, y=50),
+    ]
+
+    rows, _, logical_cells = build_logical_grid(physical_rows, columns, cells)
+
+    assert [row["source_rows"] for row in rows] == [[1], [2, 3, 4], [5]]
+    name = next(cell for cell in logical_cells if cell["cell_id"] == "NAME")
+    assert (name["row_start"], name["row_end"], name["rowspan"]) == (2, 2, 1)
+
+
 def test_build_logical_grid_redivides_chained_multiline_header_rows():
     physical_rows = [
         {"id": 1, "y": 10},
@@ -107,6 +129,93 @@ def test_build_logical_grid_redivides_chained_multiline_header_rows():
     loss_rate = next(cell for cell in logical_cells if cell["cell_id"] == "R5")
     assert (book_value["row_start"], book_value["row_end"], book_value["rowspan"]) == (2, 3, 2)
     assert (loss_rate["row_start"], loss_rate["row_end"], loss_rate["rowspan"]) == (3, 3, 1)
+
+
+def test_build_logical_grid_collapses_wrapped_leaf_header_row():
+    physical_rows = [
+        {"id": 1, "y": 10},
+        {"id": 2, "y": 20},
+        {"id": 3, "y": 30},
+    ]
+    columns = [
+        {"id": column, "x0": column * 20, "x1": column * 20 + 10}
+        for column in range(1, 6)
+    ]
+    cells = [
+        {
+            **_logical_cell(
+                "H3",
+                "未来12个月\n内的预期信用损失率(%)",
+                1,
+                3,
+                y=10,
+            ),
+            "row_end": 2,
+            "rowspan": 2,
+            "merge_kind": "multiline_cell",
+        },
+        _logical_cell("H1", "类别", 2, 1, y=20),
+        _logical_cell("H2", "账面余额", 2, 2, y=20),
+        _logical_cell("H4", "坏账准备", 2, 4, y=20),
+        _logical_cell("H5", "账面价值", 2, 5, y=20),
+        *[_logical_cell(f"B{column}", f"正文{column}", 3, column, y=30) for column in range(1, 6)],
+    ]
+
+    rows, _, logical_cells = build_logical_grid(
+        physical_rows,
+        columns,
+        cells,
+        header_cutoff=25,
+    )
+
+    assert [row["source_rows"] for row in rows] == [[1, 2], [3]]
+    header = [cell for cell in logical_cells if cell["text"].startswith(("类别", "账面余额", "未来", "坏账准备", "账面价值"))]
+    assert all((cell["row_start"], cell["row_end"], cell["rowspan"]) == (1, 1, 1) for cell in header)
+
+    materialized = logical_grid.materialize_empty_cells(
+        rows,
+        physical_rows,
+        columns,
+        logical_cells,
+        BBox(0, 0, 120, 40),
+    )
+    assert not any(cell.get("merge_kind") == "empty_slot" and cell["row_start"] == 1 for cell in materialized)
+
+
+def test_build_logical_grid_keeps_wrapped_leaf_below_a_real_parent_header():
+    physical_rows = [
+        {"id": 1, "y": 10},
+        {"id": 2, "y": 20},
+        {"id": 3, "y": 30},
+    ]
+    columns = [
+        {"id": column, "x0": column * 20, "x1": column * 20 + 10}
+        for column in range(1, 5)
+    ]
+    cells = [
+        {
+            **_logical_cell("H1", "账面\n价值", 1, 1, y=10),
+            "row_end": 2,
+            "rowspan": 2,
+            "merge_kind": "multiline_cell",
+        },
+        _logical_cell("P", "年度", 1, 2, 4, y=10),
+        _logical_cell("L2", "金额", 2, 2, y=20),
+        _logical_cell("L3", "坏账准备", 2, 3, y=20),
+        _logical_cell("L4", "账面余额", 2, 4, y=20),
+        *[_logical_cell(f"B{column}", f"正文{column}", 3, column, y=30) for column in range(1, 5)],
+    ]
+
+    rows, _, logical_cells = build_logical_grid(
+        physical_rows,
+        columns,
+        cells,
+        header_cutoff=25,
+    )
+
+    assert [row["source_rows"] for row in rows] == [[1], [2], [3]]
+    header = next(cell for cell in logical_cells if cell["cell_id"] == "H1")
+    assert (header["row_start"], header["row_end"], header["rowspan"]) == (1, 2, 2)
 
 
 def test_materialize_empty_cells_fills_every_unoccupied_logical_slot():

@@ -79,6 +79,7 @@ def _header_cutoff(atoms: Sequence[dict[str, Any]]) -> float | None:
     ]
     gaps = [right - left for left, right in zip(levels, levels[1:])]
     median_gap = statistics.median(gaps)
+    early_gap_threshold = max(12.0, min(gaps) * 1.65)
     # 检查清单表中重复出现的对号属于正文记录，而不是多级表头。以第一条
     # 对号记录为正文起点，避免长说明文本把表头下界拖到后续正文行。
     checkmark_levels = sorted({
@@ -91,6 +92,27 @@ def _header_cutoff(atoms: Sequence[dict[str, Any]]) -> float | None:
         preceding = [level for level in levels if level < first_checkmark - 1.0]
         if preceding:
             return (preceding[-1] + first_checkmark) / 2.0
+    # A wrapped first-column label may be emitted as two consecutive Latin
+    # levels before numeric fields begin.  When that pair follows a clearly
+    # larger gap than the dense header rhythm, it is body evidence even though
+    # neither level contains a number.
+    latin_body_indices = {
+        index
+        for index, level in enumerate(levels)
+        if any(
+            _is_latin_body_atom(item)
+            and not _is_structural_header_atom(item)
+            for item in atoms
+            if abs(_center_y(item) - level) < 0.5
+        )
+    }
+    for index in sorted(latin_body_indices):
+        if (
+            index >= 2
+            and index + 1 in latin_body_indices
+            and gaps[index - 1] >= early_gap_threshold
+        ):
+            return (levels[index - 1] + levels[index]) / 2.0
     # Repeated non-structural numeric rows are strong body evidence.  A wrapped
     # body note can create a later sparse level and a larger gap, so this must be
     # checked before the generic large-gap heuristic.
@@ -113,7 +135,6 @@ def _header_cutoff(atoms: Sequence[dict[str, Any]]) -> float | None:
     # 四层及以上的密集表头常见于“公司 / 日期 / 年份 / 单位”。其后的正文
     # 间隔未必达到相邻表头行间距的两倍；若仍坚持 2.0，会令后续数值叶子
     # 轨迹完全失效，把同一公司下的两个年份压进同一列带。
-    early_gap_threshold = max(12.0, min(gaps) * 1.65)
     for index, gap in enumerate(gaps):
         if index >= 2 and gap >= early_gap_threshold and sum(count >= 2 for count in level_counts[: index + 1]) >= 2:
             return (levels[index] + levels[index + 1]) / 2.0
@@ -228,6 +249,13 @@ def _is_note_reference_atom(atom: dict[str, Any]) -> bool:
 def _is_numeric_body_atom(item: dict[str, Any]) -> bool:
     """金额、百分比和年份等数值对象可作为叶子数值列的稳定锚点。"""
     return any(char.isdigit() for char in item["text"])
+
+
+def _is_latin_body_atom(item: dict[str, Any]) -> bool:
+    text = str(item.get("text", ""))
+    return bool(re.search(r"[A-Za-z]", text)) and not bool(
+        re.search(r"[\u3400-\u9fff]", text)
+    )
 
 
 def _split_by_numeric_body_alignment(

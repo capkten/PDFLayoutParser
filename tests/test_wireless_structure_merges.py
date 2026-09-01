@@ -62,6 +62,27 @@ def test_merge_multiline_cells_requires_continuous_same_column_evidence():
     assert result[0]["rowspan"] == 2
 
 
+def test_merge_multiline_cells_accepts_vertical_fragments_in_same_physical_row():
+    first = _cell("坏账准备", flow=1, row=1, y0=10, y1=20)
+    second = _cell("期末余额", flow=2, row=1, y0=21, y1=31)
+
+    result = merge_multiline_cells([first, second], header_cutoff=None)
+
+    assert len(result) == 1
+    assert result[0]["text"] == "坏账准备\n期末余额"
+    assert result[0]["row_start"] == result[0]["row_end"] == 1
+    assert result[0]["rowspan"] == 1
+
+
+def test_merge_multiline_cells_requires_candidate_to_be_below_previous_fragment():
+    first = _cell("上方片段", flow=1, row=1, y0=21, y1=31)
+    second = _cell("下方片段", flow=2, row=1, y0=10, y1=20)
+
+    result = merge_multiline_cells([first, second], header_cutoff=None)
+
+    assert [item["text"] for item in result] == ["上方片段", "下方片段"]
+
+
 def test_merge_multiline_cells_keeps_independent_project_rows_separate():
     first = _cell("项目一", flow=1, row=1, y0=10, y1=20)
     second = _cell("项目二", flow=3, row=2, y0=22, y1=32)

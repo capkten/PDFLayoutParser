@@ -106,7 +106,15 @@ def _can_merge_multiline(
 ) -> bool:
     if previous["col_start"] != candidate["col_start"] or previous["col_end"] != candidate["col_end"]:
         return False
-    if candidate["row_start"] != previous["row_end"] + 1 or not _native_continuous(previous, candidate):
+    same_or_adjacent_row = candidate["row_start"] in {
+        previous["row_end"],
+        previous["row_end"] + 1,
+    }
+    if not same_or_adjacent_row or not _native_continuous(previous, candidate):
+        return False
+    previous_center_y = (previous["bbox"][1] + previous["bbox"][3]) / 2.0
+    candidate_center_y = (candidate["bbox"][1] + candidate["bbox"][3]) / 2.0
+    if candidate_center_y <= previous_center_y:
         return False
     if previous["script"] != candidate["script"] and "numeric" not in {previous["script"], candidate["script"]}:
         return False

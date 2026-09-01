@@ -86,6 +86,27 @@ def test_infer_header_cutoff_uses_the_earliest_large_header_body_gap():
     assert 28 < cutoff < 45
 
 
+def test_infer_header_cutoff_treats_repeated_latin_rows_after_header_as_body():
+    atoms = [
+        _atom("表头一", 10, 10, 30, 18, 1),
+        _atom("表头二", 50, 10, 70, 18, 2),
+        _atom("叶子一", 10, 20, 30, 28, 3),
+        _atom("叶子二", 50, 20, 70, 28, 4),
+        _atom("表头尾", 10, 30, 30, 38, 5),
+        _atom("FRASERS", 10, 50, 30, 58, 6),
+        _atom("PROPERTY", 50, 50, 80, 58, 7),
+        _atom("THAILAND", 10, 62, 35, 70, 8),
+        _atom("INDUSTRIAL", 50, 62, 85, 70, 9),
+        _atom("100", 50, 78, 70, 86, 10),
+        _atom("200", 50, 90, 70, 98, 11),
+    ]
+
+    cutoff = infer_header_cutoff(atoms)
+
+    assert cutoff is not None
+    assert 38 < cutoff < 50
+
+
 def test_refine_leaf_bands_stops_before_a_numeric_body_row_with_later_wraps():
     bands = [
         {"id": 1, "x0": 87.74, "x1": 147.74, "support": 5, "y_support": 5},

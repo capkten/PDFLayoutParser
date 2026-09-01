@@ -1,8 +1,16 @@
+from pathlib import Path
+
+import fitz
+import pytest
+
 from hexai_pdf_parser.core.models import BBox
 from hexai_pdf_parser.tables.wireless_table_recovery import NativeSpan
 from hexai_pdf_parser.tables.wireless_structure import recoverer
 from hexai_pdf_parser.tables.wireless_structure.recoverer import recover_cells_from_region
 from hexai_pdf_parser.tables.wireless_structure.text_runs import build_text_runs
+
+
+PAGE_437_FIXTURE = Path(__file__).parent / "fixtures" / "page_437_wireless.pdf"
 
 
 def test_recover_cells_from_region_converts_new_pipeline_to_project_cells(monkeypatch):
@@ -36,6 +44,29 @@ def test_recover_cells_from_region_converts_new_pipeline_to_project_cells(monkey
         (2, 0, "乙"),
         (2, 1, "20"),
     }
+
+
+def test_page_437_fixture_bottom_table_preserves_first_column_and_record_rows():
+    document = fitz.open(str(PAGE_437_FIXTURE))
+    try:
+        rows, columns, cells = recover_cells_from_region(
+            document[0],
+            BBox(67.6, 646.8, 522.5, 766.1),
+        )
+    finally:
+        document.close()
+
+    assert (rows, columns) == (3, 6)
+    first_record = [cell for cell in cells if cell.row_index == 1]
+    assert any(
+        "FRASERS" in cell.text
+        and "PROPERTY" in cell.text
+        and "THAILAND" in cell.text
+        and "INDUSTRIAL" in cell.text
+        for cell in first_record
+    )
+    assert any("1,637,322.45" in cell.text for cell in first_record)
+    assert any("196,478.69" in cell.text for cell in first_record)
 
 
 def test_table_header_gap_above_normal_gap_is_not_joined():

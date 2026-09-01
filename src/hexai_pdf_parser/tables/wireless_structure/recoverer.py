@@ -24,7 +24,7 @@ from .header_topology import (
 from .logical_grid import build_logical_grid, materialize_empty_cells, merge_header_spans
 from .merged_cells import merge_multiline_cells, merge_same_slot_fragments
 from .span_chain import region_spans
-from .text_runs import build_text_runs
+from .text_runs import build_text_runs, merge_same_band_native_line_runs
 
 
 def _bbox(values: list[float]) -> BBox:
@@ -96,6 +96,7 @@ def recover_cells_from_region(
         if not atoms or len(bands) < 2:
             return 0, 0, []
 
+        atoms = merge_same_band_native_line_runs(atoms, bands)
         bands, header_cutoff = refine_leaf_bands(atoms, bands)
         bands = rescue_sparse_body_bands(atoms, bands, header_cutoff)
         if len(bands) < 1:
@@ -112,7 +113,7 @@ def recover_cells_from_region(
         if _has_occupancy_conflict(cells):
             return 0, 0, []
         logical_rows, logical_columns, logical_cells = build_logical_grid(
-            physical_rows, columns, cells
+            physical_rows, columns, cells, header_cutoff
         )
         if _has_occupancy_conflict(logical_cells):
             return 0, 0, []
