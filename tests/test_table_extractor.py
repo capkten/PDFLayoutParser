@@ -3273,3 +3273,76 @@ def test_dollar_sign_no_numeric_neighbor():
     result = extractor._handle_dollar_signs([row])
     assert len(result) == 1
     assert len(result[0].words) == 2
+
+
+def test_physical_horizontal_line_row_separation_and_multi_dollar_split():
+    """Physical horizontal lines force row separation (Page 251) and multi-dollar data rows adaptively split into separate columns (Page 247)."""
+    from types import SimpleNamespace
+    from hexai_pdf_parser.core.models import BBox
+    from hexai_pdf_parser.tables.extractors.wireless_table_extractor import WirelessTableExtractor
+
+    # 1. Test Physical Horizontal Line Row Separation (Page 251 style)
+    words_p251 = [
+        (34.0, 475.0, 88.0, 482.0, "As of June 2024"),
+        (34.0, 484.0, 60.0, 492.0, "Assets"),
+        (34.0, 495.0, 85.0, 503.0, "Investments"),
+        (140.0, 495.0, 170.0, 503.0, "$26,981"),
+        (220.0, 495.0, 250.0, 503.0, "$(258)"),
+    ]
+    drawings_p251 = [
+        {"items": [("l", SimpleNamespace(x=34.0, y=482.4), SimpleNamespace(x=88.0, y=482.4))]}
+    ]
+    page_p251 = SimpleNamespace(
+        get_text=lambda kind: words_p251 if kind == "words" else [],
+        get_drawings=lambda: drawings_p251,
+        rect=SimpleNamespace(x0=0.0, y0=0.0, x1=600.0, y1=800.0),
+    )
+    extractor = WirelessTableExtractor()
+    tables_p251 = extractor.extract_general_wireless(page_p251, table_bbox=BBox(32.0, 470.0, 290.0, 520.0))
+    assert len(tables_p251) == 1
+    t251 = tables_p251[0]
+    r0_text = [c.text for c in t251.cells if c.row_index == 0 and c.text]
+    r1_text = [c.text for c in t251.cells if c.row_index == 1 and c.text]
+    assert "As of June 2024" in r0_text[0]
+    assert "Assets" in r1_text[0]
+
+    # 2. Test Multi-dollar Adaptive Split (Page 247 style)
+    words_p247 = [
+        (34.0, 213.5, 72.0, 222.0, "$ in millions"),
+        (140.0, 213.5, 170.0, 222.0, "Less than 1 Year"),
+        (180.0, 213.5, 207.0, 222.0, "1 - 5 Years"),
+        (215.0, 213.5, 253.0, 222.0, "Greater than 5 Years"),
+        (270.0, 213.5, 293.0, 222.0, "Total"),
+        (34.0, 253.5, 76.0, 262.4, "Interest rates"),
+        (134.3, 253.5, 138.5, 262.4, "$"),
+        (150.6, 253.5, 169.2, 262.4, "5,678"),
+        (173.4, 253.5, 177.6, 262.4, "$"),
+        (182.3, 253.5, 205.1, 262.4, "10,680"),
+        (209.3, 253.5, 213.5, 262.4, "$"),
+        (229.1, 253.5, 251.9, 262.4, "47,396"),
+        (256.1, 253.5, 260.3, 262.4, "$"),
+        (268.6, 253.5, 291.4, 262.4, "63,754"),
+    ]
+    drawings_p247 = [
+        {"items": [("l", SimpleNamespace(x=35.8, y=229.9), SimpleNamespace(x=131.7, y=229.9))]},
+        {"items": [("l", SimpleNamespace(x=138.5, y=229.9), SimpleNamespace(x=170.9, y=229.9))]},
+        {"items": [("l", SimpleNamespace(x=177.6, y=229.9), SimpleNamespace(x=207.3, y=229.9))]},
+        {"items": [("l", SimpleNamespace(x=213.4, y=229.9), SimpleNamespace(x=253.9, y=229.9))]},
+        {"items": [("l", SimpleNamespace(x=260.6, y=229.9), SimpleNamespace(x=293.7, y=229.9))]},
+    ]
+    page_p247 = SimpleNamespace(
+        get_text=lambda kind: words_p247 if kind == "words" else [],
+        get_drawings=lambda: drawings_p247,
+        rect=SimpleNamespace(x0=0.0, y0=0.0, x1=600.0, y1=800.0),
+    )
+    tables_p247 = extractor.extract_general_wireless(page_p247, table_bbox=BBox(32.0, 210.0, 296.0, 270.0))
+    assert len(tables_p247) == 1
+    t247 = tables_p247[0]
+    assert t247.cols == 5
+    data_cells = sorted([c for c in t247.cells if c.row_index == 1], key=lambda c: c.col_index)
+    assert data_cells[0].text == "Interest rates"
+    assert data_cells[1].text == "$5,678"
+    assert data_cells[2].text == "$10,680"
+    assert data_cells[3].text == "$47,396"
+    assert data_cells[4].text == "$63,754"
+

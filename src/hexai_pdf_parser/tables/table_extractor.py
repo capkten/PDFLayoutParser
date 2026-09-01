@@ -258,16 +258,17 @@ class TableExtractor:
             return list(wired_tables or [])
 
         tables: List[Table] = []
+        valid_wired_tables = list(wired_tables or [])
         if page_language in {"zh", "mixed"}:
-            wired_tables = [
+            valid_wired_tables = [
                 self._recover_hybrid_wired_table(page, table, page_language)
-                for table in (wired_tables or [])
+                for table in valid_wired_tables
             ]
         included_wired: set[int] = set()
         for bbox, score in model_items:
             overlapping_wired = [
                 table
-                for table in wired_tables or []
+                for table in valid_wired_tables
                 if id(table) not in included_wired
                 and self._bbox_overlaps(table.bbox, bbox)
             ]
@@ -283,16 +284,29 @@ class TableExtractor:
                 page_language=page_language,
             )
             if not region_tables:
-                region_tables = self._wired_extractor.extract(
-                    page,
-                    table_bbox=bbox,
-                    confidence=score,
-                )
+                if overlapping_wired:
+                    region_tables = overlapping_wired
+                    included_wired.update(id(table) for table in overlapping_wired)
+                else:
+                    try:
+                        region_tables = self._wired_extractor.extract(
+                            page,
+                            table_bbox=bbox,
+                            confidence=score,
+                        )
+                    except TypeError:
+                        try:
+                            region_tables = self._wired_extractor.extract(page)
+                        except Exception:
+                            region_tables = []
+                    except Exception:
+                        region_tables = []
+                    region_tables = [t for t in region_tables if t.cols > 1]
             tables.extend(region_tables)
 
         tables.extend(
             table
-            for table in wired_tables or []
+            for table in valid_wired_tables
             if id(table) not in included_wired
         )
         return tables
