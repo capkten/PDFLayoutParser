@@ -11,6 +11,7 @@ from pathlib import Path
 import fitz
 
 from hexai_pdf_parser.core.models import Document, Page
+from hexai_pdf_parser.extractors.page_classifier import classify_page_type
 
 
 class Loader:
@@ -40,6 +41,7 @@ class Loader:
                         index=idx,
                         size={"width": rect.width, "height": rect.height},
                         rotation=page.rotation,
+                        page_type=classify_page_type(page),
                     )
                 )
 

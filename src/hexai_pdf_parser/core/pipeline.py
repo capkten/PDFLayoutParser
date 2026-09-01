@@ -265,6 +265,7 @@ def _process_page_process_worker(
     page_size: dict,
     page_rotation: int,
     table_extractor_cls=TableExtractor,
+    page_type: str = "vector",
 ) -> tuple[int, Page, dict[str, float], float]:
     """Worker function for process-based parallelism.
 
@@ -277,6 +278,7 @@ def _process_page_process_worker(
         index=page_index,
         size=page_size,
         rotation=page_rotation,
+        page_type=page_type,
     )
 
     output_dir = os.path.dirname(images_dir) if images_dir else None
@@ -558,6 +560,7 @@ class Pipeline:
                             page.size,
                             page.rotation,
                             self._get_table_extractor_class(),
+                            page_type=page.page_type,
                         )
                     )
                 for future in futures:

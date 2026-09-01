@@ -28,6 +28,7 @@ _LEGACY_MODULE_MAP = {
     "layout_mapper": "hexai_pdf_parser.extractors.layout_mapper",
     "layout_builder": "hexai_pdf_parser.extractors.layout_builder",
     "language_detector": "hexai_pdf_parser.extractors.language_detector",
+    "page_classifier": "hexai_pdf_parser.extractors.page_classifier",
     "personal_credit_report": "hexai_pdf_parser.extractors.personal_credit_report",
     "table_extractor": "hexai_pdf_parser.tables.table_extractor",
     "table_config": "hexai_pdf_parser.tables.table_config",
@@ -114,6 +115,8 @@ from hexai_pdf_parser.core.models import (
 
 # Extractors & Builders
 from hexai_pdf_parser.extractors.text_extractor import TextExtractor
+from hexai_pdf_parser.extractors.language_detector import detect_page_language
+from hexai_pdf_parser.extractors.page_classifier import classify_page_type, is_scanned_page
 from hexai_pdf_parser.tables.table_extractor import TableExtractor
 from hexai_pdf_parser.tables.extractors import (
     ChineseTableExtractor,
@@ -182,6 +185,9 @@ __all__ = [
     "ImageExtractor",
     "LayoutMapper",
     "LayoutBuilder",
+    "detect_page_language",
+    "classify_page_type",
+    "is_scanned_page",
     # Writers & Renderers
     "JSONWriter",
     "MarkdownWriter",
