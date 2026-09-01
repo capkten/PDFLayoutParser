@@ -2034,6 +2034,85 @@ class WirelessTableExtractor(BaseTableExtractor):
             for cluster in cooccurring
         ]
 
+    @staticmethod
+    def _infer_repeated_leading_text_spans(
+        words: List[Tuple],
+        first_col_x0: float,
+        table_y0: float,
+    ) -> List[List[float]]:
+        """Find repeated text intervals before the first explicit rule column."""
+        leading_words = [
+            word
+            for word in words
+            if word[2] < first_col_x0 - 15.0
+            and (word[1] + word[3]) / 2.0 >= table_y0 - 15.0
+        ]
+        if not leading_words:
+            return []
+
+        rows: List[List[Tuple]] = []
+        for word in sorted(leading_words, key=lambda item: ((item[1] + item[3]) / 2.0, item[0])):
+            mid_y = (word[1] + word[3]) / 2.0
+            matched_row = None
+            for row in rows:
+                row_mid = sum((item[1] + item[3]) / 2.0 for item in row) / len(row)
+                if abs(mid_y - row_mid) <= 3.5:
+                    matched_row = row
+                    break
+            if matched_row is None:
+                rows.append([word])
+            else:
+                matched_row.append(word)
+
+        segments: List[Tuple[float, float, int]] = []
+        for row_index, row in enumerate(rows):
+            current = []
+            for word in sorted(row, key=lambda item: item[0]):
+                if current and word[0] - current[-1][2] > 6.0:
+                    segments.append((current[0][0], current[-1][2], row_index))
+                    current = []
+                current.append(word)
+            if current:
+                segments.append((current[0][0], current[-1][2], row_index))
+
+        clusters: List[Dict[str, object]] = []
+        for x0, x1, row_index in sorted(segments):
+            matched = None
+            for cluster in clusters:
+                if not (x1 < cluster["x0"] or x0 > cluster["x1"]):
+                    matched = cluster
+                    break
+            if matched is None:
+                clusters.append({"x0": x0, "x1": x1, "rows": {row_index}})
+            else:
+                matched["x0"] = min(matched["x0"], x0)
+                matched["x1"] = max(matched["x1"], x1)
+                matched["rows"].add(row_index)
+
+        min_support = max(2, int(len(rows) * 0.15))
+        repeated = [
+            cluster
+            for cluster in sorted(clusters, key=lambda item: item["x0"])
+            if len(cluster["rows"]) >= min_support
+        ]
+        if len(repeated) < 2:
+            return []
+
+        cooccurring = [repeated[0]]
+        for cluster in repeated[1:]:
+            if any(
+                len(cluster["rows"] & previous["rows"]) >= 2
+                for previous in cooccurring
+            ):
+                cooccurring.append(cluster)
+        if len(cooccurring) < 2:
+            return []
+
+        return [
+            [float(cluster["x0"]), float(cluster["x1"])]
+            for cluster in cooccurring
+        ]
+
     def _normalize_zebra_headers(
         self,
         header_cells: List[Cell],
