@@ -123,6 +123,38 @@ class WiredTableExtractor(BaseTableExtractor):
                 ):
                     continue
 
+            # A filled narrow path can represent one thick rule while exposing
+            # both of its parallel edges as ``l`` items.  Use the drawing
+            # centerline so the two edges do not become separate grid bounds.
+            drawing_rect = d.get("rect")
+            if d.get("type") == "f" and drawing_rect is not None:
+                try:
+                    x0 = float(drawing_rect.x0)
+                    y0 = float(drawing_rect.y0)
+                    x1 = float(drawing_rect.x1)
+                    y1 = float(drawing_rect.y1)
+                except (AttributeError, TypeError, ValueError):
+                    drawing_rect = None
+                else:
+                    width = x1 - x0
+                    height = y1 - y0
+                    if clip_bbox:
+                        if (
+                            x1 < clip_bbox.x0 - 2.0
+                            or x0 > clip_bbox.x1 + 2.0
+                            or y1 < clip_bbox.y0 - 2.0
+                            or y0 > clip_bbox.y1 + 2.0
+                        ):
+                            continue
+                    if height <= self.line_tolerance and width >= 3.0:
+                        center_y = (y0 + y1) / 2.0
+                        h_lines.append((x0, center_y, x1, center_y))
+                        continue
+                    if width <= self.line_tolerance and height >= 3.0:
+                        center_x = (x0 + x1) / 2.0
+                        v_lines.append((center_x, y0, center_x, y1))
+                        continue
+
             items = d.get("items", [])
             for item in items:
                 if item[0] == "l":

@@ -83,6 +83,98 @@ def test_wireless_extractor_keeps_zebra_for_english_page(monkeypatch):
     assert tables == [zebra_table]
 
 
+def test_english_wireless_keeps_unlined_note_column_before_amount_columns():
+    from hexai_pdf_parser.tables.extractors.wireless_table_extractor import (
+        WirelessTableExtractor as NativeWirelessTableExtractor,
+    )
+
+    def word(x0, y0, x1, y1, text):
+        return (x0, y0, x1, y1, text, 0, 0, 0)
+
+    words = [
+        word(326.7, 134.17, 346.2, 145.26, "Note"),
+        word(69.0, 153.85, 188.98, 164.94, "Trading fees and trading tariff"),
+        word(419.28, 153.85, 434.31, 164.94, "765"),
+        word(515.28, 153.85, 530.31, 164.94, "653"),
+        word(69.0, 170.89, 179.69, 181.98, "Stock Exchange listing fees"),
+        word(341.17, 238.87, 346.18, 249.96, "3"),
+        word(69.0, 238.87, 126.01, 249.96, "Other revenue"),
+        word(419.28, 238.87, 434.31, 249.96, "127"),
+        word(515.28, 238.87, 530.31, 249.96, "108"),
+        word(341.18, 312.97, 346.19, 324.06, "4"),
+        word(69.0, 312.97, 161.79, 324.06, "Net investment income"),
+        word(420.36, 312.97, 434.31, 324.06, "111"),
+        word(515.28, 312.97, 530.31, 324.06, "125"),
+    ]
+    drawings = [
+        {"items": [("re", fitz.Rect(375.84, 275.46, 447.24, 275.94))]},
+        {"items": [("re", fitz.Rect(471.24, 275.46, 543.72, 275.94))]},
+        {"items": [("re", fitz.Rect(375.84, 309.42, 447.24, 309.90))]},
+        {"items": [("re", fitz.Rect(471.24, 309.42, 543.72, 309.90))]},
+    ]
+    page = SimpleNamespace(
+        rect=fitz.Rect(0, 0, 595.22, 842.0),
+        get_drawings=lambda: drawings,
+        get_text=lambda kind: words if kind == "words" else [],
+    )
+
+    tables = NativeWirelessTableExtractor().extract_general_wireless(
+        page,
+        table_bbox=BBox(62.8, 104.2, 546.4, 612.5),
+    )
+
+    assert len(tables) == 1
+    assert tables[0].cols == 4
+    note_cell = next(cell for cell in tables[0].cells if cell.text == "Note")
+    assert note_cell.col_index == 1
+
+
+def test_english_wireless_does_not_split_alternately_indented_description_column():
+    from hexai_pdf_parser.tables.extractors.wireless_table_extractor import (
+        WirelessTableExtractor as NativeWirelessTableExtractor,
+    )
+
+    def word(x0, y0, x1, y1, text):
+        return (x0, y0, x1, y1, text, 0, 0, 0)
+
+    words = [
+        word(69.0, 153.85, 110.0, 164.94, "Trading fees"),
+        word(419.28, 153.85, 434.31, 164.94, "765"),
+        word(515.28, 153.85, 530.31, 164.94, "653"),
+        word(140.0, 170.89, 230.0, 181.98, "Indented description"),
+        word(419.28, 170.89, 434.31, 181.98, "246"),
+        word(515.28, 170.89, 530.31, 181.98, "221"),
+        word(69.0, 187.87, 112.0, 198.96, "Clearing fees"),
+        word(419.28, 187.87, 434.31, 198.96, "418"),
+        word(515.28, 187.87, 530.31, 198.96, "365"),
+        word(140.0, 204.85, 237.51, 215.94, "Another indented"),
+        word(419.28, 204.85, 434.31, 215.94, "72"),
+        word(515.28, 204.85, 530.31, 215.94, "73"),
+        word(69.0, 300.0, 112.0, 311.09, "Final description"),
+        word(419.28, 300.0, 434.31, 311.09, "10"),
+        word(515.28, 300.0, 530.31, 311.09, "11"),
+    ]
+    drawings = [
+        {"items": [("re", fitz.Rect(375.84, 275.46, 447.24, 275.94))]},
+        {"items": [("re", fitz.Rect(471.24, 275.46, 543.72, 275.94))]},
+        {"items": [("re", fitz.Rect(375.84, 309.42, 447.24, 309.90))]},
+        {"items": [("re", fitz.Rect(471.24, 309.42, 543.72, 309.90))]},
+    ]
+    page = SimpleNamespace(
+        rect=fitz.Rect(0, 0, 595.22, 842.0),
+        get_drawings=lambda: drawings,
+        get_text=lambda kind: words if kind == "words" else [],
+    )
+
+    tables = NativeWirelessTableExtractor().extract_general_wireless(
+        page,
+        table_bbox=BBox(62.8, 104.2, 546.4, 612.5),
+    )
+
+    assert len(tables) == 1
+    assert tables[0].cols == 3
+
+
 def test_wireless_extractor_uses_new_recovery_for_mixed_page(monkeypatch):
     extractor = WirelessTableExtractor()
 
@@ -159,8 +251,8 @@ def test_hybrid_wired_table_recovers_only_tall_body_cell(monkeypatch):
         Cell("20.00", 1, 1, BBox(250, 180, 320, 195)),
     ]
     monkeypatch.setattr(
-        "hexai_pdf_parser.tables.table_extractor.recover_cells_from_region",
-        lambda page, region: (2, 2, recovered),
+        "hexai_pdf_parser.tables.table_extractor.recover_hybrid_body_cells",
+        lambda page, region, column_edges: (2, 2, recovered),
     )
 
     result = extractor._recover_hybrid_wired_table(object(), wired, "zh")
@@ -194,6 +286,45 @@ def test_hybrid_wired_table_keeps_normal_height_grid(monkeypatch):
     )
 
     assert extractor._recover_hybrid_wired_table(object(), table, "zh") is table
+
+
+def test_hybrid_wired_table_preserves_body_colspan_without_conflict(monkeypatch):
+    extractor = TableExtractor()
+    wired_cells = [
+        Cell("项目", 0, 0, BBox(0, 0, 100, 20)),
+        Cell("金额", 0, 1, BBox(100, 0, 200, 20)),
+        Cell("", 1, 0, BBox(0, 20, 100, 280)),
+        Cell("", 1, 1, BBox(100, 20, 200, 280)),
+        Cell("合计", 2, 0, BBox(0, 280, 100, 300)),
+        Cell("1.00", 2, 1, BBox(100, 280, 200, 300)),
+    ]
+    wired = Table(
+        bbox=BBox(0, 0, 200, 300),
+        rows=3,
+        cols=2,
+        cells=wired_cells,
+        source="line_projection",
+        h_lines=[(0.0, 0.0, 200.0, 0.0)],
+        v_lines=[(0.0, 0.0, 0.0, 300.0), (100.0, 0.0, 100.0, 300.0)],
+    )
+    recovered = [
+        Cell("跨列项目", 0, 0, BBox(0, 30, 200, 45), colspan=2),
+        Cell("明细", 1, 0, BBox(0, 60, 100, 75)),
+        Cell("2.00", 1, 1, BBox(100, 60, 200, 75)),
+    ]
+    monkeypatch.setattr(
+        "hexai_pdf_parser.tables.table_extractor.recover_hybrid_body_cells",
+        lambda page, region, column_edges: (2, 2, recovered),
+    )
+
+    result = extractor._recover_hybrid_wired_table(object(), wired, "zh")
+
+    assert result.source == "hybrid_line_span_recovery"
+    merged = next(cell for cell in result.cells if cell.text == "跨列项目")
+    assert (merged.row_index, merged.col_index, merged.colspan) == (1, 0, 2)
+    assert not any(cell.row_index == 1 and cell.col_index == 1 for cell in result.cells)
+    assert result.h_lines == wired.h_lines
+    assert result.v_lines == wired.v_lines
 
 
 def make_synthetic_text_alignment_pdf(
