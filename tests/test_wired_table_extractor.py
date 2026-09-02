@@ -78,6 +78,26 @@ def test_extract_lines_ignores_non_narrow_filled_path_outline():
     assert v_lines == []
 
 
+def test_extract_lines_keeps_re_rule_in_non_narrow_fill_path():
+    extractor = WiredTableExtractor()
+    page = SimpleNamespace(
+        get_drawings=lambda: [
+            {
+                "type": "f",
+                "color": None,
+                "fill": (0.0, 0.0, 0.0),
+                "rect": fitz.Rect(10.0, 20.0, 110.0, 80.0),
+                "items": [("re", fitz.Rect(10.0, 20.0, 110.0, 20.5))],
+            }
+        ]
+    )
+
+    h_lines, v_lines = extractor._extract_lines_from_drawings(page)
+
+    assert h_lines == [(10.0, 20.25, 110.0, 20.25)]
+    assert v_lines == []
+
+
 def test_extract_lines_recovers_rules_tiled_as_tiny_images():
     extractor = WiredTableExtractor()
     page = SimpleNamespace(
