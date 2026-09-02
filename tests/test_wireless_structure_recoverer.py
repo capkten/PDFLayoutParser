@@ -107,6 +107,113 @@ def test_final_occupancy_rejects_unresolved_duplicate_slot():
     assert recoverer._has_occupancy_conflict(duplicate_cells) is True
 
 
+def test_recover_cells_rebuilds_after_exact_slot_conflict_merge(monkeypatch):
+    region = BBox(100, 260, 505, 385)
+
+    def candidate(text, flow, x0, x1, y0, column, source_line, source_span=0):
+        return {
+            "candidate_label": f"T{flow}",
+            "cell_id": f"T{flow}",
+            "text": text,
+            "bbox": [x0, y0, x1, y0 + 10.5],
+            "flow_start": flow,
+            "flow_end": flow,
+            "span_refs": [f"S{flow}"],
+            "source_blocks": [14],
+            "source_line_start": source_line,
+            "source_line_end": source_line,
+            "source_position_known": True,
+            "font_size": 10.5,
+            "bold": False,
+            "script": "cjk" if not text.replace(".", "").isdigit() else "numeric",
+            "column_id": column,
+            "column_start": column,
+            "column_end": column,
+            "source_position": [14, source_line, source_span],
+        }
+
+    atoms = [
+        candidate("项目", 1, 110, 150, 275, 1, 0),
+        candidate("账面价值", 2, 250, 310, 275, 2, 1),
+        candidate("评估价值", 3, 400, 460, 275, 3, 2),
+        candidate("清远市新城B30号开发用土地", 4, 110, 230, 315, 1, 3),
+        candidate("100.00", 5, 250, 300, 315, 2, 4),
+        candidate("120.00", 6, 400, 450, 315, 3, 5),
+        candidate("合", 7, 176.0415, 186.5415, 363.869, 1, 6, 0),
+        candidate("计", 8, 212.8219, 223.3219, 363.869, 1, 6, 1),
+        candidate("100.00", 9, 250, 300, 363.869, 2, 7),
+        candidate("120.00", 10, 400, 450, 363.869, 3, 8),
+    ]
+    bands = [
+        {"id": 1, "x0": 105, "x1": 230, "support": 3, "y_support": 3},
+        {"id": 2, "x0": 240, "x1": 320, "support": 3, "y_support": 3},
+        {"id": 3, "x0": 390, "x1": 470, "support": 3, "y_support": 3},
+    ]
+
+    monkeypatch.setattr(
+        recoverer,
+        "collect_native_spans",
+        lambda page, allowed_regions: [object()],
+    )
+    monkeypatch.setattr(recoverer, "region_spans", lambda spans, bbox: [object()])
+    monkeypatch.setattr(
+        recoverer, "infer_output_order_mode", lambda spans: "row_interleaved"
+    )
+    monkeypatch.setattr(
+        recoverer, "build_text_runs", lambda spans, output_mode: atoms
+    )
+    monkeypatch.setattr(recoverer, "infer_column_bands", lambda items, bbox: bands)
+    monkeypatch.setattr(
+        recoverer, "prune_paired_cjk_artifact_bands", lambda items, value: value
+    )
+    monkeypatch.setattr(
+        recoverer,
+        "prune_sparse_alignment_artifact_bands",
+        lambda items, value: value,
+    )
+    monkeypatch.setattr(
+        recoverer, "merge_same_band_native_line_runs", lambda items, value: items
+    )
+    monkeypatch.setattr(
+        recoverer, "refine_leaf_bands", lambda items, value: (value, None)
+    )
+    monkeypatch.setattr(
+        recoverer,
+        "rescue_sparse_body_bands",
+        lambda items, value, cutoff: value,
+    )
+    monkeypatch.setattr(
+        recoverer,
+        "rescue_header_only_note_bands",
+        lambda items, value, cutoff: value,
+    )
+    monkeypatch.setattr(
+        recoverer,
+        "rescue_header_only_leaf_bands",
+        lambda items, value, cutoff: value,
+    )
+    monkeypatch.setattr(
+        recoverer,
+        "annotate_columns",
+        lambda items, value, cutoff, bbox: None,
+    )
+    monkeypatch.setattr(
+        recoverer, "merge_column_continuations", lambda items, value: items
+    )
+
+    rows, columns, cells = recover_cells_from_region(object(), region)
+
+    assert (rows, columns) == (3, 3)
+    assert any(cell.text == "合计" for cell in cells)
+    occupied = set()
+    for cell in cells:
+        for row in range(cell.row_index, cell.row_index + cell.rowspan):
+            for column in range(cell.col_index, cell.col_index + cell.colspan):
+                assert (row, column) not in occupied
+                occupied.add((row, column))
+    assert len(occupied) == rows * columns
+
+
 def test_header_span_conflict_keeps_conflict_free_base_grid(monkeypatch):
     base = [
         {"cell_id": "A", "row_start": 1, "row_end": 1, "col_start": 1, "col_end": 1},

@@ -13,7 +13,11 @@ from hexai_pdf_parser.tables.wireless_table_recovery import collect_native_spans
 from .continuations import merge_column_continuations
 from .grid import build_grid
 from .logical_grid import build_logical_grid, materialize_empty_cells
-from .merged_cells import merge_multiline_cells, merge_same_slot_fragments
+from .merged_cells import (
+    merge_multiline_cells,
+    merge_same_slot_fragments,
+    resolve_exact_slot_conflicts,
+)
 from .span_chain import region_spans
 from .text_runs import build_text_runs, infer_output_order_mode
 
@@ -142,6 +146,15 @@ def recover_hybrid_body_cells(
             return 0, 0, []
 
         cells = merge_same_slot_fragments(grid_cells, header_cutoff=None)
+        if _has_occupancy_conflict(cells):
+            resolved_cells = resolve_exact_slot_conflicts(cells)
+            if len(resolved_cells) < len(cells):
+                physical_rows, columns, grid_cells, _issues = build_grid(
+                    resolved_cells, bands
+                )
+                cells = merge_same_slot_fragments(
+                    grid_cells, header_cutoff=None
+                )
         cells = merge_multiline_cells(
             cells, header_cutoff=None, output_mode=output_mode
         )
