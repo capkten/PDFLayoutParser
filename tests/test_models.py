@@ -54,12 +54,21 @@ class TestPage:
         assert page.size["width"] == 612.0
         assert page.size["height"] == 792.0
         assert page.rotation == 90
+        assert page.page_type == "vector"
         assert page.blocks == []
         assert page.tables == []
         assert page.images == []
         assert page.seals == []
         assert isinstance(page.render, RenderInfo)
         assert page.layout_elements == []
+
+    def test_page_type_does_not_shift_existing_positional_fields(self):
+        blocks = [Block(text="Hi", bbox=BBox(0, 0, 10, 10))]
+
+        page = Page(1, {"width": 612.0, "height": 792.0}, 0, blocks)
+
+        assert page.blocks == blocks
+        assert page.page_type == "vector"
 
 
 class TestLayoutElementTypes:

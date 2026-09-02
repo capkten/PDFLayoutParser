@@ -131,6 +131,9 @@ class TableExtractor:
             line_tolerance=self.line_tolerance, merge_group_tol=self.merge_group_tol
         )
         self._wireless_extractor = WirelessTableExtractor(line_tolerance=self.line_tolerance)
+        self._wireless_extractor._legacy_text_alignment_callback = (
+            self._extract_legacy_text_alignment
+        )
 
         # Override scalar args from config when provided
         if table_config is not None:
@@ -3084,9 +3087,43 @@ class TableExtractor:
         page: fitz.Page,
         excluded_regions: Optional[List[BBox]] = None,
     ) -> List[Table]:
-        """Extract tables from aligned text when drawing lines are absent."""
+        """Extract text-aligned candidates through the language facade."""
+        from hexai_pdf_parser.extractors.language_detector import detect_page_language
+
         self._last_text_alignment_debug = None
         allowed_regions = self._get_text_alignment_regions(page)
+        if allowed_regions == []:
+            self._last_wireless_recovery = {"regions": [], "disabled": True}
+            return []
+
+        tables = self._wireless_extractor.extract_text_alignment_candidates(
+            page,
+            excluded_regions=excluded_regions,
+            allowed_regions=allowed_regions,
+            use_legacy_fallback=(
+                self._use_legacy_text_alignment_fallback()
+                and detect_page_language(page) == "en"
+            ),
+        )
+        self._last_wireless_recovery = getattr(
+            self._wireless_extractor, "_last_wireless_recovery", None
+        )
+        if self._last_text_alignment_debug is None:
+            self._last_text_alignment_debug = getattr(
+                self._wireless_extractor, "_last_text_alignment_debug", None
+            )
+        return tables
+
+    def _extract_legacy_text_alignment(
+        self,
+        page: fitz.Page,
+        excluded_regions: Optional[List[BBox]] = None,
+        allowed_regions: Optional[List[BBox]] = None,
+    ) -> List[Table]:
+        """Extract tables from aligned text when drawing lines are absent."""
+        self._last_text_alignment_debug = None
+        if allowed_regions is None:
+            allowed_regions = self._get_text_alignment_regions(page)
         if allowed_regions == []:
             self._last_wireless_recovery = {"regions": [], "disabled": True}
             return []

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 
+import fitz
 import pytest
 
 from hexai_pdf_parser.pdf_parser import PDFParser
@@ -85,6 +86,24 @@ def assert_error_result(result, expected_substring=None):
         assert expected_substring in result.message
 
 
+def _write_garbled_pdf(path):
+    doc = fitz.open()
+    page = doc.new_page(width=595, height=842)
+    page.insert_text((50, 100), "\x00" * 20, fontsize=12)
+    doc.save(path)
+    doc.close()
+
+
+def _write_mixed_page_type_pdf(path):
+    doc = fitz.open()
+    vector_page = doc.new_page(width=595, height=842)
+    vector_page.insert_text((50, 100), "normal text", fontsize=12)
+    scanned_page = doc.new_page(width=595, height=842)
+    scanned_page.insert_text((50, 100), "\x00" * 20, fontsize=12)
+    doc.save(path)
+    doc.close()
+
+
 from hexai_pdf_parser import ApiResult
 
 
@@ -142,6 +161,33 @@ def test_parse_returns_document(tmp_dir):
     assert doc.page_count == 1
     assert len(doc.pages) == 1
     assert len(doc.pages[0].blocks) >= 1
+
+
+def test_parse_preserves_scanned_page_type(tmp_dir):
+    pdf_path = os.path.join(tmp_dir, "garbled-parse.pdf")
+    _write_garbled_pdf(pdf_path)
+
+    result = PDFParser(pdf_path, backend="sequential").parse()
+
+    assert_success_result(result)
+    assert result.data.pages[0].page_type == "scanned"
+
+
+def test_process_backend_preserves_page_types(tmp_dir):
+    pdf_path = os.path.join(tmp_dir, "mixed-page-types.pdf")
+    _write_mixed_page_type_pdf(pdf_path)
+
+    result = PDFParser(
+        pdf_path,
+        num_workers=2,
+        backend="process",
+    ).parse()
+
+    assert_success_result(result)
+    assert [page.page_type for page in result.data.pages] == [
+        "vector",
+        "scanned",
+    ]
 
 
 def test_parse_caches_result(tmp_dir):
@@ -209,6 +255,17 @@ def test_extract_text_from_path(tmp_dir):
     assert len(blocks) >= 1
     assert isinstance(blocks[0], Block)
     assert "Extract" in blocks[0].text
+
+
+def test_extract_text_classifies_scanned_page(tmp_dir):
+    pdf_path = os.path.join(tmp_dir, "garbled-text.pdf")
+    _write_garbled_pdf(pdf_path)
+    parser = PDFParser(pdf_path, backend="sequential")
+
+    result = parser.extract_text()
+
+    assert_success_result(result)
+    assert parser._document.pages[0].page_type == "scanned"
 
 
 def test_extract_text_rebuilds_visual_order_for_loan_details():
@@ -869,6 +926,7 @@ def test_parse_with_process_backend(real_pdf_path):
     assert_success_result(result)
     assert isinstance(result.data, Document)
     assert len(result.data.pages) > 0
+    assert result.data.pages[0].page_type == "vector"
 
     from hexai_pdf_parser.pipeline import _PROCESS_POOL
     assert _PROCESS_POOL is not None

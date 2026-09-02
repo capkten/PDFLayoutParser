@@ -1,4 +1,7 @@
-from hexai_pdf_parser.tables.wireless_structure.text_runs import build_text_runs
+from hexai_pdf_parser.tables.wireless_structure.text_runs import (
+    build_text_runs,
+    merge_same_band_native_line_runs,
+)
 
 
 def _atom(
@@ -33,6 +36,17 @@ def test_build_text_runs_merges_adjacent_chinese_fragments_on_one_native_line():
     assert result[0]["flow_start"] == 2
     assert result[0]["flow_end"] == 3
     assert result[0]["merge_kind"] == "same_line"
+
+
+def test_build_text_runs_joins_same_line_spans_across_skipped_whitespace_span():
+    atoms = [
+        _atom("项", 10, 17, 1, (2, 3, 0)),
+        _atom("目", 18, 25, 2, (2, 3, 2)),
+    ]
+
+    result = build_text_runs(atoms)
+
+    assert [item["text"] for item in result] == ["项目"]
 
 
 def test_build_text_runs_keeps_chinese_label_and_numeric_field_separate():
@@ -294,3 +308,55 @@ def test_build_text_runs_keeps_widely_spaced_single_cjk_fields_separate():
     result = build_text_runs(atoms)
 
     assert [item["text"] for item in result] == ["年", "月", "金额"]
+
+
+def test_merge_same_band_native_line_runs_joins_wide_spaced_latin_fragments():
+    atoms = build_text_runs(
+        [
+            _atom("FRASERS", 10, 50, 0, (1, 1, 0), font_size=10),
+            _atom("PROPERTY", 84, 140, 1, (1, 1, 1), font_size=10),
+        ]
+    )
+
+    result = merge_same_band_native_line_runs(
+        atoms,
+        [{"id": 1, "x0": 0, "x1": 150}],
+    )
+
+    assert [item["text"] for item in result] == ["FRASERS PROPERTY"]
+    assert result[0]["merge_kind"] == "same_band_native_line"
+
+
+def test_merge_same_band_native_line_runs_joins_same_visual_line_from_split_native_lines():
+    atoms = build_text_runs(
+        [
+            _atom("FRASERS", 10, 50, 0, (1, 1, 0), font_size=10),
+            _atom("PROPERTY", 84, 140, 1, (1, 2, 1), font_size=10),
+        ]
+    )
+
+    result = merge_same_band_native_line_runs(
+        atoms,
+        [{"id": 1, "x0": 0, "x1": 150}],
+    )
+
+    assert [item["text"] for item in result] == ["FRASERS PROPERTY"]
+
+
+def test_merge_same_band_native_line_runs_keeps_fragments_in_distinct_bands():
+    atoms = build_text_runs(
+        [
+            _atom("FRASERS", 10, 50, 0, (1, 1, 0), font_size=10),
+            _atom("PROPERTY", 84, 140, 1, (1, 1, 1), font_size=10),
+        ]
+    )
+
+    result = merge_same_band_native_line_runs(
+        atoms,
+        [
+            {"id": 1, "x0": 0, "x1": 70},
+            {"id": 2, "x0": 70, "x1": 150},
+        ],
+    )
+
+    assert [item["text"] for item in result] == ["FRASERS", "PROPERTY"]

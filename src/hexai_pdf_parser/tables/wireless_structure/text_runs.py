@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import re
+import statistics
 from collections import Counter
-from typing import Any, Sequence
+from typing import Any, Literal, Sequence
 
+from .columns import assign_column
 from .span_chain import _union
 
 
@@ -90,9 +92,12 @@ def _filter_separator_spans(spans: Sequence[dict[str, Any]]) -> list[dict[str, A
 
 
 def _same_native_line(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    left_position = _native_position(left)
+    right_position = _native_position(right)
     return (
-        left["source_position"][:2] == right["source_position"][:2]
-        and right["source_position"][2] == left["source_position"][2] + 1
+        left_position[:2] == right_position[:2]
+        and right_position[2] > left_position[2]
+        and right.get("flow") == left.get("flow") + 1
     )
 
 
@@ -131,7 +136,9 @@ def _can_join(group: Sequence[dict[str, Any]], candidate: dict[str, Any], normal
     ):
         return False
     gap = candidate["bbox"][0] - previous["bbox"][2]
-    if gap > 0 and (_is_placeholder(previous) or _is_placeholder(candidate)):
+    native_line = _same_native_line(previous, candidate)
+    inline_punct = native_line and (len(candidate["text"].strip()) == 1 or len(previous["text"].strip()) == 1) and gap <= 1.0
+    if gap > 0 and not inline_punct and (_is_placeholder(previous) or _is_placeholder(candidate)):
         return False
     if (
         gap > 0.8
@@ -147,6 +154,7 @@ def _can_join(group: Sequence[dict[str, Any]], candidate: dict[str, Any], normal
     )
     if (
         not superscript
+        and not inline_punct
         and _CJK.search(previous["text"])
         and (
             _NUMERIC.fullmatch(candidate["text"].strip())
@@ -154,7 +162,6 @@ def _can_join(group: Sequence[dict[str, Any]], candidate: dict[str, Any], normal
         )
     ):
         return False
-    native_line = _same_native_line(previous, candidate)
     normal_gap_join = native_line and -0.8 <= gap <= _join_gap_limit(previous, candidate, normal_gap)
     spaced_single_cjk = (
         native_line
@@ -170,67 +177,210 @@ def _join_text(group: Sequence[dict[str, Any]]) -> str:
     return "".join(item["text"] for item in group)
 
 
+def _native_position(item: dict[str, Any]) -> Sequence[int]:
+    position = item.get("source_position")
+    if position is None:
+        return (0, 0, int(item.get("flow", 0)))
+    return position
+
+
 def _horizontal_overlap(left: Sequence[float], right: Sequence[float]) -> float:
     return max(0.0, min(left[2], right[2]) - max(left[0], right[0]))
 
 
+def infer_output_order_mode(
+    spans: Sequence[dict[str, Any]],
+) -> Literal["row_interleaved", "columnar"]:
+    """Choose the merge policy from sustained native-order geometry.
+
+    A short vertically wrapped field is not enough to identify column-oriented
+    output.  The columnar policy requires a long vertical run on a separated
+    x-track, which is the evidence exposed by PDFs that emit one table column
+    before moving to the next one.
+    """
+    filtered = _filter_separator_spans(spans)
+    if len(filtered) < 4:
+        return "row_interleaved"
+    ordered = sorted(filtered, key=lambda item: item["flow"])
+    sizes = [float(item.get("font_size", 10.0)) for item in ordered if item.get("font_size")]
+    tolerance = max(2.4, (statistics.median(sizes) if sizes else 10.0) * 0.38)
+    widths = [item["bbox"][2] - item["bbox"][0] for item in ordered]
+    horizontal_gap = max(8.0, (statistics.median(widths) if widths else 10.0) * 0.35)
+
+    tracks: list[list[float]] = []
+    for item in sorted(ordered, key=lambda value: value["bbox"][0]):
+        if tracks and item["bbox"][0] <= tracks[-1][1] + horizontal_gap:
+            tracks[-1][1] = max(tracks[-1][1], item["bbox"][2])
+        else:
+            tracks.append([item["bbox"][0], item["bbox"][2]])
+
+    def track_index(item: dict[str, Any]) -> int | None:
+        overlaps = [
+            max(0.0, min(item["bbox"][2], right) - max(item["bbox"][0], left))
+            for left, right in tracks
+        ]
+        if not overlaps or max(overlaps) <= 0.0:
+            return None
+        return overlaps.index(max(overlaps))
+
+    vertical_edges: Counter[int] = Counter()
+    cross_block_edges: Counter[int] = Counter()
+    longest_chain: dict[int, int] = {}
+    longest_span: dict[int, float] = {}
+    active_track: int | None = None
+    active_length = 0
+    active_start_y: float | None = None
+    active_end_y: float | None = None
+    for previous, current in zip(ordered, ordered[1:]):
+        previous_center = _center_y(previous)
+        current_center = _center_y(current)
+        if abs(current_center - previous_center) <= tolerance:
+            active_track = None
+            active_length = 0
+            active_start_y = None
+            active_end_y = None
+            continue
+        overlap = _horizontal_overlap(previous["bbox"], current["bbox"])
+        minimum_width = min(
+            previous["bbox"][2] - previous["bbox"][0],
+            current["bbox"][2] - current["bbox"][0],
+        )
+        previous_track = track_index(previous)
+        current_track = track_index(current)
+        if (
+            current_center > previous_center
+            and previous_track is not None
+            and previous_track == current_track
+            and overlap >= max(2.0, minimum_width * 0.45)
+        ):
+            vertical_edges[current_track] += 1
+            previous_position = previous.get("source_position") or []
+            current_position = current.get("source_position") or []
+            if (
+                len(previous_position) >= 1
+                and len(current_position) >= 1
+                and previous_position[0] != current_position[0]
+            ):
+                cross_block_edges[current_track] += 1
+            if active_track == current_track:
+                active_length += 1
+            else:
+                active_track = current_track
+                active_length = 2
+                active_start_y = previous_center
+            active_end_y = current_center
+            longest_chain[current_track] = max(
+                longest_chain.get(current_track, 0), active_length
+            )
+            if active_start_y is not None and active_end_y is not None:
+                longest_span[current_track] = max(
+                    longest_span.get(current_track, 0.0),
+                    active_end_y - active_start_y,
+                )
+        else:
+            active_track = None
+            active_length = 0
+            active_start_y = None
+            active_end_y = None
+
+    dominant_track = max(vertical_edges, key=vertical_edges.get, default=None)
+    dominant_edges = vertical_edges.get(dominant_track, 0) if dominant_track is not None else 0
+    dominant_cross_block_edges = (
+        cross_block_edges.get(dominant_track, 0) if dominant_track is not None else 0
+    )
+    if (
+        len(tracks) >= 2
+        and dominant_edges >= 6
+        and longest_chain.get(dominant_track, 0) >= 6
+        and longest_span.get(dominant_track, 0.0) >= max(48.0, (statistics.median(sizes) if sizes else 10.0) * 5.0)
+        and (dominant_cross_block_edges >= 3 or dominant_edges >= 12)
+    ):
+        return "columnar"
+    return "row_interleaved"
+
+
 def _right_witnesses(
-    left: dict[str, Any], right: dict[str, Any], runs: Sequence[dict[str, Any]]
+    chain: Sequence[dict[str, Any]],
+    candidate: dict[str, Any],
+    runs: Sequence[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    y0 = min(left["bbox"][1], right["bbox"][1])
-    y1 = max(left["bbox"][3], right["bbox"][3])
-    x1 = max(left["bbox"][2], right["bbox"][2])
+    y0 = min(chain[0]["bbox"][1], candidate["bbox"][1]) - 2.0
+    y1 = max(chain[-1]["bbox"][3], candidate["bbox"][3]) + max(candidate.get("font_size", 10.0), 10.0) * 4.0
+    x1 = max(item["bbox"][2] for item in chain + [candidate])
     return [
         item
         for item in runs
-        if item is not left
-        and item is not right
-        and item["flow_start"] > right["flow_end"]
+        if item not in chain
+        and item is not candidate
+        and item["flow_start"] > candidate["flow_end"]
         and item["bbox"][0] >= x1 + 8.0
         and min(y1, item["bbox"][3]) > max(y0, item["bbox"][1])
     ]
 
 
-def _is_wrapped_field_pair(
-    left: dict[str, Any],
-    right: dict[str, Any],
+def _is_wrapped_chain_pair(
+    chain: Sequence[dict[str, Any]],
+    candidate: dict[str, Any],
     runs: Sequence[dict[str, Any]],
 ) -> bool:
-    if right["flow_start"] != left["flow_end"] + 1:
+    left = chain[-1]
+    if candidate["flow_start"] != left["flow_end"] + 1:
         return False
-    if (
-        left["font"] != right["font"]
-        or left["bold"] != right["bold"]
-        or left["script"] != right["script"]
-    ):
+    if left.get("bold") != candidate.get("bold"):
+        return False
+    if abs(left.get("font_size", 10.0) - candidate.get("font_size", 10.0)) > 1.0:
         return False
     if (
         _NUMERIC.fullmatch(left["text"].strip())
-        or _NUMERIC.fullmatch(right["text"].strip())
+        or _NUMERIC.fullmatch(candidate["text"].strip())
         or _is_placeholder(left)
-        or _is_placeholder(right)
+        or _is_placeholder(candidate)
     ):
         return False
 
     left_center = _center_y(left)
-    right_center = _center_y(right)
-    if right_center <= left_center or right["bbox"][1] < left["bbox"][3]:
+    candidate_center = _center_y(candidate)
+    if candidate_center <= left_center or candidate["bbox"][1] < left["bbox"][3]:
         return False
     minimum_width = min(
         left["bbox"][2] - left["bbox"][0],
-        right["bbox"][2] - right["bbox"][0],
+        candidate["bbox"][2] - candidate["bbox"][0],
     )
-    if _horizontal_overlap(left["bbox"], right["bbox"]) < minimum_width * 0.45:
+    if _horizontal_overlap(left["bbox"], candidate["bbox"]) < minimum_width * 0.45:
         return False
-    if right["bbox"][1] - left["bbox"][3] > max(
-        6.0, min(left["font_size"], right["font_size"])
+    if candidate["bbox"][1] - left["bbox"][3] > max(
+        6.0, min(left["font_size"], candidate["font_size"])
     ):
         return False
 
-    witnesses = _right_witnesses(left, right, runs)
+    witnesses = _right_witnesses(chain, candidate, runs)
     if not witnesses:
         return False
     return True
+
+
+def _merge_run_chain(
+    chain: Sequence[dict[str, Any]], joiner: str, merge_kind: str
+) -> dict[str, Any]:
+    merged = dict(chain[0])
+    merged.update(
+        text=joiner.join(item["text"] for item in chain),
+        bbox=_union(chain),
+        span_refs=[span for item in chain for span in item["span_refs"]],
+        flow_start=chain[0]["flow_start"],
+        flow_end=chain[-1]["flow_end"],
+        char_boxes=[char for item in chain for char in item.get("char_boxes", [])],
+        source_blocks=sorted(
+            {block for item in chain for block in item["source_blocks"]}
+        ),
+        source_line_start=min(item["source_line_start"] for item in chain),
+        source_line_end=max(item["source_line_end"] for item in chain),
+        source_position_known=all(
+            item.get("source_position_known", False) for item in chain
+        ),
+        merge_kind=merge_kind,
+    )
+    return merged
 
 
 def _merge_wrapped_field_runs(
@@ -242,8 +392,8 @@ def _merge_wrapped_field_runs(
     while index < len(ordered):
         chain = [ordered[index]]
         cursor = index + 1
-        while cursor < len(ordered) and _is_wrapped_field_pair(
-            chain[-1], ordered[cursor], ordered
+        while cursor < len(ordered) and _is_wrapped_chain_pair(
+            chain, ordered[cursor], ordered
         ):
             chain.append(ordered[cursor])
             cursor += 1
@@ -251,27 +401,83 @@ def _merge_wrapped_field_runs(
             result.append(ordered[index])
             index += 1
             continue
-        merged = dict(chain[0])
-        merged.update(
-            text="\n".join(item["text"] for item in chain),
-            bbox=_union(chain),
-            span_refs=[span for item in chain for span in item["span_refs"]],
-            flow_start=chain[0]["flow_start"],
-            flow_end=chain[-1]["flow_end"],
-            char_boxes=[char for item in chain for char in item.get("char_boxes", [])],
-            source_blocks=sorted(
-                {block for item in chain for block in item["source_blocks"]}
-            ),
-            source_line_start=min(item["source_line_start"] for item in chain),
-            source_line_end=max(item["source_line_end"] for item in chain),
-            merge_kind="wrapped_field",
-        )
-        result.append(merged)
+        result.append(_merge_run_chain(chain, "\n", "wrapped_field"))
         index = cursor
     return sorted(result, key=lambda item: (item["flow_start"], item["flow_end"]))
 
 
-def build_text_runs(spans: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+def _is_columnar_native_block_line_pair(
+    chain: Sequence[dict[str, Any]], candidate: dict[str, Any]
+) -> bool:
+    previous = chain[-1]
+    if not all(
+        item.get("source_position_known", False)
+        for item in (previous, candidate)
+    ):
+        return False
+    previous_blocks = previous.get("source_blocks", [])
+    candidate_blocks = candidate.get("source_blocks", [])
+    if len(previous_blocks) != 1 or previous_blocks != candidate_blocks:
+        return False
+    if candidate["source_line_start"] != previous["source_line_end"] + 1:
+        return False
+    if candidate["flow_start"] != previous["flow_end"] + 1:
+        return False
+    if previous.get("bold") != candidate.get("bold"):
+        return False
+    if abs(previous.get("font_size", 10.0) - candidate.get("font_size", 10.0)) > 1.0:
+        return False
+    if (
+        _NUMERIC.fullmatch(previous["text"].strip())
+        or _NUMERIC.fullmatch(candidate["text"].strip())
+        or _is_placeholder(previous)
+        or _is_placeholder(candidate)
+    ):
+        return False
+
+    previous_center = _center_y(previous)
+    candidate_center = _center_y(candidate)
+    if candidate_center <= previous_center or candidate["bbox"][1] < previous["bbox"][3]:
+        return False
+    minimum_width = min(
+        previous["bbox"][2] - previous["bbox"][0],
+        candidate["bbox"][2] - candidate["bbox"][0],
+    )
+    if _horizontal_overlap(previous["bbox"], candidate["bbox"]) < minimum_width * 0.45:
+        return False
+    return candidate["bbox"][1] - previous["bbox"][3] <= max(
+        6.0, min(previous["font_size"], candidate["font_size"])
+    )
+
+
+def _merge_same_native_block_lines(
+    runs: Sequence[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    ordered = sorted((dict(item) for item in runs), key=lambda item: item["flow_start"])
+    result: list[dict[str, Any]] = []
+    index = 0
+    while index < len(ordered):
+        chain = [ordered[index]]
+        cursor = index + 1
+        while cursor < len(ordered) and _is_columnar_native_block_line_pair(
+            chain, ordered[cursor]
+        ):
+            chain.append(ordered[cursor])
+            cursor += 1
+        result.append(
+            _merge_run_chain(chain, "\n", "same_native_block_lines")
+            if len(chain) > 1
+            else chain[0]
+        )
+        index = cursor
+    return sorted(result, key=lambda item: (item["flow_start"], item["flow_end"]))
+
+
+def build_text_runs(
+    spans: Sequence[dict[str, Any]],
+    *,
+    output_mode: str = "row_interleaved",
+) -> list[dict[str, Any]]:
     """Merge source-continuous native fragments into complete field atoms."""
     if not spans:
         return []
@@ -304,6 +510,7 @@ def build_text_runs(spans: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
             else:
                 groups.append([span])
         for group in groups:
+            positions = [_native_position(item) for item in group]
             result.append(
                 {
                     "span_refs": [item["span_ref"] for item in group],
@@ -316,11 +523,109 @@ def build_text_runs(spans: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
                     "bold": group[0]["bold"],
                     "script": script_kind(_join_text(group)),
                     "char_boxes": [char for item in group for char in item.get("char_boxes", [])],
-                    "source_blocks": sorted({item["source_position"][0] for item in group}),
-                    "source_line_start": min(item["source_position"][1] for item in group),
-                    "source_line_end": max(item["source_position"][1] for item in group),
+                    "source_blocks": sorted({position[0] for position in positions}),
+                    "source_line_start": min(position[1] for position in positions),
+                    "source_line_end": max(position[1] for position in positions),
+                    "source_position_known": all(
+                        item.get("source_position_known", False) for item in group
+                    ),
                     "merge_kind": "same_line" if len(group) > 1 else "single",
                     "normal_word_gap": normal_gap,
                 }
             )
+    if output_mode == "columnar":
+        return _merge_same_native_block_lines(result)
     return _merge_wrapped_field_runs(result)
+
+
+def _same_native_line_run(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    return (
+        left.get("source_blocks") == right.get("source_blocks")
+        and left.get("source_line_start") == left.get("source_line_end")
+        and right.get("source_line_start") == right.get("source_line_end")
+        and right["flow_start"] == left["flow_end"] + 1
+    )
+
+
+def _can_join_same_band_native_line(
+    previous: dict[str, Any],
+    candidate: dict[str, Any],
+    previous_band: int | None,
+    candidate_band: int | None,
+) -> bool:
+    if previous_band is None or previous_band != candidate_band:
+        return False
+    if previous.get("script") != "latin" or candidate.get("script") != "latin":
+        return False
+    if not _same_native_line_run(previous, candidate):
+        return False
+    if abs(_center_y(previous) - _center_y(candidate)) > max(
+        2.4, min(previous["font_size"], candidate["font_size"]) * 0.38
+    ):
+        return False
+    gap = candidate["bbox"][0] - previous["bbox"][2]
+    return -0.8 <= gap <= max(
+        30.0, min(previous["font_size"], candidate["font_size"]) * 3.5
+    )
+
+
+def _merge_same_band_native_line_group(
+    group: Sequence[dict[str, Any]],
+) -> dict[str, Any]:
+    merged = dict(group[0])
+    merged.update(
+        text=" ".join(item["text"].strip() for item in group),
+        bbox=_union(group),
+        span_refs=[span for item in group for span in item["span_refs"]],
+        flow_start=group[0]["flow_start"],
+        flow_end=group[-1]["flow_end"],
+        char_boxes=[char for item in group for char in item.get("char_boxes", [])],
+        source_blocks=sorted(
+            {block for item in group for block in item["source_blocks"]}
+        ),
+        source_line_start=group[0]["source_line_start"],
+        source_line_end=group[-1]["source_line_end"],
+        merge_kind="same_band_native_line",
+    )
+    return merged
+
+
+def merge_same_band_native_line_runs(
+    runs: Sequence[dict[str, Any]], bands: Sequence[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Join wide-spaced Latin fragments only after a coarse band is known."""
+    if not runs or not bands:
+        return [dict(item) for item in runs]
+
+    ordered = sorted(
+        (dict(item) for item in runs),
+        key=lambda item: item["flow_start"],
+    )
+    result: list[dict[str, Any]] = []
+    current: list[dict[str, Any]] = []
+    current_band: int | None = None
+    for item in ordered:
+        item_band = assign_column(item, bands)
+        if current and not _can_join_same_band_native_line(
+            current[-1], item, current_band, item_band
+        ):
+            result.append(
+                _merge_same_band_native_line_group(current)
+                if len(current) > 1
+                else current[0]
+            )
+            current = []
+            current_band = None
+        if not current:
+            current = [item]
+            current_band = item_band
+        else:
+            current.append(item)
+
+    if current:
+        result.append(
+            _merge_same_band_native_line_group(current)
+            if len(current) > 1
+            else current[0]
+        )
+    return result

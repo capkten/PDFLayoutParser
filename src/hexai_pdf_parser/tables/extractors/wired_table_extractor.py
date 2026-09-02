@@ -795,22 +795,101 @@ class WiredTableExtractor(BaseTableExtractor):
         except Exception:
             return cells
 
-        cell_words: Dict[int, List[Tuple]] = defaultdict(list)
-        for w in words:
-            wxc = (w[0] + w[2]) / 2.0
-            wyc = (w[1] + w[3]) / 2.0
+        raw_chars: List[Tuple[float, float, float, float, str]] = []
+        try:
+            rawdict = page.get_text("rawdict")
+        except Exception:
+            rawdict = {}
+        if isinstance(rawdict, dict):
+            for block in rawdict.get("blocks", []):
+                for line in block.get("lines", []):
+                    for span in line.get("spans", []):
+                        for char in span.get("chars", []):
+                            value = char.get("c")
+                            bbox = char.get("bbox")
+                            if not isinstance(value, str) or not bbox or len(bbox) < 4:
+                                continue
+                            try:
+                                x0, y0, x1, y1 = (float(value) for value in bbox[:4])
+                            except (TypeError, ValueError):
+                                continue
+                            raw_chars.append((x0, y0, x1, y1, value))
 
+        def overlapping_cells(word: Tuple) -> List[int]:
+            wx0, wy0, wx1, wy1 = (float(value) for value in word[:4])
+            wyc = (wy0 + wy1) / 2.0
+            return [
+                idx
+                for idx, cell in enumerate(cells)
+                if cell.bbox.y0 - 2.0 <= wyc <= cell.bbox.y1 + 2.0
+                and min(wx1, cell.bbox.x1) > max(wx0, cell.bbox.x0)
+            ]
+
+        def split_word(word: Tuple, candidate_indexes: List[int]) -> Optional[List[Tuple[int, str]]]:
+            if len(candidate_indexes) < 2 or not raw_chars:
+                return None
+
+            wx0, wy0, wx1, wy1 = (float(value) for value in word[:4])
+            word_text = str(word[4]).strip()
+            expected_text = word_text.replace(" ", "")
+            matching_chars = [
+                char
+                for char in raw_chars
+                if wx0 - 0.5 <= (char[0] + char[2]) / 2.0 <= wx1 + 0.5
+                and wy0 - 0.5 <= (char[1] + char[3]) / 2.0 <= wy1 + 0.5
+            ]
+            matching_chars.sort(key=lambda char: (char[1], char[0]))
+            if "".join(char[4] for char in matching_chars if not char[4].isspace()) != expected_text:
+                return None
+
+            fragments: Dict[int, List[str]] = defaultdict(list)
+            for char in matching_chars:
+                char_xc = (char[0] + char[2]) / 2.0
+                char_yc = (char[1] + char[3]) / 2.0
+                matched_idx = None
+                for idx in candidate_indexes:
+                    cell = cells[idx]
+                    if (
+                        cell.bbox.x0 - 2.0 <= char_xc <= cell.bbox.x1 + 2.0
+                        and cell.bbox.y0 - 2.0 <= char_yc <= cell.bbox.y1 + 2.0
+                    ):
+                        matched_idx = idx
+                        break
+                if matched_idx is None:
+                    return None
+                fragments[matched_idx].append(char[4])
+
+            pieces = [
+                (idx, "".join(fragment).strip())
+                for idx, fragment in fragments.items()
+                if "".join(fragment).strip()
+            ]
+            if len(pieces) < 2 or "".join(piece for _, piece in pieces) != expected_text:
+                return None
+            return sorted(pieces, key=lambda item: cells[item[0]].bbox.x0)
+
+        cell_words: Dict[int, List[Tuple[float, float, str]]] = defaultdict(list)
+        for w in words:
+            wyc = (w[1] + w[3]) / 2.0
+            candidates = overlapping_cells(w)
+            pieces = split_word(w, candidates)
+            if pieces is not None:
+                for idx, text in pieces:
+                    cell_words[idx].append((wyc, w[0], text))
+                continue
+
+            wxc = (w[0] + w[2]) / 2.0
             matched_idx = None
             for idx, c in enumerate(cells):
                 if c.bbox.x0 - 2.0 <= wxc <= c.bbox.x1 + 2.0 and c.bbox.y0 - 2.0 <= wyc <= c.bbox.y1 + 2.0:
                     matched_idx = idx
                     break
             if matched_idx is not None:
-                cell_words[matched_idx].append(w)
+                cell_words[matched_idx].append((wyc, w[0], str(w[4]).strip()))
 
-        for idx, ws in cell_words.items():
-            ws.sort(key=lambda w: (round((w[1] + w[3]) / 2.0 / 4.0), w[0]))
-            cells[idx].text = " ".join(w[4].strip() for w in ws if w[4].strip()).strip()
+        for idx, tokens in cell_words.items():
+            tokens.sort(key=lambda token: (round(token[0] / 4.0), token[1]))
+            cells[idx].text = " ".join(token[2] for token in tokens if token[2]).strip()
 
         return cells
 
@@ -829,10 +908,41 @@ class WiredTableExtractor(BaseTableExtractor):
         if all(col_has_text.values()):
             return cells
 
+        # Empty cells are not necessarily phantom columns: a wired table can
+        # contain a real column with no values on the current page.  Only
+        # remove an empty column when it is a very thin border fragment or
+        # every cell in it is covered by a non-empty spanning cell.
+        text_coverage: Dict[int, set[int]] = defaultdict(set)
+        for cell in cells:
+            if not cell.text.strip():
+                continue
+            for row_index in range(
+                cell.row_index, cell.row_index + max(1, cell.rowspan)
+            ):
+                for col_index in range(
+                    cell.col_index, cell.col_index + max(1, cell.colspan)
+                ):
+                    text_coverage[col_index].add(row_index)
+
+        columns_to_remove = set()
+        for ci, column_cells in cols.items():
+            if col_has_text[ci]:
+                continue
+
+            widths = [cell.bbox.x1 - cell.bbox.x0 for cell in column_cells]
+            average_width = sum(widths) / len(widths) if widths else 0.0
+            is_thin_border_fragment = average_width < self.line_tolerance
+            is_covered_by_text = bool(column_cells) and all(
+                cell.row_index in text_coverage.get(ci, set())
+                for cell in column_cells
+            )
+            if is_thin_border_fragment or is_covered_by_text:
+                columns_to_remove.add(ci)
+
         new_ci = 0
         ci_map = {}
         for ci in sorted(cols.keys()):
-            if col_has_text[ci]:
+            if ci not in columns_to_remove:
                 ci_map[ci] = new_ci
                 new_ci += 1
             else:

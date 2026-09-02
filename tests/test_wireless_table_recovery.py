@@ -18,6 +18,7 @@ from hexai_pdf_parser.wireless_table_recovery import (
     TextStrip,
     _anchor,
     _build_table,
+    _column_tracks,
     _completion_date_continuations,
     _drop_orphan_field_before_title,
     _prepend_short_title,
@@ -374,3 +375,71 @@ def test_export_wireless_debug_writes_html_json_and_overlay(tmp_path):
     assert Path(paths["html"]).exists()
     assert Path(paths["image"]).exists()
     assert "Alpha" in Path(paths["html"]).read_text(encoding="utf-8")
+
+
+def test_column_tracks_does_not_bridge_long_text_field_across_columns():
+    """Verify that a long item description spanning across columns does not collapse column tracks."""
+    def make_strip(text: str, x0: float, y0: float, x1: float, y1: float, order: int) -> TextStrip:
+        span = NativeSpan(text, BBox(x0, y0, x1, y1), "SimSun", 10.0, order)
+        return TextStrip(text, BBox(x0, y0, x1, y1), [span])
+
+    # 3-column table with a long text item in row 1 extending past the start of column 2 (240.0)
+    row0 = [
+        make_strip("项目", 73.5, 20.0, 97.5, 32.0, 0),
+        make_strip("本期发生额", 240.0, 20.0, 300.0, 32.0, 1),
+        make_strip("上期发生额", 420.0, 20.0, 480.0, 32.0, 2),
+    ]
+    row1 = [
+        # Long item name whose x1 (265.0) > column 2 x0 (240.0)
+        make_strip("扣代缴个人所得税手续费返还", 73.5, 40.0, 265.0, 52.0, 3),
+        make_strip("123,088.67", 240.0, 40.0, 300.0, 52.0, 4),
+        make_strip("110,582.87", 420.0, 40.0, 480.0, 52.0, 5),
+    ]
+    row2 = [
+        make_strip("合计", 73.5, 60.0, 97.5, 72.0, 6),
+        make_strip("21,296,326.81", 240.0, 60.0, 300.0, 72.0, 7),
+        make_strip("19,463,618.19", 420.0, 60.0, 480.0, 72.0, 8),
+    ]
+
+    tracks = _column_tracks([row0, row1, row2])
+    # Must retain 3 distinct column tracks, not collapsing to 1
+    assert len(tracks) == 3
+    assert abs(tracks[0] - 73.5) < 5.0
+    assert abs(tracks[1] - 300.0) < 5.0  # Number anchor is right edge (300.0)
+    assert abs(tracks[2] - 480.0) < 5.0  # Number anchor is right edge (480.0)
+
+
+def test_column_tracks_multi_table_run_keeps_independent_tracks():
+    """Verify that multiple adjacent tables with long names keep distinct column tracks."""
+    def make_strip(text: str, x0: float, y0: float, x1: float, y1: float, order: int) -> TextStrip:
+        span = NativeSpan(text, BBox(x0, y0, x1, y1), "SimSun", 10.0, order)
+        return TextStrip(text, BBox(x0, y0, x1, y1), [span])
+
+    # Table 1: 3 columns (税种, 计税依据, 法定税率)
+    t1_r0 = [
+        make_strip("税种", 73.5, 20.0, 109.5, 32.0, 0),
+        make_strip("计税依据", 208.2, 20.0, 256.4, 32.0, 1),
+        make_strip("法定税率（%）", 435.5, 20.0, 516.5, 32.0, 2),
+    ]
+    t1_r1 = [
+        make_strip("企业所得税", 73.5, 40.0, 133.5, 52.0, 3),
+        make_strip("应纳税所得额", 208.2, 40.0, 280.2, 52.0, 4),
+        make_strip("25", 505.5, 40.0, 516.5, 52.0, 5),
+    ]
+    # Table 2: 2 columns with long company name
+    t2_r0 = [
+        make_strip("纳税主体名称", 73.5, 70.0, 145.8, 82.0, 6),
+        make_strip("所得税税率%", 447.5, 70.0, 519.2, 82.0, 7),
+    ]
+    t2_r1 = [
+        # Long company name extending to 253.5
+        make_strip("河南仕佳信息技术研究院有限公司", 73.5, 90.0, 253.5, 102.0, 8),
+        make_strip("20", 505.5, 90.0, 519.2, 102.0, 9),
+    ]
+
+    tracks = _column_tracks([t1_r0, t1_r1, t2_r0, t2_r1])
+    # Should identify column tracks at ~73.5, ~208.2, and right side (~516-519)
+    assert len(tracks) >= 2
+    assert any(abs(t - 73.5) < 5.0 for t in tracks)
+    assert any(abs(t - 208.2) < 5.0 for t in tracks)
+

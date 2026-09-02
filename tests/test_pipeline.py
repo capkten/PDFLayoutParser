@@ -9,6 +9,7 @@ from pathlib import Path
 import fitz
 import pytest
 
+import hexai_pdf_parser.core.pipeline as pipeline_module
 from hexai_pdf_parser.pipeline import Pipeline
 from hexai_pdf_parser.table_config import (
     GlobalTableSettings,
@@ -20,6 +21,118 @@ from hexai_pdf_parser.table_config import (
 from hexai_pdf_parser.table_extractor import TableExtractor
 from tests.conftest import make_text_pdf
 from tests.test_table_extractor import make_pdf_with_table, make_synthetic_text_alignment_pdf
+
+
+def _write_scanned_pdf(path):
+    doc = fitz.open()
+    page = doc.new_page(width=595, height=842)
+    page.insert_text((50, 100), "\x00" * 20, fontsize=12)
+    doc.save(path)
+    doc.close()
+
+
+def _write_mixed_page_type_pdf(path):
+    doc = fitz.open()
+    vector_page = doc.new_page(width=595, height=842)
+    vector_page.insert_text((50, 100), "vector page text", fontsize=12)
+    scanned_page = doc.new_page(width=595, height=842)
+    scanned_page.insert_text((50, 100), "\x00" * 20, fontsize=12)
+    doc.save(path)
+    doc.close()
+
+
+def test_pipeline_scanned_page_skips_extraction_stages_and_keeps_fixed_output(
+    tmp_dir, monkeypatch
+):
+    pdf_path = Path(tmp_dir) / "scanned.pdf"
+    output_dir = Path(tmp_dir) / "out"
+    _write_scanned_pdf(pdf_path)
+
+    stale_md = output_dir / "pages" / "page-000.md"
+    stale_md.parent.mkdir(parents=True)
+    stale_md.write_text("stale scanned output", encoding="utf-8")
+
+    def unexpected_stage(*_args, **_kwargs):
+        raise AssertionError("scanned pages must not enter extraction stages")
+
+    monkeypatch.setattr(pipeline_module, "TextExtractor", unexpected_stage)
+    monkeypatch.setattr(pipeline_module, "ImageExtractor", unexpected_stage)
+    monkeypatch.setattr(pipeline_module, "LayoutMapper", unexpected_stage)
+    monkeypatch.setattr(pipeline_module, "LayoutBuilder", unexpected_stage)
+    monkeypatch.setattr(Pipeline, "_create_table_extractor", unexpected_stage)
+
+    document = Pipeline(
+        pdf_path=str(pdf_path),
+        output_dir=str(output_dir),
+        render_dpi=72,
+        backend="sequential",
+    ).run()
+
+    page = document.pages[0]
+    assert page.page_type == "scanned"
+    assert page.blocks == []
+    assert page.tables == []
+    assert page.images == []
+    assert page.seals == []
+    assert page.layout_elements == []
+
+    with open(output_dir / "pages" / "page-000.json", encoding="utf-8") as f:
+        page_json = json.load(f)
+    assert set(page_json) == {
+        "index",
+        "size",
+        "rotation",
+        "page_type",
+        "blocks",
+        "tables",
+        "images",
+        "seals",
+        "render",
+        "layout_elements",
+    }
+    assert page_json["page_type"] == "scanned"
+    assert page_json["blocks"] == []
+    assert page_json["tables"] == []
+    assert page_json["images"] == []
+    assert page_json["seals"] == []
+    assert page_json["layout_elements"] == []
+    assert page_json["render"]["path"]
+
+    assert not stale_md.exists()
+    assert (output_dir / "output.md").read_text(encoding="utf-8") == ""
+    assert (output_dir / "page-000.png").exists()
+    assert (output_dir / "tables" / "page-000.png").exists()
+    assert list((output_dir / "images").iterdir()) == []
+
+    for image_path in (
+        output_dir / "page-000.png",
+        output_dir / "tables" / "page-000.png",
+    ):
+        pixmap = fitz.Pixmap(str(image_path))
+        assert max(pixmap.pixel(8, 8)) < 100
+
+
+def test_pipeline_omits_scanned_markdown_but_keeps_vector_output(tmp_dir):
+    pdf_path = Path(tmp_dir) / "mixed.pdf"
+    output_dir = Path(tmp_dir) / "out"
+    _write_mixed_page_type_pdf(pdf_path)
+
+    document = Pipeline(
+        pdf_path=str(pdf_path),
+        output_dir=str(output_dir),
+        render_dpi=72,
+        backend="sequential",
+    ).run()
+
+    assert [page.page_type for page in document.pages] == ["vector", "scanned"]
+    assert document.pages[0].blocks
+    assert document.pages[1].blocks == []
+    assert document.pages[1].tables == []
+    assert (output_dir / "pages" / "page-000.md").exists()
+    assert not (output_dir / "pages" / "page-001.md").exists()
+
+    output_md = (output_dir / "output.md").read_text(encoding="utf-8")
+    assert "vector page text" in output_md
 
 
 def test_pipeline_end_to_end(tmp_dir):

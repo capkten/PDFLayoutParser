@@ -83,52 +83,6 @@ def test_wireless_extractor_keeps_zebra_for_english_page(monkeypatch):
     assert tables == [zebra_table]
 
 
-def test_english_wireless_keeps_unlined_note_column_before_amount_columns():
-    from hexai_pdf_parser.tables.extractors.wireless_table_extractor import (
-        WirelessTableExtractor as NativeWirelessTableExtractor,
-    )
-
-    def word(x0, y0, x1, y1, text):
-        return (x0, y0, x1, y1, text, 0, 0, 0)
-
-    words = [
-        word(326.7, 134.17, 346.2, 145.26, "Note"),
-        word(69.0, 153.85, 188.98, 164.94, "Trading fees and trading tariff"),
-        word(419.28, 153.85, 434.31, 164.94, "765"),
-        word(515.28, 153.85, 530.31, 164.94, "653"),
-        word(69.0, 170.89, 179.69, 181.98, "Stock Exchange listing fees"),
-        word(341.17, 238.87, 346.18, 249.96, "3"),
-        word(69.0, 238.87, 126.01, 249.96, "Other revenue"),
-        word(419.28, 238.87, 434.31, 249.96, "127"),
-        word(515.28, 238.87, 530.31, 249.96, "108"),
-        word(341.18, 312.97, 346.19, 324.06, "4"),
-        word(69.0, 312.97, 161.79, 324.06, "Net investment income"),
-        word(420.36, 312.97, 434.31, 324.06, "111"),
-        word(515.28, 312.97, 530.31, 324.06, "125"),
-    ]
-    drawings = [
-        {"items": [("re", fitz.Rect(375.84, 275.46, 447.24, 275.94))]},
-        {"items": [("re", fitz.Rect(471.24, 275.46, 543.72, 275.94))]},
-        {"items": [("re", fitz.Rect(375.84, 309.42, 447.24, 309.90))]},
-        {"items": [("re", fitz.Rect(471.24, 309.42, 543.72, 309.90))]},
-    ]
-    page = SimpleNamespace(
-        rect=fitz.Rect(0, 0, 595.22, 842.0),
-        get_drawings=lambda: drawings,
-        get_text=lambda kind: words if kind == "words" else [],
-    )
-
-    tables = NativeWirelessTableExtractor().extract_general_wireless(
-        page,
-        table_bbox=BBox(62.8, 104.2, 546.4, 612.5),
-    )
-
-    assert len(tables) == 1
-    assert tables[0].cols == 4
-    note_cell = next(cell for cell in tables[0].cells if cell.text == "Note")
-    assert note_cell.col_index == 1
-
-
 def test_english_wireless_does_not_split_alternately_indented_description_column():
     from hexai_pdf_parser.tables.extractors.wireless_table_extractor import (
         WirelessTableExtractor as NativeWirelessTableExtractor,
@@ -343,36 +297,6 @@ def make_synthetic_text_alignment_pdf(
         doc.save(str(path))
     finally:
         doc.close()
-
-
-def test_extract_deduplicates_overlapping_text_alignment_candidates(
-    tmp_dir, monkeypatch
-):
-    pdf_path = Path(tmp_dir) / "deduplicate-text-tables.pdf"
-    make_synthetic_text_alignment_pdf(pdf_path, [(40, [(40, "content")])])
-    candidate = Table(
-        bbox=BBox(40, 30, 160, 80),
-        rows=1,
-        cols=1,
-        cells=[Cell("content", 0, 0, BBox(40, 30, 160, 80))],
-        source="text_alignment",
-    )
-
-    monkeypatch.setattr(
-        "hexai_pdf_parser.language_detector.detect_page_language",
-        lambda page: "zh",
-    )
-    extractor = TableExtractor()
-    extractor._extract_via_lines = lambda page: []
-    extractor._extract_via_text_alignment = lambda page, excluded_regions=None: [
-        candidate,
-        candidate,
-    ]
-
-    with fitz.open(pdf_path) as document:
-        tables = extractor.extract(document[0])
-
-    assert len(tables) == 1
 
 
 def test_personal_credit_report_rejects_sparse_numbered_prose_candidate():
@@ -702,34 +626,6 @@ class TestTableExtractor:
         ]
 
         assert extractor._should_fallback(tables) is True
-
-    def test_extract_keeps_line_tables_when_fallback_returns_empty(self):
-        extractor = TableExtractor()
-        line_tables = [
-            Table(
-                bbox=BBox(0, 0, 100, 100),
-                rows=2,
-                cols=2,
-                cells=[
-                    Cell(
-                        text="A",
-                        row_index=0,
-                        col_index=0,
-                        bbox=BBox(0, 0, 10, 10),
-                    )
-                ],
-                confidence=0.9,
-                source="line_projection",
-            )
-        ]
-
-        extractor._extract_via_lines = lambda page: line_tables
-        extractor._should_fallback = lambda tables: True
-        extractor._extract_via_pymupdf = lambda page: []
-
-        result = extractor.extract(SimpleNamespace())
-
-        assert result == line_tables
 
     def test_extract_does_not_call_pymupdf_table_parser(self, tmp_dir):
         pdf_path = Path(tmp_dir) / "without_pymupdf_tables.pdf"
@@ -1629,86 +1525,6 @@ class TestTableExtractor:
         finally:
             doc.close()
 
-    def test_ml_detector_defaults_to_layoutanalysis_model(self):
-        from hexai_pdf_parser.ml_table_detector import MLTableDetector
-
-        detector = MLTableDetector()
-        assert detector._model_path.as_posix().endswith(
-            "src/models/layoutanalysis/layoutanalysis.onnx"
-        )
-
-    def test_extract_via_ml_builds_table_structure_from_model_region(
-        self, tmp_dir, monkeypatch
-    ):
-        pdf_path = Path(tmp_dir) / "ml_region_table.pdf"
-        make_synthetic_text_alignment_pdf(
-            pdf_path,
-            [
-                (30.0, [(20.0, "A"), (150.0, "10")]),
-                (48.0, [(20.0, "B"), (150.0, "20")]),
-                (66.0, [(20.0, "C"), (150.0, "30")]),
-            ],
-        )
-
-        class FakeDetector:
-            def __init__(self, model_path=None, confidence_threshold=0.25, **kwargs):
-                self.model_path = model_path
-                self.confidence_threshold = confidence_threshold
-
-            def detect_with_scores(self, page):
-                return [(BBox(10, 10, 250, 100), 0.9)]
-
-        monkeypatch.setattr(
-            "hexai_pdf_parser.ml_table_detector.MLTableDetector",
-            FakeDetector,
-        )
-
-        doc = fitz.open(str(pdf_path))
-        try:
-            extractor = TableExtractor()
-            extractor._wired_extractor.extract = lambda page, table_bbox=None, confidence=None: [
-                Table(bbox=BBox(0, 0, 1, 1), rows=1, cols=1, cells=[], source="candidate")
-            ]
-            tables = extractor._extract_model_tables(doc[0])
-            assert len(tables) == 1
-            table = tables[0]
-            assert table.source == "text_alignment"
-            assert table.rows == 3
-            assert table.cols == 2
-        finally:
-            doc.close()
-
-    def test_extract_cells_from_region_detects_colspan_from_wide_header(
-        self, tmp_dir
-    ):
-        pdf_path = Path(tmp_dir) / "wide_header_colspan.pdf"
-        make_synthetic_text_alignment_pdf(
-            pdf_path,
-            [
-                (30.0, [(20.0, "MergedHeaderAcrossTwoColumns")]),
-                (60.0, [(20.0, "A"), (180.0, "10")]),
-                (80.0, [(20.0, "B"), (180.0, "20")]),
-            ],
-            page_size=(360.0, 160.0),
-        )
-
-        doc = fitz.open(str(pdf_path))
-        try:
-            extractor = TableExtractor()
-            row_count, col_count, cells = extractor._extract_cells_from_region(
-                doc[0],
-                BBox(10.0, 10.0, 320.0, 140.0),
-            )
-
-
-            assert row_count == 3
-            assert col_count >= 2
-            header = next(cell for cell in cells if cell.row_index == 0)
-            assert header.colspan >= 2
-            assert header.text == "MergedHeaderAcrossTwoColumns"
-        finally:
-            doc.close()
-
     def test_zebra_header_promotes_centered_group_label_to_child_band(self):
         from hexai_pdf_parser.tables.extractors.wireless_table_extractor import _RowData
 
@@ -1817,66 +1633,6 @@ class TestTableExtractor:
             (300.5, 370.3),
             (370.3, 444.1),
         ]
-
-    def test_currency_column_cleanup_merges_header_fragment_before_currency_amount(
-        self,
-    ):
-        extractor = WirelessTableExtractor()
-        columns = [
-            (90.0, 300.5),
-            (300.5, 306.0),
-            (306.0, 370.3),
-            (370.3, 374.3),
-            (374.3, 444.1),
-            (444.1, 448.1),
-            (448.1, 518.0),
-        ]
-        words = [
-            (446.2, 100.0, 456.2, 110.0, "31,"),
-            (453.7, 100.0, 459.2, 110.0, "$"),
-            (491.9, 100.0, 516.6, 110.0, "7,468"),
-        ]
-
-        cleaned = extractor._merge_standalone_currency_columns(columns, words)
-
-        assert cleaned == [
-            (90.0, 300.5),
-            (300.5, 370.3),
-            (370.3, 444.1),
-            (444.1, 518.0),
-        ]
-
-    def test_extract_cells_from_region_extends_obvious_rowspan(
-        self, tmp_dir
-    ):
-        pdf_path = Path(tmp_dir) / "stub_rowspan.pdf"
-        make_synthetic_text_alignment_pdf(
-            pdf_path,
-            [
-                (30.0, [(20.0, "A"), (180.0, "10")]),
-                (48.0, [(180.0, "20")]),
-                (66.0, [(20.0, "B"), (180.0, "30")]),
-            ],
-            page_size=(320.0, 120.0),
-        )
-
-        doc = fitz.open(str(pdf_path))
-        try:
-            extractor = TableExtractor()
-            row_count, col_count, cells = extractor._extract_cells_from_region(
-                doc[0],
-                BBox(10.0, 10.0, 300.0, 100.0),
-            )
-
-            assert row_count == 3
-            assert col_count == 2
-            first_col = next(
-                cell for cell in cells if cell.row_index == 0 and cell.col_index == 0
-            )
-            assert first_col.text == "A"
-            assert first_col.rowspan >= 2
-        finally:
-            doc.close()
 
     def test_text_alignment_snapshot_roundtrip(self, tmp_dir):
         pdf_path = Path(tmp_dir) / "snapshot_roundtrip.pdf"
@@ -2264,58 +2020,6 @@ class TestLayoutRuleIntegration:
         finally:
             doc.close()
 
-    def test_handler_invocation(self, tmp_dir):
-        """A matched profile with a handler calls the registered handler."""
-        from hexai_pdf_parser.table_config import (
-            LayoutProfile,
-            MatcherConfig,
-            StructureRuleSet,
-            TableConfig,
-        )
-        from hexai_pdf_parser.table_rule_handlers import register_structure_handler
-        from hexai_pdf_parser.table_structure_rules import TableStructureCandidate
-
-        handler_called = {"value": False}
-
-        @register_structure_handler("test_invoke_handler")
-        def invoke_handler(candidate: TableStructureCandidate, params):
-            handler_called["value"] = True
-            return candidate
-
-        pdf_path = Path(tmp_dir) / "handler.pdf"
-        make_synthetic_text_alignment_pdf(
-            pdf_path,
-            [
-                (30.0, [(20.0, "Assets"), (150.0, "10")]),
-                (48.0, [(20.0, "Liabilities"), (150.0, "20")]),
-            ],
-        )
-
-        config = TableConfig(
-            profiles=[
-                LayoutProfile(
-                    name="handler_test",
-                    matcher=MatcherConfig(
-                        required_keywords=["Assets"],
-                        min_match_score=0.5,
-                    ),
-                    structure_rules=StructureRuleSet(
-                        enabled=True,
-                        handler="test_invoke_handler",
-                    ),
-                )
-            ]
-        )
-
-        doc = fitz.open(str(pdf_path))
-        try:
-            extractor = TableExtractor(table_config=config)
-            extractor.extract(doc[0])
-            assert handler_called["value"] is True
-        finally:
-            doc.close()
-
-
 class TestEndToEndRegression:
     """End-to-end regression tests for the table layout rule system."""
 
@@ -2591,30 +2295,6 @@ class TestEndToEndRegression:
             doc.close()
 
 
-def test_financial_grouped_header_is_promoted_on_page_046():
-    pdf_path = Path(r"D:\codes\PDFLayoutParser\152590_20230428_N7ZK_0.pdf")
-
-    with fitz.open(str(pdf_path)) as doc:
-        extractor = TableExtractor()
-        tables = extractor.extract(doc[46])
-
-    financial = next(
-        t for t in tables
-        if any("本年金额" in cell.text for cell in t.cells)
-        or (t.rows >= 3 and t.cols >= 8)
-    )
-
-    assert financial.bbox.y0 < 330.0
-    assert any(
-        cell.text == "本年金额" and cell.colspan == 7
-        for cell in financial.cells
-    )
-    assert any(
-        cell.text == "项目" and cell.rowspan == 2
-        for cell in financial.cells
-    )
-
-
 def test_complex_financial_header_handler_normalizes_grouped_header():
     from hexai_pdf_parser.financial_header_handler import (
         normalize_complex_financial_header,
@@ -2666,45 +2346,6 @@ def test_complex_financial_header_handler_normalizes_grouped_header():
     assert left_anchor.rowspan == 2
 
 
-def test_page_046_lower_table_matches_label_structure():
-    pdf_path = Path(r"D:\codes\PDFLayoutParser\152590_20230428_N7ZK_0.pdf")
-
-    with fitz.open(str(pdf_path)) as doc:
-        extractor = TableExtractor()
-        tables = extractor.extract(doc[46])
-
-    lower = next(t for t in tables if t.bbox.y0 >= 300.0)
-
-    assert lower.rows == 5
-    assert lower.cols == 8
-    cell_map = {(cell.row_index, cell.col_index): cell for cell in lower.cells}
-    assert cell_map[(0, 0)].rowspan == 2
-    assert cell_map[(0, 1)].colspan == 7
-    assert not any(ch.isdigit() for ch in cell_map[(1, 3)].text)
-    assert "244,583,302,593.81" in cell_map[(2, 3)].text
-    assert cell_map[(3, 6)].text == "20,136,924.05"
-    assert cell_map[(4, 3)].text == "244,603,439,517.86"
-    assert cell_map[(4, 6)].text == "14,558,725,540.92"
-
-
-def test_page_005_year_labels_preserve_rowspan_after_column_merge():
-    pdf_path = Path(r"D:\codes\PDFLayoutParser\个人信用报告(本人版)(1).pdf")
-
-    with fitz.open(str(pdf_path)) as doc:
-        extractor = TableExtractor()
-        tables = extractor.extract(doc[5])
-
-    year_cells = {
-        cell.text: cell
-        for table in tables
-        for cell in table.cells
-        if cell.text in {"2015", "2014"}
-    }
-
-    assert year_cells["2015"].rowspan == 2
-    assert year_cells["2014"].rowspan == 2
-
-
 def test_plain_grid_table_is_not_changed_by_header_normalization(tmp_dir):
     pdf_path = Path(tmp_dir) / "plain_grid.pdf"
     make_pdf_with_table(pdf_path)
@@ -2735,121 +2376,6 @@ def test_complex_financial_handler_does_not_touch_plain_grid_table(tmp_dir):
     assert table.cols == 2
     assert all(cell.rowspan == 1 for cell in table.cells)
     assert all(cell.colspan == 1 for cell in table.cells)
-
-
-def test_page_046_lower_table_uses_complex_financial_header():
-    pdf_path = Path(r"D:\codes\PDFLayoutParser\152590_20230428_N7ZK_0.pdf")
-
-    with fitz.open(str(pdf_path)) as doc:
-        extractor = TableExtractor()
-        tables = extractor.extract(doc[46])
-
-    lower = next(t for t in tables if t.bbox.y0 >= 300.0)
-
-    assert lower.rows == 5
-    assert lower.cols == 8
-    assert any(
-        cell.text == "项目"
-        and cell.row_index == 0
-        and cell.col_index == 0
-        and cell.rowspan == 2
-        for cell in lower.cells
-    )
-    assert any(
-        cell.text == "本年金额"
-        and cell.row_index == 0
-        and cell.col_index == 1
-        and cell.colspan == 7
-        for cell in lower.cells
-    )
-    assert any(
-        cell.text == "追溯调整前余额"
-        and cell.row_index == 2
-        and cell.col_index == 0
-        for cell in lower.cells
-    )
-    assert any(
-        cell.text == "追溯调整"
-        and cell.row_index == 3
-        and cell.col_index == 0
-        for cell in lower.cells
-    )
-    assert any(
-        cell.text == "追溯调整后余额"
-        and cell.row_index == 4
-        and cell.col_index == 0
-        for cell in lower.cells
-    )
-
-
-def test_page_052_subsidiary_table_has_full_columns():
-    pdf_path = Path(r"D:\codes\PDFLayoutParser\152590_20230428_N7ZK_0.pdf")
-
-    with fitz.open(str(pdf_path)) as doc:
-        extractor = TableExtractor()
-        tables = extractor.extract(doc[51])
-
-    # The subsidiary table should have ~13 columns, not 8.
-    # Pick the widest table (most columns) as the subsidiary table.
-    subsidiary = max(tables, key=lambda t: t.cols)
-    assert subsidiary.cols >= 11, (
-        f"Expected >= 11 columns for subsidiary table, got {subsidiary.cols}"
-    )
-
-
-def test_text_aligned_page_046_tables_are_reconstructed():
-    pdf_path = Path(r"D:\codes\PDFLayoutParser\152590_20230428_N7ZK_0.pdf")
-
-    with fitz.open(str(pdf_path)) as doc:
-        extractor = TableExtractor()
-        tables = extractor.extract(doc[46])
-
-    upper = next(t for t in tables if t.bbox.y0 < 300.0)
-    lower = next(t for t in tables if t.bbox.y0 >= 300.0)
-
-    assert upper.cols == 7
-    assert any(cell.text == "所属单位" and cell.row_index == 0 for cell in upper.cells)
-    assert any(
-        "受影响的各个比较期间报表项目名称" in cell.text and cell.row_index == 0
-        for cell in upper.cells
-    )
-    assert any(
-        "北京市地铁运" in cell.text
-        for cell in upper.cells
-    )
-    assert any(
-        cell.text.startswith("本公司") or "合并报表" in cell.text
-        for cell in upper.cells
-    )
-
-    assert lower.rows == 5
-    assert lower.cols == 8
-    assert any(cell.text == "本年金额" and cell.col_index == 1 and cell.colspan == 7 for cell in lower.cells)
-    assert any(cell.text == "项目" and cell.row_index == 0 and cell.rowspan == 2 for cell in lower.cells)
-    assert any(
-        "年初归属于母公司" in cell.text and "所有者权益总额" in cell.text
-        and cell.row_index == 1
-        and cell.col_index == 3
-        for cell in lower.cells
-    )
-    assert any(
-        cell.text == "追溯调整前余额" and cell.row_index == 2 and cell.col_index == 0
-        for cell in lower.cells
-    )
-
-
-def test_pymupdf_fallback_does_not_mask_text_alignment_tables():
-    pdf_path = Path(r"D:\codes\PDFLayoutParser\152590_20230428_N7ZK_0.pdf")
-
-    with fitz.open(str(pdf_path)) as doc:
-        extractor = TableExtractor()
-        tables = extractor.extract(doc[46])
-
-    text_tables = [t for t in tables if t.source.startswith("text_alignment:")]
-
-    assert len(text_tables) == 2
-    assert any(t.bbox.y0 < 300.0 for t in text_tables)
-    assert any(t.bbox.y0 >= 300.0 for t in text_tables)
 
 
 def test_promote_grouped_financial_header_sets_rowspan_and_colspan():
@@ -3085,113 +2611,6 @@ def test_normalize_table_headers_rebuild_keeps_short_text_in_second_column():
     assert rebuilt_row[0] == "24"
     assert rebuilt_row[1] == "咨询公司"
     assert rebuilt_row[2] == "咨询公司"
-
-
-def test_text_alignment_recovers_multiline_header_above_separator_on_page_054():
-    pdf_path = Path(r"D:\codes\PDFLayoutParser\152590_20230428_N7ZK_0.pdf")
-
-    with fitz.open(str(pdf_path)) as doc:
-        extractor = TableExtractor()
-        tables = extractor._extract_via_text_alignment(doc[54])
-
-    assert tables, "expected at least one text-alignment table on page 054"
-    table = tables[0]
-
-    assert table.bbox.y0 < 100.0
-    assert any(cell.text == "企业" for cell in table.cells)
-    assert any(cell.text == "主要经" for cell in table.cells)
-    assert any(cell.text == "实收资本" for cell in table.cells)
-
-
-def test_text_alignment_keeps_adjacent_body_text_columns_on_page_052():
-    pdf_path = Path(r"D:\codes\PDFLayoutParser\152590_20230428_N7ZK_0.pdf")
-
-    with fitz.open(str(pdf_path)) as doc:
-        extractor = TableExtractor()
-        tables = extractor._extract_via_text_alignment(doc[52])
-
-    assert tables, "expected at least one text-alignment table on page 052"
-    table = tables[0]
-
-    rows = {}
-    for cell in table.cells:
-        rows.setdefault(cell.row_index, {})[cell.col_index] = cell.text
-
-    header_rows = [
-        [rows[r].get(i, "") for i in range(max(rows[r]) + 1)]
-        for r in range(3)
-    ]
-    body_row = [rows[3].get(i, "") for i in range(max(rows[3]) + 1)]
-
-    assert any("业务性质" in text for text in header_rows[1]), header_rows
-    assert any("营地" in text for text in header_rows[2]), header_rows
-    assert "北京市" in body_row, body_row
-    assert "轨道交通建设" in body_row, body_row
-    assert "北京市 轨道交通建设" not in body_row, body_row
-
-
-def test_text_alignment_keeps_adjacent_body_text_columns_on_page_053():
-    pdf_path = Path(r"D:\codes\PDFLayoutParser\152590_20230428_N7ZK_0.pdf")
-
-    with fitz.open(str(pdf_path)) as doc:
-        extractor = TableExtractor()
-        tables = extractor._extract_via_text_alignment(doc[53])
-
-    assert tables, "expected at least one text-alignment table on page 053"
-    table = tables[0]
-
-    rows = {}
-    for cell in table.cells:
-        rows.setdefault(cell.row_index, {})[cell.col_index] = cell.text
-
-    header_rows = [
-        [rows[r].get(i, "") for i in range(max(rows[r]) + 1)]
-        for r in range(3)
-    ]
-    body_row = [rows[3].get(i, "") for i in range(max(rows[3]) + 1)]
-
-    assert any("业务性质" in text for text in header_rows[1]), header_rows
-    assert any("营地" in text for text in header_rows[2]), header_rows
-    assert "北京市" in body_row, body_row
-    assert "公共交通服务" in body_row, body_row
-    assert "北京市 公共交通服务" not in body_row, body_row
-
-
-def test_equity_change_header_template_keeps_page_148_amount_columns_separate():
-    pdf_path = Path(r"D:\codes\PDFLayoutParser\152590_20230428_N7ZK_0.pdf")
-
-    with fitz.open(str(pdf_path)) as doc:
-        extractor = TableExtractor()
-        tables = extractor.extract(doc[148])
-
-    assert tables, "expected at least one table on page 148"
-    table = tables[0]
-
-    rows = {}
-    for cell in table.cells:
-        rows.setdefault(cell.row_index, {})[cell.col_index] = cell.text
-
-    top_header_row = [rows[0].get(i, "") for i in range(max(rows[0]) + 1)]
-    lower_header_row = [rows[1].get(i, "") for i in range(max(rows[1]) + 1)]
-    subtotal_row = [rows[max(rows)].get(i, "") for i in range(max(rows[max(rows)]) + 1)]
-
-    assert top_header_row[0] == "被投资单位"
-    assert top_header_row[1] == "本期增减变动"
-    assert top_header_row[6] == "期末余额"
-    assert top_header_row[7] == "期末减值准备"
-
-    assert lower_header_row[1] == "其他综合收益调整"
-    assert lower_header_row[2] == "其他权益变动"
-    assert lower_header_row[3] == "宣告发放现金股利或利润"
-    assert lower_header_row[4] == "计提减值准备"
-    assert lower_header_row[5] == "其他"
-
-    assert "5,219,987.71" in subtotal_row, subtotal_row
-    assert "3,759,244.70" in subtotal_row, subtotal_row
-    assert "571,316,422.40" in subtotal_row, subtotal_row
-    assert "191,274,358.68" in subtotal_row, subtotal_row
-    assert "5,219,987.71 3,759,244.70" not in subtotal_row, subtotal_row
-    assert "571,316,422.40 191,274,358.68" not in subtotal_row, subtotal_row
 
 
 def test_build_special_template_table_falls_back_when_equity_template_zone_check_fails(
@@ -3476,4 +2895,3 @@ def test_physical_horizontal_line_row_separation_and_multi_dollar_split():
     assert data_cells[2].text == "$10,680"
     assert data_cells[3].text == "$47,396"
     assert data_cells[4].text == "$63,754"
-

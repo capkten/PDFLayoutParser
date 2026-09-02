@@ -28,6 +28,7 @@ _LEGACY_MODULE_MAP = {
     "layout_mapper": "hexai_pdf_parser.extractors.layout_mapper",
     "layout_builder": "hexai_pdf_parser.extractors.layout_builder",
     "language_detector": "hexai_pdf_parser.extractors.language_detector",
+    "page_classifier": "hexai_pdf_parser.extractors.page_classifier",
     "personal_credit_report": "hexai_pdf_parser.extractors.personal_credit_report",
     "table_extractor": "hexai_pdf_parser.tables.table_extractor",
     "table_config": "hexai_pdf_parser.tables.table_config",
@@ -39,6 +40,8 @@ _LEGACY_MODULE_MAP = {
     "table_template_engine": "hexai_pdf_parser.tables.table_template_engine",
     "wireless_table_recovery": "hexai_pdf_parser.tables.wireless_table_recovery",
     "wired_table_extractor": "hexai_pdf_parser.tables.extractors.wired_table_extractor",
+    "english_table_extractor": "hexai_pdf_parser.tables.extractors.english_table_extractor",
+    "chinese_table_extractor": "hexai_pdf_parser.tables.extractors.chinese_table_extractor",
     "wireless_table_extractor": "hexai_pdf_parser.tables.extractors.wireless_table_extractor",
     "financial_header_handler": "hexai_pdf_parser.tables.normalizers.financial_header_handler",
     "ml_table_detector": "hexai_pdf_parser.ml.ml_table_detector",
@@ -112,7 +115,13 @@ from hexai_pdf_parser.core.models import (
 
 # Extractors & Builders
 from hexai_pdf_parser.extractors.text_extractor import TextExtractor
+from hexai_pdf_parser.extractors.language_detector import detect_page_language
+from hexai_pdf_parser.extractors.page_classifier import classify_page_type, is_scanned_page
 from hexai_pdf_parser.tables.table_extractor import TableExtractor
+from hexai_pdf_parser.tables.extractors import (
+    ChineseTableExtractor,
+    EnglishTableExtractor,
+)
 from hexai_pdf_parser.extractors.image_extractor import ImageExtractor
 from hexai_pdf_parser.extractors.layout_mapper import LayoutMapper
 from hexai_pdf_parser.extractors.layout_builder import LayoutBuilder
@@ -171,9 +180,14 @@ __all__ = [
     # Extractors & Builders
     "TextExtractor",
     "TableExtractor",
+    "EnglishTableExtractor",
+    "ChineseTableExtractor",
     "ImageExtractor",
     "LayoutMapper",
     "LayoutBuilder",
+    "detect_page_language",
+    "classify_page_type",
+    "is_scanned_page",
     # Writers & Renderers
     "JSONWriter",
     "MarkdownWriter",

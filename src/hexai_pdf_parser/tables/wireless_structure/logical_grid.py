@@ -7,7 +7,59 @@ from typing import Any, Sequence
 from hexai_pdf_parser.core.models import BBox
 
 
-def _row_components(row_count: int, cells: Sequence[dict[str, Any]]) -> list[list[int]]:
+def _wrapped_leaf_header_span(
+    cells: Sequence[dict[str, Any]],
+    candidate: dict[str, Any],
+    header_cutoff: float | None,
+) -> tuple[int, int] | None:
+    """Find a wrapped leaf header whose first physical row is continuation-only."""
+    if header_cutoff is None:
+        return None
+    if (
+        candidate.get("merge_kind") != "multiline_cell"
+        or "\n" not in str(candidate.get("text", ""))
+        or int(candidate.get("row_end", 0)) != int(candidate.get("row_start", 0)) + 1
+        or int(candidate.get("col_start", 0)) != int(candidate.get("col_end", 0))
+        or int(candidate.get("colspan", 1)) != 1
+        or not candidate.get("bbox")
+    ):
+        return None
+    center_y = (candidate["bbox"][1] + candidate["bbox"][3]) / 2.0
+    if center_y > header_cutoff:
+        return None
+
+    start = int(candidate["row_start"])
+    end = int(candidate["row_end"])
+    started = [
+        cell
+        for cell in cells
+        if int(cell["row_start"]) == start and str(cell.get("text", "")).strip()
+    ]
+    if len(started) != 1 or started[0] is not candidate:
+        return None
+
+    sibling_columns = {
+        int(cell["col_start"])
+        for cell in cells
+        if cell is not candidate
+        and int(cell["row_start"]) == end
+        and int(cell["row_end"]) == end
+        and int(cell["col_start"]) != int(candidate["col_start"])
+        and int(cell.get("colspan", 1)) == 1
+        and cell.get("bbox")
+        and (cell["bbox"][1] + cell["bbox"][3]) / 2.0 <= header_cutoff
+        and str(cell.get("text", "")).strip()
+    }
+    if len(sibling_columns) < 2:
+        return None
+    return start, end
+
+
+def _row_components(
+    row_count: int,
+    cells: Sequence[dict[str, Any]],
+    header_cutoff: float | None = None,
+) -> list[list[int]]:
     # A surviving cell start marks a structural row; only continuation-only
     # physical rows may collapse into the preceding logical row.
     row_starts = {int(cell["row_start"]) for cell in cells}
@@ -17,6 +69,47 @@ def _row_components(row_count: int, cells: Sequence[dict[str, Any]]) -> list[lis
             groups[-1].append(row)
         else:
             groups.append([row])
+    if not cells:
+        return groups
+
+    first_column = min(int(cell["col_start"]) for cell in cells)
+    body_prefix_spans = []
+    for cell in cells:
+        if (
+            int(cell["col_start"]) != first_column
+            or int(cell["row_end"]) <= int(cell["row_start"])
+            or not str(cell.get("text", "")).strip()
+        ):
+            continue
+        center_y = (cell["bbox"][1] + cell["bbox"][3]) / 2.0
+        is_body = (
+            center_y > header_cutoff
+            if header_cutoff is not None
+            else int(cell["row_start"]) > 1
+        )
+        if is_body:
+            body_prefix_spans.append(
+                (int(cell["row_start"]), int(cell["row_end"]))
+            )
+
+    wrapped_header_spans = [
+        span
+        for cell in cells
+        for span in [_wrapped_leaf_header_span(cells, cell, header_cutoff)]
+        if span is not None
+    ]
+
+    for start, end in sorted(body_prefix_spans + wrapped_header_spans):
+        matching = [
+            index
+            for index, group in enumerate(groups)
+            if any(start <= row <= end for row in group)
+        ]
+        if len(matching) < 2:
+            continue
+        first, last = matching[0], matching[-1]
+        merged = [row for group in groups[first : last + 1] for row in group]
+        groups = groups[:first] + [merged] + groups[last + 1 :]
     return groups
 
 
@@ -24,9 +117,10 @@ def build_logical_grid(
     physical_rows: Sequence[dict[str, Any]],
     columns: Sequence[dict[str, Any]],
     cells: Sequence[dict[str, Any]],
+    header_cutoff: float | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     """Return logical rows while retaining physical source row ranges."""
-    components = _row_components(len(physical_rows), cells)
+    components = _row_components(len(physical_rows), cells, header_cutoff)
     row_mapping = {
         source: index + 1
         for index, group in enumerate(components)

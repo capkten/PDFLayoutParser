@@ -51,6 +51,7 @@ class NativeSpan:
     size: float | None
     order: int
     characters: List[Tuple[str, BBox]] = field(default_factory=list)
+    source_position: Tuple[int, int, int] | None = None
 
 
 @dataclass
@@ -101,10 +102,10 @@ def collect_native_spans(
     raw = page.get_text("rawdict", flags=fitz.TEXT_PRESERVE_WHITESPACE)
     spans: List[NativeSpan] = []
     order = 0
-    for block in raw.get("blocks", []):
+    for block_index, block in enumerate(raw.get("blocks", [])):
         if block.get("type") != 0:
             continue
-        for line in block.get("lines", []):
+        for line_index, line in enumerate(block.get("lines", [])):
             line_text = "".join(
                 char.get("c", "")
                 for item in line.get("spans", [])
@@ -115,7 +116,7 @@ def collect_native_spans(
                 and line["bbox"][1] >= page.rect.y0 + page.rect.height * 0.85
             ):
                 continue
-            for item in line.get("spans", []):
+            for span_index, item in enumerate(line.get("spans", [])):
                 text = "".join(char.get("c", "") for char in item.get("chars", []))
                 if not text.strip():
                     continue
@@ -131,6 +132,7 @@ def collect_native_spans(
                             for char in item.get("chars", [])
                             if char.get("c", "")
                         ],
+                        source_position=(block_index, line_index, span_index),
                     )
                 )
                 order += 1
@@ -385,16 +387,10 @@ def _column_tracks(rows: Sequence[Sequence[TextStrip]]) -> List[float]:
             continue
         previous = groups[-1]
         previous_anchor = statistics.median(_anchor(item) for _, item in previous)
-        overlaps_previous = any(
-            strip.bbox.x1 >= item.bbox.x0 - 2.0 and strip.bbox.x0 <= item.bbox.x1 + 2.0
-            for _, item in previous
-        )
         currency_then_number = _is_number(strip.text) and any(
             item.text.strip() in _CURRENCY for _, item in previous
         )
-        if not currency_then_number and (
-            abs(_anchor(strip) - previous_anchor) <= tolerance or overlaps_previous
-        ):
+        if not currency_then_number and abs(_anchor(strip) - previous_anchor) <= tolerance:
             previous.append((row_index, strip))
         else:
             groups.append([(row_index, strip)])
