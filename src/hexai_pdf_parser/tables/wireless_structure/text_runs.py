@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import re
+import statistics
 from collections import Counter
-from typing import Any, Sequence
+from typing import Any, Literal, Sequence
 
 from .columns import assign_column
 from .span_chain import _union
@@ -177,6 +178,117 @@ def _horizontal_overlap(left: Sequence[float], right: Sequence[float]) -> float:
     return max(0.0, min(left[2], right[2]) - max(left[0], right[0]))
 
 
+def infer_output_order_mode(
+    spans: Sequence[dict[str, Any]],
+) -> Literal["row_interleaved", "columnar"]:
+    """Choose the merge policy from sustained native-order geometry.
+
+    A short vertically wrapped field is not enough to identify column-oriented
+    output.  The columnar policy requires a long vertical run on a separated
+    x-track, which is the evidence exposed by PDFs that emit one table column
+    before moving to the next one.
+    """
+    filtered = _filter_separator_spans(spans)
+    if len(filtered) < 4:
+        return "row_interleaved"
+    ordered = sorted(filtered, key=lambda item: item["flow"])
+    sizes = [float(item.get("font_size", 10.0)) for item in ordered if item.get("font_size")]
+    tolerance = max(2.4, (statistics.median(sizes) if sizes else 10.0) * 0.38)
+    widths = [item["bbox"][2] - item["bbox"][0] for item in ordered]
+    horizontal_gap = max(8.0, (statistics.median(widths) if widths else 10.0) * 0.35)
+
+    tracks: list[list[float]] = []
+    for item in sorted(ordered, key=lambda value: value["bbox"][0]):
+        if tracks and item["bbox"][0] <= tracks[-1][1] + horizontal_gap:
+            tracks[-1][1] = max(tracks[-1][1], item["bbox"][2])
+        else:
+            tracks.append([item["bbox"][0], item["bbox"][2]])
+
+    def track_index(item: dict[str, Any]) -> int | None:
+        overlaps = [
+            max(0.0, min(item["bbox"][2], right) - max(item["bbox"][0], left))
+            for left, right in tracks
+        ]
+        if not overlaps or max(overlaps) <= 0.0:
+            return None
+        return overlaps.index(max(overlaps))
+
+    vertical_edges: Counter[int] = Counter()
+    cross_block_edges: Counter[int] = Counter()
+    longest_chain: dict[int, int] = {}
+    longest_span: dict[int, float] = {}
+    active_track: int | None = None
+    active_length = 0
+    active_start_y: float | None = None
+    active_end_y: float | None = None
+    for previous, current in zip(ordered, ordered[1:]):
+        previous_center = _center_y(previous)
+        current_center = _center_y(current)
+        if abs(current_center - previous_center) <= tolerance:
+            active_track = None
+            active_length = 0
+            active_start_y = None
+            active_end_y = None
+            continue
+        overlap = _horizontal_overlap(previous["bbox"], current["bbox"])
+        minimum_width = min(
+            previous["bbox"][2] - previous["bbox"][0],
+            current["bbox"][2] - current["bbox"][0],
+        )
+        previous_track = track_index(previous)
+        current_track = track_index(current)
+        if (
+            current_center > previous_center
+            and previous_track is not None
+            and previous_track == current_track
+            and overlap >= max(2.0, minimum_width * 0.45)
+        ):
+            vertical_edges[current_track] += 1
+            previous_position = previous.get("source_position") or []
+            current_position = current.get("source_position") or []
+            if (
+                len(previous_position) >= 1
+                and len(current_position) >= 1
+                and previous_position[0] != current_position[0]
+            ):
+                cross_block_edges[current_track] += 1
+            if active_track == current_track:
+                active_length += 1
+            else:
+                active_track = current_track
+                active_length = 2
+                active_start_y = previous_center
+            active_end_y = current_center
+            longest_chain[current_track] = max(
+                longest_chain.get(current_track, 0), active_length
+            )
+            if active_start_y is not None and active_end_y is not None:
+                longest_span[current_track] = max(
+                    longest_span.get(current_track, 0.0),
+                    active_end_y - active_start_y,
+                )
+        else:
+            active_track = None
+            active_length = 0
+            active_start_y = None
+            active_end_y = None
+
+    dominant_track = max(vertical_edges, key=vertical_edges.get, default=None)
+    dominant_edges = vertical_edges.get(dominant_track, 0) if dominant_track is not None else 0
+    dominant_cross_block_edges = (
+        cross_block_edges.get(dominant_track, 0) if dominant_track is not None else 0
+    )
+    if (
+        len(tracks) >= 2
+        and dominant_edges >= 6
+        and longest_chain.get(dominant_track, 0) >= 6
+        and longest_span.get(dominant_track, 0.0) >= max(48.0, (statistics.median(sizes) if sizes else 10.0) * 5.0)
+        and (dominant_cross_block_edges >= 3 or dominant_edges >= 12)
+    ):
+        return "columnar"
+    return "row_interleaved"
+
+
 def _right_witnesses(
     chain: Sequence[dict[str, Any]],
     candidate: dict[str, Any],
@@ -275,7 +387,11 @@ def _merge_wrapped_field_runs(
     return sorted(result, key=lambda item: (item["flow_start"], item["flow_end"]))
 
 
-def build_text_runs(spans: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+def build_text_runs(
+    spans: Sequence[dict[str, Any]],
+    *,
+    output_mode: str = "row_interleaved",
+) -> list[dict[str, Any]]:
     """Merge source-continuous native fragments into complete field atoms."""
     if not spans:
         return []

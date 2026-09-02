@@ -32,7 +32,10 @@ def _union(items: Iterable[dict[str, Any]]) -> list[float]:
 
 
 def _native_dict(span: NativeSpan) -> dict[str, Any]:
-    source_position = getattr(span, "source_position", (0, 0, span.order))
+    source_position = getattr(span, "source_position", None)
+    source_position_known = source_position is not None
+    if source_position is None:
+        source_position = (0, 0, span.order)
     characters = [
         {"text": char, "bbox": _bbox_list(box)}
         for char, box in span.characters
@@ -40,6 +43,7 @@ def _native_dict(span: NativeSpan) -> dict[str, Any]:
     return {
         "order": int(span.order),
         "source_position": list(source_position),
+        "source_position_known": source_position_known,
         "bbox": _bbox_list(span.bbox),
         "text": span.text.replace("\n", " ").strip(),
         "font": span.font or "",
