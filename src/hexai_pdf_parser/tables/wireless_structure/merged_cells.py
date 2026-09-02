@@ -50,6 +50,21 @@ def _same_slot_single_cjk(left: dict[str, Any], right: dict[str, Any]) -> bool:
     )
 
 
+def _is_left_shifted_single_cjk_continuation(
+    previous: dict[str, Any], candidate: dict[str, Any]
+) -> bool:
+    """Recognize a short wrapped tail that starts just left of a long line."""
+    font_size = min(previous["font_size"], candidate["font_size"])
+    previous_width = previous["bbox"][2] - previous["bbox"][0]
+    return (
+        _SINGLE_CJK.fullmatch(candidate["text"].strip()) is not None
+        and previous_width >= font_size * 4.0
+        and candidate["bbox"][0] < previous["bbox"][0]
+        and candidate["bbox"][2]
+        <= previous["bbox"][0] + max(2.0, font_size * 0.5)
+    )
+
+
 def _merge_pair(left: dict[str, Any], right: dict[str, Any], joiner: str, kind: str) -> dict[str, Any]:
     merged = dict(left)
     merged["text"] = left["text"] + joiner + right["text"]
@@ -127,7 +142,10 @@ def _can_merge_multiline(
         if bold["col_start"] == bold["col_end"] == 1 and row_columns.get(bold["row_start"], {1}) == {1}:
             return False
     minimum_width = min(previous["bbox"][2] - previous["bbox"][0], candidate["bbox"][2] - candidate["bbox"][0])
-    if _horizontal_overlap(previous["bbox"], candidate["bbox"]) < minimum_width * 0.45:
+    if (
+        _horizontal_overlap(previous["bbox"], candidate["bbox"]) < minimum_width * 0.45
+        and not _is_left_shifted_single_cjk_continuation(previous, candidate)
+    ):
         return False
     gap = candidate["bbox"][1] - previous["bbox"][3]
     return gap <= max(6.0, min(previous["font_size"], candidate["font_size"]))

@@ -66,6 +66,31 @@ def test_hybrid_body_preserves_a_geometry_proven_colspan(monkeypatch):
     assert (cells[0].col_index, cells[0].colspan) == (0, 2)
 
 
+def test_hybrid_body_merges_left_shifted_same_column_continuation(monkeypatch):
+    region = BBox(0, 0, 200, 60)
+    spans = [
+        _span("一年内到期的非流动资", 20, 10, 95, 1),
+        _span("产", 0, 18, 10, 2),
+        _span("100", 120, 16.3, 150, 3),
+        _span("其他项目", 20, 40, 55, 4),
+        _span("200", 120, 40, 150, 5),
+    ]
+    monkeypatch.setattr(
+        "hexai_pdf_parser.tables.wireless_structure.hybrid_body.collect_native_spans",
+        lambda page, allowed_regions: spans,
+    )
+
+    rows, columns, cells = recover_hybrid_body_cells(
+        object(), region, [0, 100, 200]
+    )
+
+    assert (rows, columns) == (2, 2)
+    assert [cell.text for cell in cells if cell.col_index == 0 and cell.text] == [
+        "一年内到期的非流动资\n产",
+        "其他项目",
+    ]
+
+
 def test_hybrid_body_rejects_independent_same_slot_fields(monkeypatch):
     region = BBox(0, 0, 200, 40)
     spans = [

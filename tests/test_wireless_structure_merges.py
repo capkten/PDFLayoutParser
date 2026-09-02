@@ -74,6 +74,43 @@ def test_merge_multiline_cells_accepts_vertical_fragments_in_same_physical_row()
     assert result[0]["rowspan"] == 1
 
 
+def test_merge_multiline_cells_accepts_left_shifted_single_cjk_continuation():
+    first = _cell(
+        "一年内到期的非流动资",
+        flow=1,
+        row=1,
+        x0=18,
+        y0=10,
+        x1=90,
+        y1=20,
+        source_line=1,
+    )
+    second = _cell(
+        "产",
+        flow=2,
+        row=1,
+        x0=10,
+        y0=22,
+        x1=20,
+        y1=32,
+        source_line=2,
+    )
+
+    result = merge_multiline_cells([first, second], header_cutoff=None)
+
+    assert len(result) == 1
+    assert result[0]["text"] == "一年内到期的非流动资\n产"
+
+
+def test_merge_multiline_cells_keeps_left_shifted_independent_label_separate():
+    first = _cell("项目明细", flow=1, row=1, x0=40, y0=10, x1=70, y1=20)
+    second = _cell("金额", flow=2, row=1, x0=10, y0=22, x1=30, y1=32, source_line=2)
+
+    result = merge_multiline_cells([first, second], header_cutoff=None)
+
+    assert [item["text"] for item in result] == ["项目明细", "金额"]
+
+
 def test_merge_multiline_cells_requires_candidate_to_be_below_previous_fragment():
     first = _cell("上方片段", flow=1, row=1, y0=21, y1=31)
     second = _cell("下方片段", flow=2, row=1, y0=10, y1=20)
