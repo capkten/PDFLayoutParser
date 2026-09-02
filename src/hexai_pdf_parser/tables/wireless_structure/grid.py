@@ -10,14 +10,43 @@ def _center_y(item: dict[str, Any]) -> float:
     return (item["bbox"][1] + item["bbox"][3]) / 2.0
 
 
-def _cluster(values: Sequence[float], tolerance: float) -> list[float]:
-    groups: list[list[float]] = []
-    for value in sorted(values):
-        if groups and value - statistics.mean(groups[-1]) <= tolerance:
-            groups[-1].append(value)
-        else:
-            groups.append([value])
-    return [round(statistics.mean(group), 2) for group in groups]
+def _center_y(item: dict[str, Any]) -> float:
+    return (item["bbox"][1] + item["bbox"][3]) / 2.0
+
+
+def _same_visual_row(
+    left: dict[str, Any], right: dict[str, Any], tolerance: float
+) -> bool:
+    if abs(_center_y(left) - _center_y(right)) <= tolerance:
+        return True
+    left_height = left["bbox"][3] - left["bbox"][1]
+    right_height = right["bbox"][3] - right["bbox"][1]
+    overlap = max(
+        0.0,
+        min(left["bbox"][3], right["bbox"][3])
+        - max(left["bbox"][1], right["bbox"][1]),
+    )
+    return (
+        overlap >= min(left_height, right_height) * 0.45
+        and abs(left["bbox"][1] - right["bbox"][1])
+        <= max(2.4, min(left_height, right_height) * 0.4)
+    )
+
+
+def _cluster_rows(
+    candidates: Sequence[dict[str, Any]], tolerance: float
+) -> list[float]:
+    groups: list[list[dict[str, Any]]] = []
+    for candidate in sorted(candidates, key=_center_y):
+        if groups:
+            representative = min(
+                groups[-1], key=lambda item: abs(_center_y(item) - _center_y(candidate))
+            )
+            if _same_visual_row(representative, candidate, tolerance):
+                groups[-1].append(candidate)
+                continue
+        groups.append([candidate])
+    return [round(statistics.mean(_center_y(item) for item in group), 2) for group in groups]
 
 
 def build_grid(
@@ -28,9 +57,10 @@ def build_grid(
         return [], [], [], ["缺少可用文本条或稳定列带。"]
     heights = [item["bbox"][3] - item["bbox"][1] for item in candidates]
     tolerance = max(3.0, statistics.median(heights) * 0.70)
+    row_centers = _cluster_rows(candidates, tolerance)
     rows = [
         {"id": index + 1, "y": value}
-        for index, value in enumerate(_cluster([_center_y(item) for item in candidates], tolerance))
+        for index, value in enumerate(row_centers)
     ]
     columns = [
         {"id": band["id"], "x0": band["x0"], "x1": band["x1"]}

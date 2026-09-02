@@ -2,6 +2,21 @@
 
 ## 2026-09-02
 
+- 修复 `fix/zh_all_table_pages.pdf` 页面索引 `482` 中文无线表格因首列双列竖排（`被-投`、`资-单`、`位` 及企业名称）导致伪列割裂与 Occupancy Conflict 漏表问题。
+  - **根因与调用位置**：第 482 页首列（`被投资单位` 表头及 `①联营企业 河南泓淇光电子产业基金合伙企业（有限合伙）`）排版为左右两列交织竖排，在 PDF 文本流中拆分为同 block 内不同渲染行的单字。原 `src/hexai_pdf_parser/tables/wireless_structure/merged_cells.py` 的 `_same_slot_single_cjk()` 强制要求 `source_line_start` 完全相等，导致同行相邻单字无法合并，在同一槽位产生多重占用冲突（如 `(8, 1)` 槽位 `①` 与 `联...` 冲突），最终被 `_has_occupancy_conflict()` 判定冲突而丢弃整表。
+  - **修复判定条件**：
+    1. 扩充 `_SINGLE_CJK` 匹配字符集，覆盖带圈数字（`①`..`⑳`）、全角/半角括号及符号；
+    2. 在 `_same_slot_single_cjk()` 中放宽行号限制，允许同 block 内相邻渲染行（`abs(line1 - line2) <= 1`）、水平紧邻（`gap <= 2.1 * font_size`）且同一视觉行高度（`delta_y <= 0.35 * font_size`）的单字/符号安全融合；
+    3. 融合后的同行单字与后续换行在 `merge_multiline_cells()` 中顺畅完成垂直合龙，首列表头恢复为 `rowspan=2`，企业全称作为一个逻辑单元格保留。
+  - **约束与验证**：不回读 `page.get_text("words")`，不回退 legacy 路径。全量无线测试组件 119 passed。页面级提取结果从 0 表恢复为 1 张 3x13 完整大表（含多级表头 `本期增减变动` colspan=6），0 Occupancy Conflict，可视化 PNG 经核验网格与文字完整对齐。
+
+
+- 修复 `fix/zh_all_table_pages.pdf` 页面索引 `591`（PDF 第 592 页、页面显示页码 7）中文无线表格因 native 输出顺序为左列连续而造成的结构串行化和文本漏失问题。
+  - **根因与调用位置**：目标区域的 80 个 native span 按 native block 连续输出左侧项目列，随后才输出右侧表头和金额列；原 `src/hexai_pdf_parser/tables/wireless_structure/text_runs.py` 的 `build_text_runs()` 在同视觉行组合后，继续用连续 `flow`、几何换行和右侧 witness 跨 block 合并，导致相邻独立项目被串成一个文本块。此前 `NativeSpan` 未保留可靠的 rawdict `(block_index, line_index, span_index)` 来源，无法区分独立 block 与同 block 的真实换行。
+  - **模式判定**：`recover_cells_from_region()` 和 `recover_hybrid_body_cells()` 在 `region_spans()` 后调用 `infer_output_order_mode()`；区域内只有存在足够长、稳定且水平分离的纵向 native 轨迹时才判为 `columnar`，证据不足仍为 `row_interleaved`。591 页判定为 `columnar`，所有 80 个 span 均带可靠来源。
+  - **合并边界与网格兼容**：`columnar` 路径跳过原有跨 block 顺序换行合并，仅在 span 到 atom 阶段合并同一 native block、相邻 source line、下方且水平重叠充分、字体兼容的真实换行；`merge_multiline_cells()` 同样拒绝跨 block 合并。已有列带、列标注、物理/逻辑网格、表头跨度、空槽位物化和 occupancy 检查继续复用。针对 row-interleaved 页面中“高的已合并文本框 + 同排短数值”中心点轻微错开的情况，`grid.py` 的物理行聚类增加垂直投影重叠且顶部对齐证据，避免兼容回归把一行拆成两行。当前目标页构建 63 个 atom，其中仅 1 个同 native block 换行 atom；最终表格为 `29x10`，290 个 Cell，63 个非空 Cell、227 个独立空 Cell，290/290 槽位恰好占用且无冲突。
+  - **约束与验证**：中文/混合 native-span 结构恢复只消费 native span、atom、列带、物理 Cell 和逻辑 Cell，不回读 `page.get_text("words")`，不回退 legacy 或 zebra 路径。聚焦回归为 `81 passed`，无线、网格、表头、有线和语言分流相关集合为 `173 passed`（仅既有 PyMuPDF/SWIG 弃用警告）。页面级输出位于 `D:\codes\PDFLayoutParser\output\fix_full_rerun_current_20260902_page591_output_order_final_grid_fix\`；结构化结果为 `pages\page-591.json`，最终可视化为 `tables\page-591.png`。视觉核验确认表格外框、10 列、29 行、项目列换行、右侧数值列及表外附注均未发生明显错位、误并或漏失。
+
 - 重构并泛化中文无线表格与混合主体多行折行合并判定（`merge_multiline_cells`）：
   - **根因与问题**：在中文报表中，多行长字段折行常采用“首行缩进 2 格、次行顶格/回缩”的悬挂缩进排版（如 936 页“保证金、押金、质保金组”首行 $x=[98.5, 214.2]$，换行“合”次行顶格 $x=[88.0, 98.5]$，两行水平投影交集为 0）。过去硬卡 `_horizontal_overlap >= 45%` 的假设忽略了缩进与回缩折行形态，导致次行多行折行无法合并，在同一列槽位生成两个独立 Cell 并触发占用冲突（occupancy conflict），导致整表被丢弃。
   - **重构判定与调用位置**：在 `src/hexai_pdf_parser/tables/wireless_structure/merged_cells.py` 中，将 `_can_merge_multiline()` 的折行判定从单字拓展为支持列内左移/回缩折行与右侧空白见证。在同列、上下相邻、native flow 连续、字体字号兼容的前提下，满足以下任一条件均放行合并：

@@ -82,3 +82,49 @@ def test_infer_output_order_mode_does_not_classify_one_wrapped_field_as_columnar
     spans.append(_span("右侧见证", 120, 160, 38, 6, 10))
 
     assert infer_output_order_mode(spans) == "row_interleaved"
+
+
+def _atom(text, x0, x1, y, flow, block, line=0):
+    return {
+        "text": text,
+        "bbox": [x0, y, x1, y + 10],
+        "flow": flow,
+        "source_position": [block, line, 0],
+        "source_position_known": True,
+        "font": "SimSun",
+        "font_size": 10,
+        "bold": False,
+        "span_ref": f"S{flow}",
+        "char_boxes": [],
+    }
+
+
+def test_columnar_mode_keeps_independent_left_blocks_separate():
+    from hexai_pdf_parser.tables.wireless_structure.text_runs import build_text_runs
+
+    atoms = [
+        _atom("左一", 10, 50, 10, 1, 1),
+        _atom("左二", 10, 50, 24, 2, 2),
+        _atom("左三", 10, 50, 38, 3, 3),
+        _atom("右侧", 120, 160, 24, 4, 4),
+    ]
+
+    result = build_text_runs(atoms, output_mode="columnar")
+
+    assert [item["text"] for item in result] == ["左一", "左二", "左三", "右侧"]
+
+
+def test_columnar_mode_merges_only_adjacent_lines_from_one_native_block():
+    from hexai_pdf_parser.tables.wireless_structure.text_runs import build_text_runs
+
+    atoms = [
+        _atom("第一行", 10, 50, 10, 1, 1, line=0),
+        _atom("第二行", 10, 50, 24, 2, 1, line=1),
+        _atom("右侧", 120, 160, 17, 3, 2),
+    ]
+
+    result = build_text_runs(atoms, output_mode="columnar")
+
+    assert [item["text"] for item in result] == ["第一行\n第二行", "右侧"]
+    assert result[0]["merge_kind"] == "same_native_block_lines"
+    assert result[0]["source_blocks"] == [1]

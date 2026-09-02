@@ -24,7 +24,11 @@ from .header_topology import (
 from .logical_grid import build_logical_grid, materialize_empty_cells, merge_header_spans
 from .merged_cells import merge_multiline_cells, merge_same_slot_fragments
 from .span_chain import region_spans
-from .text_runs import build_text_runs, merge_same_band_native_line_runs
+from .text_runs import (
+    build_text_runs,
+    infer_output_order_mode,
+    merge_same_band_native_line_runs,
+)
 
 
 def _bbox(values: list[float]) -> BBox:
@@ -89,7 +93,8 @@ def recover_cells_from_region(
     try:
         native_spans = collect_native_spans(page, allowed_regions=[region_bbox])
         spans = region_spans(native_spans, region_bbox)
-        atoms = build_text_runs(spans)
+        output_mode = infer_output_order_mode(spans)
+        atoms = build_text_runs(spans, output_mode=output_mode)
         bands = infer_column_bands(atoms, region_bbox)
         bands = prune_paired_cjk_artifact_bands(atoms, bands)
         bands = prune_sparse_alignment_artifact_bands(atoms, bands)
@@ -109,7 +114,9 @@ def recover_cells_from_region(
             return 0, 0, []
 
         cells = merge_same_slot_fragments(grid_cells, header_cutoff)
-        cells = merge_multiline_cells(cells, header_cutoff)
+        cells = merge_multiline_cells(
+            cells, header_cutoff, output_mode=output_mode
+        )
         if _has_occupancy_conflict(cells):
             return 0, 0, []
         logical_rows, logical_columns, logical_cells = build_logical_grid(

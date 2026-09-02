@@ -327,3 +327,51 @@ def test_recover_cells_from_region_removes_sparse_alignment_column(monkeypatch):
     assert (rows, columns, len(cells)) == (4, 3, 12)
     assert next(cell for cell in cells if cell.row_index == 0 and cell.col_index == 0).text == "项目"
     assert next(cell for cell in cells if cell.row_index == 3 and cell.col_index == 0).text == "合计"
+
+
+def test_recover_interleaved_vertical_cjk_columns(monkeypatch):
+    region = BBox(0, 0, 200, 140)
+    raw = [
+        # Header row (y=10..40): "被投资单位" + "期初余额" + "期末余额"
+        (10, 10, 20, "被"),
+        (10, 30, 40, "投"),
+        (25, 10, 20, "资"),
+        (25, 30, 40, "单"),
+        (40, 10, 20, "位"),
+        (25, 60, 100, "期初余额"),
+        (25, 120, 160, "期末余额"),
+        # Row 1 (y=60..85): "河南泓淇" + 100.00 + 120.00
+        (60, 10, 20, "河"),
+        (60, 30, 40, "南"),
+        (75, 10, 20, "泓"),
+        (75, 30, 40, "淇"),
+        (67.5, 60, 100, "100.00"),
+        (67.5, 120, 160, "120.00"),
+        # Row 2 (y=95..120): "光电产业" + 200.00 + 240.00
+        (95, 10, 20, "光"),
+        (95, 30, 40, "电"),
+        (110, 10, 20, "产"),
+        (110, 30, 40, "业"),
+        (102.5, 60, 100, "200.00"),
+        (102.5, 120, 160, "240.00"),
+    ]
+    spans = [
+        NativeSpan(text, BBox(x0, y, x1, y + 10), "SimSun", 10.5, order)
+        for order, (y, x0, x1, text) in enumerate(raw)
+    ]
+    monkeypatch.setattr(
+        "hexai_pdf_parser.tables.wireless_structure.recoverer.collect_native_spans",
+        lambda page, allowed_regions: spans,
+    )
+
+    rows, columns, cells = recover_cells_from_region(object(), region)
+
+    assert (rows, columns) == (3, 3)
+    header_col0 = next(cell for cell in cells if cell.row_index == 0 and cell.col_index == 0).text
+    assert "被" in header_col0 and "投" in header_col0 and "资" in header_col0 and "单" in header_col0 and "位" in header_col0
+    row1_col0 = next(cell for cell in cells if cell.row_index == 1 and cell.col_index == 0).text
+    assert "河" in row1_col0 and "南" in row1_col0 and "泓" in row1_col0 and "淇" in row1_col0
+    row2_col0 = next(cell for cell in cells if cell.row_index == 2 and cell.col_index == 0).text
+    assert "光" in row2_col0 and "电" in row2_col0 and "产" in row2_col0 and "业" in row2_col0
+    assert next(cell for cell in cells if cell.row_index == 1 and cell.col_index == 1).text == "100.00"
+    assert next(cell for cell in cells if cell.row_index == 2 and cell.col_index == 2).text == "240.00"

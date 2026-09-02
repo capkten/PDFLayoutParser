@@ -15,7 +15,7 @@ from .grid import build_grid
 from .logical_grid import build_logical_grid, materialize_empty_cells
 from .merged_cells import merge_multiline_cells, merge_same_slot_fragments
 from .span_chain import region_spans
-from .text_runs import build_text_runs
+from .text_runs import build_text_runs, infer_output_order_mode
 
 
 def _column_bands(column_edges: Sequence[float]) -> list[dict[str, Any]]:
@@ -121,7 +121,8 @@ def recover_hybrid_body_cells(
     try:
         native_spans = collect_native_spans(page, allowed_regions=[region_bbox])
         spans = region_spans(native_spans, region_bbox)
-        atoms = build_text_runs(spans)
+        output_mode = infer_output_order_mode(spans)
+        atoms = build_text_runs(spans, output_mode=output_mode)
         if not atoms:
             return 0, 0, []
 
@@ -141,7 +142,9 @@ def recover_hybrid_body_cells(
             return 0, 0, []
 
         cells = merge_same_slot_fragments(grid_cells, header_cutoff=None)
-        cells = merge_multiline_cells(cells, header_cutoff=None)
+        cells = merge_multiline_cells(
+            cells, header_cutoff=None, output_mode=output_mode
+        )
         if _has_occupancy_conflict(cells):
             return 0, 0, []
 

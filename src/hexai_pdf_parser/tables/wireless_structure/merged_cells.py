@@ -9,7 +9,7 @@ from typing import Any, Sequence
 _VALUE_ONLY = re.compile(r"^[\s$¥£€HKRMB,'’()\-–—.\d%]+$")
 _LIST_CONTINUATION = re.compile(r"^[\s\-–—•·]")
 _INLINE_MARKER = re.compile(r"^[*#†‡\-–—]+$")
-_SINGLE_CJK = re.compile(r"^[\u3400-\u9fff]$")
+_SINGLE_CJK = re.compile(r"^[\u3400-\u9fff\u2460-\u2473\uff00-\uffef\w()（）]$")
 
 
 def _horizontal_overlap(left: Sequence[float], right: Sequence[float]) -> float:
@@ -36,11 +36,21 @@ def _same_native_inline(left: dict[str, Any], right: dict[str, Any]) -> bool:
 
 
 def _same_slot_single_cjk(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    source_blocks_match = (
+        left.get("source_blocks") == right.get("source_blocks")
+        if left.get("source_blocks") is not None and right.get("source_blocks") is not None
+        else True
+    )
+    source_lines_close = (
+        abs(left.get("source_line_start", 0) - right.get("source_line_start", 0)) <= 1
+        if left.get("source_line_start") is not None and right.get("source_line_start") is not None
+        else True
+    )
     return (
         _SINGLE_CJK.fullmatch(left["text"]) is not None
         and _SINGLE_CJK.fullmatch(right["text"]) is not None
-        and left.get("source_blocks") == right.get("source_blocks")
-        and left.get("source_line_start") == right.get("source_line_start")
+        and source_blocks_match
+        and source_lines_close
         and _native_continuous(left, right)
         and abs((left["bbox"][1] + left["bbox"][3]) / 2 - (right["bbox"][1] + right["bbox"][3]) / 2)
         <= max(2.0, min(left["font_size"], right["font_size"]) * 0.35)
