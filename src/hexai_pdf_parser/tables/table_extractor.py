@@ -317,15 +317,17 @@ class TableExtractor:
             ]
         included_wired: set[int] = set()
         for bbox, score in model_items:
-            overlapping_wired = [
+            bbox_h = max(1.0, bbox.y1 - bbox.y0)
+            full_matching_wired = [
                 table
                 for table in valid_wired_tables
                 if id(table) not in included_wired
                 and self._bbox_overlaps(table.bbox, bbox)
+                and (min(table.bbox.y1, bbox.y1) - max(table.bbox.y0, bbox.y0)) >= 0.5 * bbox_h
             ]
-            if overlapping_wired:
-                tables.extend(overlapping_wired)
-                included_wired.update(id(table) for table in overlapping_wired)
+            if full_matching_wired:
+                tables.extend(full_matching_wired)
+                included_wired.update(id(table) for table in full_matching_wired)
                 continue
 
             region_tables = self._wireless_extractor.extract(
@@ -334,6 +336,12 @@ class TableExtractor:
                 confidence=score,
                 page_language=page_language,
             )
+            overlapping_wired = [
+                table
+                for table in valid_wired_tables
+                if id(table) not in included_wired
+                and self._bbox_overlaps(table.bbox, bbox)
+            ]
             if region_tables:
                 included_wired.update(id(table) for table in overlapping_wired)
             else:

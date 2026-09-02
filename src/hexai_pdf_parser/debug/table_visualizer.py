@@ -167,7 +167,7 @@ LAYOUT_TEXT_FILL = (0.15, 0.65, 0.35)        # Emerald green for text badge fill
 def draw_tables_on_page(
     page: fitz.Page,
     tables: Sequence[Table],
-    draw_text_boxes: bool = False,
+    draw_text_boxes: bool = True,
     layout_elements: Optional[Sequence[Any]] = None,
     blocks: Optional[Sequence[Any]] = None,
 ) -> None:
@@ -203,7 +203,7 @@ def draw_tables_on_page(
             shape.draw_rect(grid_rect)
             shape.finish(color=CELL_BORDER_COLOR, width=0.8)
 
-            if cell.text.strip():
+            if draw_text_boxes and cell.text.strip():
                 cell_words = [
                     w for w in page_words
                     if cell.bbox.x0 - 2.0 <= (w[0] + w[2]) / 2.0 <= cell.bbox.x1 + 2.0

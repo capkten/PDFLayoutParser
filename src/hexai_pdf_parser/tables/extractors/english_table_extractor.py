@@ -357,7 +357,7 @@ class EnglishTableExtractor(BaseTableExtractor):
                 expanded_x0, expanded_y0 = table_bbox.x0, table_bbox.y0
                 expanded_x1, expanded_y1 = table_bbox.x1, table_bbox.y1
                 for w in page_words:
-                    if min(table_bbox.x1, w[2]) > max(table_bbox.x0, w[0]) and min(table_bbox.y1, w[3]) > max(table_bbox.y0, w[1]):
+                    if table_bbox.x0 - 2.0 <= (w[0] + w[2]) / 2.0 <= table_bbox.x1 + 2.0 and table_bbox.y0 - 2.0 <= (w[1] + w[3]) / 2.0 <= table_bbox.y1 + 2.0:
                         expanded_x0 = min(expanded_x0, w[0])
                         expanded_x1 = max(expanded_x1, w[2])
                         expanded_y0 = min(expanded_y0, w[1])
@@ -402,41 +402,53 @@ class EnglishTableExtractor(BaseTableExtractor):
                     x0 = min(it[1].x, it[2].x) if it[0] == "l" else it[1].x0
                     x1 = max(it[1].x, it[2].x) if it[0] == "l" else it[1].x1
                     if h <= 3.0 and w >= 2.0:
-                        h_lines.append((round(y, 1), round(x0, 1), round(x1, 1)))
+                        is_hyperlink = fill is not None and len(fill) >= 3 and (fill[2] > 0.6 and fill[0] < 0.3 and fill[1] < 0.3)
+                        if not is_hyperlink:
+                            h_lines.append((round(y, 1), round(x0, 1), round(x1, 1)))
                     elif it[0] == "re" and h >= 5.0 and w >= 50.0 and fill is not None and fill != (1.0, 1.0, 1.0):
                         zebra_bands.append((round(x0, 1), round(it[1].y0, 1), round(x1, 1), round(it[1].y1, 1)))
 
-        # 1. 行的确定 (Y轴): 优先基于斑马底色块或 Y 坐标重叠聚类为行
-        t_words.sort(key=lambda w: (round(w[1] / 3.0), w[0]))
+        # 1. 行的确定 (Y轴): 动态字高与垂直重叠度自适应聚类
+        word_heights = [w[3] - w[1] for w in t_words if w[3] > w[1]]
+        avg_line_h = sum(word_heights) / len(word_heights) if word_heights else 10.0
+
+        t_words.sort(key=lambda w: (w[1], w[0]))
         rows_words: List[List[Tuple]] = []
         for w in t_words:
-            mid_y = (w[1] + w[3]) / 2.0
+            w_mid_y = (w[1] + w[3]) / 2.0
             matched = False
             for rw in rows_words:
-                rw_mid = sum((lw[1] + lw[3]) / 2.0 for lw in rw) / len(rw)
                 rw_y0 = min(lw[1] for lw in rw)
                 rw_y1 = max(lw[3] for lw in rw)
+                rw_mid_y = sum((lw[1] + lw[3]) / 2.0 for lw in rw) / len(rw)
 
-                # 若存在斑马线底色块，同底色块内的文字严格聚类为同一行，跨底色块严格禁止合并
+                # 斑马底色块约束：同底色块文字天然聚类为同一行，跨底色块严格禁止合并
                 in_same_band = any(
-                    by0 - 1.5 <= min(w[1], rw_y0) and max(w[3], rw_y1) <= by1 + 1.5
+                    by0 <= min(w[1], rw_y0) and max(w[3], rw_y1) <= by1
                     for bx0, by0, bx1, by1 in zebra_bands
                 )
                 across_bands = any(
-                    (by0 - 0.5 <= mid_y <= by1 + 0.5) != (by0 - 0.5 <= rw_mid <= by1 + 0.5)
+                    (by0 <= w_mid_y <= by1) != (by0 <= rw_mid_y <= by1)
                     for bx0, by0, bx1, by1 in zebra_bands
                 )
-
                 if across_bands:
                     continue
 
+                # 物理横线硬阻断检查
                 has_sep_line = any(
-                    min(mid_y, rw_mid) + 0.5 < ly < max(mid_y, rw_mid) - 0.5
+                    min(w[1], rw_y0) < ly < max(w[3], rw_y1)
                     and max(w[0], min(lw[0] for lw in rw)) < lx1
                     and min(w[2], max(lw[2] for lw in rw)) > lx0
                     for ly, lx0, lx1 in h_lines
                 )
-                if not has_sep_line and (in_same_band or abs(mid_y - rw_mid) <= 3.5):
+                if has_sep_line:
+                    continue
+
+                # 垂直空间重叠判定 (Vertical Interval Overlap)：重叠高度超过字高 40%，或属于同一底色块
+                v_overlap = max(0.0, min(w[3], rw_y1) - max(w[1], rw_y0))
+                is_same_line = in_same_band or (v_overlap >= min(w[3] - w[1], rw_y1 - rw_y0) * 0.4) or abs(w_mid_y - rw_mid_y) < avg_line_h * 0.35
+
+                if is_same_line:
                     rw.append(w)
                     matched = True
                     break
@@ -551,37 +563,36 @@ class EnglishTableExtractor(BaseTableExtractor):
                     cur_y0 = min(w[1] for w in cur_row)
                     boundary_y = (prev_y1 + cur_y0) / 2.0
 
+                    prev_x0 = min(w[0] for w in prev_row)
+                    prev_x1 = max(w[2] for w in prev_row)
+                    cur_x0 = min(w[0] for w in cur_row)
+                    cur_x1 = max(w[2] for w in cur_row)
+
                     has_line_between = any(
                         prev_y1 - 1.5 <= l[0] <= cur_y0 + 1.5
-                        and max(min(w[0] for w in prev_row), min(w[0] for w in cur_row)) < l[2]
-                        and min(max(w[2] for w in prev_row), max(w[2] for w in cur_row)) > l[1]
+                        and (
+                            (l[1] <= min(prev_x1, cur_x1) + 15.0 and l[2] >= max(prev_x0, cur_x0) - 15.0)
+                            or (l[1] <= prev_x0 + 15.0 and l[2] >= prev_x1 - 15.0)
+                            or (l[1] <= cur_x0 + 15.0 and l[2] >= cur_x1 - 15.0)
+                        )
                         for l in lines_in_table
                     )
                     if has_line_between:
                         merged_sub_rows.append(cur_row)
                         continue
 
-                    # 仅当两行之间没有独立数值冲突且 Text Block 高度较小（<= 28pt，仅为2行单元格换行）时才允许考虑合并
-                    block_h = min((b[3] - b[1] for b in table_blocks if b[1] + 1.0 < boundary_y < b[3] - 1.0), default=999.0)
-                    both_have_numeric = any(any(ch.isdigit() for ch in w[4]) for w in prev_row) and any(any(ch.isdigit() for ch in w[4]) for w in cur_row)
-                    
-                    # 纯几何排版拓扑不变量：若上一行是从左边界延伸的大跨度文本（段落/标题），而当前行从右侧数据区开始或具有多个离散列间隙，严禁合并
-                    prev_x0 = min(w[0] for w in prev_row)
-                    prev_x1 = max(w[2] for w in prev_row)
-                    cur_x0 = min(w[0] for w in cur_row)
-                    cur_x1 = max(w[2] for w in cur_row)
-                    
-                    is_layout_mismatch = (prev_x0 < sub_bbox.x0 + 30.0 and prev_x1 >= sub_bbox.x0 + (sub_bbox.x1 - sub_bbox.x0) * 0.45 and cur_x0 > sub_bbox.x0 + 80.0)
+                    is_inside_block = any(b[1] + 1.0 < boundary_y < b[3] - 1.0 for b in table_blocks)
+
+                    col0_limit = sub_bbox.x0 + min(60.0, (sub_bbox.x1 - sub_bbox.x0) * 0.25)
+                    prev_has_c0 = any(w[0] < col0_limit for w in prev_row)
+                    cur_has_c0 = any(w[0] < col0_limit for w in cur_row)
 
                     across_zebra_boundary = any(
                         (by0 - 1.0 <= min(w[1] for w in prev_row) and prev_y1 <= by1 + 1.0) != (by0 - 1.0 <= cur_y0 and max(w[3] for w in cur_row) <= by1 + 1.0)
                         for bx0, by0, bx1, by1 in zebra_bands
                     )
 
-                    is_cut = (block_h <= 28.0) and not both_have_numeric and not is_layout_mismatch and not across_zebra_boundary and any(
-                        b[1] + 1.0 < boundary_y < b[3] - 1.0
-                        for b in table_blocks
-                    )
+                    is_cut = is_inside_block and not (prev_has_c0 and cur_has_c0) and not across_zebra_boundary
 
                     if is_cut:
                         prev_row.extend(cur_row)
@@ -682,14 +693,16 @@ class EnglishTableExtractor(BaseTableExtractor):
 
             header_line_levels = []
             sub_w = sub_bbox.x1 - sub_bbox.x0
+            sub_h = sub_bbox.y1 - sub_bbox.y0
+            max_header_y = sub_y0 + max(40.0, sub_h * 0.35)
             for y, segs in sorted(sub_fused_lines_by_y.items(), key=lambda item: item[0]):
-                if y >= data_row_y_min - 1.0:
+                if y >= data_row_y_min - 1.0 or y > max_header_y or len(header_line_levels) >= 3:
                     break
                 if len(segs) >= 2 or max(s[1] for s in segs) - min(s[0] for s in segs) >= 25.0:
                     header_line_levels.append(y)
                     min_x = min(s[0] for s in segs)
                     max_w = max(s[1] for s in segs) - min(s[0] for s in segs)
-                    if min_x <= sub_bbox.x0 + 15.0 and max_w >= sub_w * 0.75:
+                    if (min_x <= sub_bbox.x0 + 15.0 or (columns and min_x <= columns[0][1] + 15.0)) and max_w >= sub_w * 0.65:
                         break
 
             if header_line_levels:
@@ -708,14 +721,14 @@ class EnglishTableExtractor(BaseTableExtractor):
             else:
                 # 保持天然物理行 (Natural Physical Rows)，表头层级数由数据区首行之前的天然行数决定
                 header_row_list = [rw for rw in sub_rows if (sum((w[1] + w[3]) / 2.0 for w in rw) / len(rw)) < data_row_y_min - 1.5]
-                if not header_row_list:
+                if not header_row_list or len(header_row_list) >= len(sub_rows):
                     first_row_metrics = sum(1 for w in sub_rows[0] if is_fin_metric(w[4]))
                     if first_row_metrics >= 2:
                         header_tier_count = 0
                     else:
                         header_tier_count = 1 if len(sub_rows) > 1 else 0
                 else:
-                    header_tier_count = len(header_row_list)
+                    header_tier_count = min(2, len(header_row_list))
                 body_sub_rows = []
 
             # 规则指南第 56 条：多 $ 宽列自适应分裂与精准贴合（每一个 $ 的 x0 直接分裂为独立列）
@@ -800,242 +813,59 @@ class EnglishTableExtractor(BaseTableExtractor):
             grid_cells: Dict[Tuple[int, int], Cell] = {}
             for r_idx, rw in enumerate(sub_rows):
                 is_header_tier = (r_idx < header_tier_count)
-
-                if is_header_tier:
-                    # 全宽注释行检测（表头内）：与数据行的 is_prose_footnote 逻辑对称。
-                    # 当表头某行的所有词连续成一个短语（词间距 <= 14pt），
-                    # 且宽度覆盖表格宽的 20%~80%（居中对齐，非全宽撑满），
-                    # 且行内无纯数值 token，则判定为全宽注释行，colspan 覆盖全列。
-                    h_rwords = sorted(rw, key=lambda w: w[0])
-                    if h_rwords:
-                        h_rw_x0 = h_rwords[0][0]
-                        h_rw_x1 = h_rwords[-1][2]
-                        h_rw_w = h_rw_x1 - h_rw_x0
-                        h_table_w = table_x1 - table_x0
-                        h_phrase_gap = max(
-                            (h_rwords[i + 1][0] - h_rwords[i][2] for i in range(len(h_rwords) - 1)),
-                            default=0.0,
-                        )
-                        h_pure_data = [
-                            w for w in h_rwords
-                            if any(ch.isdigit() for ch in w[4])
-                            and len(re.findall(r'[a-zA-Z]', w[4])) == 0
-                        ]
-                        h_center = (h_rw_x0 + h_rw_x1) / 2.0
-                        t_center = (table_x0 + table_x1) / 2.0
-                        is_header_prose_row = (
-                            h_rw_w >= h_table_w * 0.20
-                            and h_rw_w <= h_table_w * 0.85
-                            and h_phrase_gap <= 14.0
-                            and len(h_pure_data) == 0
-                            and abs(h_center - t_center) <= h_table_w * 0.25
-                            and len(h_rwords) >= 3
-                        )
-                        if is_header_prose_row:
-                            h_text = " ".join(w[4] for w in h_rwords).strip()
-                            grid_cells[(r_idx, 0)] = Cell(
-                                row_index=r_idx,
-                                col_index=0,
-                                rowspan=1,
-                                colspan=num_cols,
-                                text=h_text,
-                                bbox=BBox(
-                                    round(grid_x[0], 1),
-                                    round(grid_y[r_idx], 1),
-                                    round(grid_x[-1], 1),
-                                    round(grid_y[r_idx + 1], 1),
-                                ),
-                            )
-                            continue
-                    # 表头行：复用经过完整几何中心点与拓扑校验的统一列分配算法
-                    raw_h_cells = self._assign_words_to_zebra_columns(
-                        words=rw,
-                        columns=columns,
-                        row_idx=r_idx,
-                        row_y0=grid_y[r_idx],
-                        row_y1=grid_y[r_idx + 1],
-                        page=page,
-                        is_header=True,
-                    )
-                    for c in raw_h_cells:
-                        grid_cells[(r_idx, c.col_index)] = c
-                    continue
-                else:
-                    rwords = sorted(rw, key=lambda w: w[0])
-                    
-                    # 纯几何页码过滤：页面/表格底部孤立纯数字页码
-                    is_isolated_page_footer = (
-                        len(rwords) == 1
-                        and rwords[0][4].strip().isdigit()
-                        and r_idx == len(sub_rows) - 1
-                        and rwords[0][1] >= sub_bbox.y1 - 25.0
-                    )
-                    if is_isolated_page_footer:
-                        continue
-
-                    # 纯正文注释行判别 (Prose / Footnote Row)：
-                    # 1) 宽幅散列行：文本横跨 >= 40% 表格宽，词数 >= 4，无纯数值 token。
-                    # 2) 居中窄短语行：宽度 20%~85%，词间距 <= 14pt（连续短语），
-                    #    居中偏差 <= 25% 表格宽，词数 >= 3，无纯数值 token。
-                    #    用于识别"(Dollars/Euros in Thousands, Except Where Noted)"等
-                    #    居中对齐的全表注释行（glyph bbox 只覆盖中间列，实际语义全表通用）。
-                    pure_data_tokens = [w for w in rwords if any(ch.isdigit() for ch in w[4]) and len(re.findall(r'[a-zA-Z]', w[4])) == 0]
-                    rw_w = rwords[-1][2] - rwords[0][0]
-                    rw_table_w = table_x1 - table_x0
-                    rw_center = (rwords[0][0] + rwords[-1][2]) / 2.0
-                    rw_t_center = (table_x0 + table_x1) / 2.0
-                    rw_max_gap = max(
-                        (rwords[i + 1][0] - rwords[i][2] for i in range(len(rwords) - 1)),
-                        default=0.0,
-                    )
-                    is_prose_footnote = (
-                        len(pure_data_tokens) <= 1
-                        and (
-                            # 宽幅散列行
-                            (rw_w >= rw_table_w * 0.40 and len(rwords) >= 4)
-                            # 居中窄短语行
-                            or (
-                                rw_w >= rw_table_w * 0.20
-                                and rw_w <= rw_table_w * 0.85
-                                and rw_max_gap <= 14.0
-                                and abs(rw_center - rw_t_center) <= rw_table_w * 0.25
-                                and len(rwords) >= 3
-                            )
-                        )
-                    )
-                    if is_prose_footnote:
-                        p_text = " ".join(w[4] for w in rwords).strip()
-                        grid_cells[(r_idx, 0)] = Cell(
-                            row_index=r_idx,
-                            col_index=0,
-                            rowspan=1,
-                            colspan=num_cols,
-                            text=p_text,
-                            bbox=BBox(round(grid_x[0], 1), round(grid_y[r_idx], 1), round(grid_x[-1], 1), round(grid_y[r_idx + 1], 1)),
-                        )
-                        continue
-
-                    # 普通表体数据行：纯文本跨列大标题自动合并 (Rule 4.1 Colspan)，普通数据行按列归属
-                    phrases = []
-                    cur_p = []
-                    for w in rwords:
-                        if not cur_p:
-                            cur_p.append(w)
-                        else:
-                            prev = cur_p[-1]
-                            gap = w[0] - prev[2]
-                            if gap <= 6.0 and not (prev[4] == "$" and any(ch.isdigit() for ch in w[4])) and not (any(ch.isdigit() for ch in prev[4]) and any(ch.isdigit() for ch in w[4]) and gap > 2.0):
-                                cur_p.append(w)
-                            else:
-                                phrases.append(cur_p)
-                                cur_p = [w]
-                    if cur_p:
-                        phrases.append(cur_p)
-
-                    spanning_cols = set()
-                    peer_boxes = [(min(w[0] for w in op), max(w[2] for w in op)) for op in phrases]
-                    for p in phrases:
-                        px0 = min(w[0] for w in p)
-                        px1 = max(w[2] for w in p)
-                        p_text = " ".join(w[4] for w in p).strip().replace("$ ", "$")
-                        has_number = any(any(ch.isdigit() for ch in w[4]) for w in p) and not any(k in p_text for k in ("2024", "2023", "2022", "2021", "2020", "points", "Tenor", "Tier", "Level"))
-
-                        other_peers = [pb for pb in peer_boxes if not (pb[0] == px0 and pb[1] == px1)]
-                        span_res = None
-                        if not has_number and len(columns) >= 2:
-                            span_res = self._infer_centered_parent_header_span(
-                                px0=px0,
-                                px1=px1,
-                                peer_boxes=other_peers,
-                                columns=columns,
-                                allow_full_width=True,
-                            )
-                        if span_res is not None:
-                            sc, colspan = span_res
-                            grid_cells[(r_idx, sc)] = Cell(
-                                row_index=r_idx,
-                                col_index=sc,
-                                rowspan=1,
-                                colspan=colspan,
-                                text=p_text,
-                                bbox=BBox(round(grid_x[sc], 1), round(grid_y[r_idx], 1), round(grid_x[sc + colspan], 1), round(grid_y[r_idx + 1], 1)),
-                            )
-                            for ci in range(sc, sc + colspan):
-                                spanning_cols.add(ci)
-                        else:
-                            covered_cols = [ci for ci in range(num_cols) if max(px0, grid_x[ci]) < min(px1, grid_x[ci + 1])]
-                            if len(covered_cols) >= 2 and not has_number:
-                                sc = min(covered_cols)
-                                ec = max(covered_cols)
-                                other_p_in_cols = [
-                                    op for op in phrases
-                                    if op is not p and any(sc <= ci <= ec for ci in [next((i for i in range(num_cols) if grid_x[i] <= (ow[0] + ow[2]) / 2.0 < grid_x[i + 1]), -1) for ow in op])
-                                ]
-                                if not other_p_in_cols:
-                                    colspan = ec - sc + 1
-                                    grid_cells[(r_idx, sc)] = Cell(
-                                        row_index=r_idx,
-                                        col_index=sc,
-                                        rowspan=1,
-                                        colspan=colspan,
-                                        text=p_text,
-                                        bbox=BBox(round(grid_x[sc], 1), round(grid_y[r_idx], 1), round(grid_x[sc + colspan], 1), round(grid_y[r_idx + 1], 1)),
-                                    )
-                                    for ci in range(sc, ec + 1):
-                                        spanning_cols.add(ci)
-
-                    col_words: Dict[int, List[Tuple]] = defaultdict(list)
-                    for w in rw:
-                        w_mid = (w[0] + w[2]) / 2.0
-                        assigned_col = next((ci for ci in range(num_cols) if grid_x[ci] <= w_mid < grid_x[ci + 1]), None)
-                        if assigned_col is None:
-                            assigned_col = min(range(num_cols), key=lambda ci: abs(w_mid - (grid_x[ci] + grid_x[ci + 1]) / 2.0))
-                        col_words[assigned_col].append(w)
-
-                    for ci in range(num_cols):
-                        if ci in spanning_cols:
-                            continue
-                        cw = col_words.get(ci, [])
-                        if cw:
-                            cw.sort(key=lambda w: (round(w[1] / 3.0), w[0]))
-                            txt = " ".join(w[4] for w in cw).strip().replace("$ ", "$")
-                            grid_cells[(r_idx, ci)] = Cell(
-                                row_index=r_idx,
-                                col_index=ci,
-                                rowspan=1,
-                                colspan=1,
-                                text=txt,
-                                bbox=BBox(round(grid_x[ci], 1), round(grid_y[r_idx], 1), round(grid_x[ci + 1], 1), round(grid_y[r_idx + 1], 1)),
-                            )
-                        else:
-                            grid_cells[(r_idx, ci)] = Cell(
-                                row_index=r_idx,
-                                col_index=ci,
-                                rowspan=1,
-                                colspan=1,
-                                text="",
-                                bbox=BBox(round(grid_x[ci], 1), round(grid_y[r_idx], 1), round(grid_x[ci + 1], 1), round(grid_y[r_idx + 1], 1)),
-                            )
+                row_cells = self._assign_words_to_zebra_columns(
+                    words=rw,
+                    columns=columns,
+                    row_idx=r_idx,
+                    row_y0=grid_y[r_idx],
+                    row_y1=grid_y[r_idx + 1],
+                    page=page,
+                    is_header=is_header_tier,
+                )
+                for c in row_cells:
+                    grid_cells[(r_idx, c.col_index)] = c
 
             if header_tier_count > 1:
                 header_cells_list = [c for c in grid_cells.values() if c.row_index < header_tier_count]
                 data_cells_list = [c for c in grid_cells.values() if c.row_index >= header_tier_count]
                 norm_h_cells, num_h_tiers = self._normalize_zebra_headers(header_cells_list, columns, page=page)
                 
-                # 若表头行发生压缩，数据行行号统一向上平移，并更新 grid_y 切分点
+                # 若表头行发生压缩，数据行行号统一向上平移
                 shift = header_tier_count - num_h_tiers
                 for dc in data_cells_list:
                     dc.row_index -= shift
                 
                 num_rows = num_h_tiers + (num_rows - header_tier_count)
-                if shift > 0 and len(grid_y) > header_tier_count:
-                    grid_y = [grid_y[0]] + list(grid_y[header_tier_count:])
                 
                 grid_cells.clear()
                 for c in norm_h_cells:
                     grid_cells[(c.row_index, c.col_index)] = c
                 for dc in data_cells_list:
                     grid_cells[(dc.row_index, dc.col_index)] = dc
+
+            # 根据实际单元格包围盒稳健重建 grid_y 切分点
+            row_y_bounds: Dict[int, List[float]] = {}
+            for c in grid_cells.values():
+                if c.row_index not in row_y_bounds:
+                    row_y_bounds[c.row_index] = [c.bbox.y0, c.bbox.y1]
+                else:
+                    row_y_bounds[c.row_index][0] = min(row_y_bounds[c.row_index][0], c.bbox.y0)
+                    row_y_bounds[c.row_index][1] = max(row_y_bounds[c.row_index][1], c.bbox.y1)
+
+            grid_y = []
+            for r in range(num_rows):
+                if r in row_y_bounds:
+                    grid_y.append(row_y_bounds[r][0])
+                elif grid_y:
+                    grid_y.append(grid_y[-1])
+                else:
+                    grid_y.append(0.0)
+            if (num_rows - 1) in row_y_bounds:
+                grid_y.append(row_y_bounds[num_rows - 1][1])
+            elif grid_y:
+                grid_y.append(grid_y[-1] + 15.0)
+            else:
+                grid_y.append(15.0)
 
             rebuilt_grid_cells: Dict[Tuple[int, int], Cell] = {}
             for cell in grid_cells.values():
@@ -1059,7 +889,11 @@ class EnglishTableExtractor(BaseTableExtractor):
                             for cell in grid_cells.values()
                         )
                         if not covered:
-                            empty_box = BBox(grid_x[c], grid_y[r], grid_x[c + 1], grid_y[r + 1])
+                            bx0 = grid_x[c] if c < len(grid_x) else (columns[c][0] if c < len(columns) else 0.0)
+                            bx1 = grid_x[c + 1] if c + 1 < len(grid_x) else (columns[c][1] if c < len(columns) else bx0 + 20.0)
+                            by0 = grid_y[r] if r < len(grid_y) else 0.0
+                            by1 = grid_y[r + 1] if r + 1 < len(grid_y) else by0 + 15.0
+                            empty_box = BBox(bx0, by0, bx1, by1)
                             cells.append(Cell(
                                 text="",
                                 row_index=r,
@@ -1108,7 +942,7 @@ class EnglishTableExtractor(BaseTableExtractor):
                 expanded_x0, expanded_y0 = table_bbox.x0, table_bbox.y0
                 expanded_x1, expanded_y1 = table_bbox.x1, table_bbox.y1
                 for w in page_words:
-                    if min(table_bbox.x1, w[2]) > max(table_bbox.x0, w[0]) and min(table_bbox.y1, w[3]) > max(table_bbox.y0, w[1]):
+                    if table_bbox.x0 - 2.0 <= (w[0] + w[2]) / 2.0 <= table_bbox.x1 + 2.0 and table_bbox.y0 - 2.0 <= (w[1] + w[3]) / 2.0 <= table_bbox.y1 + 2.0:
                         expanded_x0 = min(expanded_x0, w[0])
                         expanded_x1 = max(expanded_x1, w[2])
                         expanded_y0 = min(expanded_y0, w[1])
@@ -1127,71 +961,46 @@ class EnglishTableExtractor(BaseTableExtractor):
                 if not (bg[1] <= table_bbox.y0 + 2.0 or bg[0] >= table_bbox.y1 - 2.0)
                 and not (bg[1] > table_bbox.y1 + 15.0 and bg[2] == "white")
             ]
-            if filtered_bgs:
-                row_backgrounds = filtered_bgs
-            else:
+            if not filtered_bgs:
                 return []
-
-        colored_bgs = [bg for bg in row_backgrounds if bg[2] != "white"]
-        if not colored_bgs:
-            return []
-        if colored_bgs:
-            first_colored_y = min(bg[0] for bg in colored_bgs)
-            last_colored_y = max(bg[1] for bg in colored_bgs)
-            max_allowed_bottom = table_bbox.y1 + 5.0 if table_bbox else last_colored_y + 15.0
-            data_bgs = [
-                bg for bg in row_backgrounds
-                if bg[0] >= first_colored_y - 2.0 and bg[0] < max(last_colored_y + 1.0, max_allowed_bottom - 2.0) and bg[1] <= max_allowed_bottom
-            ]
-            if data_bgs:
-                try:
-                    words = page.get_text("words")
-                    drawings = page.get_drawings()
-                    h_lines = []
-                    for d in drawings:
-                        for it in d.get("items", []):
-                            if it[0] in ("l", "re"):
-                                y = it[1].y if it[0] == "l" else (it[1].y0 + it[1].y1) / 2.0
-                                x0 = min(it[1].x, it[2].x) if it[0] == "l" else it[1].x0
-                                x1 = max(it[1].x, it[2].x) if it[0] == "l" else it[1].x1
-                                if abs(x1 - x0) >= 15.0:
-                                    h_lines.append((x0, x1, y))
-
-                    filled_bgs = []
-                    for i, bg in enumerate(data_bgs):
-                        if i > 0:
-                            prev_y1 = filled_bgs[-1][1]
-                            cur_y0 = bg[0]
-                            gap = cur_y0 - prev_y1
-                            if gap >= 3.5:
-                                filled_bgs.append((prev_y1, cur_y0, "white"))
-                        filled_bgs.append(bg)
-
-
-
-                    # Check if there's a bottom white zebra row after last filled band
-                    last_filled_y1 = filled_bgs[-1][1] if filled_bgs else last_colored_y
-                    if table_bbox and table_bbox.y1 > last_filled_y1 + 4.0:
-                        bot_words = [w for w in words if last_filled_y1 + 2.0 <= (w[1] + w[3]) / 2.0 <= table_bbox.y1 + 2.0]
-                        if bot_words:
-                            filled_bgs.append((last_filled_y1, table_bbox.y1, "white"))
-
-                    data_bgs = filled_bgs
-                    row_backgrounds = data_bgs
-                except Exception:
-                    pass
-
-        if not row_backgrounds:
-            return []
-
-        if table_bbox is not None:
-            tables_bg = [row_backgrounds]
+            tables_bg = [filtered_bgs]
         else:
             tables_bg = self._group_into_tables(row_backgrounds)
 
         tables: List[Table] = []
         for bg_group in tables_bg:
-            t = self._process_zebra_group(page, bg_group, table_bbox, confidence)
+            colored_bgs = [bg for bg in bg_group if bg[2] != "white"]
+            if not colored_bgs:
+                continue
+
+            last_colored_y = max(bg[1] for bg in colored_bgs)
+            max_allowed_bottom = table_bbox.y1 + 5.0 if table_bbox else last_colored_y + 15.0
+            data_bgs = [
+                bg for bg in bg_group
+                if bg[0] < max(last_colored_y + 1.0, max_allowed_bottom - 2.0) and bg[1] <= max_allowed_bottom
+            ]
+            if not data_bgs:
+                continue
+
+            filled_bgs = []
+            for i, bg in enumerate(data_bgs):
+                if i > 0:
+                    prev_y1 = filled_bgs[-1][1]
+                    cur_y0 = bg[0]
+                    gap = cur_y0 - prev_y1
+                    if 3.5 <= gap <= 25.0:
+                        filled_bgs.append((prev_y1, cur_y0, "white"))
+                filled_bgs.append(bg)
+
+            # Check if there's a bottom white zebra row after last filled band
+            last_filled_y1 = filled_bgs[-1][1] if filled_bgs else last_colored_y
+            if table_bbox and table_bbox.y1 > last_filled_y1 + 4.0:
+                words = page.get_text("words")
+                bot_words = [w for w in words if last_filled_y1 + 2.0 <= (w[1] + w[3]) / 2.0 <= table_bbox.y1 + 2.0]
+                if bot_words:
+                    filled_bgs.append((last_filled_y1, table_bbox.y1, "white"))
+
+            t = self._process_zebra_group(page, filled_bgs, table_bbox, confidence)
             if t is not None:
                 tables.append(t)
 
@@ -1204,8 +1013,15 @@ class EnglishTableExtractor(BaseTableExtractor):
         table_bbox: Optional[BBox] = None,
         confidence: Optional[float] = None,
     ) -> Optional[Table]:
-        table_y0 = min(bg[0] for bg in bg_group)
-        table_y1 = max(bg[1] for bg in bg_group)
+        first_band = bg_group[0]
+        colored_bgs = [b for b in bg_group if b[2] != "white"]
+        if colored_bgs and first_band[2] == "white" and (first_band[1] - first_band[0]) > 18.0:
+            table_y0 = first_band[1]
+            data_bgs = bg_group[1:]
+        else:
+            table_y0 = min(bg[0] for bg in bg_group)
+            data_bgs = bg_group
+        table_y1 = max(bg[1] for bg in data_bgs)
         if table_bbox:
             table_y1 = max(table_y1, table_bbox.y1)
 
@@ -1226,7 +1042,7 @@ class EnglishTableExtractor(BaseTableExtractor):
                 if table_bbox.x0 - 5.0 <= (w[0] + w[2]) / 2.0 <= table_bbox.x1 + 5.0
             ]
 
-        data_rows = self._assign_words_to_zebra_rows(data_words, bg_group)
+        data_rows = self._assign_words_to_zebra_rows(data_words, data_bgs)
 
         data_rows = self._handle_dollar_signs(data_rows)
 
@@ -1328,9 +1144,9 @@ class EnglishTableExtractor(BaseTableExtractor):
                 merged.append(cur)
                 continue
 
-            # 条件 1 + 4：mid_y 穿透某 text block（高度 <= 40pt）
+            # 条件 1：mid_y 穿透某 text block 且两行之间无物理横线与数值冲突
             is_cut = any(
-                b[1] + 1.0 < mid_y < b[3] - 1.0 and (b[3] - b[1]) <= 40.0
+                b[1] + 1.0 < mid_y < b[3] - 1.0
                 for b in table_blocks
             )
             if is_cut:
@@ -1527,23 +1343,40 @@ class EnglishTableExtractor(BaseTableExtractor):
                     else:
                         merged_segs.append(list(s))
             tot_w = sum(s[1] - s[0] for s in merged_segs)
-            if len(merged_segs) >= 2 or tot_w >= 20.0:
-                h_lines.append(y)
             is_full_width_line = any(
                 (s[0] <= table_x0 + 15.0 and s[1] >= table_x1 - 15.0) or (s[1] - s[0] >= table_w * 0.70)
                 for s in merged_segs
             )
+            # 过滤表体内部紧贴文字底部的文本超链接划线
+            if len(merged_segs) < 2 and y > table_y0 + 20.0 and not is_full_width_line:
+                tight_words = [
+                    w for w in words
+                    if abs((w[1] + w[3]) / 2.0 - y) <= 6.0
+                    and not (w[2] < merged_segs[0][0] - 5.0 or w[0] > merged_segs[-1][1] + 5.0)
+                ]
+                if tight_words:
+                    w_y1 = max(w[3] for w in tight_words)
+                    if abs(y - w_y1) <= 3.0:
+                        continue
+
+            if len(merged_segs) >= 2 or tot_w >= 20.0:
+                h_lines.append(y)
             if is_full_width_line and y < table_y0 - 10.0:
-                full_width_dividing_lines.append(y)
+                if not table_bbox or y < table_bbox.y0:
+                    full_width_dividing_lines.append(y)
 
         unique_h_lines = sorted(list(set(h_lines)))
         header_h_lines = [y for y in unique_h_lines if y not in full_width_dividing_lines and y <= table_y0]
-        if header_h_lines:
-            header_y_min = max(table_y0 - 50.0, min(header_h_lines) - 20.0)
+        header_h_lines_above = [y for y in header_h_lines if y < table_y0 - 3.0]
+        if table_bbox:
+            header_y_min = table_bbox.y0 - 2.0
+        elif header_h_lines_above:
+            header_y_min = max(table_y0 - 50.0, min(header_h_lines_above) - 20.0)
+        else:
+            header_y_min = table_y0 - 50.0
+
         if full_width_dividing_lines:
             header_y_min = max(header_y_min, max(full_width_dividing_lines) + 1.0)
-        if table_bbox:
-            header_y_min = max(header_y_min, table_bbox.y0 - 2.0)
         header_words = [
             w for w in words
             if header_y_min <= (w[1] + w[3]) / 2.0 <= header_y_max
@@ -1592,6 +1425,7 @@ class EnglishTableExtractor(BaseTableExtractor):
                 ))
             return header_rows
         else:
+            # 原则 3：表格顶部边界到第一道下划线区域（Table Top to First Underline）合并为顶层表头
             header_words_sorted = sorted(header_words, key=lambda w: (round((w[1] + w[3]) / 2.0 / 4.0), w[0]))
             return [_RowData(
                 words=header_words_sorted,
@@ -1670,31 +1504,24 @@ class EnglishTableExtractor(BaseTableExtractor):
             ))
 
         if unassigned_words:
-            unassigned_words.sort(key=lambda w: (w[1] + w[3]) / 2.0)
-            clusters: List[List[Tuple]] = []
-            curr: List[Tuple] = [unassigned_words[0]]
-            for w in unassigned_words[1:]:
-                prev_y1 = max(cw[3] for cw in curr)
-                curr_y0 = w[1]
-                if curr_y0 - prev_y1 <= 6.0 or (w[1] + w[3]) / 2.0 - (curr[-1][1] + curr[-1][3]) / 2.0 <= 10.0:
-                    curr.append(w)
-                else:
-                    clusters.append(curr)
-                    curr = [w]
-            if curr:
-                clusters.append(curr)
+            # 优先行级别为准：未落入背景色的文本直接按天然物理行归入数据行
+            row_words_by_y: Dict[float, List[Tuple]] = defaultdict(list)
+            for w in unassigned_words:
+                mid_y = (w[1] + w[3]) / 2.0
+                matched_y = next((ey for ey in row_words_by_y if abs(mid_y - ey) <= 3.5), None)
+                if matched_y is None:
+                    matched_y = mid_y
+                row_words_by_y[matched_y].append(w)
 
-            for c in clusters:
-                c_y0 = min(w[1] for w in c)
-                c_y1 = max(w[3] for w in c)
-                row_data = _RowData(
-                    words=sorted(c, key=lambda w: (round((w[1] + w[3]) / 2.0 / 4.0), w[0])),
-                    y0=c_y0,
-                    y1=c_y1,
+            for ry in sorted(row_words_by_y.keys()):
+                rwords = sorted(row_words_by_y[ry], key=lambda w: w[0])
+                data_rows.append(_RowData(
+                    words=rwords,
+                    y0=min(w[1] for w in rwords),
+                    y1=max(w[3] for w in rwords),
                     color=None,
                     is_header=False,
-                )
-                data_rows.append(row_data)
+                ))
 
             data_rows.sort(key=lambda r: r.y0)
 
@@ -1721,6 +1548,7 @@ class EnglishTableExtractor(BaseTableExtractor):
                     or re.match(r"^\$[\d(]", str(word[4]).strip())
                 )
                 and word[0] >= header_cols[1][0]
+                and self._is_pure_amount_dollar(word, [w for w in (words or []) if abs((w[1] + w[3]) / 2.0 - (word[1] + word[3]) / 2.0) <= 3.5])
             ]
             original_cols = list(header_cols)
             for x0 in sorted({round(float(word[0]), 1) for word in body_words}):
@@ -1746,40 +1574,6 @@ class EnglishTableExtractor(BaseTableExtractor):
                     header_cols[ci] = (x0, original_cols[ci][1])
             return header_cols
 
-        # 2. Background column intervals (e.g. zebra tables with per-column background rects)
-        if page is not None:
-            try:
-                drawings = page.get_drawings()
-                table_y_min = table_bbox.y0 if table_bbox else table_y0
-                table_y_max = table_bbox.y1 if table_bbox else table_y0 + 200.0
-                bg_rects = []
-                for d in drawings:
-                    fill = d.get("fill")
-                    if fill and (self._is_color_match(fill, LIGHT_BLUE) or self._is_color_match(fill, WHITE)):
-                        for it in d.get("items", []):
-                            if it[0] == "re":
-                                r = it[1]
-                                if table_y_min - 5.0 <= (r.y0 + r.y1) / 2.0 <= table_y_max + 5.0 and r.height >= 4.0:
-                                    if table_bbox is None or (table_bbox.x0 - 5.0 <= r.x0 and r.x1 <= table_bbox.x1 + 5.0):
-                                        bg_rects.append(r)
-                if bg_rects:
-                    x_cuts = set()
-                    for r in bg_rects:
-                        x_cuts.add(round(r.x0, 1))
-                        x_cuts.add(round(r.x1, 1))
-                    sorted_cuts = sorted(list(x_cuts))
-                    merged_cuts: List[float] = []
-                    for xc in sorted_cuts:
-                        if not merged_cuts:
-                            merged_cuts.append(xc)
-                        elif xc - merged_cuts[-1] > 2.0:
-                            merged_cuts.append(xc)
-                    if len(merged_cuts) >= 3:
-                        bg_cols = [(merged_cuts[i], merged_cuts[i + 1]) for i in range(len(merged_cuts) - 1)]
-                        return bg_cols
-            except Exception:
-                pass
-
         # Universal column detection via horizontal overlap
         rows_by_y: Dict[float, List[Tuple]] = defaultdict(list)
         for w in words:
@@ -1803,7 +1597,19 @@ class EnglishTableExtractor(BaseTableExtractor):
                 if not cur:
                     cur.append(w)
                 else:
-                    if w[0] - cur[-1][2] <= 6.0:
+                    prev = cur[-1]
+                    gap = w[0] - prev[2]
+                    # 纯金额货币符号属于其右侧金额项，绝不能与左侧独立数据项向左合并产生跨列粘连
+                    is_new_currency = (
+                        (str(w[4]).startswith("$") or str(w[4]).strip() == "$")
+                        and self._is_pure_amount_dollar(w, rwords)
+                        and not (str(prev[4]).startswith("$") or str(prev[4]).strip() == "$")
+                    )
+                    is_dash = (str(prev[4]).strip() in ("—", "-", "–") or str(w[4]).strip() in ("—", "-", "–"))
+                    if is_new_currency or is_dash:
+                        row_segs.append((min(x[0] for x in cur), max(x[2] for x in cur)))
+                        cur = [w]
+                    elif gap <= 6.0:
                         cur.append(w)
                     else:
                         row_segs.append((min(x[0] for x in cur), max(x[2] for x in cur)))
@@ -1890,10 +1696,15 @@ class EnglishTableExtractor(BaseTableExtractor):
         # include the symbol and its number.  Move the left boundary of that
         # numeric column to the symbol's left edge so a column cut can never
         # occur between ``$`` and the amount.
-        body_words = [word for row in (data_rows or []) for word in row.words]
+        body_words = [
+            word for row in (data_rows or [])
+            if not getattr(row, "is_header", False)
+            for word in getattr(row, "words", [])
+        ]
         dollar_words = [
             word for word in body_words
-            if str(word[4]).strip() == "$" or str(word[4]).strip().startswith("$")
+            if (str(word[4]).strip() == "$" or str(word[4]).strip().startswith("$"))
+            and self._is_pure_amount_dollar(word, getattr(next((r for r in (data_rows or []) if word in getattr(r, "words", [])), None), "words", []))
         ]
         for dollar in dollar_words:
             x0 = float(dollar[0])
@@ -1902,7 +1713,27 @@ class EnglishTableExtractor(BaseTableExtractor):
                     if ci > 0:
                         columns[ci - 1] = (columns[ci - 1][0], x0)
                     columns[ci] = (x0, cx1)
-                    break
+
+        # 融合在纯数据/编号列左侧过度切分的连续描述与地址栏
+        if len(columns) >= 3:
+            ci = 0
+            while ci < len(columns) - 1:
+                cx0, cx1 = columns[ci]
+                nx0, nx1 = columns[ci + 1]
+                c_words = [w for w in (words or []) if cx0 - 2.0 <= (w[0] + w[2]) / 2.0 <= cx1 + 2.0]
+                n_words = [w for w in (words or []) if nx0 - 2.0 <= (w[0] + w[2]) / 2.0 <= nx1 + 2.0]
+                
+                n_has_pure_data = any(
+                    self._is_pure_amount_dollar(w, [x for x in (words or []) if abs((x[1] + x[3]) / 2.0 - (w[1] + w[3]) / 2.0) <= 3.5])
+                    or bool(re.search(r'\d|%|\$|^(?:[A-D][+-]?|N/A|None|Yes|No|\*|—|-)$', w[4].strip()))
+                    or bool(re.search(r'\b\d{2,}-\d+\b|\b\d{5}\b', w[4].strip()))  # IRS Employer No / Zip Code
+                    for w in n_words
+                )
+                if not n_has_pure_data and ci < len(columns) - 1:
+                    columns[ci] = (cx0, nx1)
+                    del columns[ci + 1]
+                else:
+                    ci += 1
 
         ci = 0
         while ci < len(columns) - 1:
@@ -1924,6 +1755,56 @@ class EnglishTableExtractor(BaseTableExtractor):
             columns = [(clean_bounds[i], clean_bounds[i + 1]) for i in range(len(clean_bounds) - 1)]
 
         return columns
+
+    @staticmethod
+    def _is_pure_amount_dollar(w: Tuple, row_words: List[Tuple]) -> bool:
+        """Check if a word containing '$' belongs to a pure numeric amount item, not an inline prose sentence."""
+        if not w or not row_words:
+            return False
+        w_text = str(w[4]).strip()
+        if "$" not in w_text:
+            return False
+        
+        # Cluster row words into contiguous horizontal phrases (gap <= 5.0pt)
+        sorted_rw = sorted(row_words, key=lambda x: x[0])
+        phrases: List[List[Tuple]] = []
+        cur: List[Tuple] = []
+        for x in sorted_rw:
+            if not cur:
+                cur.append(x)
+            else:
+                if x[0] - cur[-1][2] <= 5.0:
+                    cur.append(x)
+                else:
+                    phrases.append(cur)
+                    cur = [x]
+        if cur:
+            phrases.append(cur)
+        
+        w_phrase = next((p for p in phrases if any(id(px) == id(w) for px in p)), None)
+        if not w_phrase:
+            return False
+        
+        # Standard currency and numeric unit/symbol tokens
+        valid_units = {
+            '$', '\u2009$', 'usd', 'eur', 'rmb', 'gbp', 'aud', 'cad', 'chf', 'hkd', 'sgd',
+            'm', 'b', 'k', 'mn', 'bn', 'in', 'million', 'millions', 'thousand', 'thousands', 'billion', 'billions',
+            '—', '-', '--', '(', ')', '%', 'n/m', 'nil', 'none'
+        }
+        
+        non_numeric_tokens = [
+            pw[4].strip().lower().rstrip('.,;:()')
+            for pw in w_phrase
+            if not any(ch.isdigit() for ch in pw[4])
+        ]
+        
+        prose_tokens = [tok for tok in non_numeric_tokens if tok and tok not in valid_units]
+        if prose_tokens:
+            return False
+        
+        # Must contain at least one digit or standard nil token
+        has_amount = any(any(ch.isdigit() for ch in pw[4]) or pw[4].strip() in ('—', '-', '--', 'nil', 'none') for pw in w_phrase)
+        return has_amount
 
     def _detect_columns_from_header_underlines(
         self,
@@ -1995,6 +1876,20 @@ class EnglishTableExtractor(BaseTableExtractor):
                     else:
                         merged.append(list(s))
             col_segs = [s for s in merged if not (s[0] <= table_x0 + 5.0 and s[1] >= table_x1 - 5.0)]
+            
+            # 过滤表体内部紧贴文字底部的文本超链接划线
+            is_full_width = any((s[1] - s[0]) >= table_w * 0.70 for s in col_segs)
+            if len(col_segs) < 2 and y > table_y0 + 20.0 and not is_full_width:
+                tight_words = [
+                    w for w in (words or [])
+                    if abs((w[1] + w[3]) / 2.0 - y) <= 6.0
+                    and not (w[2] < col_segs[0][0] - 5.0 or w[0] > col_segs[-1][1] + 5.0)
+                ]
+                if tight_words:
+                    w_y1 = max(w[3] for w in tight_words)
+                    if abs(y - w_y1) <= 3.0:
+                        continue
+
             if col_segs and len(col_segs) >= 2:
                 merged_by_y[y] = col_segs
 
@@ -2110,11 +2005,16 @@ class EnglishTableExtractor(BaseTableExtractor):
                         gaps.append((items[k][1], items[k + 1][0]))
 
             gap_clusters = []
-            for g in sorted(gaps, key=lambda g: (g[0] + g[1]) / 2.0):
-                g_mid = (g[0] + g[1]) / 2.0
-                gc = next((c for c in gap_clusters if abs(g_mid - sum((x[0] + x[1]) / 2.0 for x in c) / len(c)) <= 8.0), None)
-                if gc is not None:
-                    gc.append(g)
+            for g in gaps:
+                matched_gc = None
+                for gc in gap_clusters:
+                    max_l = max(max(x[0] for x in gc), g[0])
+                    min_r = min(min(x[1] for x in gc), g[1])
+                    if max_l < min_r:
+                        matched_gc = gc
+                        break
+                if matched_gc is not None:
+                    matched_gc.append(g)
                 else:
                     gap_clusters.append([g])
 
@@ -2130,6 +2030,7 @@ class EnglishTableExtractor(BaseTableExtractor):
                     else:
                         cuts.append(sum((g[0] + g[1]) / 2.0 for g in gc) / len(gc))
                 cuts.append(sx1)
+                cuts = sorted(list(set(cuts)))
                 for ci in range(len(cuts) - 1):
                     refined_col_spans.append([cuts[ci], cuts[ci + 1]])
             else:
@@ -2172,30 +2073,57 @@ class EnglishTableExtractor(BaseTableExtractor):
             if best_ci >= 0:
                 col_words[best_ci].append(w)
 
-        # 行标签列与各数据列的分界线：优先精准对齐到数据列的 $ 符号左侧或下划线左侧
+        # 过滤出严格属于表体（排除表头区域）的数据词，用于计算数据列留白中心点与表体货币锚点
+        body_data_words = [w for w in t_words if (w[1] + w[3]) / 2.0 >= best_y - 2.0]
+        # 表体纯金额货币符号识别（仅限纯金额数据项，排除长描述句子中的内嵌面值如 $0.0001 per share）
+        body_rows_dict = defaultdict(list)
+        for w in body_data_words:
+            mid_y = (w[1] + w[3]) / 2.0
+            matched_y = next((ey for ey in body_rows_dict if abs(mid_y - ey) <= 3.5), None)
+            if matched_y is None:
+                matched_y = mid_y
+            body_rows_dict[matched_y].append(w)
+        
+        body_dollar_words = set()
+        for ry, rw in body_rows_dict.items():
+            for w in rw:
+                if ("$" in w[4] or w[4].strip() == "$") and self._is_pure_amount_dollar(w, rw):
+                    body_dollar_words.add(id(w))
+
+        # 行标签列与各数据列的分界线：优先以文本间隙中心点（Gap Midpoint）划分；若表体数据列包含纯金额 $ 符号，则对齐到表体 $ 符号左侧
         boundaries = []
-        # 第 1 数据列的起始边界：优先使用第 1 数据列中的 $ 符号左侧或下划线/内容起点
-        first_d = [
-            w[0] for w in data_words
-            if ("$" in w[4] or w[4].strip() == "$")
-            and first_col_x0 - 25.0 <= w[0] <= first_col_x0 + 25.0
-        ]
-        if first_d:
-            b0 = min(min(first_d), first_col_x0)
-        else:
-            b0 = first_col_x0
-        boundaries.append(b0)
+        if all_col_spans and all_col_spans[0][0] > table_x0 + 35.0:
+            leading_body = [w for w in body_data_words if (w[0] + w[2]) / 2.0 < all_col_spans[0][0] - 2.0]
+            if leading_body:
+                lead_x1 = max(w[2] for w in leading_body)
+                first_col_body_words = [w for w in body_data_words if all_col_spans[0][0] - 2.0 <= (w[0] + w[2]) / 2.0 <= all_col_spans[0][1] + 2.0]
+                first_d = [w[0] for w in first_col_body_words if id(w) in body_dollar_words]
+                if first_d:
+                    b0 = min(first_d)
+                else:
+                    first_x0 = min((w[0] for w in first_col_body_words), default=all_col_spans[0][0])
+                    b0 = (lead_x1 + first_x0) / 2.0 if lead_x1 < first_x0 else first_x0
+                boundaries.append(b0)
 
         for k in range(len(all_col_spans) - 1):
             col_k_span = all_col_spans[k]
             col_next_span = all_col_spans[k + 1]
-            left_words = [w for w in data_words if col_k_span[0] - 2.0 <= (w[0] + w[2]) / 2.0 <= col_k_span[1] + 2.0]
-            right_words = [w for w in data_words if col_next_span[0] - 25.0 <= (w[0] + w[2]) / 2.0 <= col_next_span[1] + 2.0]
-            next_dollars = [w[0] for w in right_words if "$" in w[4] or w[4].strip() == "$"]
+            left_words = [w for w in body_data_words if col_k_span[0] - 2.0 <= (w[0] + w[2]) / 2.0 <= col_k_span[1] + 2.0]
+            right_words = [w for w in body_data_words if col_next_span[0] - 25.0 <= (w[0] + w[2]) / 2.0 <= col_next_span[1] + 2.0]
+            next_dollars = [w[0] for w in right_words if id(w) in body_dollar_words and w[0] >= col_k_span[1] - 5.0]
             if next_dollars:
-                bk = min(min(next_dollars), col_next_span[0])
+                bk = min(next_dollars)
             else:
-                bk = col_next_span[0]
+                # 存在物理下划线间隔时，列线优先处于两下划线之间的物理留白通道内，不得穿透进入下一列下划线或标题
+                if col_k_span[1] < col_next_span[0]:
+                    bk = (col_k_span[1] + col_next_span[0]) / 2.0
+                else:
+                    prev_end = max((w[2] for w in left_words), default=col_k_span[1])
+                    next_start = min((w[0] for w in right_words), default=col_next_span[0])
+                    if prev_end < next_start:
+                        bk = (prev_end + next_start) / 2.0
+                    else:
+                        bk = (col_k_span[1] + col_next_span[0]) / 2.0
             boundaries.append(bk)
 
         columns = []
@@ -2207,14 +2135,24 @@ class EnglishTableExtractor(BaseTableExtractor):
         if table_x1 > curr_x + 2.0:
             columns.append((curr_x, table_x1))
 
-        # 规则指南第 56 条：多 $ 宽列自适应分裂与精准贴合（每一个 $ 的 x0 直接分裂为独立列）
+        # 规则指南第 56 条：多 $ 宽列自适应分裂与精准贴合（仅限表体纯金额单元格项）
+        row_words_by_y = defaultdict(list)
+        for w in data_words:
+            mid_y = (w[1] + w[3]) / 2.0
+            matched_y = next((ey for ey in row_words_by_y if abs(mid_y - ey) <= 3.5), None)
+            if matched_y is None:
+                matched_y = mid_y
+            row_words_by_y[matched_y].append(w)
+
         adj_columns = []
         for cx0, cx1 in columns:
             row_dollars_dict = defaultdict(list)
             for w in data_words:
+                rw = row_words_by_y.get(next((ey for ey in row_words_by_y if abs((w[1] + w[3]) / 2.0 - ey) <= 3.5), None), [])
                 if ("$" in w[4] or w[4].strip() == "$") and cx0 <= (w[0] + w[2]) / 2.0 < cx1:
-                    mid_y = round((w[1] + w[3]) / 2.0 / 3.5)
-                    row_dollars_dict[mid_y].append(w)
+                    if self._is_pure_amount_dollar(w, rw):
+                        mid_y = round((w[1] + w[3]) / 2.0 / 3.5)
+                        row_dollars_dict[mid_y].append(w)
             multi_d_rows = [sorted(dw_list, key=lambda dw: dw[0]) for dw_list in row_dollars_dict.values() if len(dw_list) >= 2]
             if multi_d_rows:
                 max_d_count = max(len(r) for r in multi_d_rows)
@@ -2481,46 +2419,24 @@ class EnglishTableExtractor(BaseTableExtractor):
                 if it[0] in ("l", "re"):
                     y = it[1].y if it[0] == "l" else it[1].y0
                     w = abs(it[2].x - it[1].x) if it[0] == "l" else it[1].width
+                    h = abs(it[2].y - it[1].y) if it[0] == "l" else it[1].height
                     x0 = min(it[1].x, it[2].x) if it[0] == "l" else it[1].x0
                     x1 = max(it[1].x, it[2].x) if it[0] == "l" else it[1].x1
-                    if w >= 10.0:
+                    if w >= 10.0 and h <= 2.5:
                         h_lines.append((round(y, 1), x0, x1))
 
-        # 1. 识别并合并全宽说明/副标题行（如表尾/表头的 Dollars/Euros in Thousands, Except Where Noted, Dollars in Millions）
-        subtitle_tiers = set()
-        for r_idx in sorted_row_indices:
-            row_c = sorted([c for c in rows_dict[r_idx] if c.text.strip()], key=lambda c: c.bbox.x0)
-            if not row_c:
-                continue
-            span_x0 = row_c[0].bbox.x0
-            span_x1 = row_c[-1].bbox.x1
-            cols_covered = sum(1 for cx0, cx1 in columns if min(span_x1, cx1) > max(span_x0, cx0))
-            is_sub = (
-                (r_idx == sorted_row_indices[-1] or r_idx == sorted_row_indices[0])
-                and all(not any(ch.isdigit() for ch in c.text) for c in row_c)
-                and cols_covered >= 2
-            )
-            if is_sub and r_idx == sorted_row_indices[-1]:
-                subtitle_tiers.add(r_idx)
-                combined_txt = " ".join(c.text for c in row_c)
-                top_c = row_c[0]
-                top_c.text = combined_txt
-                # 自适应跨度：若说明文字位于右侧数据列上方（不延伸至 Col 0），则限定为数据列跨度；否则为全表全宽
-                if len(columns) > 1 and span_x0 >= columns[0][1] - 10.0:
-                    sc = 1
-                    ec = len(columns) - 1
-                else:
-                    sc = 0
-                    ec = len(columns) - 1
-                top_c.col_index = sc
-                top_c.colspan = ec - sc + 1
-                top_c.bbox = BBox(columns[sc][0], top_c.bbox.y0, columns[ec][1], top_c.bbox.y1)
-                for other_c in row_c[1:]:
-                    other_c.text = ""
-                    other_c.colspan = 1
+        # 0. 表头中独立的通栏金额/单位说明行（如 (Dollars in thousands)）全宽跨列合并
+        for orig_r in sorted_row_indices:
+            tier_non_empty = [c for c in rows_dict[orig_r] if c.text.strip()]
+            if len(tier_non_empty) == 1 and re.search(r'^\(?\s*(?:dollars|in\s+(?:thousands|millions|billions)|usd|\$|rmb)', tier_non_empty[0].text.strip(), re.IGNORECASE):
+                unit_c = tier_non_empty[0]
+                unit_c.col_index = 0
+                unit_c.colspan = len(columns)
+                unit_c.bbox = BBox(columns[0][0], unit_c.bbox.y0, columns[-1][1], unit_c.bbox.y1)
+                rows_dict[orig_r] = [unit_c]
 
-        # 2. 非叶子父表头行连续词组预合并（如 R0 中的 Unrealized + Investments, R1 中的 Net IRRs + (d)）
-        hier_tiers = [t for t in sorted_row_indices if t not in subtitle_tiers]
+        # 1. 非叶子父表头行连续词组预合并（如 R0 中的 Unrealized + Investments, R1 中的 Net IRRs + (d)）
+        hier_tiers = list(sorted_row_indices)
         for pt in hier_tiers[:-1]:
             row_c = sorted([c for c in rows_dict[pt] if c.text.strip()], key=lambda c: c.bbox.x0)
             non_empty_c = list(row_c)
@@ -2543,16 +2459,13 @@ class EnglishTableExtractor(BaseTableExtractor):
                 else:
                     i += 1
 
-        # 基于几何中心点与拓扑关系自底向上推断父表头跨列合并
-        for t in range(num_tiers - 1, -1, -1):
-            if sorted_row_indices[t] in subtitle_tiers:
-                continue
+        # 2. 自底向上推断父表头跨列合并（叶子行保持单列，只推断父层表头；优先级 1：物理下划线；优先级 2：中心对称扩充）
+        for t in range(num_tiers - 2, -1, -1):
             cur_tier_cells = [c for c in rows_dict[sorted_row_indices[t]] if c.text.strip()]
-            next_tier_cells = rows_dict[sorted_row_indices[t + 1]] if (t + 1 < num_tiers and sorted_row_indices[t + 1] not in subtitle_tiers) else []
-            # 支撑列为所有下层非副标题表头中有效列的并集
+            next_tier_cells = rows_dict[sorted_row_indices[t + 1]] if t + 1 < num_tiers else []
+            # 支撑列为所有下层表头中有效列的并集
             supported_cols = {
                 ci for nt in range(t + 1, num_tiers)
-                if sorted_row_indices[nt] not in subtitle_tiers
                 for c in rows_dict[sorted_row_indices[nt]] if c.text.strip()
                 for ci in range(c.col_index, c.col_index + c.colspan)
             }
@@ -2561,8 +2474,6 @@ class EnglishTableExtractor(BaseTableExtractor):
 
             col_content_extents: List[Optional[Tuple[float, float]]] = [None] * len(columns)
             for nt in range(t + 1, num_tiers):
-                if sorted_row_indices[nt] in subtitle_tiers:
-                    continue
                 for c in rows_dict[sorted_row_indices[nt]]:
                     if c.text.strip() and c.col_index < len(columns):
                         for ci in range(c.col_index, min(len(columns), c.col_index + max(1, c.colspan))):
@@ -2574,8 +2485,6 @@ class EnglishTableExtractor(BaseTableExtractor):
 
             lower_spans = []
             for nt in range(t + 1, num_tiers):
-                if sorted_row_indices[nt] in subtitle_tiers:
-                    continue
                 for c in rows_dict[sorted_row_indices[nt]]:
                     if c.text.strip():
                         lower_spans.append((c.col_index, c.col_index + max(1, c.colspan) - 1))
@@ -2592,119 +2501,173 @@ class EnglishTableExtractor(BaseTableExtractor):
                         covered_indices.add(x)
             atomic_spans.sort(key=lambda s: s[0])
 
-            for top in cur_tier_cells:
-                if not top.text.strip():
-                    continue
+            non_empty_tops = sorted([c for c in cur_tier_cells if c.text.strip()], key=lambda c: c.bbox.x0)
+            if non_empty_tops:
+                num_cols = len(columns)
+                occupied = set()
 
-                top_mid = (top.bbox.x0 + top.bbox.x1) / 2.0
-                top_w = top.bbox.x1 - top.bbox.x0
+                # 1. 优先级最高：当文本存在物理下划线（或由列间隙隔开的连续下划线线段组）时，以下划线覆盖的子列范围为准
+                processed_tops = set()
+                y_groups = {}
+                for ly, lx0, lx1 in h_lines:
+                    matched_y = None
+                    for y_key in y_groups:
+                        if abs(y_key - ly) <= 1.5:
+                            matched_y = y_key
+                            break
+                    if matched_y is None:
+                        y_groups[ly] = [(lx0, lx1)]
+                    else:
+                        y_groups[matched_y].append((lx0, lx1))
 
-                # 优先检查是否完整覆盖下一层的若干连续子跨度 (Hierarchical Spanning Cover)
-                left_peers = [p for p in cur_tier_cells if p is not top and p.text.strip() and p.bbox.x1 <= top.bbox.x0 + 5.0]
-                min_allowed_col = max((p.col_index + p.colspan for p in left_peers), default=0)
-                # 若 top 位于数据区（不在 Col 0 内部），严禁跨入 Col 0
-                if len(columns) > 1 and top.bbox.x0 >= columns[0][1] - 10.0:
-                    min_allowed_col = max(min_allowed_col, 1)
+                all_underline_groups = []
+                for y_key, segs in y_groups.items():
+                    sorted_segs = sorted(segs, key=lambda s: s[0])
+                    curr_chain = []
+                    for s in sorted_segs:
+                        if not curr_chain:
+                            curr_chain.append(s)
+                        else:
+                            gap = s[0] - curr_chain[-1][1]
+                            if gap <= 25.0:
+                                curr_chain.append(s)
+                            else:
+                                all_underline_groups.append((y_key, min(x[0] for x in curr_chain), max(x[1] for x in curr_chain)))
+                                curr_chain = [s]
+                    if curr_chain:
+                        all_underline_groups.append((y_key, min(x[0] for x in curr_chain), max(x[1] for x in curr_chain)))
 
-                right_peers = [p for p in cur_tier_cells if p is not top and p.text.strip() and p.bbox.x0 >= top.bbox.x1 - 5.0]
-                max_allowed_col = min((p.col_index for p in right_peers), default=len(columns))
-
-                best_sub_spans = None
-                best_dev = 99999.0
-
-                candidate_subs = [s for s in atomic_spans if s[0] >= min_allowed_col and s[1] < max_allowed_col]
-                for i in range(len(candidate_subs)):
-                    for j in range(i, len(candidate_subs)):
-                        sub_seq = candidate_subs[i:j+1]
-                        sc = sub_seq[0][0]
-                        ec = sub_seq[-1][1]
-                        valid_sub_exts = [
-                            col_content_extents[ci] for ci in range(sc, ec + 1)
-                            if ci < len(col_content_extents) and col_content_extents[ci] is not None
+                for top in sorted(non_empty_tops, key=lambda c: -(c.bbox.x1 - c.bbox.x0)):
+                    line_h = max(8.0, top.bbox.y1 - top.bbox.y0)
+                    best_covered_cols = []
+                    # 寻找紧贴在当前表头文本下方的物理下划线组（优先距离最近的第一道下划线，避免跨层匹配到下层横线）
+                    matching_groups = [
+                        (y_key, gx0, gx1) for y_key, gx0, gx1 in all_underline_groups
+                        if top.bbox.y1 - 1.5 <= y_key <= top.bbox.y1 + min(8.0, line_h * 0.4)
+                        and min(top.bbox.x1, gx1) - max(top.bbox.x0, gx0) >= 2.0
+                    ]
+                    if not matching_groups:
+                        matching_groups = [
+                            (y_key, gx0, gx1) for y_key, gx0, gx1 in all_underline_groups
+                            if top.bbox.y1 - 1.5 <= y_key <= top.bbox.y1 + 10.0
+                            and min(top.bbox.x1, gx1) - max(top.bbox.x0, gx0) >= 2.0
                         ]
-                        if valid_sub_exts:
-                            sub_x0 = min(e[0] for e in valid_sub_exts)
-                            sub_x1 = max(e[1] for e in valid_sub_exts)
-                        else:
-                            sub_x0 = columns[sc][0]
-                            sub_x1 = columns[ec][1]
 
-                        sub_center = (sub_x0 + sub_x1) / 2.0
-                        sub_w = sub_x1 - sub_x0
-                        dev = abs(sub_center - top_mid)
-                        grid_dev = abs((columns[sc][0] + columns[ec][1]) / 2.0 - top_mid)
-                        eff_dev = min(dev, grid_dev)
-                        max_tol = max(8.0, max(sub_w, columns[ec][1] - columns[sc][0]) * 0.20)
+                    if matching_groups:
+                        closest_y = min(g[0] for g in matching_groups)
+                        for y_key, gx0, gx1 in matching_groups:
+                            if abs(y_key - closest_y) > 1.5:
+                                continue
+                            cols_in_grp = [
+                                ci for ci, (cx0, cx1) in enumerate(columns)
+                                if min(cx1, gx1) - max(cx0, gx0) >= 2.0
+                            ]
+                            overlapping_tops = [
+                                other for other in non_empty_tops
+                                if min(other.bbox.x1, gx1) - max(other.bbox.x0, gx0) >= 2.0
+                                and other.bbox.y1 - 1.5 <= y_key <= other.bbox.y1 + 10.0
+                            ]
+                            if len(overlapping_tops) <= 1:
+                                if len(cols_in_grp) > len(best_covered_cols):
+                                    best_covered_cols = cols_in_grp
+                            else:
+                                sorted_ov = sorted(overlapping_tops, key=lambda t: (t.bbox.x0 + t.bbox.x1) / 2.0)
+                                top_idx = sorted_ov.index(top)
+                                top_mid = (top.bbox.x0 + top.bbox.x1) / 2.0
+                                left_mid = (sorted_ov[top_idx - 1].bbox.x0 + sorted_ov[top_idx - 1].bbox.x1) / 2.0 if top_idx > 0 else -float("inf")
+                                right_mid = (sorted_ov[top_idx + 1].bbox.x0 + sorted_ov[top_idx + 1].bbox.x1) / 2.0 if top_idx < len(sorted_ov) - 1 else float("inf")
 
-                        peer_conflict = any(
-                            (p.bbox.x0 >= top.bbox.x1 - 5.0 and columns[ec][1] > p.bbox.x0 + 5.0)
-                            or (p.bbox.x1 <= top.bbox.x0 + 5.0 and columns[sc][0] < p.bbox.x1 - 5.0)
-                            for p in cur_tier_cells if p is not top and p.text.strip()
-                        )
-                        if peer_conflict:
+                                x_left = (left_mid + top_mid) / 2.0 if left_mid != -float("inf") else gx0 - 5.0
+                                x_right = (top_mid + right_mid) / 2.0 if right_mid != float("inf") else gx1 + 5.0
+
+                                my_cols = [
+                                    ci for ci in cols_in_grp
+                                    if x_left <= (columns[ci][0] + columns[ci][1]) / 2.0 <= x_right
+                                ]
+                                if len(my_cols) > len(best_covered_cols):
+                                    best_covered_cols = my_cols
+
+                    if len(best_covered_cols) > 1 and not any(ci in occupied for ci in best_covered_cols):
+                        sc = min(best_covered_cols)
+                        ec = max(best_covered_cols)
+                        for ci in range(sc, ec + 1):
+                            occupied.add(ci)
+                        top.col_index = sc
+                        top.colspan = ec - sc + 1
+                        top.bbox = BBox(columns[sc][0], top.bbox.y0, columns[ec][1], top.bbox.y1)
+                        processed_tops.add(id(top))
+
+                # 2. 优先级次之：当没有下划线的时候，中心点向两边同时对称扩充相同数量单元格
+                for top in sorted(non_empty_tops, key=lambda c: -(c.bbox.x1 - c.bbox.x0)):
+                    if id(top) in processed_tops:
+                        continue
+
+                    t_mid = (top.bbox.x0 + top.bbox.x1) / 2.0
+
+                    # 寻找初始锚点列（按中心点对齐优先）
+                    best_anchor = None
+                    best_dev = float("inf")
+
+                    for k in range(num_cols):
+                        if k in occupied:
                             continue
+                        cmid = (columns[k][0] + columns[k][1]) / 2.0
+                        dev = abs(cmid - t_mid)
+                        if dev < best_dev:
+                            best_dev = dev
+                            best_anchor = (k, k)
 
-                        if sc == ec:
-                            if top.bbox.x0 < columns[sc][0] - 2.0 or top.bbox.x1 > columns[ec][1] + 2.0:
-                                continue
-                        else:
-                            if top.bbox.x0 < columns[sc][0] - 8.0 or top.bbox.x1 > columns[ec][1] + 1.0:
-                                continue
-                            if top.bbox.x0 > columns[sc][1] + 8.0 or top.bbox.x1 < columns[ec][0] - 8.0:
-                                continue
+                    for k in range(num_cols - 1):
+                        if k in occupied or (k + 1) in occupied:
+                            continue
+                        cmid = (columns[k][0] + columns[k + 1][1]) / 2.0
+                        dev = abs(cmid - t_mid)
+                        if dev < best_dev:
+                            best_dev = dev
+                            best_anchor = (k, k + 1)
 
-                        if ec > sc:
-                            has_ul = any(
-                                abs(y - top.bbox.y1) <= 4.0 and not (x1 < columns[sc][0] - 5.0 or x0 > columns[ec][1] + 5.0)
-                                for y, x0, x1 in h_lines
-                            )
-                            if not has_ul and len(cur_tier_cells) > 1:
-                                continue
+                    if best_anchor is None:
+                        continue
 
-                        if eff_dev <= max_tol:
-                            # 当两个候选都极好地居中时，优先覆盖更大有效子列跨度
-                            is_centered_well = eff_dev <= max(6.0, max_tol * 0.25)
-                            best_centered_well = best_dev <= max(6.0, max_tol * 0.25)
+                    sc, ec = best_anchor
 
-                            if is_centered_well and best_centered_well and best_sub_spans is not None:
-                                if (ec - sc) > (best_sub_spans[1] - best_sub_spans[0]):
-                                    best_sub_spans = (sc, ec)
-                                    best_dev = eff_dev
-                            elif eff_dev < best_dev - 0.5:
-                                best_dev = eff_dev
-                                best_sub_spans = (sc, ec)
-                            elif abs(eff_dev - best_dev) <= 3.5 and best_sub_spans is not None:
-                                if (ec - sc) > (best_sub_spans[1] - best_sub_spans[0]):
-                                    best_sub_spans = (sc, ec)
-                                    best_dev = eff_dev
+                    # 中心点向两边同时对称扩充相同数量单元格
+                    while True:
+                        left = sc - 1
+                        right = ec + 1
+                        # 达到边界检查
+                        if left < 0 or right >= num_cols:
+                            break
+                        # 左右单元格为空检查
+                        if left in occupied or right in occupied:
+                            break
+                        if any(other for other in non_empty_tops if other is not top and max(other.bbox.x0, columns[left][0]) < min(other.bbox.x1, columns[left][1])):
+                            break
+                        if any(other for other in non_empty_tops if other is not top and max(other.bbox.x0, columns[right][0]) < min(other.bbox.x1, columns[right][1])):
+                            break
 
-                if best_sub_spans is not None:
-                    sc, ec = best_sub_spans
+                        # 若当前跨度已完全包围文本，且外部列在子层中均无内容支撑，则停止向外扩充空白列
+                        if columns[sc][0] <= top.bbox.x0 and columns[ec][1] >= top.bbox.x1:
+                            if left not in supported_cols and right not in supported_cols:
+                                break
+
+                        new_mid = (columns[left][0] + columns[right][1]) / 2.0
+                        new_dev = abs(new_mid - t_mid)
+
+                        # 中心点发生偏移检查：如果扩充后中心点偏出文本自身横向跨度或偏出最小列宽半距，停止扩充
+                        min_col_w = min(c[1] - c[0] for c in columns)
+                        if new_dev > min_col_w / 2.0 and (new_mid < top.bbox.x0 or new_mid > top.bbox.x1):
+                            break
+
+                        sc = left
+                        ec = right
+
+                    for ci in range(sc, ec + 1):
+                        occupied.add(ci)
+
                     top.col_index = sc
                     top.colspan = ec - sc + 1
                     top.bbox = BBox(columns[sc][0], top.bbox.y0, columns[ec][1], top.bbox.y1)
-                    continue
-
-                peer_boxes = [
-                    (p.bbox.x0, p.bbox.x1) for p in cur_tier_cells
-                    if p is not top and p.text.strip()
-                ]
-                span_res = self._infer_centered_parent_header_span(
-                    px0=top.bbox.x0,
-                    px1=top.bbox.x1,
-                    peer_boxes=peer_boxes,
-                    columns=columns,
-                    col_content_extents=col_content_extents,
-                    supported_cols=supported_cols,
-                )
-                if span_res is not None:
-                    sc, colspan = span_res
-                    if len(columns) > 1 and top.bbox.x0 >= columns[0][1] - 10.0 and sc == 0:
-                        sc = 1
-                        colspan = max(1, colspan - 1)
-                    top.col_index = sc
-                    top.colspan = colspan
-                    top.bbox = BBox(columns[sc][0], top.bbox.y0, columns[sc + colspan - 1][1], top.bbox.y1)
 
         grid: List[List[Optional[Cell]]] = [[None for _ in range(len(columns))] for _ in range(num_tiers)]
         for out_r, orig_r in enumerate(sorted_row_indices):
@@ -2720,14 +2683,13 @@ class EnglishTableExtractor(BaseTableExtractor):
                 c_top = grid[t][ci]
                 c_bot = grid[t + 1][ci]
                 if c_top is not None and c_bot is not None and c_bot is not c_top and c_top.col_index == c_bot.col_index and c_top.colspan == c_bot.colspan:
-                    # 纯几何折行判别：两单元格列跨度完全相同，垂直留白紧凑（<= 8pt），且中间无物理水平横线
+                    # 纯几何折行判别：两单元格列跨度完全相同，且中间无物理水平横线阻断
                     has_sep_line = any(
                         c_top.bbox.y1 - 1.5 <= ly <= c_bot.bbox.y0 + 1.5
-                        and not (lx1 < cx0 + 5.0 or lx0 > cx1 - 5.0)
+                        and max(columns[c_top.col_index][0] + 5.0, lx0) < min(columns[c_top.col_index + c_top.colspan - 1][1] - 5.0, lx1)
                         for ly, lx0, lx1 in h_lines
                     )
-                    v_gap = c_bot.bbox.y0 - c_top.bbox.y1
-                    is_compact_wrapping = (not has_sep_line and -4.0 <= v_gap <= 8.0)
+                    is_compact_wrapping = (not has_sep_line and c_bot.bbox.y0 >= c_top.bbox.y1 - 4.0)
                     
                     if is_compact_wrapping:
                         pair_key = (id(c_top), id(c_bot))
@@ -2773,6 +2735,15 @@ class EnglishTableExtractor(BaseTableExtractor):
                 if all_upper_empty and grid[leaf_r][ci] is not None and grid[leaf_r][ci].colspan == 1:
                     c_leaf = grid[leaf_r][ci]
                     if c_leaf.text.strip():
+                        # 若上层与当前单元格之间存在物理水平横线，严格禁止跨线提升
+                        upper_cells = [grid[t][other_ci] for t in range(leaf_r) for other_ci in range(len(columns)) if grid[t][other_ci] is not None]
+                        has_sep_line = any(
+                            min((c.bbox.y1 for c in upper_cells), default=c_leaf.bbox.y0) - 1.5 <= ly <= c_leaf.bbox.y0 + 1.5
+                            for ly, _, _ in h_lines
+                        ) if upper_cells else False
+                        if has_sep_line:
+                            continue
+
                         # 从叶子行移除，放入首行
                         for orig_r in sorted_row_indices:
                             rows_dict[orig_r] = [c for c in rows_dict[orig_r] if c is not c_leaf]
@@ -3054,16 +3025,37 @@ class EnglishTableExtractor(BaseTableExtractor):
                     gap = w[0] - prev_w[2]
                     c_prev = next((ci for ci, c in enumerate(columns) if c[0] <= (prev_w[0] + prev_w[2]) / 2.0 < c[1]), -1)
                     c_curr = next((ci for ci, c in enumerate(columns) if c[0] <= (w[0] + w[2]) / 2.0 < c[1]), -1)
-                    is_num_repeat = (any(ch.isdigit() for ch in prev_w[4]) and any(ch.isdigit() for ch in w[4]) and gap > 3.0)
+                    font_h = min(prev_w[3] - prev_w[1], w[3] - w[1]) if (len(w) >= 4 and len(prev_w) >= 4) else 10.0
+                    avg_char_w = ((prev_w[2] - prev_w[0]) / max(1, len(prev_w[4]))) if (len(prev_w) >= 5 and prev_w[4]) else 5.0
+                    max_word_space = max(avg_char_w * 1.5, font_h * 0.5)
+
+                    is_same_stream_line = (
+                        len(w) >= 8 and len(prev_w) >= 8
+                        and w[5] == prev_w[5]
+                        and w[6] == prev_w[6]
+                    )
+                    is_num_repeat = (
+                        any(ch.isdigit() for ch in prev_w[4])
+                        and any(ch.isdigit() for ch in w[4])
+                        and gap > avg_char_w * 0.8
+                    )
+
                     if is_num_repeat:
                         phrases.append(cur_p)
                         cur_p = [w]
+                    elif is_header:
+                        # 表头自然语块保护：依据流式文本行拓扑或字体空间尺寸判断是否属于同一自然语块，不使用固定阈值
+                        if is_same_stream_line or gap <= max_word_space:
+                            cur_p.append(w)
+                        else:
+                            phrases.append(cur_p)
+                            cur_p = [w]
                     elif c_prev != c_curr and (c_prev != -1 and c_curr != -1):
                         phrases.append(cur_p)
                         cur_p = [w]
-                    elif c_prev == c_curr and gap <= 6.0:
+                    elif c_prev == c_curr and (is_same_stream_line or gap <= max_word_space):
                         cur_p.append(w)
-                    elif gap <= 4.5 and not (w[4] in ("$", "\u2009$") or (any(ch.isdigit() for ch in w[4]) and gap > 3.0)):
+                    elif gap <= avg_char_w * 1.2 and not (w[4] in ("$", "\u2009$") or (any(ch.isdigit() for ch in w[4]) and gap > avg_char_w * 0.8)):
                         cur_p.append(w)
                     else:
                         phrases.append(cur_p)
@@ -3080,6 +3072,7 @@ class EnglishTableExtractor(BaseTableExtractor):
                     continue
                 p1_x0 = min(w[0] for w in p1)
                 p1_x1 = max(w[2] for w in p1)
+                p1_char_w = sum((w[2] - w[0]) / max(1, len(w[4])) for w in p1) / max(1, len(p1))
                 cur_words = list(p1)
                 used.add(i)
                 for j, p2 in enumerate(phrases):
@@ -3089,7 +3082,7 @@ class EnglishTableExtractor(BaseTableExtractor):
                     p2_x1 = max(w[2] for w in p2)
                     ov = min(p1_x1, p2_x1) - max(p1_x0, p2_x0)
                     min_w = min(p1_x1 - p1_x0, p2_x1 - p2_x0)
-                    if min_w > 0 and (ov >= 0.5 * min_w):
+                    if min_w > 0 and (ov >= 0.25 * min_w or abs(p1_x1 - p2_x1) <= p1_char_w * 1.2):
                         cur_words.extend(p2)
                         used.add(j)
                         p1_x0 = min(p1_x0, p2_x0)
@@ -3102,10 +3095,26 @@ class EnglishTableExtractor(BaseTableExtractor):
                 px0 = min(w[0] for w in p)
                 px1 = max(w[2] for w in p)
                 pmid = (px0 + px1) / 2.0
-                best_ci = next((ci for ci, c in enumerate(columns) if c[0] <= pmid < c[1]), None)
-                if best_ci is None:
-                    best_ci = min(range(len(columns)), key=lambda ci: abs(pmid - (columns[ci][0] + columns[ci][1]) / 2.0))
-                col_assigned_phrases[best_ci].append(p)
+                p_char_w = sum((w[2] - w[0]) / max(1, len(w[4])) for w in p) / max(1, len(p))
+
+                # 寻找表头语块最佳归属列
+                best_ci = None
+                best_score = -1e9
+                for ci, (cx0, cx1) in enumerate(columns):
+                    col_w = max(1.0, cx1 - cx0)
+                    phrase_w = max(1.0, px1 - px0)
+                    right_fit = -abs(px1 - cx1) / col_w
+                    ov = max(0.0, min(px1, cx1) - max(px0, cx0)) / phrase_w
+                    cmid = (cx0 + cx1) / 2.0
+                    center_dist = -abs(pmid - cmid) / col_w
+                    in_col_right = (cx0 - p_char_w <= px1 <= cx1 + p_char_w and px0 >= (columns[ci - 1][0] if ci > 0 else -1e9))
+                    in_col_center = (cx0 <= pmid <= cx1)
+                    score = (2.0 if in_col_right else 0.0) + (1.0 if in_col_center else 0.0) + ov + right_fit * 0.5 + center_dist * 0.1
+                    if score > best_score:
+                        best_score = score
+                        best_ci = ci
+                if best_ci is not None:
+                    col_assigned_phrases[best_ci].append(p)
 
             cells = []
             for ci, (col_x0, col_x1) in enumerate(columns):
@@ -3221,9 +3230,21 @@ class EnglishTableExtractor(BaseTableExtractor):
             cws = col_words.get(ci, [])
             if cws:
                 cws.sort(key=lambda w: (round(w[1] / 3.0), w[0]))
-                dollar_words = [w for w in cws if ("$" in w[4] or w[4].strip() == "$")]
-                non_dollar_words = [w for w in cws if not ("$" in w[4] or w[4].strip() == "$")]
-                ordered_w = dollar_words + non_dollar_words if (dollar_words and non_dollar_words) else cws
+                is_pure_amount = not any(
+                    w[4].strip().lower().rstrip('.,;:()') not in {
+                        '$', '\u2009$', 'usd', 'eur', 'rmb', 'gbp', 'aud', 'cad', 'chf', 'hkd', 'sgd',
+                        'm', 'b', 'k', 'mn', 'bn', 'in', 'million', 'millions', 'thousand', 'thousands', 'billion', 'billions',
+                        '—', '-', '--', '(', ')', '%', 'n/m', 'nil', 'none'
+                    }
+                    for w in cws
+                    if not any(ch.isdigit() for ch in w[4]) and w[4].strip().lower().rstrip('.,;:()')
+                )
+                if is_pure_amount:
+                    dollar_words = [w for w in cws if ("$" in w[4] or w[4].strip() == "$")]
+                    non_dollar_words = [w for w in cws if not ("$" in w[4] or w[4].strip() == "$")]
+                    ordered_w = dollar_words + non_dollar_words if (dollar_words and non_dollar_words) else cws
+                else:
+                    ordered_w = cws
                 cell_text = " ".join(w[4] for w in ordered_w)
                 cell_text = cell_text.replace('\u2009', '')
                 cell_text = re.sub(r'(\d+,\d+)\s+(\d+)', r'\1\2', cell_text)
@@ -3698,6 +3719,28 @@ class EnglishTableExtractor(BaseTableExtractor):
     ) -> Tuple[List[Cell], int]:
         if not cells or num_cols <= 1:
             return cells, num_cols
+
+        # 检查并融合无数据对比关系的过拆拆分描述/地址列 (如 Form 10-Q 注册人信息表中的 multi-column prose)
+        col_cells = defaultdict(list)
+        for c in cells:
+            for ci in range(c.col_index, c.col_index + c.colspan):
+                col_cells[ci].append(c)
+
+        merge_map = list(range(num_cols))
+        for ci in range(num_cols - 1):
+            c0_cells = col_cells[ci]
+            c1_cells = col_cells[ci + 1]
+            c1_texts = [c.text.strip() for c in c1_cells if c.text.strip()]
+            c0_texts = [c.text.strip() for c in c0_cells if c.text.strip()]
+            
+            c1_has_pure_amount = any(
+                any(ch.isdigit() for ch in txt) and any(kw in txt.lower() for kw in ('$', 'no.', 'code', 'zip', 'tel', 'fax', '%'))
+                for txt in c1_texts
+            )
+            # 若右侧列不是独立的编号/金额/ZipCode列，且左侧为多行纯英文描述
+            if c1_texts and c0_texts and not c1_has_pure_amount and not any(any(ch.isdigit() for ch in txt) for txt in c0_texts):
+                # 将 ci+1 融合到 ci
+                merge_map[ci + 1] = merge_map[ci]
 
         col_has_text = [False] * num_cols
         for c in cells:
