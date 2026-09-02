@@ -162,6 +162,11 @@ class WiredTableExtractor(BaseTableExtractor):
             items = d.get("items", [])
             for item in items:
                 if item[0] == "l":
+                    # Non-narrow fill-only paths expose their shape boundary
+                    # as ``l`` items, not as stroked rules.  The narrow path
+                    # centerline exception above has already returned.
+                    if d.get("type") == "f":
+                        continue
                     p1 = item[1]
                     p2 = item[2]
                     x1, y1 = float(p1.x), float(p1.y)
