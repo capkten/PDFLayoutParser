@@ -691,6 +691,9 @@ def rescue_header_only_leaf_bands(
     header_atoms = [
         atom for atom in atoms if _center_y(atom) <= header_cutoff
     ]
+    eligible_levels: list[
+        tuple[float, list[dict[str, Any]], list[dict[str, Any]]]
+    ] = []
     for level in _levels(header_atoms):
         row = [
             atom
@@ -714,60 +717,65 @@ def rescue_header_only_leaf_bands(
                 candidates.append(atom)
         if has_parent or covered_ids != stable_ids:
             continue
+        if candidates:
+            eligible_levels.append((level, row, candidates))
 
-        for atom in candidates:
-            if _is_structural_header_atom(atom):
-                continue
-            if any(
-                horizontal_overlap(
-                    atom,
-                    {"bbox": [band["x0"], 0.0, band["x1"], 1.0]},
-                )
-                > 0
-                for band in rescued
-            ):
-                continue
+    if not eligible_levels:
+        return rescued
+    _, row, candidates = max(eligible_levels, key=lambda item: item[0])
+    for atom in candidates:
+        if _is_structural_header_atom(atom):
+            continue
+        if any(
+            horizontal_overlap(
+                atom,
+                {"bbox": [band["x0"], 0.0, band["x1"], 1.0]},
+            )
+            > 0
+            for band in rescued
+        ):
+            continue
 
-            x0, x1 = atom["bbox"][0], atom["bbox"][2]
-            left = [item for item in row if item is not atom and item["bbox"][2] <= x0]
-            right = [item for item in row if item is not atom and item["bbox"][0] >= x1]
-            if not left and not right:
-                continue
-            neighbors = [
-                item
-                for item in (
-                    [max(left, key=lambda item: item["bbox"][2])] if left else []
-                )
-                + ([min(right, key=lambda item: item["bbox"][0])] if right else [])
+        x0, x1 = atom["bbox"][0], atom["bbox"][2]
+        left = [item for item in row if item is not atom and item["bbox"][2] <= x0]
+        right = [item for item in row if item is not atom and item["bbox"][0] >= x1]
+        if not left and not right:
+            continue
+        neighbors = [
+            item
+            for item in (
+                [max(left, key=lambda item: item["bbox"][2])] if left else []
+            )
+            + ([min(right, key=lambda item: item["bbox"][0])] if right else [])
+        ]
+        line_height = max(
+            [
+                float(atom.get("font_size") or 0.0),
+                atom["bbox"][3] - atom["bbox"][1],
             ]
-            line_height = max(
-                [
-                    float(atom.get("font_size") or 0.0),
-                    atom["bbox"][3] - atom["bbox"][1],
-                ]
-                + [
-                    max(
-                        float(item.get("font_size") or 0.0),
-                        item["bbox"][3] - item["bbox"][1],
-                    )
-                    for item in neighbors
-                ]
-            )
-            minimum_gap = max(8.0, line_height * 1.25)
-            if left and x0 - max(item["bbox"][2] for item in left) < minimum_gap:
-                continue
-            if right and min(item["bbox"][0] for item in right) - x1 < minimum_gap:
-                continue
+            + [
+                max(
+                    float(item.get("font_size") or 0.0),
+                    item["bbox"][3] - item["bbox"][1],
+                )
+                for item in neighbors
+            ]
+        )
+        minimum_gap = max(8.0, line_height * 1.25)
+        if left and x0 - max(item["bbox"][2] for item in left) < minimum_gap:
+            continue
+        if right and min(item["bbox"][0] for item in right) - x1 < minimum_gap:
+            continue
 
-            rescued.append(
-                {
-                    "x0": x0,
-                    "x1": x1,
-                    "support": 1,
-                    "y_support": 1,
-                    "kind": "header_only_leaf",
-                }
-            )
+        rescued.append(
+            {
+                "x0": x0,
+                "x1": x1,
+                "support": 1,
+                "y_support": 1,
+                "kind": "header_only_leaf",
+            }
+        )
 
     rescued.sort(key=lambda band: band["x0"])
     for index, band in enumerate(rescued, 1):
