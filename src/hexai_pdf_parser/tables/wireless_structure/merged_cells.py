@@ -9,11 +9,21 @@ from typing import Any, Sequence
 _VALUE_ONLY = re.compile(r"^[\s$¥£€HKRMB,'’()\-–—.\d%]+$")
 _LIST_CONTINUATION = re.compile(r"^[\s\-–—•·]")
 _INLINE_MARKER = re.compile(r"^[*#†‡\-–—]+$")
+_NUMBERED_MARKER = re.compile(
+    r"^(?:\d+[.)、]|[（(]\d+[）)]|[一二三四五六七八九十百]+[.)、])$"
+)
+_NUMBERED_ITEM_START = re.compile(
+    r"^(?:\d+[.)、]|[（(]\d+[）)]|[一二三四五六七八九十百]+[.)、])"
+)
 _SINGLE_CJK = re.compile(r"^[\u3400-\u9fff\u2460-\u2473\uff00-\uffef\w()（）]$")
 
 
 def _horizontal_overlap(left: Sequence[float], right: Sequence[float]) -> float:
     return max(0.0, min(left[2], right[2]) - max(left[0], right[0]))
+
+
+def _has_substantive_text(text: str) -> bool:
+    return any(character.isalnum() for character in text)
 
 
 def _native_continuous(left: dict[str, Any], right: dict[str, Any]) -> bool:
@@ -57,6 +67,45 @@ def _same_slot_single_cjk(left: dict[str, Any], right: dict[str, Any]) -> bool:
         and right["bbox"][0] - left["bbox"][2]
         <= min(left["font_size"], right["font_size"]) * 2.1
     )
+
+
+def _same_slot_horizontal_prefix(
+    left: dict[str, Any], right: dict[str, Any]
+) -> bool:
+    """Join a numbered prefix with its right-hand text in one visual row."""
+    left_text = left["text"].strip()
+    right_text = right["text"].strip()
+    if (
+        _NUMBERED_MARKER.fullmatch(left_text) is None
+        or _NUMBERED_MARKER.fullmatch(right_text) is not None
+        or _VALUE_ONLY.fullmatch(right_text) is not None
+        or not _has_substantive_text(right_text)
+        or not left.get("source_position_known", False)
+        or not right.get("source_position_known", False)
+    ):
+        return False
+    same_source_line = (
+        left.get("source_blocks") == right.get("source_blocks")
+        and left.get("source_line_start") == left.get("source_line_end")
+        and right.get("source_line_start") == right.get("source_line_end")
+        and left.get("source_line_start") == right.get("source_line_start")
+    )
+    if not same_source_line or not _native_continuous(left, right):
+        return False
+    vertical_overlap = max(
+        0.0,
+        min(left["bbox"][3], right["bbox"][3])
+        - max(left["bbox"][1], right["bbox"][1]),
+    )
+    minimum_height = min(
+        left["bbox"][3] - left["bbox"][1],
+        right["bbox"][3] - right["bbox"][1],
+    )
+    if vertical_overlap < minimum_height * 0.35:
+        return False
+    minimum_font_size = min(left["font_size"], right["font_size"])
+    gap = right["bbox"][0] - left["bbox"][2]
+    return 0.0 <= gap <= max(4.0, minimum_font_size * 2.1)
 
 
 def _is_left_shifted_cjk_continuation(
@@ -132,12 +181,19 @@ def merge_same_slot_fragments(
                 _native_continuous(current, candidate)
                 and (_INLINE_MARKER.fullmatch(current["text"]) or _INLINE_MARKER.fullmatch(candidate["text"]))
             )
+            horizontal_prefix = _same_slot_horizontal_prefix(current, candidate)
             if _same_slot(current, candidate) and (
                 _same_native_inline(current, candidate)
                 or _same_slot_single_cjk(current, candidate)
                 or inline_marker
+                or horizontal_prefix
             ):
-                current = _merge_pair(current, candidate, "", "same_slot_native_inline")
+                merge_kind = (
+                    "same_slot_horizontal_prefix"
+                    if horizontal_prefix
+                    else "same_slot_native_inline"
+                )
+                current = _merge_pair(current, candidate, "", merge_kind)
                 pending.pop(index)
                 continue
             index += 1
@@ -158,6 +214,8 @@ def _can_merge_multiline(
         previous["row_end"] + 1,
     }
     if not same_or_adjacent_row or not _native_continuous(previous, candidate):
+        return False
+    if _NUMBERED_ITEM_START.match(candidate["text"].strip()) is not None:
         return False
     if output_mode == "columnar":
         previous_blocks = previous.get("source_blocks", [])

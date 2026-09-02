@@ -2,6 +2,12 @@
 
 ## 2026-09-02
 
+- 修复 `fix/zh_all_table_pages.pdf` 页面索引 `587` 中文无线表格因同槽位横向碎片冲突而整表漏出的问题。
+  - **根因与调用位置**：`src/hexai_pdf_parser/tables/wireless_structure/grid.py` 将项目列中的编号 `2.`、同一视觉行右侧的“权益法下在被投资单位不能重分类进损益的其他综合”和下一行“收益中享有的份额”都分配到 `R23C1`；`src/hexai_pdf_parser/tables/wireless_structure/merged_cells.py` 原先只能处理普通同槽位行内片段，未先合并编号与右侧正文。随后多行合并留下 `T85` 与 `T86/T87` 的重复占用，`recover_cells_from_region()` 的 occupancy 检查返回空，最终表格数量为 0。
+  - **修复判定条件**：在 `merge_same_slot_fragments()` 增加同槽位横向前缀合并，仅当左片段是编号标记、右片段有实质正文、native flow 连续、同 block/同 source line、同一视觉行且右片段位于左片段右侧、间距不超过字号比例阈值时合并。`row_start/row_end/col_start/col_end` 必须完全一致，因此不允许跨列扩展，也不修改 `colspan`；下一条编号在纵向 `merge_multiline_cells()` 中继续作为断点。
+  - **约束与调用链**：规则位于 native span 形成的 atom、物理 Cell 合并阶段，仍只消费 native span、atom、列带和逻辑 Cell，不回读 `page.get_text("words")`，不进入 `extract_zebra()` 或 legacy 文本重建；合并后继续执行物理/逻辑 occupancy 冲突检查和空槽位物化。
+  - **测试与页面验证**：新增目标正例、跨列拒绝反例、编号右侧省略号正例和下一编号纵向断点反例；`tests/test_wireless_structure_merges.py` 为 `19 passed`。在同一候选区域关闭该规则时恢复器为 `(0, 0, [])`，开启后恢复为 `35x5`、175 个 Cell；`2.` 与右侧正文合并，`3. ……` 保持独立，occupancy conflict 为 0。当前代码独立重跑页面索引 `587` 到 `D:\codes\PDFLayoutParser\output\page_587_pipeline_verify_20260902\`，结构化结果为 `pages\page-587.json`，表格 PNG 为 `tables\page-587.png`；解释图为 `D:\codes\PDFLayoutParser\output\page_587_horizontal_prefix_explainer_20260902\`。
+
 - 在页面索引 `591` 的左列连续输出修复基础上，补齐表头专用附注列和完整物理叶子层父表头推断。此前该页虽已恢复文本顺序，但 `附注五` 被吸附到首个数据列，`2014年度` 仅被标注为单列，最终输出为 `29x10`；本次恢复为项目列、附注列和 9 个数据叶子列共 `29x11`。
   - **根因与调用位置**：`src/hexai_pdf_parser/tables/wireless_structure/header_topology.py` 的 `_header_leaf_bands()` 只排除 `sparse_body`，未排除表头专用附注带；同时原有居中父表头规则把候选组限制在文字宽度的约 `1.55~3.05` 倍，无法覆盖本页连续 9 个叶子列。`src/hexai_pdf_parser/tables/wireless_structure/recoverer.py` 在列带细化和稀疏列救援后直接进入 `annotate_columns()`，没有恢复首个稳定列带间隙中的附注列。
   - **修复判定条件**：扩展通用 note-reference 识别，支持 `附注/附註` 加数字或中文数字；仅当 atom 位于表头截止线内、与既有列带无水平重叠且完整位于首两个稳定列带之间时，新增 `kind="header_only_note"` 物理列带。主表头候选同时排除 `sparse_body` 与 `header_only_note`，但物理网格保留全部列带。

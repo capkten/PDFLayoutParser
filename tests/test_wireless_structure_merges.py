@@ -61,6 +61,71 @@ def test_merge_same_slot_fragments_joins_same_visual_line_from_split_native_line
     assert result[0]["text"] == "FRASERSPROPERTY"
 
 
+def test_merge_same_slot_fragments_joins_right_side_numbered_prefix():
+    marker = _cell(
+        "2.", flow=1, row=1, x0=10, y0=20, x1=15, y1=30, source_line=0
+    )
+    body = _cell(
+        "权益法下的其他综合收益",
+        flow=2,
+        row=1,
+        x0=18,
+        y0=16,
+        x1=90,
+        y1=26,
+        source_line=0,
+    )
+    marker["font_size"] = body["font_size"] = 6.72
+
+    result = merge_same_slot_fragments([marker, body], header_cutoff=None)
+
+    assert len(result) == 1
+    assert result[0]["text"] == "2.权益法下的其他综合收益"
+    assert result[0]["merge_kind"] == "same_slot_horizontal_prefix"
+
+
+def test_merge_same_slot_fragments_keeps_right_side_prefix_in_different_column():
+    marker = _cell(
+        "2.", flow=1, row=1, col=1, x0=10, y0=20, x1=15, y1=30, source_line=0
+    )
+    body = _cell(
+        "金额",
+        flow=2,
+        row=1,
+        col=2,
+        x0=18,
+        y0=16,
+        x1=40,
+        y1=26,
+        source_line=0,
+    )
+
+    result = merge_same_slot_fragments([marker, body], header_cutoff=None)
+
+    assert [item["text"] for item in result] == ["2.", "金额"]
+
+
+def test_merge_same_slot_fragments_joins_numbered_marker_with_right_ellipsis():
+    marker = _cell(
+        "3.", flow=1, row=1, x0=10, y0=20, x1=15, y1=30, source_line=0
+    )
+    ellipsis = _cell(
+        "……",
+        flow=2,
+        row=1,
+        x0=18,
+        y0=20,
+        x1=30,
+        y1=30,
+        source_line=0,
+    )
+    marker["font_size"] = ellipsis["font_size"] = 6.72
+
+    result = merge_same_slot_fragments([marker, ellipsis], header_cutoff=None)
+
+    assert [item["text"] for item in result] == ["3.……"]
+
+
 def test_merge_multiline_cells_requires_continuous_same_column_evidence():
     first = _cell("项目", flow=1, row=1, y0=10, y1=20, source_line=1)
     second = _cell("续写", flow=2, row=2, y0=22, y1=32, source_line=2)
@@ -181,6 +246,19 @@ def test_merge_multiline_cells_requires_candidate_to_be_below_previous_fragment(
     result = merge_multiline_cells([first, second], header_cutoff=None)
 
     assert [item["text"] for item in result] == ["上方片段", "下方片段"]
+
+
+def test_merge_multiline_cells_keeps_next_numbered_item_separate():
+    first = _cell("2.权益法下的其他综合收益", flow=1, row=1, y0=10, y1=20)
+    second = _cell("3.……", flow=2, row=2, y0=22, y1=32)
+    second["script"] = "numeric"
+
+    result = merge_multiline_cells([first, second], header_cutoff=None)
+
+    assert [item["text"] for item in result] == [
+        "2.权益法下的其他综合收益",
+        "3.……",
+    ]
 
 
 def test_merge_multiline_cells_keeps_independent_project_rows_separate():
