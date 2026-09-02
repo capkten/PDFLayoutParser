@@ -387,16 +387,10 @@ def _column_tracks(rows: Sequence[Sequence[TextStrip]]) -> List[float]:
             continue
         previous = groups[-1]
         previous_anchor = statistics.median(_anchor(item) for _, item in previous)
-        overlaps_previous = any(
-            strip.bbox.x1 >= item.bbox.x0 - 2.0 and strip.bbox.x0 <= item.bbox.x1 + 2.0
-            for _, item in previous
-        )
         currency_then_number = _is_number(strip.text) and any(
             item.text.strip() in _CURRENCY for _, item in previous
         )
-        if not currency_then_number and (
-            abs(_anchor(strip) - previous_anchor) <= tolerance or overlaps_previous
-        ):
+        if not currency_then_number and abs(_anchor(strip) - previous_anchor) <= tolerance:
             previous.append((row_index, strip))
         else:
             groups.append([(row_index, strip)])
