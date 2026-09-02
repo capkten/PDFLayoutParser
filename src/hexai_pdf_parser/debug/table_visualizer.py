@@ -80,8 +80,23 @@ def _compute_cell_grid_rects(table: Table) -> list[tuple[Cell, fitz.Rect]]:
     row_bottoms: dict[int, float] = {}
     col_lefts: dict[int, float] = {}
     col_rights: dict[int, float] = {}
+    content_rows = {
+        row
+        for cell in table.cells
+        if cell.text.strip()
+        for row in range(cell.row_index, cell.row_index + max(1, cell.rowspan))
+    }
+    geometry_cells = [
+        cell
+        for cell in table.cells
+        if cell.text.strip()
+        or not any(
+            row in content_rows
+            for row in range(cell.row_index, cell.row_index + max(1, cell.rowspan))
+        )
+    ]
 
-    for c in table.cells:
+    for c in geometry_cells:
         ri, ci = c.row_index, c.col_index
         if c.rowspan == 1:
             row_tops[ri] = min(row_tops.get(ri, c.bbox.y0), c.bbox.y0)
@@ -90,7 +105,7 @@ def _compute_cell_grid_rects(table: Table) -> list[tuple[Cell, fitz.Rect]]:
             col_lefts[ci] = min(col_lefts.get(ci, c.bbox.x0), c.bbox.x0)
             col_rights[ci] = max(col_rights.get(ci, c.bbox.x1), c.bbox.x1)
 
-    for c in table.cells:
+    for c in geometry_cells:
         ri_start = c.row_index
         ri_end = c.row_index + max(1, c.rowspan) - 1
         ci_start = c.col_index
@@ -295,6 +310,18 @@ def draw_tables_on_page(
 
         badge_y0 = max(0.0, tb.y0 - badge_h)
         badge_y1 = max(badge_h, tb.y0)
+        top_badge_has_text = any(
+            char[0] < tb.x1
+            and char[2] > tb.x0
+            and char[1] < badge_y1
+            and char[3] > badge_y0
+            for char in page_chars
+        )
+        if top_badge_has_text:
+            lower_badge_y0 = tb.y1 + 2.0
+            lower_badge_y1 = lower_badge_y0 + badge_h
+            if lower_badge_y1 <= page.rect.height:
+                badge_y0, badge_y1 = lower_badge_y0, lower_badge_y1
 
         badge_rect = fitz.Rect(tb.x0, badge_y0, tb.x0 + badge_w, badge_y1)
         shape.draw_rect(badge_rect)

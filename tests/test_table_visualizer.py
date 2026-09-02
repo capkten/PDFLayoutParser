@@ -24,6 +24,90 @@ def test_complete_wireless_recovery_table_still_uses_inferred_grid_rects():
     assert first.x1 > table.cells[0].bbox.x1
 
 
+def test_wireless_grid_preserves_tall_header_above_materialized_empty_slot():
+    table = Table(
+        bbox=BBox(0, 0, 100, 220),
+        rows=3,
+        cols=2,
+        source="wireless_span_recovery",
+        cells=[
+            Cell("分组", 0, 0, BBox(10, 5, 20, 15), colspan=2),
+            Cell("追加/新增\n投资", 1, 0, BBox(10, 20, 20, 100)),
+            Cell("金额", 1, 1, BBox(60, 45, 70, 55)),
+            Cell("", 2, 0, BBox(0, 80, 50, 150)),
+            Cell("12", 2, 1, BBox(60, 120, 75, 130)),
+        ],
+    )
+
+    rects = dict((cell.text, rect) for cell, rect in _compute_cell_grid_rects(table))
+
+    assert rects["追加/新增\n投资"].y1 >= 100
+
+
+def test_badges_move_below_table_when_top_strip_contains_page_text():
+    finishes = []
+
+    class Shape:
+        def __init__(self):
+            self.rect = None
+
+        def draw_rect(self, rect):
+            self.rect = rect
+
+        def finish(self, **kwargs):
+            finishes.append((self.rect, kwargs))
+
+        def insert_text(self, *_args, **_kwargs):
+            pass
+
+        def commit(self):
+            pass
+
+    class Page:
+        rect = table_visualizer.fitz.Rect(0, 0, 200, 200)
+
+        def clean_contents(self):
+            pass
+
+        def get_text(self, mode):
+            if mode == "rawdict":
+                return {
+                    "blocks": [
+                        {
+                            "lines": [
+                                {
+                                    "spans": [
+                                        {"chars": [{"c": "标题", "bbox": (40, 20, 50, 31)}]}
+                                    ]
+                                }
+                            ]
+                        }
+                    ]
+                }
+            return []
+
+        def new_shape(self):
+            return Shape()
+
+    table = Table(
+        bbox=BBox(40, 40, 160, 80),
+        rows=1,
+        cols=1,
+        source="line_projection",
+        cells=[Cell("A", 0, 0, BBox(40, 40, 160, 80))],
+    )
+
+    table_visualizer.draw_tables_on_page(Page(), [table])
+
+    badge_rects = [
+        rect
+        for rect, kwargs in finishes
+        if kwargs.get("fill") == table_visualizer.TABLE_BADGE_FILL
+    ]
+    assert len(badge_rects) == 1
+    assert badge_rects[0].y0 >= table.bbox.y1
+
+
 def test_visualization_normalizes_fresh_rotated_page(monkeypatch, tmp_path):
     calls = []
 
@@ -253,4 +337,3 @@ def test_cell_text_box_drawn_for_glued_adjacent_words_via_chars():
     # Col 1 text bbox should correspond to 14 (x0=231.77, x1=240.82)
     assert round(green_rects[1].x0, 2) == 231.77
     assert round(green_rects[1].x1, 2) == 240.82
-

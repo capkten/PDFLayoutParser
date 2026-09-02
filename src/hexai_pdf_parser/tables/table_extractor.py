@@ -223,12 +223,49 @@ class TableExtractor:
             for table in line_tables
             if table.source == "line_projection"
         ]
-        candidates.extend(
-            self._extract_via_text_alignment(
-                page,
-                excluded_regions=wired_regions,
-            )
+        alignment_tables = self._extract_via_text_alignment(
+            page,
+            excluded_regions=wired_regions,
         )
+        candidates.extend(alignment_tables)
+
+        recovery_debug = self._last_wireless_recovery
+        page_signal = (
+            recovery_debug.get("page_signal")
+            if isinstance(recovery_debug, dict)
+            else None
+        )
+        if (
+            page_language in {"zh", "mixed"}
+            and not alignment_tables
+            and isinstance(page_signal, dict)
+            and page_signal.get("matched") is True
+        ):
+            bbox_data = page_signal.get("bbox")
+            try:
+                signal_bbox = BBox(
+                    float(bbox_data["x0"]),
+                    float(bbox_data["y0"]),
+                    float(bbox_data["x1"]),
+                    float(bbox_data["y1"]),
+                )
+                valid_bbox = (
+                    signal_bbox.x1 > signal_bbox.x0
+                    and signal_bbox.y1 > signal_bbox.y0
+                )
+            except (KeyError, TypeError, ValueError):
+                signal_bbox = None
+                valid_bbox = False
+            if valid_bbox:
+                candidates.append(
+                    Table(
+                        bbox=signal_bbox,
+                        rows=0,
+                        cols=0,
+                        cells=[],
+                        source="wireless_page_signal",
+                    )
+                )
         return candidates
 
     @staticmethod

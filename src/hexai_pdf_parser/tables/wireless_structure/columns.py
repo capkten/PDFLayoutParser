@@ -35,12 +35,29 @@ def is_sparse_left_section_title(
     )
 
 
+_PLACEHOLDER = re.compile(r"^(?:--+|——+|—+|-+|/|\*+|NA|N/A|\.)$", re.IGNORECASE)
+_NUMERIC = re.compile(r"^[+-]?(?:\d{1,3}(?:,\d{3})*|\d+)(?:\.\d+)?%?$")
+
+
+def _is_placeholder(item: dict[str, Any]) -> bool:
+    return _PLACEHOLDER.fullmatch(str(item.get("text", "")).strip()) is not None
+
+
 def _compatible(left: dict[str, Any], right: dict[str, Any]) -> bool:
     overlap = _horizontal_overlap(left, right)
-    narrow = max(
-        1.0,
-        min(left["bbox"][2] - left["bbox"][0], right["bbox"][2] - right["bbox"][0]),
-    )
+    left_w = left["bbox"][2] - left["bbox"][0]
+    right_w = right["bbox"][2] - right["bbox"][0]
+    narrow = max(1.0, min(left_w, right_w))
+
+    left_ph = _is_placeholder(left)
+    right_ph = _is_placeholder(right)
+    left_num = bool(_NUMERIC.fullmatch(str(left.get("text", "")).strip()))
+    right_num = bool(_NUMERIC.fullmatch(str(right.get("text", "")).strip()))
+    if (left_ph and right_num) or (right_ph and left_num):
+        ph = left if left_ph else right
+        ph_w = max(1.0, ph["bbox"][2] - ph["bbox"][0])
+        return overlap >= ph_w * 0.75 and overlap >= 4.0
+
     return overlap >= max(2.0, narrow * 0.25)
 
 

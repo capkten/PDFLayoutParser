@@ -20,6 +20,7 @@ from hexai_pdf_parser.wireless_table_recovery import (
     _build_table,
     _column_tracks,
     _completion_date_continuations,
+    _detect_native_span_page_signal,
     _drop_orphan_field_before_title,
     _prepend_short_title,
     _significant_overlap,
@@ -48,6 +49,86 @@ def _make_native_borderless_table(path: Path) -> None:
         page.insert_text((325, y), previous, fontsize=10)
     document.save(path)
     document.close()
+
+
+def _make_signal_strip(
+    text: str, x0: float, y0: float, x1: float, y1: float, order: int
+) -> TextStrip:
+    bbox = BBox(x0, y0, x1, y1)
+    return TextStrip(text, bbox, [NativeSpan(text, bbox, "Helvetica", 10.0, order)])
+
+
+def test_native_span_page_signal_accepts_wrapped_label_rows():
+    strips = []
+    order = 0
+    for row_index in range(3):
+        label_y = 20.0 + row_index * 32.0
+        number_y = label_y + (5.8 if row_index % 2 == 0 else -4.0)
+        strips.append(
+            _make_signal_strip(
+                "公司名称片段", 20.0, label_y, 115.0, label_y + 10.0, order
+            )
+        )
+        for column in range(6):
+            x0 = 150.0 + column * 82.0
+            strips.append(
+                _make_signal_strip(
+                    str(1000 + row_index * 10 + column),
+                    x0,
+                    number_y,
+                    x0 + 55.0,
+                    number_y + 12.0,
+                    order + column + 1,
+                )
+            )
+        order += 8
+
+    signal = _detect_native_span_page_signal(strips)
+
+    assert signal is not None
+    assert signal.numeric_row_count == 3
+    assert signal.stable_column_count >= 4
+    assert signal.labeled_row_count == 3
+    assert signal.bbox.x0 == 20.0
+    assert signal.bbox.x1 >= 615.0
+
+
+def test_native_span_page_signal_rejects_sparse_or_unstable_body_numbers():
+    sparse = [
+        [
+            _make_signal_strip(
+                str(value),
+                40.0 + value * 20.0,
+                row * 20.0,
+                55.0 + value * 20.0,
+                row * 20.0 + 10.0,
+                row * 4 + value,
+            )
+            for value in range(3)
+        ]
+        for row in range(4)
+    ]
+    assert _detect_native_span_page_signal(
+        [strip for row in sparse for strip in row]
+    ) is None
+
+    unstable = [
+        [
+            _make_signal_strip(
+                str(100 + row + column),
+                40.0 + column * 80.0 + row * 18.0,
+                row * 20.0,
+                55.0 + column * 80.0 + row * 18.0,
+                row * 20.0 + 10.0,
+                row * 4 + column,
+            )
+            for column in range(4)
+        ]
+        for row in range(3)
+    ]
+    assert _detect_native_span_page_signal(
+        [strip for row in unstable for strip in row]
+    ) is None
 
 
 def test_merge_text_strips_keeps_columns_separate_but_joins_tight_font_splits():
@@ -442,4 +523,3 @@ def test_column_tracks_multi_table_run_keeps_independent_tracks():
     assert len(tracks) >= 2
     assert any(abs(t - 73.5) < 5.0 for t in tracks)
     assert any(abs(t - 208.2) < 5.0 for t in tracks)
-

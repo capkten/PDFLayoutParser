@@ -47,6 +47,7 @@ def run_single_test(
     output_dir: str | Path | None = OUTPUT_DIR,
     dpi: int = RENDER_DPI,
     ml_model_path: str | Path | None = MODEL_PATH,
+    page_index: int = 0,
 ) -> None:
     """执行单个 PDF 页面的表格解析与可视化测试。"""
     if not pdf_path:
@@ -62,24 +63,29 @@ def run_single_test(
     out_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"=" * 80)
-    print(f"[test_single] 开始单测: {pdf_file.name}")
+    print(f"[test_single] 开始单测: {pdf_file.name} (page_index={page_index})")
     print(f"[test_single] 完整路径: {pdf_file}")
     print(f"[test_single] 模型路径: {ml_model_path}")
     print(f"=" * 80)
 
     # 1. 执行 PDFParser 解析
     with PDFParser(str(pdf_file), ml_model_path=str(ml_model_path)) as parser:
-        result = parser.parse(page_indices=[0], output_dir=str(out_dir))
+        result = parser.parse(page_indices=[page_index], output_dir=str(out_dir))
         if result.code == -1:
             raise RuntimeError(result.message)
         doc = result.data
 
-    if not doc.pages:
-        print("[test_single] 警告: 未能从 PDF 解析出任何页面！")
-        return
+    target_page = next((p for p in doc.pages if p.index == page_index), None)
+    if target_page is None:
+        if 0 <= page_index < len(doc.pages):
+            target_page = doc.pages[page_index]
+        elif doc.pages:
+            target_page = doc.pages[0]
+        else:
+            print("[test_single] 警告: 未能从 PDF 解析出任何页面！")
+            return
 
-    page0 = doc.pages[0]
-    tables = page0.tables
+    tables = target_page.tables
     print(f"\n[1] 表格识别结果 (共识别到 {len(tables)} 个表格):")
     print("-" * 80)
 
@@ -121,12 +127,15 @@ def run_single_test(
     print("-" * 80)
     doc_handle = fitz.open(str(pdf_file))
     try:
-        page_handle = doc_handle[0]
+        page_handle = doc_handle[page_index]
         draw_tables_on_page(page_handle, tables, draw_text_boxes=True)
         matrix = fitz.Matrix(dpi / 72.0, dpi / 72.0)
         pix = page_handle.get_pixmap(matrix=matrix, alpha=False)
 
-        vis_img_path = out_dir / f"{pdf_file.stem}_visualized.png"
+        if len(doc_handle) == 1 and page_index == 0:
+            vis_img_path = out_dir / f"{pdf_file.stem}_visualized.png"
+        else:
+            vis_img_path = out_dir / f"{pdf_file.stem}_page_{page_index:03d}_visualized.png"
         pix.save(str(vis_img_path))
         print(f"  ✔ 可视化图片已保存: {vis_img_path}")
     finally:
@@ -139,7 +148,7 @@ def run_single_test(
     # md_writer.write_page(page0, str(md_path))
     # print(f"  ✔ JSON 输出已保存   : {json_path}")
     # print(f"  ✔ Markdown 已保存   : {md_path}")
-    # print(f"\n[test_single] 测试完成！")
+    print(f"\n[test_single] 测试完成！")
 
 
 def run_all_missing(
@@ -181,18 +190,57 @@ def run_all_missing(
 
 
 if __name__ == "__main__":
-    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    import argparse
 
-    if "--all" in sys.argv or "--missing" in sys.argv:
-        run_all_missing()
-    elif args:
-        target = args[0]
+    parser = argparse.ArgumentParser(description="单页表格提取与可视化单测试验脚本")
+    parser.add_argument("target", nargs="?", default=None, help="PDF 路径或页码")
+    parser.add_argument("--page", type=int, default=None, help="指定解析的页码索引（0-based）")
+    parser.add_argument("--pages", type=str, default=None, help="指定多个页码索引，逗号分隔，如 983,986,1000")
+    parser.add_argument("--pdf", type=str, default=TARGET_PDF_PATH, help="指定 PDF 文件路径")
+    parser.add_argument("--output-dir", type=str, default=OUTPUT_DIR, help="输出目录")
+    parser.add_argument("--dpi", type=int, default=RENDER_DPI, help="渲染 DPI")
+    parser.add_argument("--model-path", type=str, default=MODEL_PATH, help="ML 模型路径")
+    parser.add_argument("--all", action="store_true", help="批量解析所有未处理的单页 PDF")
+    parser.add_argument("--missing", action="store_true", help="批量解析所有未处理的单页 PDF")
+
+    cli_args = parser.parse_args()
+
+    if cli_args.all or cli_args.missing:
+        run_all_missing(output_dir=cli_args.output_dir, dpi=cli_args.dpi, ml_model_path=cli_args.model_path)
+    elif cli_args.pages:
+        page_list = [int(p.strip()) for p in cli_args.pages.split(",") if p.strip()]
+        for p_idx in page_list:
+            run_single_test(
+                pdf_path=cli_args.pdf,
+                output_dir=cli_args.output_dir,
+                dpi=cli_args.dpi,
+                ml_model_path=cli_args.model_path,
+                page_index=p_idx,
+            )
+    elif cli_args.page is not None:
+        run_single_test(
+            pdf_path=cli_args.pdf,
+            output_dir=cli_args.output_dir,
+            dpi=cli_args.dpi,
+            ml_model_path=cli_args.model_path,
+            page_index=cli_args.page,
+        )
+    elif cli_args.target:
+        target = cli_args.target
         if target.isdigit():
-            target_path = Path(OUTPUT_DIR) / "pdf_debug" / f"en_all_table_pages_page_{int(target):03d}.pdf"
-        elif not Path(target).is_absolute() and (Path(OUTPUT_DIR) / "pdf_debug" / target).exists():
-            target_path = Path(OUTPUT_DIR) / "pdf_debug" / target
+            # If target is digits, treat as page index on default target PDF
+            run_single_test(
+                pdf_path=cli_args.pdf,
+                output_dir=cli_args.output_dir,
+                dpi=cli_args.dpi,
+                ml_model_path=cli_args.model_path,
+                page_index=int(target),
+            )
+        elif not Path(target).is_absolute() and (Path(cli_args.output_dir) / "pdf_debug" / target).exists():
+            target_path = Path(cli_args.output_dir) / "pdf_debug" / target
+            run_single_test(pdf_path=target_path, output_dir=cli_args.output_dir, dpi=cli_args.dpi, ml_model_path=cli_args.model_path)
         else:
             target_path = Path(target)
-        run_single_test(pdf_path=target_path)
+            run_single_test(pdf_path=target_path, output_dir=cli_args.output_dir, dpi=cli_args.dpi, ml_model_path=cli_args.model_path)
     else:
-        run_single_test()
+        run_single_test(output_dir=cli_args.output_dir, dpi=cli_args.dpi, ml_model_path=cli_args.model_path)

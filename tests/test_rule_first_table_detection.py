@@ -80,6 +80,85 @@ def test_rule_miss_does_not_call_model(monkeypatch):
     assert extractor.extract(_page()) == []
 
 
+def test_native_page_signal_gates_model_without_becoming_final_table(monkeypatch):
+    extractor = TableExtractor()
+    model_table = _table("model", 200)
+    calls = []
+
+    extractor._wireless_extractor.extract_zebra = lambda page: []
+    extractor._wired_extractor.extract = lambda page: []
+
+    def signal_alignment(page, excluded_regions=None):
+        extractor._last_wireless_recovery = {
+            "page_signal": {
+                "matched": True,
+                "bbox": {"x0": 20.0, "y0": 40.0, "x1": 380.0, "y1": 180.0},
+            }
+        }
+        return []
+
+    extractor._extract_via_text_alignment = signal_alignment
+
+    class FakeDetector:
+        def detect_with_scores(self, page):
+            calls.append(page)
+            return [(model_table.bbox, 0.91)]
+
+    extractor._ml_detector = FakeDetector()
+    extractor._wireless_extractor.extract = (
+        lambda page, table_bbox=None, confidence=None, **kwargs: [model_table]
+    )
+    monkeypatch.setattr(
+        "hexai_pdf_parser.extractors.language_detector.detect_page_language",
+        lambda page: "mixed",
+    )
+    monkeypatch.setattr(
+        "hexai_pdf_parser.tables.table_extractor.normalize_page_rotation",
+        lambda page: None,
+        raising=False,
+    )
+
+    result = extractor.extract(_page())
+
+    assert len(calls) == 1
+    assert result == [model_table]
+    assert all(table.source != "wireless_page_signal" for table in result)
+
+
+def test_native_page_signal_does_not_leak_when_model_returns_no_tables(monkeypatch):
+    extractor = TableExtractor()
+    extractor._wireless_extractor.extract_zebra = lambda page: []
+    extractor._wired_extractor.extract = lambda page: []
+
+    def signal_alignment(page, excluded_regions=None):
+        extractor._last_wireless_recovery = {
+            "page_signal": {
+                "matched": True,
+                "bbox": {"x0": 20.0, "y0": 40.0, "x1": 380.0, "y1": 180.0},
+            }
+        }
+        return []
+
+    extractor._extract_via_text_alignment = signal_alignment
+
+    class EmptyDetector:
+        def detect_with_scores(self, page):
+            return []
+
+    extractor._ml_detector = EmptyDetector()
+    monkeypatch.setattr(
+        "hexai_pdf_parser.extractors.language_detector.detect_page_language",
+        lambda page: "mixed",
+    )
+    monkeypatch.setattr(
+        "hexai_pdf_parser.tables.table_extractor.normalize_page_rotation",
+        lambda page: None,
+        raising=False,
+    )
+
+    assert extractor.extract(_page()) == []
+
+
 def test_model_failure_does_not_fall_back_to_rule_tables(monkeypatch):
     extractor = TableExtractor()
     rule_table = _table("line_projection", 10)

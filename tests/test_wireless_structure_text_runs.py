@@ -142,6 +142,18 @@ def test_build_text_runs_does_not_join_placeholder_to_positive_gap_neighbor():
     assert [item["text"] for item in result] == ["项目", "---"]
 
 
+def test_build_text_runs_keeps_small_gap_inside_inline_hyphenated_text():
+    atoms = [
+        _atom("高质量发展", 100, 150, 1, (2, 3, 0)),
+        _atom("-", 150.5, 156.5, 2, (2, 3, 1)),
+        _atom("专项资金", 157.0, 197.0, 3, (2, 3, 2)),
+    ]
+
+    result = build_text_runs(atoms)
+
+    assert [item["text"] for item in result] == ["高质量发展-专项资金"]
+
+
 def test_build_text_runs_caps_measured_gap_before_separate_headers():
     atoms = []
     for line in range(3):

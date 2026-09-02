@@ -456,9 +456,80 @@ def refine_leaf_bands(atoms: Sequence[dict[str, Any]], bands: Sequence[dict[str,
     refined = _split_by_numeric_body_alignment(atoms, refined, cutoff)
     refined = _remove_empty_overlapping_leaf_bands(atoms, refined, cutoff)
     refined = _coalesce_right_aligned_sibling_leaves(atoms, refined, cutoff)
+    refined = _coalesce_pure_header_and_body_leaf_bands(atoms, refined, cutoff)
     for index, band in enumerate(refined, 1):
         band["id"] = index
     return refined, cutoff
+
+
+def _coalesce_pure_header_and_body_leaf_bands(
+    atoms: Sequence[dict[str, Any]], bands: Sequence[dict[str, Any]], cutoff: float | None
+) -> list[dict[str, Any]]:
+    """将有实质水平重叠且互补的表头/正文片段合并为单一物理列。"""
+    if cutoff is None or len(bands) < 2:
+        return [dict(band) for band in bands]
+    merged: list[dict[str, Any]] = []
+    i = 0
+    while i < len(bands):
+        curr = dict(bands[i])
+        if i + 1 < len(bands):
+            nxt = dict(bands[i + 1])
+            gap = nxt["x0"] - curr["x1"]
+            overlap = min(curr["x1"], nxt["x1"]) - max(curr["x0"], nxt["x0"])
+            narrow_width = min(
+                curr["x1"] - curr["x0"],
+                nxt["x1"] - nxt["x0"],
+            )
+            if gap <= 3.5:
+                curr_atoms = [
+                    a for a in atoms
+                    if curr["x0"] - 1.0 <= (a["bbox"][0] + a["bbox"][2]) / 2.0 <= curr["x1"] + 1.0
+                ]
+                nxt_atoms = [
+                    a for a in atoms
+                    if nxt["x0"] - 1.0 <= (a["bbox"][0] + a["bbox"][2]) / 2.0 <= nxt["x1"] + 1.0
+                ]
+                curr_head = any(_center_y(a) <= cutoff for a in curr_atoms)
+                curr_body = any(_center_y(a) > cutoff for a in curr_atoms)
+                nxt_head = any(_center_y(a) <= cutoff for a in nxt_atoms)
+                nxt_body = any(_center_y(a) > cutoff for a in nxt_atoms)
+                complementary = (curr_head and not curr_body and not nxt_head and nxt_body) or (
+                    not curr_head and curr_body and nxt_head and not nxt_body
+                )
+                if complementary:
+                    body_band = curr if curr_body else nxt
+                    header_band = nxt if curr_body else curr
+                    body_atoms = [
+                        a for a in (curr_atoms if curr_body else nxt_atoms)
+                        if _center_y(a) > cutoff
+                    ]
+                    body_width = body_band["x1"] - body_band["x0"]
+                    header_width = header_band["x1"] - header_band["x0"]
+                    substantial_overlap = overlap >= max(1.0, narrow_width * 0.25)
+                    terminal_placeholder_track = (
+                        (i == 0 or i + 1 == len(bands) - 1)
+                        and len({_center_y(a) for a in body_atoms}) >= 3
+                        and all(_is_placeholder(a) for a in body_atoms)
+                        and body_width <= header_width * 0.5
+                        and gap <= max(1.0, body_width * 0.25)
+                    )
+                if complementary and (substantial_overlap or terminal_placeholder_track):
+                    combined = {
+                        **curr,
+                        "x0": min(curr["x0"], nxt["x0"]),
+                        "x1": max(curr["x1"], nxt["x1"]),
+                        "support": curr.get("support", 1) + nxt.get("support", 1),
+                        "y_support": curr.get("y_support", 1) + nxt.get("y_support", 1),
+                        "kind": curr.get("kind") or nxt.get("kind"),
+                    }
+                    merged.append(combined)
+                    i += 2
+                    continue
+        merged.append(curr)
+        i += 1
+    for index, band in enumerate(merged, 1):
+        band["id"] = index
+    return merged
 
 
 def _coalesce_right_aligned_sibling_leaves(
@@ -905,9 +976,7 @@ def _infer_complete_physical_leaf_span(
             overlaps = [
                 int(band["id"])
                 for band in physical_bands
-                if horizontal_overlap(
-                    item, {"bbox": [band["x0"], 0.0, band["x1"], 1.0]}
-                ) > 0
+                if _meaningful_header_band_overlap(item, band)
             ]
             if len(overlaps) != 1:
                 assigned = []
@@ -929,29 +998,49 @@ def _infer_complete_physical_leaf_span(
         for run in runs:
             if len(run) < 3 or parent_column not in run:
                 continue
-            if not all(column in band_by_id for column in run):
-                continue
-            first, last = band_by_id[run[0]], band_by_id[run[-1]]
-            group_width = last["x1"] - first["x0"]
-            group_center = (first["x0"] + last["x1"]) / 2.0
-            parent_center = (atom["bbox"][0] + atom["bbox"][2]) / 2.0
-            error = abs(group_center - parent_center)
-            if error > max(4.0, group_width * 0.10):
-                continue
-            candidate_x0, candidate_x1 = first["x0"], last["x1"]
-            if any(
-                horizontal_overlap(
-                    peer, {"bbox": [candidate_x0, 0.0, candidate_x1, 1.0]}
-                ) > 0
-                for peer in same_level_peers
-            ):
-                continue
-            candidates.append((error, run))
+            for start_idx in range(len(run)):
+                for end_idx in range(start_idx + 2, len(run)):
+                    sub_run = run[start_idx : end_idx + 1]
+                    if parent_column not in sub_run:
+                        continue
+                    if not all(column in band_by_id for column in sub_run):
+                        continue
+                    first, last = band_by_id[sub_run[0]], band_by_id[sub_run[-1]]
+                    group_width = last["x1"] - first["x0"]
+                    group_center = (first["x0"] + last["x1"]) / 2.0
+                    parent_center = (atom["bbox"][0] + atom["bbox"][2]) / 2.0
+                    error = abs(group_center - parent_center)
+                    narrowest_band_width = min(
+                        band["x1"] - band["x0"]
+                        for band in (band_by_id[column] for column in sub_run)
+                    )
+                    if error > max(4.0, narrowest_band_width * 0.50):
+                        continue
+                    candidate_x0, candidate_x1 = first["x0"], last["x1"]
+                    if any(
+                        horizontal_overlap(
+                            peer, {"bbox": [candidate_x0, 0.0, candidate_x1, 1.0]}
+                        ) > 0
+                        for peer in same_level_peers
+                    ):
+                        continue
+                    candidates.append((error, sub_run))
 
-    unique = {tuple(span): error for error, span in candidates}
-    if len(unique) != 1:
+    if not candidates:
         return []
-    return list(next(iter(unique)))
+    unique_candidates = {
+        tuple(span): error
+        for error, span in candidates
+    }
+    longest_length = max(len(span) for span in unique_candidates)
+    longest = [
+        (error, list(span))
+        for span, error in unique_candidates.items()
+        if len(span) == longest_length
+    ]
+    if len(longest) != 1:
+        return []
+    return longest[0][1]
 
 
 def _infer_wrapped_two_leaf_parent_spans(

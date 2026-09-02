@@ -72,6 +72,16 @@ class TextStrip:
 
 
 @dataclass
+class NativeSpanPageSignal:
+    """Recall-only evidence that a page contains repeated numeric columns."""
+
+    bbox: BBox
+    numeric_row_count: int
+    stable_column_count: int
+    labeled_row_count: int
+
+
+@dataclass
 class WirelessRecovery:
     """Recovered tables plus JSON-serializable evidence for review."""
 
@@ -247,6 +257,114 @@ def _is_number(text: str) -> bool:
         return any(char.isdigit() for char in value)
     except ValueError:
         return False
+
+
+def _detect_native_span_page_signal(
+    strips: Sequence[TextStrip],
+) -> NativeSpanPageSignal | None:
+    """Detect repeated native-span numeric columns without building cells."""
+
+    numeric_strips = [strip for strip in strips if _is_number(strip.text)]
+    numeric_rows = [
+        row for row in _row_cluster(numeric_strips) if len(row) >= 4
+    ]
+    if len(numeric_rows) < 3:
+        return None
+
+    widths = [
+        strip.bbox.x1 - strip.bbox.x0
+        for row in numeric_rows
+        for strip in row
+        if strip.bbox.x1 > strip.bbox.x0
+    ]
+    if not widths:
+        return None
+    anchor_tolerance = min(24.0, max(10.0, statistics.median(widths) * 0.35))
+
+    anchors = [
+        (
+            strip.bbox.x1,
+            row_index,
+            strip,
+        )
+        for row_index, row in enumerate(numeric_rows)
+        for strip in row
+    ]
+    anchors.sort(
+        key=lambda item: (item[0], item[1], item[2].bbox.x0, item[2].order)
+    )
+    anchor_groups: List[List[Tuple[float, int, TextStrip]]] = []
+    for anchor, row_index, strip in anchors:
+        if not anchor_groups:
+            anchor_groups.append([(anchor, row_index, strip)])
+            continue
+        previous = anchor_groups[-1]
+        reference = statistics.median(item[0] for item in previous)
+        if abs(anchor - reference) <= anchor_tolerance:
+            previous.append((anchor, row_index, strip))
+        else:
+            anchor_groups.append([(anchor, row_index, strip)])
+
+    tracks = [
+        statistics.median(item[0] for item in group)
+        for group in anchor_groups
+        if len({item[1] for item in group}) >= 3
+    ]
+    if len(tracks) < 4:
+        return None
+
+    qualifying_rows: List[List[TextStrip]] = []
+    for row in numeric_rows:
+        assigned: set[int] = set()
+        for strip in row:
+            nearest = min(
+                range(len(tracks)),
+                key=lambda index: abs(strip.bbox.x1 - tracks[index]),
+            )
+            if abs(strip.bbox.x1 - tracks[nearest]) <= anchor_tolerance:
+                assigned.add(nearest)
+        if len(assigned) >= 4:
+            qualifying_rows.append(row)
+    if len(qualifying_rows) < 3:
+        return None
+
+    heights = [
+        strip.bbox.y1 - strip.bbox.y0
+        for strip in strips
+        if strip.bbox.y1 > strip.bbox.y0
+    ]
+    median_height = statistics.median(heights) if heights else 10.0
+    label_gap_limit = max(14.0, median_height * 2.5)
+    labeled_row_count = 0
+    evidence_boxes = [
+        strip.bbox
+        for row in qualifying_rows
+        for strip in row
+    ]
+    for row in qualifying_rows:
+        row_box = _union(strip.bbox for strip in row)
+        numeric_left = min(strip.bbox.x0 for strip in row)
+        nearby_labels = []
+        for strip in strips:
+            if _is_number(strip.text) or strip.bbox.x1 > numeric_left + 8.0:
+                continue
+            vertical_gap = max(
+                row_box.y0 - strip.bbox.y1,
+                strip.bbox.y0 - row_box.y1,
+                0.0,
+            )
+            if vertical_gap <= label_gap_limit:
+                nearby_labels.append(strip)
+        if nearby_labels:
+            labeled_row_count += 1
+            evidence_boxes.extend(strip.bbox for strip in nearby_labels)
+
+    return NativeSpanPageSignal(
+        bbox=_union(evidence_boxes),
+        numeric_row_count=len(qualifying_rows),
+        stable_column_count=len(tracks),
+        labeled_row_count=labeled_row_count,
+    )
 
 
 def _looks_like_field(text: str) -> bool:
@@ -776,6 +894,7 @@ def recover_wireless_tables(
         allowed_regions=allowed_regions,
     )
     strips = merge_text_strips(spans)
+    page_signal = _detect_native_span_page_signal(strips)
     visual_rows = merge_wrapped_rows(_row_cluster(strips))
     tables: List[Table] = []
     regions: List[Dict[str, Any]] = []
@@ -865,6 +984,13 @@ def recover_wireless_tables(
             {"order": strip.order, "text": strip.text, "bbox": strip.bbox.__dict__, "span_orders": [span.order for span in strip.spans]}
             for strip in strips
         ],
+        "page_signal": {
+            "matched": page_signal is not None,
+            "bbox": page_signal.bbox.__dict__ if page_signal else None,
+            "numeric_row_count": page_signal.numeric_row_count if page_signal else 0,
+            "stable_column_count": page_signal.stable_column_count if page_signal else 0,
+            "labeled_row_count": page_signal.labeled_row_count if page_signal else 0,
+        },
         "regions": regions,
     }
     for table in _completion_date_continuations(visual_rows):

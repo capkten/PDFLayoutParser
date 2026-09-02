@@ -1,6 +1,7 @@
 import hexai_pdf_parser.tables.wireless_structure.header_topology as header_topology
 from hexai_pdf_parser.tables.wireless_structure.header_topology import (
     _infer_complete_child_group_span,
+    _coalesce_pure_header_and_body_leaf_bands,
     annotate_columns,
     infer_header_cutoff,
     refine_leaf_bands,
@@ -384,6 +385,98 @@ def test_annotate_columns_infers_parent_over_complete_physical_leaf_run():
 
     assert (parent["column_start"], parent["column_end"], parent["colspan"]) == (3, 11, 9)
     assert parent["bbox"] == [205, 10, 225, 18]
+
+
+def test_annotate_columns_keeps_grazing_leaf_separate_when_parent_starts_after_it():
+    bands = [
+        {"id": 3, "x0": 241.34, "x1": 264.90},
+        {"id": 4, "x0": 276.17, "x1": 291.54},
+        {"id": 5, "x0": 289.13, "x1": 358.50},
+        {"id": 6, "x0": 371.57, "x1": 434.46},
+        {"id": 7, "x0": 434.46, "x1": 478.64},
+        {"id": 8, "x0": 488.35, "x1": 511.88},
+        {"id": 9, "x0": 509.47, "x1": 572.72},
+        {"id": 10, "x0": 582.67, "x1": 606.23},
+        {"id": 11, "x0": 614.86, "x1": 627.83},
+    ]
+    parent = _atom("父表头", 415.25, 90.43, 478.61, 100.99, 1)
+    leaves = [
+        _atom("叶三", 241.34, 119.47, 262.49, 170.83, 2),
+        # Its right edge grazes the next band by 0.13pt, but it is one leaf.
+        _atom("叶四", 276.17, 105.79, 289.26, 184.42, 3),
+        _atom("叶五", 313.97, 139.87, 356.21, 150.43, 4),
+        _atom("叶六", 387.41, 126.19, 429.65, 163.99, 5),
+        _atom("叶七", 444.55, 119.47, 476.23, 170.83, 6),
+        _atom("叶八", 488.35, 126.19, 509.47, 163.99, 7),
+        _atom("叶九", 517.63, 126.19, 570.43, 163.99, 8),
+        _atom("叶十", 582.67, 126.19, 603.79, 163.99, 9),
+        _atom("叶十一", 614.86, 133.03, 625.42, 157.15, 10),
+    ]
+
+    annotate_columns([parent, *leaves], bands, header_cutoff=200)
+
+    assert (parent["column_start"], parent["column_end"], parent["colspan"]) == (
+        4,
+        11,
+        8,
+    )
+    assert (leaves[1]["column_start"], leaves[1]["column_end"], leaves[1]["colspan"]) == (
+        4,
+        4,
+        1,
+    )
+
+
+def test_coalesce_pure_header_and_body_rejects_unaligned_adjacent_bands():
+    bands = [
+        {"id": 1, "x0": 10.0, "x1": 30.0},
+        {"id": 2, "x0": 29.0, "x1": 52.0},
+    ]
+    atoms = [
+        _atom("表头", 12.0, 10.0, 28.0, 20.0, 1),
+        _atom("100", 34.0, 40.0, 50.0, 50.0, 2),
+    ]
+
+    result = _coalesce_pure_header_and_body_leaf_bands(atoms, bands, cutoff=30.0)
+
+    assert [(band["x0"], band["x1"]) for band in result] == [
+        (10.0, 30.0),
+        (29.0, 52.0),
+    ]
+
+
+def test_coalesce_pure_header_and_body_keeps_equal_width_placeholder_columns():
+    bands = [
+        {"id": 1, "x0": 10.0, "x1": 30.0},
+        {"id": 2, "x0": 31.0, "x1": 51.0},
+    ]
+    atoms = [
+        _atom("表头", 12.0, 10.0, 28.0, 20.0, 1),
+        _atom("-", 35.0, 40.0, 45.0, 50.0, 2),
+        _atom("-", 35.0, 55.0, 45.0, 65.0, 3),
+        _atom("-", 35.0, 70.0, 45.0, 80.0, 4),
+    ]
+
+    result = _coalesce_pure_header_and_body_leaf_bands(atoms, bands, cutoff=30.0)
+
+    assert len(result) == 2
+
+
+def test_coalesce_pure_header_and_body_accepts_terminal_narrow_placeholder_track():
+    bands = [
+        {"id": 1, "x0": 10.0, "x1": 40.0},
+        {"id": 2, "x0": 40.5, "x1": 47.0},
+    ]
+    atoms = [
+        _atom("表头", 14.0, 10.0, 36.0, 20.0, 1),
+        _atom("-", 41.0, 40.0, 46.0, 50.0, 2),
+        _atom("-", 41.0, 55.0, 46.0, 65.0, 3),
+        _atom("-", 41.0, 70.0, 46.0, 80.0, 4),
+    ]
+
+    result = _coalesce_pure_header_and_body_leaf_bands(atoms, bands, cutoff=30.0)
+
+    assert [(band["x0"], band["x1"]) for band in result] == [(10.0, 47.0)]
 
 
 def test_annotate_columns_rejects_parent_when_physical_leaf_run_has_a_gap():

@@ -152,13 +152,35 @@ def _can_join(
         return False
     gap = candidate["bbox"][0] - previous["bbox"][2]
     native_line = _same_native_line(previous, candidate)
-    inline_punct = native_line and (len(candidate["text"].strip()) == 1 or len(previous["text"].strip()) == 1) and gap <= 1.0
-    if gap > 0 and not inline_punct and (_is_placeholder(previous) or _is_placeholder(candidate)):
+    prev_is_ph = _is_placeholder(previous)
+    cand_is_ph = _is_placeholder(candidate)
+    prev_is_num = bool(_NUMERIC.fullmatch(previous["text"].strip()))
+    cand_is_num = bool(_NUMERIC.fullmatch(candidate["text"].strip()))
+    if prev_is_ph and cand_is_num:
+        return False
+    if prev_is_num and cand_is_ph:
+        return False
+    if prev_is_ph and cand_is_ph:
+        return False
+
+    has_substantive_text = any(
+        item["text"].strip()
+        and not _is_placeholder(item)
+        and not _NUMERIC.fullmatch(item["text"].strip())
+        for item in group
+    )
+    inline_punct = (
+        native_line
+        and gap <= 1.0
+        and (not prev_is_ph or has_substantive_text)
+        and (len(candidate["text"].strip()) == 1 or len(previous["text"].strip()) == 1)
+    )
+    if gap > 0 and not inline_punct and (prev_is_ph or cand_is_ph):
         return False
     if (
         gap > 0.8
-        and _NUMERIC.fullmatch(previous["text"].strip())
-        and _NUMERIC.fullmatch(candidate["text"].strip())
+        and prev_is_num
+        and cand_is_num
     ):
         return False
     superscript = (

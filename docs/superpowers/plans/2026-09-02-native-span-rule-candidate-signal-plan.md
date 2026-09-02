@@ -48,7 +48,7 @@ def _make_strip(text, x0, y0, x1, y1, order):
     return TextStrip(text, BBox(x0, y0, x1, y1), [span])
 ```
 
-- [ ] **步骤 1：添加首列换行、六列数字的正例。**
+- [x] **步骤 1：添加首列换行、六列数字的正例。**
 
 构造三条以上数值 visual row；数值条的中心线相同，左侧标签条分别位于数值行上方或下方，且标签可以是同一字段的换行片段。断言信号命中、稳定列不少于四列、数值行不少于三条，并且 bbox 覆盖数字和左侧标签。
 
@@ -85,7 +85,7 @@ def test_native_span_page_signal_accepts_wrapped_label_rows():
     assert signal.bbox.x1 >= 615.0
 ```
 
-- [ ] **步骤 2：添加普通正文反例。**
+- [x] **步骤 2：添加普通正文反例。**
 
 用少于四列数字、只有两条重复数字行或数字右边界不稳定的 strips 调用同一函数，断言返回 `None`。该测试必须只证明候选信号的召回门槛，不调用模型。
 
@@ -107,11 +107,11 @@ def test_native_span_page_signal_rejects_sparse_or_unstable_body_numbers():
     assert _detect_native_span_page_signal([strip for row in unstable for strip in row]) is None
 ```
 
-- [ ] **步骤 3：添加候选页门控回归测试。**
+- [x] **步骤 3：添加候选页门控回归测试。**
 
 在 `TableExtractor` 的中文/混合候选路径中预置一个命中的 `page_signal` diagnostics，模型 fake 返回一个 sentinel 表格；断言模型被调用且最终结果是模型表格。再覆盖一个命中的 page signal 不会被作为最终表格直接返回，`source` 不会是 `wireless_page_signal`。
 
-- [ ] **步骤 4：运行新增测试确认旧实现失败。**
+- [x] **步骤 4：运行新增测试确认旧实现失败。**
 
 运行：
 
@@ -135,7 +135,7 @@ $env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'
 - 新增 `_detect_native_span_page_signal(strips)`。
 - `recover_wireless_tables()` 的 diagnostics 新增 `page_signal` 对象；未命中时 `matched` 为 `False`，读取异常仍沿用当前异常处理。
 
-- [ ] **步骤 1：定义最小信号数据结构。**
+- [x] **步骤 1：定义最小信号数据结构。**
 
 在 `NativeSpan`/`TextStrip` 附近添加：
 
@@ -148,13 +148,13 @@ class NativeSpanPageSignal:
     labeled_row_count: int
 ```
 
-- [ ] **步骤 2：实现纯 strip 信号计算。**
+- [x] **步骤 2：实现纯 strip 信号计算。**
 
 实现逻辑固定为：筛出 `_is_number()` 条带；用 `_row_cluster()` 分成数值 visual row；保留至少四个数值条带的行；使用数值条带右边界聚类列锚点，锚点容差为 `min(24.0, max(10.0, median_width * 0.35))`；保留至少三条数值行支持的锚点；至少三行能映射到四个稳定锚点才命中。向左侧寻找与数值行垂直相邻的非数值 strip，只用于 `labeled_row_count` 和 bbox 扩展，不设为硬门槛。
 
 每个信号对象的 bbox 由命中的数值行和相邻左侧条带并集得到；没有左侧条带时仍以数值行并集作为 bbox。函数不得访问 `fitz.Page`，不得调用任何 `get_text`。
 
-- [ ] **步骤 3：在恢复 diagnostics 中记录信号。**
+- [x] **步骤 3：在恢复 diagnostics 中记录信号。**
 
 `recover_wireless_tables()` 在现有 `strips = merge_text_strips(spans)` 后计算信号，并将以下结构加入 diagnostics：
 
@@ -170,7 +170,7 @@ class NativeSpanPageSignal:
 
 这一步不改变 `candidate_runs`、`tagged_runs`、`_build_table()` 或最终 `recovery.tables`。
 
-- [ ] **步骤 4：运行信号单元测试确认通过。**
+- [x] **步骤 4：运行信号单元测试确认通过。**
 
 运行同任务 1 的两个新增测试；预期均 PASS。若反例误命中，只调整信号门槛或几何条件，不放宽到最终结构恢复。
 
@@ -186,7 +186,7 @@ class NativeSpanPageSignal:
 - 候选标记使用已有 `Table` 类型，`source="wireless_page_signal"`、`rows=0`、`cols=0`、`cells=[]`。
 - `_extract_model_tables()` 的 `wired_tables` 过滤继续只接受 `source == "line_projection"`。
 
-- [ ] **步骤 1：在文本对齐候选为空且信号命中时追加标记。**
+- [x] **步骤 1：在文本对齐候选为空且信号命中时追加标记。**
 
 保留现有 `line_tables`、英文 zebra 和 `_extract_via_text_alignment()` 顺序，在其后增加等价逻辑：
 
@@ -224,11 +224,11 @@ if (
 
 生产代码应在 bbox 字段不完整或类型异常时把标记视为未命中，不让诊断数据异常绕过候选门控；这个保护只包围标记转换，不改变已有恢复异常处理。
 
-- [ ] **步骤 2：验证标记只触发模型，不进入最终结果。**
+- [x] **步骤 2：验证标记只触发模型，不进入最终结果。**
 
 让 fake detector 返回一个 `model` 表格，断言 `extract()` 调用模型一次、返回模型表格；再让 fake detector 返回空列表，断言结果为空而不是 `wireless_page_signal`。保留既有 `test_rule_miss_does_not_call_model` 和 wired 优先测试。
 
-- [ ] **步骤 3：运行规则候选和无线相关测试。**
+- [x] **步骤 3：运行规则候选和无线相关测试。**
 
 运行：
 
@@ -247,19 +247,19 @@ $env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'
 - 检查：`fix/zh_all_table_pages.pdf` 页面索引 `983`
 - 输出：新的独立目录 `output/page_983_rule_candidate_signal_20260902/`
 
-- [ ] **步骤 1：运行目标页面候选与模型回归。**
+- [x] **步骤 1：运行目标页面候选与模型回归。**
 
 使用项目单页解析入口只处理 0-based 索引 `983`，输出到上述新目录；检查候选不为空、模型确实执行，最终表格数量为两张，`source` 为 `wireless_span_recovery`，而不是 `wireless_page_signal`。
 
-- [ ] **步骤 2：同时检查结构化 JSON 和最终 PNG。**
+- [x] **步骤 2：同时检查结构化 JSON 和最终 PNG。**
 
 核对页面 JSON 中两张表的 bbox、行列和 Cell 数量，确认上下两张表未误并；核对最终 PNG 中模型框/表格边界未吸收页眉、续页文字或底部孤立数字。候选标记本身不应出现在最终表格 JSON。
 
-- [ ] **步骤 3：更新中文 changes.md。**
+- [x] **步骤 3：更新中文 changes.md。**
 
 在 `2026-09-02` 下追加根因、调用位置、判定条件、无 `words` 回读约束、测试命令、页面输出路径和最终表格 source/数量；不改写已有条目。
 
-- [ ] **步骤 4：运行完整相关回归并检查差异。**
+- [x] **步骤 4：运行完整相关回归并检查差异。**
 
 运行：
 
