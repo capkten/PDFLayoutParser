@@ -614,6 +614,30 @@ def test_rescue_header_only_leaf_band_rejects_a_parent_header_level():
     assert len(rescued) == len(bands)
 
 
+def test_rescue_header_only_leaf_band_uses_lowest_complete_candidate_level():
+    bands = [
+        {"id": 1, "x0": 10, "x1": 30, "support": 4, "y_support": 4},
+        {"id": 2, "x0": 90, "x1": 110, "support": 4, "y_support": 4},
+    ]
+    atoms = [
+        _atom("上层左", 10, 5, 30, 15, 1),
+        _atom("上层孤立标题", 45, 5, 65, 15, 2),
+        _atom("上层右", 90, 5, 110, 15, 3),
+        _atom("叶子左", 10, 25, 30, 35, 4),
+        _atom("叶子空列", 48, 25, 68, 35, 5),
+        _atom("叶子右", 90, 25, 110, 35, 6),
+    ]
+
+    rescued = header_topology.rescue_header_only_leaf_bands(
+        atoms, bands, header_cutoff=40
+    )
+
+    header_only = [
+        band for band in rescued if band.get("kind") == "header_only_leaf"
+    ]
+    assert [(band["x0"], band["x1"]) for band in header_only] == [(48, 68)]
+
+
 def test_rescue_header_only_leaf_band_rejects_a_nearby_field_fragment():
     bands = [
         {"id": 1, "x0": 10, "x1": 30, "support": 4, "y_support": 4},

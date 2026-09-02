@@ -2,6 +2,25 @@
 
 ## 2026-09-02
 
+- 修复表格可视化调试模块（`table_visualizer.py`）中因 PDF 无空格粘连词导致单元格文字框漏画及表格索引倒置问题（如 `fix/zh_all_table_pages.pdf` 页面索引 `817`）。
+  - **根因与调用位置**：
+    1. 在 `src/hexai_pdf_parser/debug/table_visualizer.py` 的 `draw_tables_on_page()` 中，原先绘制单元格内部绿色文字框时仅依赖 PyMuPDF 的 `page.get_text("words")` 进行中心点 $x$ 坐标匹配。当 PDF 文本流中相邻列数字无空格粘连（如 `100.00` 与 `14,403,362.65` 被底层判定为单一词 `'100.0014,403,362.65'`）时，该粘连词的中心点漂移至右侧单元格，导致左侧 `100.00` 单元格匹配到的词列表为空，从而在 PNG 调试图中漏画内部绿色文字框（即便解析数据与蓝色物理网格完全正确），引发“可视化与实际结果不一致”的误解。
+    2. `src/hexai_pdf_parser/tables/table_extractor.py` 返回的表格列表未按页面物理垂直坐标严格排序，导致页面顶部跨页表格被标号为 `Table 2`、中部账龄表格被标号为 `Table 1`，产生视觉标号倒置。
+  - **修复判定条件**：
+    1. **原生字符级（rawdict chars）精确文字框匹配**：在 `table_visualizer.py` 的 `draw_tables_on_page()` 中，优先提取页面 `rawdict` 的非空白原生字符流 `page_chars`，按各单元格与网格边界进行逐字符中心点匹配并计算最小外包矩形 `Rect(min_x, min_y, max_x, max_y)`；在缺少 rawdict 时自动回退至 `page_words` 与 `cell.bbox` 裁剪，确保凡是有实际文本（`cell.text.strip()`）的非空单元格，均 100% 渲染对应绿色文字框；
+    2. **表格从上到下统一排序**：在 `table_extractor.py` 与 `table_visualizer.py` 中统一按 `(t.bbox.y0, t.bbox.x0)` 排序，使 JSON、Markdown 与可视化 PNG 的表格编号及顺序完全与阅读流自然对齐。
+  - **不回读 words 约束与调用链**：主提取解析器与可视化逻辑边界清晰，结构解析全程遵循原生字符流与矢量线框分词，不依赖分词器粗粒度词边界；可视化模块补齐字符级贴合能力，实现可视化与结构化交付数据的严格一致。
+  - **测试与页面验证**：在 `tests/test_table_visualizer.py` 中新增粘连跨列文本字符级可视化测试 `test_cell_text_box_drawn_for_glued_adjacent_words_via_chars`（`5 passed`）；使用 `fix/zh_all_table_pages.pdf` 页面索引 `817` 独立重跑至 `D:\codes\PDFLayoutParser\output\fix_visualizer_p817_20260902\`：
+    - 结构化数据：`pages/page-817.json`、`pages/page-817.md`
+    - 可视化渲染图：`tables/page-817.png`
+    核验确认：顶部表格被标记为 `Table 1 [line_projection] 7x9`，所有数据行中两列 `100.00`（Col 2、Col 6）均已精准绘制绿色文字选框，各单元格文字框与数值完全贴合，表格编号从上到下按 Table 1、Table 2、Table 3 自然排列，彻底消除视觉与实际数据不一致的问题。
+
+- 修复 `fix/zh_all_table_pages.pdf` 页面索引 `923` 中文无线表格因最右侧正文全空列缺少重复轨迹而整表漏检的问题。
+  - **根因与调用位置**：ML 模型已以 `0.9721` 置信度检测到 bbox `[83.5, 509.3, 505.5, 636.4]`。`src/hexai_pdf_parser/tables/wireless_structure/columns.py` 的 `infer_column_bands()` 要求普通列带至少具有两个 atom 和两个纵向层级的重复支持，因此只有表头、五行正文均为空的最右侧叶子列不能形成稳定列带。原 `rescue_header_only_note_bands()` 只处理首两个稳定列带间的附注编号引用，无法恢复尾部普通叶子表头；后续最近列分配将该表头与前一列表头同时放入第 4 列，产生 `R1C4` occupancy conflict，`recover_cells_from_region()` 返回空结构。
+  - **修复判定条件**：在 `src/hexai_pdf_parser/tables/wireless_structure/header_topology.py` 新增 `rescue_header_only_leaf_bands()`。只在 cutoff 内某一表头层以单列 atom 完整覆盖所有稳定叶子列、没有跨列父标题时，才把同层不与既有列带重叠且与左右相邻字段间距达到 `max(8pt, 1.25 * line_height)` 的 atom 恢复为 `kind="header_only_leaf"`。候选可位于列间或最左/最右端；不匹配“备注”等业务文字。调用位于 `recoverer.py` 的列带细化和既有附注列恢复之后、`annotate_columns()` 之前。
+  - **结构约束**：普通列带的跨行支持门槛保持不变；父表头、表头外孤立说明及近邻字段片段均不得生成列。全流程只消费 native span、atom、列带、物理 Cell 和逻辑 Cell，不回读 `page.get_text("words")`，不回退 zebra 或 legacy 路径；补列后继续执行 occupancy conflict 检查，正文空槽由 `materialize_empty_cells()` 逐格生成独立 `1x1` Cell。
+  - **测试与页面验证**：新增尾部空列、中间空列、父表头拒绝、近邻片段拒绝和完整网格集成测试；聚焦结构测试为 `58 passed`。页面独立重跑至 `D:\codes\PDFLayoutParser\output\fix_page_923_header_only_leaf_20260902\`，结果为 1 张 `wireless_span_recovery` 表、`6x5`、30 个 Cell，30/30 逻辑槽位唯一占用；最右列包含 1 个表头和 5 个独立空槽。结构化结果为 `pages\page-923.json`，最终 PNG 为 `tables\page-923.png`；视觉核验确认五列边界清晰、首行两行文字保持同一 Cell，表格 bbox 未吸收上下正文。
+
 - 修复 `fix/zh_all_table_pages.pdf` 页面索引 `915`（合并及公司资产负债表）等表格中末尾带冒号的分类标题（如 `流动负债：`、`非流动负债：`、`所有者权益：`）与下一行科目文本误并导致结构错位与横线穿透文字的问题。
   - **根因分析与调用位置**：
     在 `src/hexai_pdf_parser/tables/wireless_structure/text_runs.py` 的 `build_text_runs()` 阶段，`_is_wrapped_chain_pair()`（针对 row-interleaved 模式）与 `_is_columnar_native_block_line_pair()`（针对 columnar 模式）将原生 Span 组合为文本原子（Atom）时：

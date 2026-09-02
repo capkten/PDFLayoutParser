@@ -530,6 +530,7 @@ class TableExtractor:
         tables = [normalize_table_headers(t, page) for t in tables]
         tables = [normalize_complex_financial_header(t, page) for t in tables]
         tables = [self._clamp_table_to_page(t, page) for t in tables]
+        tables = sorted(tables, key=lambda t: (t.bbox.y0, t.bbox.x0))
 
         if self.debug_pipeline:
             self._last_pipeline_debug["text_alignment"] = copy.deepcopy(

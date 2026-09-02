@@ -185,7 +185,33 @@ def draw_tables_on_page(
             shape.finish(color=LAYOUT_TEXT_COLOR, width=1.0)
 
     # 2. Draw tables: cell grids + text inside cells + table borders
-    page_words = page.get_text("words") if tables else []
+    tables = sorted(tables, key=lambda t: (t.bbox.y0, t.bbox.x0))
+    page_words = []
+    page_chars: list[tuple[float, float, float, float, str]] = []
+    if tables:
+        try:
+            words = page.get_text("words")
+            if isinstance(words, list):
+                page_words = words
+        except Exception:
+            page_words = []
+
+        try:
+            rawdict = page.get_text("rawdict")
+            if isinstance(rawdict, dict):
+                for block in rawdict.get("blocks", []):
+                    for line in block.get("lines", []):
+                        for span in line.get("spans", []):
+                            for char in span.get("chars", []):
+                                c = char.get("c")
+                                bbox = char.get("bbox")
+                                if c and bbox and len(bbox) >= 4 and not str(c).isspace():
+                                    page_chars.append(
+                                        (float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3]), str(c))
+                                    )
+        except Exception:
+            page_chars = []
+
     for idx, table in enumerate(tables):
         tb = table.bbox
         table_rect = fitz.Rect(tb.x0, tb.y0, tb.x1, tb.y1)
@@ -197,25 +223,65 @@ def draw_tables_on_page(
             shape.finish(color=CELL_BORDER_COLOR, width=0.8)
 
             if cell.text.strip():
-                cell_words = [
-                    w for w in page_words
-                    if cell.bbox.x0 - 2.0 <= (w[0] + w[2]) / 2.0 <= cell.bbox.x1 + 2.0
-                    and cell.bbox.y0 - 2.0 <= (w[1] + w[3]) / 2.0 <= cell.bbox.y1 + 2.0
-                ]
-                if cell_words:
-                    wx0 = min(w[0] for w in cell_words)
-                    wy0 = min(w[1] for w in cell_words)
-                    wx1 = max(w[2] for w in cell_words)
-                    wy1 = max(w[3] for w in cell_words)
-                    text_rect = fitz.Rect(
-                        max(wx0, grid_rect.x0),
-                        max(wy0, grid_rect.y0),
-                        min(wx1, grid_rect.x1),
-                        min(wy1, grid_rect.y1),
+                bx0 = max(grid_rect.x0, cell.bbox.x0)
+                by0 = max(grid_rect.y0, cell.bbox.y0)
+                bx1 = min(grid_rect.x1, cell.bbox.x1)
+                by1 = min(grid_rect.y1, cell.bbox.y1)
+
+                text_rect: Optional[fitz.Rect] = None
+                if page_chars:
+                    matched_chars = [
+                        c for c in page_chars
+                        if bx0 - 1.5 <= (c[0] + c[2]) / 2.0 <= bx1 + 1.5
+                        and by0 - 1.5 <= (c[1] + c[3]) / 2.0 <= by1 + 1.5
+                    ]
+                    if matched_chars:
+                        wx0 = min(c[0] for c in matched_chars)
+                        wy0 = min(c[1] for c in matched_chars)
+                        wx1 = max(c[2] for c in matched_chars)
+                        wy1 = max(c[3] for c in matched_chars)
+                        candidate_rect = fitz.Rect(
+                            max(wx0, grid_rect.x0),
+                            max(wy0, grid_rect.y0),
+                            min(wx1, grid_rect.x1),
+                            min(wy1, grid_rect.y1),
+                        )
+                        if not candidate_rect.is_empty:
+                            text_rect = candidate_rect
+
+                if text_rect is None and page_words:
+                    cell_words = [
+                        w for w in page_words
+                        if cell.bbox.x0 - 2.0 <= (w[0] + w[2]) / 2.0 <= cell.bbox.x1 + 2.0
+                        and cell.bbox.y0 - 2.0 <= (w[1] + w[3]) / 2.0 <= cell.bbox.y1 + 2.0
+                    ]
+                    if cell_words:
+                        wx0 = min(w[0] for w in cell_words)
+                        wy0 = min(w[1] for w in cell_words)
+                        wx1 = max(w[2] for w in cell_words)
+                        wy1 = max(w[3] for w in cell_words)
+                        candidate_rect = fitz.Rect(
+                            max(wx0, grid_rect.x0),
+                            max(wy0, grid_rect.y0),
+                            min(wx1, grid_rect.x1),
+                            min(wy1, grid_rect.y1),
+                        )
+                        if not candidate_rect.is_empty:
+                            text_rect = candidate_rect
+
+                if text_rect is None or text_rect.is_empty:
+                    candidate_rect = fitz.Rect(
+                        max(cell.bbox.x0, grid_rect.x0),
+                        max(cell.bbox.y0, grid_rect.y0),
+                        min(cell.bbox.x1, grid_rect.x1),
+                        min(cell.bbox.y1, grid_rect.y1),
                     )
-                    if not text_rect.is_empty:
-                        shape.draw_rect(text_rect)
-                        shape.finish(color=LAYOUT_TEXT_COLOR, width=0.8)
+                    if not candidate_rect.is_empty:
+                        text_rect = candidate_rect
+
+                if text_rect and not text_rect.is_empty:
+                    shape.draw_rect(text_rect)
+                    shape.finish(color=LAYOUT_TEXT_COLOR, width=0.8)
 
         # 2b. Draw table outer rectangle
         shape.draw_rect(table_rect)
