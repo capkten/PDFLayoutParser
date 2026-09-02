@@ -427,7 +427,14 @@ def refine_leaf_bands(atoms: Sequence[dict[str, Any]], bands: Sequence[dict[str,
     # 附注行属于叶子列内容而非叶子列定义；否则同一附注被 PDF 拆成几段会反过来改变列带。
     header_without_notes = [item for item in header if not _is_note_reference_atom(item)]
     levels = _levels(header_without_notes)[-2:]
-    leaf_atoms = [item for item in header_without_notes if any(abs(_center_y(item) - level) < 0.5 for level in levels)]
+    leaf_atoms = [
+        item
+        for item in header_without_notes
+        if any(
+            abs(_center_y(item) - level) <= max(1.5, item.get("font_size", 10.0) * 0.15)
+            for level in levels
+        )
+    ]
     refined: list[dict[str, Any]] = []
     for band in bands:
         members = [item for item in leaf_atoms if horizontal_overlap(item, {"bbox": [band["x0"], 0.0, band["x1"], 1.0]}) > 0]

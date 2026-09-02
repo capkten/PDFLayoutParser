@@ -2,6 +2,24 @@
 
 ## 2026-09-02
 
+- 修复 `fix/zh_all_table_pages.pdf` 页面索引 `437` 与 `461` 中文无线表格因词内数字切断、占位符伪列误并与浮点 Level 容差截断导致的整表漏检问题。
+  - **根因分析与调用位置**：
+    1. **Page 437（印刷页码 47）顶部表格**：表头第 3 列包含排版混排的“未来 12 个月”（西文加粗数字 Arial-Bold 混排仿宋）换行接“内的预期信用损失率(%)”。在 `src/hexai_pdf_parser/tables/wireless_structure/text_runs.py` 的 `_can_join()` 中，因原逻辑对中文接纯数字盲目拦截，且 `_is_wrapped_chain_pair()` 强行卡 `left["bold"] == candidate["bold"]`，导致词内嵌入数字未能在同行与跨行合并，被切碎为 3 个独立 Atom；下游 `src/hexai_pdf_parser/tables/wireless_structure/header_topology.py` 的 `_infer_complete_physical_leaf_span()` 误将碎片判为跨全表 5 列的大表头，引发网格多重占用冲突并整表丢弃。
+    2. **Page 461（印刷页码 71）顶部表格**：父表头“持股比例（%）”下分“直接”与“间接”。“直接”列为数字 `100.00`，“间接”列全为会计占位符 `--`。`_coalesce_right_aligned_sibling_leaves()` 原先仅通过正则 `\d` 检查数字轨道，将全为 `--` 的合法子列误判为空白伪列强行与“直接”列合并，造成多重占用冲突。
+    3. **Page 461 中部表格**：父表头“持股比例(%)”下分“直接”与“间接”。`_split_by_lowest_header_children()` 与 `refine_leaf_bands()` 在匹配 `_levels()` 聚类均值时采用了过窄的 `< 0.5pt` 绝对容差，偏差为 0.56pt 的“直接”与“间接”被过滤剔除，父表头未被拆分，引发占位冲突。
+  - **修复判定条件**：
+    1. 在 `text_runs.py` 中增强 `_can_join()` 词内数字识别：当中文遇纯数字时，若在同一 `native_line` 内右侧紧随中文字符（如 `"未来"` + `"12"` + `"个月"`），允许连接；在 `_is_wrapped_chain_pair()` 中以段落主体字重为基准进行字重兼容校验；
+    2. 在 `_coalesce_right_aligned_sibling_leaves()` 中增加非首叶子列数据保护：只要任一叶子列在正文中具有非空数据（包括 `--` 等占位符或文本），一票否决伪列合并；
+    3. 在 `_split_by_lowest_header_children()` 与 `refine_leaf_bands()` 中将固定 `< 0.5pt` 放宽为与 `_levels()` 兼容的动态容差 `max(1.5, font_size * 0.15)`；
+    4. 在 `_infer_complete_physical_leaf_span()` 中增加叶子层数据行排除：若叶子层包含 `--` 占位符或纯数值，判定为正文数据行而非表头叶子层，拒绝推断表头跨度。
+  - **不回读 words 约束**：全流程严格基于 `native span`、`atom`、列带与逻辑网格拓扑决策，不回读 `page.get_text("words")`，不回退 legacy 或 zebra 路径，严格保持 0 Occupancy Conflict 契约与空槽位物化。
+  - **测试与页面验证**：新增 `tests/test_page_437_461_table_recovery.py` 回归测试（6 项全通过），全量表格与无线测试 234 项全量通过（`234 passed`）。独立重跑页面索引 `437` 至 `output/fix_rerun_page_437_20260902/`，成功恢复全部 3 张无线表格（`6x5`、`14x5`、`3x6`）；独立重跑页面索引 `461` 至 `output/fix_rerun_page_461_20260902/`，成功恢复全部 3 张无线表格（`10x7`、`4x7`、`5x3`）；视觉核验最终 PNG 确认表头与单元格网格完全规整对齐，0 Occupancy Conflict。
+
+- 修复页面索引 `185` 无线表格中 `清远市新城`、`B30`、`号开发用土地` 被拆成多个 atom 的问题。
+  - **根因与调用位置**：`src/hexai_pdf_parser/tables/wireless_structure/text_runs.py` 的 `build_text_runs()` 在 `_can_join()` 中使用 `_join_gap_limit()` 判定同一 native line 的相邻 Span。该区域的常规字距统计为 `normal_gap=0.0`，旧上限被压为 `1.5pt`；但 `清远市新城` 到 `B30` 的真实间距为约 `2.64pt`，且三段来自同一 block/line、flow 连续、字号均为 `10.5pt`。
+  - **修复判定条件**：对 CJK 与西文相邻且仍处于同一 native line 的 Span，使用 `min(0.8 * 字号, max(3.5pt, 0.35 * 字号))` 作为混排最小间距上限；本例为 `3.675pt`，因此 `2.64pt` 通过，后续 `B30` 到 `号开发用土地` 的 `0pt` 间距也连续合并。该规则仍要求 native source position 连续，不以同一列带或同一槽位作为合并依据。
+  - **约束与验证**：合并只发生在 native span 到 atom 阶段，继续只消费 native span 派生信息，不回读 `page.get_text("words")`，不进入 `extract_zebra()` 或 legacy 文本重建。新增真实间距回归用例；无线结构相关测试为 `62 passed`，真实页面 atom 为 `清远市新城B30号开发用土地`，来源为 `S46/S47/S48`。页面级结果暂不据此宣称恢复，后续仍需单独处理该页的 `合计` 同槽位冲突。
+
 - 修复中文无线表格分散对齐（Kerning）表头误拆分子列与正文页码割裂问题（如 `fix/zh_all_table_pages.pdf` 页面索引 `621`）。
   - **根因与调用位置**：
     1. 在 `src/hexai_pdf_parser/tables/wireless_structure/header_topology.py` 的 `refine_leaf_bands()` -> `_split_by_lowest_header_children()` 中，当表头存在末级单行分散单字（如“页” $x=[470.0, 484.1]$ 与“次” $x=[498.1, 512.2]$）时，原逻辑盲目将单行文字间隙判定为多级子表头，并在中点 $x=491.1$ 强制将父列带切成两列。而下方正文数据行全为单列页码（如 `1-6`、`11-12`、`19-124`），该切割线直接穿透所有页码中点，导致不同宽度的页码在 Col 3 与 Col 4 之间左右交错，空单元格物化导致大量页码在单列视角下呈现缺失。
