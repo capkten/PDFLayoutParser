@@ -159,3 +159,33 @@ def test_prune_sparse_alignment_band_keeps_columns_separated_by_normal_gap():
     result = columns.prune_sparse_alignment_artifact_bands(atoms, bands)
 
     assert len(result) == len(bands) == 4
+
+
+def test_infer_column_bands_excludes_sparse_left_section_title():
+    atoms = [
+        # Column 1 items
+        _atom("短期借款", 120, 10, 150),
+        _atom("应付账款", 120, 30, 150),
+        _atom("应付票据", 120, 50, 150),
+        # Single wide item spanning across col 1 into col 2
+        _atom("以公允价值计量且其变动计入当期损益的金融负债", 120, 20, 275),
+        # Column 2 (note column)
+        _atom("附注", 260, 10, 285),
+        _atom("注释1", 260, 30, 285),
+        _atom("注释2", 260, 50, 285),
+        # Column 3 (amount column)
+        _atom("100.00", 320, 10, 360),
+        _atom("200.00", 320, 30, 360),
+        _atom("300.00", 320, 50, 360),
+    ]
+    region = BBox(110, 0, 400, 70)
+
+    bands = infer_column_bands(atoms, region)
+
+    assert len(bands) == 3
+    assert [(band["x0"], band["x1"]) for band in bands] == [
+        (120, 150),
+        (260, 285),
+        (320, 360),
+    ]
+

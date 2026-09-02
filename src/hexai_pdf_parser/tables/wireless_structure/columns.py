@@ -57,6 +57,7 @@ def infer_column_bands(atoms: Sequence[dict[str, Any]], region: BBox) -> list[di
         for item in atoms
         if item["bbox"][2] - item["bbox"][0] < (region.x1 - region.x0) * 0.86
         and not _is_wide_header(item, region)
+        and not is_sparse_left_section_title(item, atoms, region)
     ]
     components: list[list[dict[str, Any]]] = []
     for atom in sorted(candidates, key=lambda item: item["bbox"][0]):

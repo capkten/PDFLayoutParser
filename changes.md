@@ -2,6 +2,11 @@
 
 ## 2026-09-02
 
+- 修复 `fix/zh_all_table_pages.pdf` 页面索引 `586` 中文无线表格因单行跨列超长项目（`以公允价值计量且其变动计入当期损益的金融负债`）污染列带推断导致的列合并与 Occupancy Conflict 漏表问题。
+  - **根因与调用位置**：第 586 页为 45 行 × 5 列的资产负债表大表（含项目列、附注列、3期金额列）。表内第 4 行为单行超长科目 `以公允价值计量且其变动计入当期损益的金融负债`（$x=[120.1, 273.3]$），该行附注列为空，文本横向跨越并延伸至附注列左界（$x=268.7$）。原 `src/hexai_pdf_parser/tables/wireless_structure/columns.py` 的 `infer_column_bands()` 在聚类初始列带时未排除左侧独立的跨列长项目，导致项目列与附注列被错误合并为一个巨型列带（`Band 1: [112.7, 289.6]`），随后的网格划分将项目与附注分配至同一网格槽位触发 Occupancy Conflict 并整表丢弃。
+  - **修复判定条件**：在 `infer_column_bands()` 的聚类候选过滤中增加 `not is_sparse_left_section_title(item, atoms, region)` 判定，排除单行跨列长项目对初始列带 X 投影骨架的污染。
+  - **约束与验证**：不回读 `page.get_text("words")`，不回退 legacy 路径。全量无线测试组件 120 passed。页面级提取结果从 0 表恢复为 1 张 45 行 × 5 列、225 槽位的完整资产负债表大表，0 Occupancy Conflict，可视化 PNG 经核验 5 列清晰分离、长文本与附注列无碰撞。
+
 - 修复 `fix/zh_all_table_pages.pdf` 页面索引 `482` 中文无线表格因首列双列竖排（`被-投`、`资-单`、`位` 及企业名称）导致伪列割裂与 Occupancy Conflict 漏表问题。
   - **根因与调用位置**：第 482 页首列（`被投资单位` 表头及 `①联营企业 河南泓淇光电子产业基金合伙企业（有限合伙）`）排版为左右两列交织竖排，在 PDF 文本流中拆分为同 block 内不同渲染行的单字。原 `src/hexai_pdf_parser/tables/wireless_structure/merged_cells.py` 的 `_same_slot_single_cjk()` 强制要求 `source_line_start` 完全相等，导致同行相邻单字无法合并，在同一槽位产生多重占用冲突（如 `(8, 1)` 槽位 `①` 与 `联...` 冲突），最终被 `_has_occupancy_conflict()` 判定冲突而丢弃整表。
   - **修复判定条件**：
