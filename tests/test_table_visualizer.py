@@ -71,6 +71,59 @@ def test_visualization_normalizes_fresh_rotated_page(monkeypatch, tmp_path):
     assert calls and calls[0][0] == "normalize"
 
 
+def test_visualization_passes_page_type_to_visual_annotation(monkeypatch, tmp_path):
+    calls = []
+
+    class FakePixmap:
+        def save(self, path):
+            pass
+
+    class FakePage:
+        def get_text(self, mode):
+            return []
+
+        def new_shape(self):
+            class Shape:
+                def draw_rect(self, *_args):
+                    pass
+
+                def finish(self, **_kwargs):
+                    pass
+
+                def commit(self):
+                    pass
+
+            return Shape()
+
+        def get_pixmap(self, **_kwargs):
+            return FakePixmap()
+
+    class FakeDoc:
+        def __getitem__(self, _index):
+            return FakePage()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(table_visualizer.fitz, "open", lambda _source: FakeDoc())
+    monkeypatch.setattr(table_visualizer, "normalize_page_rotation", lambda _page: None)
+    monkeypatch.setattr(
+        table_visualizer,
+        "draw_page_type_label",
+        lambda _page, page_type: calls.append(page_type),
+        raising=False,
+    )
+
+    table_visualizer.render_table_visualization(
+        "scanned.pdf",
+        [],
+        str(tmp_path / "page.png"),
+        page_type="scanned",
+    )
+
+    assert calls == ["scanned"]
+
+
 def test_cell_text_box_is_clipped_to_cell_grid_for_broken_font_bbox():
     finishes = []
 

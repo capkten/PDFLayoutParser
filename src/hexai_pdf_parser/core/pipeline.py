@@ -39,6 +39,72 @@ _PROCESS_POOL = None
 _PROCESS_POOL_WORKERS = None
 
 
+def _run_scanned_page_pipeline(
+    pdf_doc: fitz.Document,
+    page: Page,
+    pdf_path: str,
+    pages_dir: str,
+    render_dpi: int,
+    output_dir,
+):
+    """Render and serialize a scanned page without native extraction."""
+    stage_totals: dict[str, float] = {}
+
+    def time_stage(stage: str, func):
+        start = perf_counter()
+        result = func()
+        elapsed = perf_counter() - start
+        stage_totals[stage] = stage_totals.get(stage, 0.0) + elapsed
+        return result
+
+    page.blocks = []
+    page.tables = []
+    page.images = []
+    page.seals = []
+    page.layout_elements = []
+
+    if output_dir is not None:
+        page.render = time_stage(
+            "render",
+            lambda: RenderEngine(
+                output_dir, render_dpi
+            ).render(pdf_path, page.index, page_type=page.page_type),
+        )
+
+        page_json_path = os.path.join(
+            pages_dir, f"page-{page.index:03d}.json"
+        )
+        time_stage(
+            "write_page_json",
+            lambda: JSONWriter().write_page(page, page_json_path),
+        )
+
+        page_md_path = os.path.join(
+            pages_dir, f"page-{page.index:03d}.md"
+        )
+        if os.path.exists(page_md_path):
+            os.remove(page_md_path)
+
+        tables_dir = os.path.join(output_dir, "tables")
+        os.makedirs(tables_dir, exist_ok=True)
+        table_vis_path = os.path.join(
+            tables_dir, f"page-{page.index:03d}.png"
+        )
+        time_stage(
+            "write_table_visualization",
+            lambda: render_table_visualization(
+                source=pdf_path,
+                tables=page.tables,
+                output_path=table_vis_path,
+                page_index=page.index,
+                dpi=render_dpi,
+                page_type=page.page_type,
+            ),
+        )
+
+    return stage_totals
+
+
 def _run_page_pipeline(
     pdf_doc: fitz.Document,
     page: Page,
@@ -73,6 +139,16 @@ def _run_page_pipeline(
 
     page_handle = pdf_doc[page.index]
     normalize_page_rotation(page_handle)
+
+    if page.page_type == "scanned":
+        return _run_scanned_page_pipeline(
+            pdf_doc=pdf_doc,
+            page=page,
+            pdf_path=pdf_path,
+            pages_dir=pages_dir,
+            render_dpi=render_dpi,
+            output_dir=output_dir,
+        )
 
     # a. Text extraction
     text_extractor = TextExtractor()
@@ -211,7 +287,11 @@ def _run_page_pipeline(
             "render",
             lambda: RenderEngine(
                 output_dir, render_dpi
-            ).render(pdf_path, page.index),
+            ).render(
+                pdf_path,
+                page.index,
+                page_type=page.page_type,
+            ),
         )
 
     # j. Per-page output
@@ -243,6 +323,7 @@ def _run_page_pipeline(
                 output_path=table_vis_path,
                 page_index=page.index,
                 dpi=render_dpi,
+                page_type=page.page_type,
             ),
         )
 

@@ -75,7 +75,11 @@ class PDFParser:
             return len(data) > 0
         if isinstance(data, Document):
             return any(
-                page.blocks or page.tables or page.images or page.layout_elements
+                page.page_type == "scanned"
+                or page.blocks
+                or page.tables
+                or page.images
+                or page.layout_elements
                 for page in data.pages
             )
         return True
@@ -268,7 +272,13 @@ class PDFParser:
             for page in document.pages:
                 if page_indices is not None and page.index not in page_indices:
                     continue
-                renders.append(engine.render(pdf_path, page.index))
+                renders.append(
+                    engine.render(
+                        pdf_path,
+                        page.index,
+                        page_type=page.page_type,
+                    )
+                )
             return renders
 
         return self._execute_result(_do, "pages rendered", "no pages rendered")

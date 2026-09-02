@@ -16,6 +16,7 @@ except ImportError:
 
 from hexai_pdf_parser.core.models import Table
 from hexai_pdf_parser.page_normalizer import normalize_page_rotation
+from hexai_pdf_parser.page_type_label import draw_page_type_label
 
 # ==============================================================================
 # 路径与参数配置区域（可直接在此修改路径）
@@ -184,7 +185,7 @@ def draw_tables_on_page(
             shape.finish(color=LAYOUT_TEXT_COLOR, width=1.0)
 
     # 2. Draw tables: cell grids + text inside cells + table borders
-    page_words = page.get_text("words")
+    page_words = page.get_text("words") if tables else []
     for idx, table in enumerate(tables):
         tb = table.bbox
         table_rect = fitz.Rect(tb.x0, tb.y0, tb.x1, tb.y1)
@@ -277,6 +278,7 @@ def render_table_visualization(
     output_path: str,
     page_index: Optional[int] = None,
     dpi: int = 200,
+    page_type: Optional[str] = None,
 ) -> str:
     """Render a PDF page with table detection overlays and save to output_path.
 
@@ -305,6 +307,7 @@ def render_table_visualization(
         # Draw directly on the provided page
         normalize_page_rotation(source)
         draw_tables_on_page(source, tables)
+        draw_page_type_label(source, page_type)
         pix = source.get_pixmap(matrix=matrix, alpha=False)
         pix.save(output_path)
         return output_path
@@ -318,6 +321,7 @@ def render_table_visualization(
         # coordinate system when reopening the source for the overlay.
         normalize_page_rotation(page)
         draw_tables_on_page(page, tables)
+        draw_page_type_label(page, page_type)
         pix = page.get_pixmap(matrix=matrix, alpha=False)
         pix.save(output_path)
         return output_path
@@ -419,6 +423,7 @@ def batch_visualize_directory(
 
                         # Page Preview
                         matrix = fitz.Matrix(dpi / 72.0, dpi / 72.0)
+                        draw_page_type_label(page_handle, page.page_type)
                         page_pix = page_handle.get_pixmap(matrix=matrix, alpha=False)
                         page_img_path = os.path.join(pages_dir, f"{pdf_stem}_page_{page_idx:03d}.png")
                         page_pix.save(page_img_path)
@@ -428,7 +433,11 @@ def batch_visualize_directory(
                         json_writer.write_page(page, page_json_path)
 
                         page_md_path = os.path.join(pages_dir, f"{pdf_stem}_page_{page_idx:03d}.md")
-                        md_writer.write_page(page, page_md_path)
+                        if page.page_type == "scanned":
+                            if os.path.exists(page_md_path):
+                                os.remove(page_md_path)
+                        else:
+                            md_writer.write_page(page, page_md_path)
 
                         # Single Page PDF
                         page_pdf_path = os.path.join(pages_dir, f"{pdf_stem}_page_{page_idx:03d}.pdf")
@@ -440,6 +449,7 @@ def batch_visualize_directory(
                         # Table Visualization with Score Badges
                         table_img_path = os.path.join(tables_dir, f"{pdf_stem}_page_{page_idx:03d}.png")
                         draw_tables_on_page(page_handle, page.tables)
+                        draw_page_type_label(page_handle, page.page_type)
                         table_pix = page_handle.get_pixmap(matrix=matrix, alpha=False)
                         table_pix.save(table_img_path)
 
