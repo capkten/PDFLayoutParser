@@ -27,7 +27,6 @@ def _same_slot(left: dict[str, Any], right: dict[str, Any]) -> bool:
 def _same_native_inline(left: dict[str, Any], right: dict[str, Any]) -> bool:
     return (
         left.get("source_blocks") == right.get("source_blocks")
-        and left.get("source_line_start") == right.get("source_line_start")
         and _native_continuous(left, right)
         and abs((left["bbox"][1] + left["bbox"][3]) / 2 - (right["bbox"][1] + right["bbox"][3]) / 2)
         <= max(2.0, min(left["font_size"], right["font_size"]) * 0.35)
@@ -50,19 +49,36 @@ def _same_slot_single_cjk(left: dict[str, Any], right: dict[str, Any]) -> bool:
     )
 
 
-def _is_left_shifted_single_cjk_continuation(
-    previous: dict[str, Any], candidate: dict[str, Any]
+def _is_left_shifted_cjk_continuation(
+    previous: dict[str, Any],
+    candidate: dict[str, Any],
+    row_columns: dict[int, set[int]],
 ) -> bool:
-    """Recognize a short wrapped tail that starts just left of a long line."""
+    """Recognize a wrapped tail or hanging-indent continuation that starts left of the previous line."""
     font_size = min(previous["font_size"], candidate["font_size"])
     previous_width = previous["bbox"][2] - previous["bbox"][0]
-    return (
-        _SINGLE_CJK.fullmatch(candidate["text"].strip()) is not None
-        and previous_width >= font_size * 4.0
-        and candidate["bbox"][0] < previous["bbox"][0]
-        and candidate["bbox"][2]
-        <= previous["bbox"][0] + max(2.0, font_size * 0.5)
-    )
+    if previous_width < font_size * 4.0:
+        return False
+    if candidate["bbox"][0] >= previous["bbox"][0]:
+        return False
+    candidate_text = candidate["text"].strip()
+    if (
+        _LIST_CONTINUATION.match(candidate_text)
+        or candidate_text.startswith(
+            ("1.", "2.", "3.", "4.", "5.", "(1)", "(2)", "(3)", "(4)", "(5)", "①", "②", "③")
+        )
+        or _VALUE_ONLY.fullmatch(candidate_text)
+    ):
+        return False
+    if (
+        _SINGLE_CJK.fullmatch(candidate_text)
+        and candidate["bbox"][2] <= previous["bbox"][0] + max(2.0, font_size * 0.5)
+    ):
+        return True
+    is_empty_witness = row_columns.get(candidate["row_start"]) == {candidate["col_start"]}
+    if is_empty_witness:
+        return True
+    return False
 
 
 def _merge_pair(left: dict[str, Any], right: dict[str, Any], joiner: str, kind: str) -> dict[str, Any]:
@@ -80,6 +96,9 @@ def _merge_pair(left: dict[str, Any], right: dict[str, Any], joiner: str, kind: 
     merged["source_blocks"] = sorted(set(left.get("source_blocks", [])) | set(right.get("source_blocks", [])))
     merged["source_line_start"] = min(left.get("source_line_start"), right.get("source_line_start"))
     merged["source_line_end"] = max(left.get("source_line_end"), right.get("source_line_end"))
+    merged["source_position_known"] = bool(left.get("source_position_known", False)) and bool(
+        right.get("source_position_known", False)
+    )
     merged["merged_from"] = list(left.get("merged_from", [left["candidate_label"]])) + list(right.get("merged_from", [right["candidate_label"]]))
     merged["cell_id"] = "+".join(merged["merged_from"])
     merged["merge_kind"] = kind
@@ -117,7 +136,10 @@ def merge_same_slot_fragments(
 
 
 def _can_merge_multiline(
-    previous: dict[str, Any], candidate: dict[str, Any], row_columns: dict[int, set[int]]
+    previous: dict[str, Any],
+    candidate: dict[str, Any],
+    row_columns: dict[int, set[int]],
+    output_mode: str,
 ) -> bool:
     if previous["col_start"] != candidate["col_start"] or previous["col_end"] != candidate["col_end"]:
         return False
@@ -127,6 +149,17 @@ def _can_merge_multiline(
     }
     if not same_or_adjacent_row or not _native_continuous(previous, candidate):
         return False
+    if output_mode == "columnar":
+        previous_blocks = previous.get("source_blocks", [])
+        candidate_blocks = candidate.get("source_blocks", [])
+        if not (
+            previous.get("source_position_known", False)
+            and candidate.get("source_position_known", False)
+            and len(previous_blocks) == 1
+            and previous_blocks == candidate_blocks
+            and candidate["source_line_start"] == previous["source_line_end"] + 1
+        ):
+            return False
     previous_center_y = (previous["bbox"][1] + previous["bbox"][3]) / 2.0
     candidate_center_y = (candidate["bbox"][1] + candidate["bbox"][3]) / 2.0
     if candidate_center_y <= previous_center_y:
@@ -144,7 +177,7 @@ def _can_merge_multiline(
     minimum_width = min(previous["bbox"][2] - previous["bbox"][0], candidate["bbox"][2] - candidate["bbox"][0])
     if (
         _horizontal_overlap(previous["bbox"], candidate["bbox"]) < minimum_width * 0.45
-        and not _is_left_shifted_single_cjk_continuation(previous, candidate)
+        and not _is_left_shifted_cjk_continuation(previous, candidate, row_columns)
     ):
         return False
     gap = candidate["bbox"][1] - previous["bbox"][3]
@@ -152,7 +185,10 @@ def _can_merge_multiline(
 
 
 def merge_multiline_cells(
-    cells: Sequence[dict[str, Any]], header_cutoff: float | None
+    cells: Sequence[dict[str, Any]],
+    header_cutoff: float | None,
+    *,
+    output_mode: str = "row_interleaved",
 ) -> list[dict[str, Any]]:
     """Merge only evidence-complete same-column Chinese continuation chains."""
     del header_cutoff  # Header topology is handled by the dedicated topology layer.
@@ -166,7 +202,9 @@ def merge_multiline_cells(
     while pending:
         current = pending.pop(0)
         current["merged_from"] = list(current.get("merged_from", [current["candidate_label"]]))
-        while pending and _can_merge_multiline(current, pending[0], row_columns):
+        while pending and _can_merge_multiline(
+            current, pending[0], row_columns, output_mode
+        ):
             candidate = pending.pop(0)
             current = _merge_pair(current, candidate, "\n", "multiline_cell")
             current["row_end"] = candidate["row_end"]

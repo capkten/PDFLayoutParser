@@ -17,6 +17,7 @@ def _cell(text, *, flow, row, col=1, x0=10, y0=10, x1=40, y1=20, source_line=1):
         "source_blocks": [1],
         "source_line_start": source_line,
         "source_line_end": source_line,
+        "source_position_known": True,
         "font_size": 10,
         "bold": False,
         "script": "cjk",
@@ -50,6 +51,16 @@ def test_merge_same_slot_fragments_joins_native_inline_chinese_fragments():
     assert result[0]["span_refs"] == ["S1", "S2"]
 
 
+def test_merge_same_slot_fragments_joins_same_visual_line_from_split_native_lines():
+    left = _cell("FRASERS", flow=1, row=1, x0=10, x1=25, source_line=0)
+    right = _cell("PROPERTY", flow=2, row=1, x0=25, x1=40, source_line=1)
+
+    result = merge_same_slot_fragments([left, right], header_cutoff=None)
+
+    assert len(result) == 1
+    assert result[0]["text"] == "FRASERSPROPERTY"
+
+
 def test_merge_multiline_cells_requires_continuous_same_column_evidence():
     first = _cell("项目", flow=1, row=1, y0=10, y1=20, source_line=1)
     second = _cell("续写", flow=2, row=2, y0=22, y1=32, source_line=2)
@@ -60,6 +71,30 @@ def test_merge_multiline_cells_requires_continuous_same_column_evidence():
     assert result[0]["text"] == "项目\n续写"
     assert result[0]["row_end"] == 2
     assert result[0]["rowspan"] == 2
+
+
+def test_merge_multiline_cells_columnar_keeps_different_native_blocks_separate():
+    first = _cell("项目一", flow=1, row=1, y0=10, y1=20, source_line=1)
+    second = _cell("项目二", flow=2, row=2, y0=22, y1=32, source_line=2)
+    second["source_blocks"] = [2]
+
+    result = merge_multiline_cells(
+        [first, second], header_cutoff=None, output_mode="columnar"
+    )
+
+    assert [item["text"] for item in result] == ["项目一", "项目二"]
+
+
+def test_merge_multiline_cells_columnar_accepts_adjacent_lines_from_one_block():
+    first = _cell("项目", flow=1, row=1, y0=10, y1=20, source_line=1)
+    second = _cell("续写", flow=2, row=2, y0=22, y1=32, source_line=2)
+
+    result = merge_multiline_cells(
+        [first, second], header_cutoff=None, output_mode="columnar"
+    )
+
+    assert len(result) == 1
+    assert result[0]["text"] == "项目\n续写"
 
 
 def test_merge_multiline_cells_accepts_vertical_fragments_in_same_physical_row():
@@ -100,6 +135,34 @@ def test_merge_multiline_cells_accepts_left_shifted_single_cjk_continuation():
 
     assert len(result) == 1
     assert result[0]["text"] == "一年内到期的非流动资\n产"
+
+
+def test_merge_multiline_cells_accepts_multi_char_left_shifted_continuation():
+    first = _cell(
+        "长期应收款-融资租赁",
+        flow=1,
+        row=1,
+        x0=30,
+        y0=10,
+        x1=90,
+        y1=20,
+        source_line=1,
+    )
+    second = _cell(
+        "保证金",
+        flow=2,
+        row=2,
+        x0=15,
+        y0=22,
+        x1=28,
+        y1=32,
+        source_line=2,
+    )
+
+    result = merge_multiline_cells([first, second], header_cutoff=None)
+
+    assert len(result) == 1
+    assert result[0]["text"] == "长期应收款-融资租赁\n保证金"
 
 
 def test_merge_multiline_cells_keeps_left_shifted_independent_label_separate():
