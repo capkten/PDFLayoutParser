@@ -281,7 +281,38 @@ def test_hybrid_wired_table_preserves_body_colspan_without_conflict(monkeypatch)
     assert result.v_lines == wired.v_lines
 
 
+def test_hybrid_wired_table_rejects_recovery_when_body_has_no_multi_column_support(
+    monkeypatch,
+):
+    extractor = TableExtractor()
+    wired_cells = [
+        Cell("参数", 0, 0, BBox(0, 0, 100, 20)),
+        Cell("说明", 0, 1, BBox(100, 0, 200, 20)),
+        Cell("确定方法", 1, 0, BBox(0, 20, 100, 200)),
+        Cell("多段详细说明文字\n第一段\n第二段", 1, 1, BBox(100, 20, 200, 200)),
+        Cell("参数二", 2, 0, BBox(0, 200, 100, 220)),
+        Cell("正常值", 2, 1, BBox(100, 200, 200, 220)),
+    ]
+    wired = Table(
+        bbox=BBox(0, 0, 200, 220),
+        rows=3,
+        cols=2,
+        cells=wired_cells,
+        source="line_projection",
+    )
+    monkeypatch.setattr(
+        "hexai_pdf_parser.tables.table_extractor.recover_hybrid_body_cells",
+        lambda page, region, column_edges: (0, 0, []),
+    )
+
+    result = extractor._recover_hybrid_wired_table(object(), wired, "zh")
+    assert result is wired
+    assert result.source == "line_projection"
+    assert result.rows == 3
+
+
 def make_synthetic_text_alignment_pdf(
+
     path: str | Path,
     rows: list[tuple[float, list[tuple[float, str]]]],
     *,

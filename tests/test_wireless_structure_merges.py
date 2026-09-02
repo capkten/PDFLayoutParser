@@ -297,3 +297,15 @@ def test_merge_same_slot_fragments_does_not_join_wide_multi_character_labels():
     result = merge_same_slot_fragments([left, right], header_cutoff=None)
 
     assert [item["text"] for item in result] == ["比例", "坏账准备"]
+
+
+def test_merge_same_slot_fragments_joins_two_character_spread_cjk_pair():
+    left = _cell("目", flow=1, row=1, x0=250.7, x1=264.7)
+    right = _cell("录", flow=2, row=1, x0=299.8, x1=313.8, source_line=1)
+    left["font_size"] = right["font_size"] = 14.05
+
+    result = merge_same_slot_fragments([left, right], header_cutoff=None)
+
+    assert len(result) == 1
+    assert result[0]["text"] == "目录"
+

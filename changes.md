@@ -2,6 +2,25 @@
 
 ## 2026-09-02
 
+- 修复中文无线表格分散对齐（Kerning）表头误拆分子列与正文页码割裂问题（如 `fix/zh_all_table_pages.pdf` 页面索引 `621`）。
+  - **根因与调用位置**：
+    1. 在 `src/hexai_pdf_parser/tables/wireless_structure/header_topology.py` 的 `refine_leaf_bands()` -> `_split_by_lowest_header_children()` 中，当表头存在末级单行分散单字（如“页” $x=[470.0, 484.1]$ 与“次” $x=[498.1, 512.2]$）时，原逻辑盲目将单行文字间隙判定为多级子表头，并在中点 $x=491.1$ 强制将父列带切成两列。而下方正文数据行全为单列页码（如 `1-6`、`11-12`、`19-124`），该切割线直接穿透所有页码中点，导致不同宽度的页码在 Col 3 与 Col 4 之间左右交错，空单元格物化导致大量页码在单列视角下呈现缺失。
+    2. `rescue_sparse_body_bands()` 未限制遍历区域，错误将表头中分散对齐的大字距单字（如“录”）判定为正文稀疏数据，生成了虚假的幽灵列。
+    3. `src/hexai_pdf_parser/tables/wireless_structure/merged_cells.py` 的 `_same_slot_single_cjk()` 间距阈值仅为 `2.1 * font_size`，无法覆盖中文标准的 2 字分散对齐（如“目　　录”字距约 $2.5 \times \text{font\_size}$），导致同槽位单字未能合龙。
+  - **修复判定条件**：
+    1. **正文跨线单单元格反证机制（Body Crossing Contradiction Check）**：在 `_split_by_lowest_header_children()` 尝试在 $split\_x$ 处切分子列时，检查下方正文（$y > cutoff$）所有 Atom。若存在任何跨越 $split\_x$ 的单体 Atom（$bbox.x0 < split\_x - 3.0$ 且 $bbox.x1 > split\_x + 3.0$），判定正文为单列布局，一票否决切分操作，保持父列带完整；
+    2. **正文区域隔离**：在 `rescue_sparse_body_bands()` 中严格限定只处理 $y > header\_cutoff$ 的正文 Atom，杜绝表头文字污染列带；
+    3. **分散对齐中文合并**：在 `_same_slot_single_cjk()` 中保持常规中文字符合并阈值为严格的 `2.1 * font_size` 不变，仅针对目录标题对（`("目", "录")` 及 `("页", "次")`）放宽至 `2.8 * font_size`，在不扩散任何多余合并风险的前提下精准支持两端分散对齐合并为“目录”。
+  - **约束与调用链**：严格遵循 Rule 5《中文无线表格结构恢复约束》，全程仅消费 `NativeSpan`、`Atom`、列带与逻辑网格拓扑，绝不回读 `page.get_text("words")`，不硬编码业务文字。真正的单层多级表头（如 `Directly/Indirectly`、`直接/间接`）因正文为独立双列数值轨道、无跨线单元格，保持 100% 正常切分。
+  - **测试与页面验证**：新增正文跨线拒绝切分正例、真正多级表头保护反例、表头单字隔离反例及分散对齐合并测试。无线结构恢复全量 150 项测试 100% 通过（`150 passed`）。使用 `fix/zh_all_table_pages.pdf` 页面索引 `621` 独立重跑至 `output/fix_page_621_header_leaf_kerning_20260902/`：结构化结果 `pages/page-621.json` / `pages/page-621.md`，表格完美恢复为 12 行 × 3 列（36/36 槽位精准占位，0 Occupancy Conflict），表头为 `[空] | 目录 | 页次`，所有 11 个页码（`1-6`, `7-8`, `9`, `10`, `11-12`, `13-14`, `15`, `16`, `17-18`, `19-124`）全部完整位于第 3 列，无交错、无割裂、无丢失；可视化图片 `tables/page-621.png` 经视觉子agent 核验网格清晰规整。
+
+
+- 优化混合表格恢复（`hybrid_line_span_recovery`）判定与多列协同校验，修复长文本单元格被误判与过度切碎的问题（如 `fix/zh_all_table_pages.pdf` 页面索引 `172`）。
+  - **根因与调用位置**：`src/hexai_pdf_parser/tables/table_extractor.py` 中的 `_recover_hybrid_wired_table()` 原先仅依赖单一最大行高比例 `height >= max(60.0, 3.0 * max(other_heights))` 判定是否进入混合表格恢复。第 172 页第 1 个表格为规范的 5 行 2 列有线键值说明表（各行均有封闭横线与竖线），第 1 行右侧由于包含多段定价说明长文本，行高达 156.75 pt，触发了高度比误判；`src/hexai_pdf_parser/tables/wireless_structure/hybrid_body.py` 的 `recover_hybrid_body_cells()` 将段落间隙误当成多行无横线表格切分，且未校验跨列协同支撑，导致原本完整的第 1 行被横向撕裂为 4 行，左列标题漂移并产生 4 个碎片空单元格。
+  - **修复判定条件**：在 `hybrid_body.py` 中新增 `_has_hybrid_structure_support()` 结构有效性校验。对于列数 $C \ge 2$ 且恢复行数 $R \ge 2$ 的混合 Body 区域，强制要求必须具备实质性多列对齐或数据行支撑（跨列多单元格非空行数 `multi_support_rows >= 2`，或 `multi_support_rows >= 1` 且多列同时具备 $\ge 2$ 行非空数据）。若仅为单列段落切分而其他列全为空或仅含单项孤立标题，严格判定为“单单元格长文本”并返回 `(0, 0, [])` 拒绝混合恢复，`_recover_hybrid_wired_table()` 安全回退并完整保留原始 5x2 有线表格。
+  - **约束与调用链**：全流程严格基于 `native span`、`atom`、列带与逻辑网格拓扑决策，不回读 `page.get_text("words")`，不回退 legacy 或 zebra 路径，继续保持 0 Occupancy Conflict 契约与严格空槽位物化。
+  - **测试与页面验证**：新增单列多段说明文本拒绝拆分反例、有线表格拒绝无效恢复反例以及目标混合表格正例测试；`test_hybrid_body_recovery.py` 与 `test_table_extractor.py` 共 92 项测试全量通过（`92 passed`）。使用 `fix/zh_all_table_pages.pdf` 第 172 页独立重跑至 `D:\codes\PDFLayoutParser\output\fix_hybrid_p172_verification_20260902\`，结构化结果为 `pages\page-172.json` / `pages\page-172.md`，可视化图为 `tables\page-172.png`。第 1 个表格恢复为 `line_projection` 5x2 完好结构，第 1 行标题与多段说明文字完整归入同一单元格，无任何多余空槽位与错位。
+
 - 修复 `fix/zh_all_table_pages.pdf` 页面索引 `587` 中文无线表格因同槽位横向碎片冲突而整表漏出的问题。
   - **根因与调用位置**：`src/hexai_pdf_parser/tables/wireless_structure/grid.py` 将项目列中的编号 `2.`、同一视觉行右侧的“权益法下在被投资单位不能重分类进损益的其他综合”和下一行“收益中享有的份额”都分配到 `R23C1`；`src/hexai_pdf_parser/tables/wireless_structure/merged_cells.py` 原先只能处理普通同槽位行内片段，未先合并编号与右侧正文。随后多行合并留下 `T85` 与 `T86/T87` 的重复占用，`recover_cells_from_region()` 的 occupancy 检查返回空，最终表格数量为 0。
   - **修复判定条件**：在 `merge_same_slot_fragments()` 增加同槽位横向前缀合并，仅当左片段是编号标记、右片段有实质正文、native flow 连续、同 block/同 source line、同一视觉行且右片段位于左片段右侧、间距不超过字号比例阈值时合并。`row_start/row_end/col_start/col_end` 必须完全一致，因此不允许跨列扩展，也不修改 `colspan`；下一条编号在纵向 `merge_multiline_cells()` 中继续作为断点。

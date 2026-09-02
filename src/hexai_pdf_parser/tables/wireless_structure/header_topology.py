@@ -40,6 +40,12 @@ _NOTE_REFERENCE = re.compile(
     re.IGNORECASE,
 )
 _CHECKMARK = re.compile(r"^\s*[\u2713\u2714\u2611]\s*$")
+_NUMERIC = re.compile(r"^[+-]?(?:\d{1,3}(?:,\d{3})*|\d+)(?:\.\d+)?%?$")
+_PLACEHOLDER = re.compile(r"^(?:--+|——+|—+|-+|/|\*+|NA|N/A|\.)$", re.IGNORECASE)
+
+
+def _is_placeholder(item: dict[str, Any]) -> bool:
+    return _PLACEHOLDER.fullmatch(str(item.get("text", "")).strip()) is not None
 
 
 def _is_temporal_leaf_header(atom: dict[str, Any]) -> bool:
@@ -342,7 +348,10 @@ def _remove_empty_overlapping_leaf_bands(
 
 
 def _split_by_lowest_header_children(
-    header: Sequence[dict[str, Any]], band: dict[str, Any]
+    header: Sequence[dict[str, Any]],
+    band: dict[str, Any],
+    atoms: Sequence[dict[str, Any]] | None = None,
+    cutoff: float | None = None,
 ) -> list[dict[str, Any]]:
     """Use sibling labels on one lowest header row as leaf-column evidence.
 
@@ -354,7 +363,7 @@ def _split_by_lowest_header_children(
     for level in reversed(_levels(header)):
         row = [
             item for item in header
-            if abs(_center_y(item) - level) < 0.5
+            if abs(_center_y(item) - level) <= max(1.5, item.get("font_size", 10.0) * 0.15)
             and _meaningful_header_band_overlap(item, band)
         ]
         groups = _components(row)
@@ -367,6 +376,28 @@ def _split_by_lowest_header_children(
         ]
         if any(right - left < 6.0 for left, right in zip(centers, centers[1:])):
             continue
+
+        if atoms is not None and cutoff is not None:
+            body_atoms = [
+                item for item in atoms
+                if _center_y(item) > cutoff
+                and item["bbox"][0] >= band["x0"] - 2.0
+                and item["bbox"][2] <= band["x1"] + 2.0
+            ]
+            has_crossing = False
+            for index in range(len(groups) - 1):
+                split_x = (centers[index] + centers[index + 1]) / 2.0
+                for body_atom in body_atoms:
+                    if (
+                        body_atom["bbox"][0] < split_x - 3.0
+                        and body_atom["bbox"][2] > split_x + 3.0
+                    ):
+                        has_crossing = True
+                        break
+                if has_crossing:
+                    break
+            if has_crossing:
+                continue
 
         children: list[dict[str, Any]] = []
         for index, group in enumerate(groups):
@@ -410,7 +441,7 @@ def refine_leaf_bands(atoms: Sequence[dict[str, Any]], bands: Sequence[dict[str,
             continue
         # Some multi-level headers expose their leaf labels on a single row.
         # Split those leaves before falling back to repeated numeric body values.
-        header_children = _split_by_lowest_header_children(header, band)
+        header_children = _split_by_lowest_header_children(header, band, atoms=atoms, cutoff=cutoff)
         refined.extend(header_children if len(header_children) >= 2 else [dict(band)])
     refined.sort(key=lambda item: item["x0"])
     for index, band in enumerate(refined, 1):
@@ -452,7 +483,20 @@ def _coalesce_right_aligned_sibling_leaves(
         right_edges = [atom["bbox"][2] for atom in values]
         if max(right_edges) - min(right_edges) > 2.0:
             continue
-        first = min(group, key=lambda band: band["x0"])
+        first_leaf = min(group, key=lambda band: band["x0"])
+        non_first_leaves = [b for b in group if b is not first_leaf]
+        has_non_first_data = any(
+            _center_y(atom) > cutoff
+            and str(atom.get("text", "")).strip()
+            and any(
+                b["x0"] - 1.0 <= (atom["bbox"][0] + atom["bbox"][2]) / 2.0 <= b["x1"] + 1.0
+                for b in non_first_leaves
+            )
+            for atom in atoms
+        )
+        if has_non_first_data:
+            continue
+        first = first_leaf
         replacements[id(first)] = {
             **first,
             "x0": parent_x0,
@@ -514,7 +558,11 @@ def rescue_sparse_body_bands(atoms: Sequence[dict[str, Any]], bands: Sequence[di
             {**band, "x0": split_x, "kind": "numeric_leaf"},
         ))
     rescued = split_bands
-    for atom in atoms:
+    body_atoms = [
+        atom for atom in atoms
+        if header_cutoff is None or _center_y(atom) > header_cutoff
+    ]
+    for atom in body_atoms:
         # 破折号是金额列的空值表示。它可落在相邻列边界附近，但单独不能
         # 证明存在一条新的逻辑列；否则会把同一金额列拆成极窄的伪列带。
         if re.fullmatch(r"[\s\-\u2013\u2014\u2212]+", str(atom.get("text", ""))):
@@ -551,6 +599,7 @@ def rescue_sparse_body_bands(atoms: Sequence[dict[str, Any]], bands: Sequence[di
     for index, band in enumerate(rescued, 1):
         band["id"] = index
     return rescued
+
 
 
 def rescue_header_only_note_bands(
@@ -724,6 +773,8 @@ def _infer_complete_physical_leaf_span(
     candidates: list[tuple[float, list[int]]] = []
     for level in _levels(lower):
         tier = [item for item in lower if abs(_center_y(item) - level) < 1.2]
+        if any(_is_placeholder(item) or _NUMERIC.fullmatch(str(item.get("text", "")).strip()) for item in tier):
+            continue
         assigned: list[tuple[dict[str, Any], int]] = []
         for item in tier:
             overlaps = [

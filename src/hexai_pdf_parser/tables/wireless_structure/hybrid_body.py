@@ -163,6 +163,48 @@ def recover_hybrid_body_cells(
         )
         if _has_occupancy_conflict(logical_cells):
             return 0, 0, []
-        return _to_cells(logical_cells)
+        row_count, col_count, cells = _to_cells(logical_cells)
+        if not _has_hybrid_structure_support(cells, row_count, col_count):
+            return 0, 0, []
+        return row_count, col_count, cells
     except Exception:
         return 0, 0, []
+
+
+def _has_hybrid_structure_support(
+    cells: Sequence[Cell], row_count: int, col_count: int
+) -> bool:
+    """Validate that recovered cells have true multi-row structural support.
+
+    A genuine multi-row body in a multi-column table (col_count >= 2) must have
+    synchronized multi-column alignment across rows or multiple distinct data rows
+    supported by peer columns. A single column's multiline paragraph must not be
+    fractured into pseudo-rows with empty peer cells.
+    """
+    if row_count < 2 or col_count < 2:
+        return True
+
+    non_empty_cells = [c for c in cells if c.text and c.text.strip()]
+    if not non_empty_cells:
+        return False
+
+    multi_support_rows = 0
+    for r in range(row_count):
+        row_cells = [c for c in non_empty_cells if c.row_index == r]
+        col_indices = {c.col_index for c in row_cells}
+        has_colspan = any(c.colspan >= 2 for c in row_cells)
+        if len(col_indices) >= 2 or has_colspan:
+            multi_support_rows += 1
+
+    cols_with_multiple_rows = sum(
+        1
+        for col_idx in range(col_count)
+        if sum(1 for c in non_empty_cells if c.col_index == col_idx) >= 2
+    )
+
+    if multi_support_rows >= 2:
+        return True
+    if multi_support_rows >= 1 and cols_with_multiple_rows >= 2:
+        return True
+
+    return False

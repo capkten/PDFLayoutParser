@@ -123,11 +123,26 @@ def _normal_word_gap(spans: Sequence[dict[str, Any]]) -> float | None:
 
 
 def _join_gap_limit(left: dict[str, Any], right: dict[str, Any], normal_gap: float | None) -> float:
-    fallback = max(3.5, min(left["font_size"], right["font_size"]) * 0.8)
-    return fallback if normal_gap is None else min(fallback, max(1.5, normal_gap))
+    min_size = min(left["font_size"], right["font_size"])
+    fallback = max(3.5, min_size * 0.8)
+    if normal_gap is None:
+        return fallback
+    mixed_cjk_western = (
+        (_CJK.search(left["text"]) is not None and _CJK.search(right["text"]) is None)
+        or (_CJK.search(left["text"]) is None and _CJK.search(right["text"]) is not None)
+    )
+    effective_limit = max(1.5, normal_gap)
+    if mixed_cjk_western:
+        effective_limit = max(effective_limit, min(fallback, max(3.5, min_size * 0.35)))
+    return min(fallback, effective_limit)
 
 
-def _can_join(group: Sequence[dict[str, Any]], candidate: dict[str, Any], normal_gap: float | None) -> bool:
+def _can_join(
+    group: Sequence[dict[str, Any]],
+    candidate: dict[str, Any],
+    normal_gap: float | None,
+    row_spans: Sequence[dict[str, Any]] | None = None,
+) -> bool:
     previous = group[-1]
     if previous["text"] == "$" or candidate["text"] == "$":
         return False
@@ -161,7 +176,22 @@ def _can_join(group: Sequence[dict[str, Any]], candidate: dict[str, Any], normal
             or _is_placeholder(candidate)
         )
     ):
-        return False
+        has_following_cjk = False
+        if row_spans and native_line:
+            try:
+                cand_idx = list(row_spans).index(candidate)
+                if cand_idx + 1 < len(row_spans):
+                    next_span = row_spans[cand_idx + 1]
+                    if (
+                        _same_native_line(candidate, next_span)
+                        and _CJK.search(next_span.get("text", ""))
+                        and next_span["bbox"][0] - candidate["bbox"][2] <= candidate.get("font_size", 10.0) * 1.5
+                    ):
+                        has_following_cjk = True
+            except ValueError:
+                pass
+        if not has_following_cjk:
+            return False
     normal_gap_join = native_line and -0.8 <= gap <= _join_gap_limit(previous, candidate, normal_gap)
     spaced_single_cjk = (
         native_line
@@ -326,7 +356,11 @@ def _is_wrapped_chain_pair(
     left = chain[-1]
     if candidate["flow_start"] != left["flow_end"] + 1:
         return False
-    if left.get("bold") != candidate.get("bold"):
+    base_bold = chain[0].get("bold") if chain else left.get("bold")
+    if (
+        left.get("bold") != candidate.get("bold")
+        and base_bold != candidate.get("bold")
+    ):
         return False
     if abs(left.get("font_size", 10.0) - candidate.get("font_size", 10.0)) > 1.0:
         return False
@@ -504,8 +538,9 @@ def build_text_runs(
     result: list[dict[str, Any]] = []
     for row in rows:
         groups: list[list[dict[str, Any]]] = []
-        for span in sorted(row, key=lambda item: item["bbox"][0]):
-            if groups and _can_join(groups[-1], span, normal_gap):
+        sorted_row = sorted(row, key=lambda item: item["bbox"][0])
+        for span in sorted_row:
+            if groups and _can_join(groups[-1], span, normal_gap, row_spans=sorted_row):
                 groups[-1].append(span)
             else:
                 groups.append([span])

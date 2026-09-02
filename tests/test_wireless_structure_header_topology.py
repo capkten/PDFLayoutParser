@@ -689,3 +689,64 @@ def test_rescue_sparse_body_bands_accepts_none_font_size_with_line_bbox_fallback
     refined = rescue_sparse_body_bands(atoms, bands, header_cutoff=148)
 
     assert len(refined) == 3
+
+
+def test_refine_leaf_bands_rejects_split_when_body_atom_crosses_split_line():
+    bands = [{"id": 1, "x0": 470.0, "x1": 512.2, "support": 4, "y_support": 3}]
+    atoms = [
+        _atom("页", 470.0, 10, 484.1, 20, 1),
+        _atom("次", 498.1, 10, 512.2, 20, 2),
+        _atom("1-6", 480.6, 30, 501.5, 40, 3),
+        _atom("11-12", 473.5, 50, 508.6, 60, 4),
+    ]
+
+    refined, cutoff = refine_leaf_bands(atoms, bands)
+
+    assert cutoff is not None
+    assert len(refined) == 1
+    assert refined[0]["x0"] == 470.0
+    assert refined[0]["x1"] == 512.2
+
+
+def test_refine_leaf_bands_accepts_split_when_body_atoms_are_independent_columns():
+    bands = [{"id": 1, "x0": 10.0, "x1": 90.0, "support": 7, "y_support": 4}]
+    atoms = [
+        _atom("股权比例", 25.0, 10, 75.0, 20, 1),
+        _atom("直接", 15.0, 30, 35.0, 40, 2),
+        _atom("间接", 65.0, 30, 85.0, 40, 3),
+        _atom("60", 15.0, 60, 35.0, 70, 4),
+        _atom("40", 65.0, 60, 85.0, 70, 5),
+        _atom("70", 15.0, 80, 35.0, 90, 6),
+        _atom("30", 65.0, 80, 85.0, 90, 7),
+    ]
+
+    refined, cutoff = refine_leaf_bands(atoms, bands)
+
+    assert cutoff is not None
+    assert len(refined) == 2
+    assert refined[0]["x0"] == 10.0
+    assert refined[0]["x1"] == 50.0
+    assert refined[1]["x0"] == 50.0
+    assert refined[1]["x1"] == 90.0
+
+
+
+
+
+def test_rescue_sparse_body_bands_ignores_header_region_atoms():
+    bands = [
+        {"id": 1, "x0": 140.0, "x1": 280.0, "support": 3, "y_support": 3},
+        {"id": 2, "x0": 470.0, "x1": 512.0, "support": 3, "y_support": 3},
+    ]
+    atoms = [
+        _atom("目", 250.0, 10, 264.0, 20, 1),
+        _atom("录", 300.0, 10, 314.0, 20, 2),
+        _atom("页次", 470.0, 10, 512.0, 20, 3),
+        _atom("审计报告", 140.0, 30, 200.0, 40, 4),
+        _atom("1-6", 480.0, 30, 500.0, 40, 5),
+    ]
+
+    refined = rescue_sparse_body_bands(atoms, bands, header_cutoff=25)
+
+    assert len(refined) == 2
+

@@ -117,3 +117,22 @@ def test_hybrid_body_rejects_overlapping_span_occupancy(monkeypatch):
     )
 
     assert recover_hybrid_body_cells(object(), region, [0, 100, 200]) == (0, 0, [])
+
+
+def test_hybrid_body_rejects_single_column_multiline_paragraphs_without_peer_support(
+    monkeypatch,
+):
+    region = BBox(0, 0, 200, 100)
+    spans = [
+        _span("确定方法标题", 10, 45, 90, 1),
+        _span("定价第一段说明文字", 110, 10, 190, 2),
+        _span("定价第二段说明文字", 110, 40, 190, 3),
+        _span("定价第三段说明文字", 110, 75, 190, 4),
+    ]
+    monkeypatch.setattr(
+        "hexai_pdf_parser.tables.wireless_structure.hybrid_body.collect_native_spans",
+        lambda page, allowed_regions: spans,
+    )
+
+    assert recover_hybrid_body_cells(object(), region, [0, 100, 200]) == (0, 0, [])
+

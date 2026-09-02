@@ -56,6 +56,8 @@ def _same_slot_single_cjk(left: dict[str, Any], right: dict[str, Any]) -> bool:
         if left.get("source_line_start") is not None and right.get("source_line_start") is not None
         else True
     )
+    is_toc_title_pair = (left["text"], right["text"]) in {("目", "录"), ("页", "次")}
+    max_gap_multiplier = 2.8 if is_toc_title_pair else 2.1
     return (
         _SINGLE_CJK.fullmatch(left["text"]) is not None
         and _SINGLE_CJK.fullmatch(right["text"]) is not None
@@ -65,8 +67,10 @@ def _same_slot_single_cjk(left: dict[str, Any], right: dict[str, Any]) -> bool:
         and abs((left["bbox"][1] + left["bbox"][3]) / 2 - (right["bbox"][1] + right["bbox"][3]) / 2)
         <= max(2.0, min(left["font_size"], right["font_size"]) * 0.35)
         and right["bbox"][0] - left["bbox"][2]
-        <= min(left["font_size"], right["font_size"]) * 2.1
+        <= min(left["font_size"], right["font_size"]) * max_gap_multiplier
     )
+
+
 
 
 def _same_slot_horizontal_prefix(
