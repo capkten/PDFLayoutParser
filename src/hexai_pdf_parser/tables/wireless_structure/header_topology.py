@@ -28,8 +28,15 @@ _HEADER_UNIT_TOKEN = re.compile(
     re.IGNORECASE,
 )
 
+_NOTE_NUMBER = r"(?:\d+|[零〇一二三四五六七八九十百千万亿两壹贰叁肆伍陆柒捌玖拾佰仟]+)"
+_NOTE_ENGLISH_REFERENCE = r"(?:[a-z]|[ivxlcdm]+)"
 _NOTE_REFERENCE = re.compile(
-    r"^\s*(?:\(?note\b|\d+\s*\([a-zivx]+\)|[（(].*(?:附註|注))",
+    rf"^\s*(?:"
+    rf"\(?note(?:\s*(?:{_NOTE_NUMBER}|{_NOTE_ENGLISH_REFERENCE}|[（(]\s*{_NOTE_ENGLISH_REFERENCE}\s*[）)]))?\)?"
+    rf"|\d+\s*[（(]\s*{_NOTE_ENGLISH_REFERENCE}\s*[）)]"
+    rf"|[（(]\s*(?:附註|附注|注)\s*(?:{_NOTE_NUMBER})?\s*[）)]"
+    rf"|(?:附註|附注)\s*(?:{_NOTE_NUMBER})?"
+    rf")\s*$",
     re.IGNORECASE,
 )
 _CHECKMARK = re.compile(r"^\s*[\u2713\u2714\u2611]\s*$")
@@ -546,6 +553,62 @@ def rescue_sparse_body_bands(atoms: Sequence[dict[str, Any]], bands: Sequence[di
     return rescued
 
 
+def rescue_header_only_note_bands(
+    atoms: Sequence[dict[str, Any]],
+    bands: Sequence[dict[str, Any]],
+    header_cutoff: float | None,
+) -> list[dict[str, Any]]:
+    """Recover a header-only note column from the first stable-band gap."""
+    rescued = [dict(band) for band in bands]
+    if header_cutoff is None:
+        return rescued
+
+    stable = sorted(
+        (
+            band
+            for band in rescued
+            if band.get("kind") not in {"sparse_body", "header_only_note"}
+        ),
+        key=lambda band: band["x0"],
+    )
+    if len(stable) < 2:
+        return rescued
+
+    left, right = stable[0], stable[1]
+    for atom in atoms:
+        if _center_y(atom) > header_cutoff or not _is_note_reference_atom(atom):
+            continue
+        x0, x1 = atom["bbox"][0], atom["bbox"][2]
+        if x1 <= x0 or x0 < left["x1"] or x1 > right["x0"]:
+            continue
+        if any(
+            horizontal_overlap(atom, {"bbox": [band["x0"], 0.0, band["x1"], 1.0]}) > 0
+            for band in rescued
+        ):
+            continue
+        candidate = {
+            "x0": x0,
+            "x1": x1,
+            "support": 1,
+            "y_support": 1,
+            "kind": "header_only_note",
+        }
+        if any(
+            horizontal_overlap(
+                {"bbox": [candidate["x0"], 0.0, candidate["x1"], 1.0]},
+                {"bbox": [band["x0"], 0.0, band["x1"], 1.0]},
+            ) > 0
+            for band in rescued
+        ):
+            continue
+        rescued.append(candidate)
+
+    rescued.sort(key=lambda band: band["x0"])
+    for index, band in enumerate(rescued, 1):
+        band["id"] = index
+    return rescued
+
+
 def _infer_centered_parent_span(
     atom: dict[str, Any], atoms: Sequence[dict[str, Any]], bands: Sequence[dict[str, Any]], header_cutoff: float
 ) -> list[int]:
@@ -611,6 +674,108 @@ def _infer_centered_parent_span(
         viable.sort(key=lambda item: (item[0], -len(item[1])))
         return viable[0][1]
     return []
+
+
+def _infer_complete_physical_leaf_span(
+    atom: dict[str, Any],
+    atoms: Sequence[dict[str, Any]],
+    bands: Sequence[dict[str, Any]],
+    header_cutoff: float,
+) -> list[int]:
+    """Infer a parent span from a complete physical leaf tier."""
+    if _is_temporal_leaf_header(atom) or _is_structural_header_atom(atom):
+        return []
+
+    physical_bands = sorted(
+        (
+            band
+            for band in bands
+            if band.get("kind") != "header_only_note"
+        ),
+        key=lambda band: band["x0"],
+    )
+    if len(physical_bands) < 3:
+        return []
+
+    parent_column = assign_column(atom, physical_bands)
+    if parent_column is None:
+        return []
+
+    parent_level = _center_y(atom)
+    lower = [
+        item
+        for item in atoms
+        if parent_level + 4.0 < _center_y(item) <= header_cutoff
+        and str(item.get("text", "")).strip()
+        and not _is_structural_header_atom(item)
+        and not _is_note_reference_atom(item)
+    ]
+    if not lower:
+        return []
+
+    band_by_id = {int(band["id"]): band for band in physical_bands}
+    same_level_peers = [
+        peer
+        for peer in atoms
+        if peer is not atom
+        and abs(_center_y(peer) - parent_level) <= 2.4
+        and not _is_note_reference_atom(peer)
+    ]
+    candidates: list[tuple[float, list[int]]] = []
+    for level in _levels(lower):
+        tier = [item for item in lower if abs(_center_y(item) - level) < 1.2]
+        assigned: list[tuple[dict[str, Any], int]] = []
+        for item in tier:
+            overlaps = [
+                int(band["id"])
+                for band in physical_bands
+                if horizontal_overlap(
+                    item, {"bbox": [band["x0"], 0.0, band["x1"], 1.0]}
+                ) > 0
+            ]
+            if len(overlaps) != 1:
+                assigned = []
+                break
+            assigned.append((item, overlaps[0]))
+        if not assigned:
+            continue
+
+        leaf_columns = [column for _item, column in assigned]
+        if len(set(leaf_columns)) != len(leaf_columns):
+            continue
+        ordered_columns = sorted(leaf_columns)
+        runs: list[list[int]] = []
+        for column in ordered_columns:
+            if not runs or column != runs[-1][-1] + 1:
+                runs.append([column])
+            else:
+                runs[-1].append(column)
+        for run in runs:
+            if len(run) < 3 or parent_column not in run:
+                continue
+            if not all(column in band_by_id for column in run):
+                continue
+            first, last = band_by_id[run[0]], band_by_id[run[-1]]
+            group_width = last["x1"] - first["x0"]
+            group_center = (first["x0"] + last["x1"]) / 2.0
+            parent_center = (atom["bbox"][0] + atom["bbox"][2]) / 2.0
+            error = abs(group_center - parent_center)
+            if error > max(4.0, group_width * 0.10):
+                continue
+            candidate_x0, candidate_x1 = first["x0"], last["x1"]
+            if any(
+                horizontal_overlap(
+                    peer, {"bbox": [candidate_x0, 0.0, candidate_x1, 1.0]}
+                ) > 0
+                for peer in same_level_peers
+            ):
+                continue
+            candidates.append((error, run))
+
+    unique = {tuple(span): error for error, span in candidates}
+    if len(unique) != 1:
+        return []
+    return list(next(iter(unique)))
 
 
 def _infer_wrapped_two_leaf_parent_spans(
@@ -896,8 +1061,15 @@ def _infer_two_leaf_parent_spans(
 
 def _header_leaf_bands(bands: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
     """返回可定义表头叶子列的列带，保留附注窄列的物理网格位置。"""
-    primary = [band for band in bands if band.get("kind") != "sparse_body"]
-    return primary or list(bands)
+    primary = [
+        band
+        for band in bands
+        if band.get("kind") not in {"sparse_body", "header_only_note"}
+    ]
+    if primary:
+        return primary
+    non_note = [band for band in bands if band.get("kind") != "header_only_note"]
+    return non_note or list(bands)
 
 
 def _assign_dash_body_atoms_to_right_aligned_tracks(atoms: Sequence[dict[str, Any]], header_cutoff: float | None) -> None:
@@ -983,6 +1155,10 @@ def annotate_columns(atoms: Sequence[dict[str, Any]], bands: Sequence[dict[str, 
         # 数值正文已把一个父带拆成多个叶子列时，居中的年份/期间表头不一定
         # 真正覆盖每个叶子带。仍按其相对父带中心恢复 colspan，不能误判成首列。
         inferred_parent_span = two_leaf_parent_spans.get(id(atom), [])
+        if not inferred_parent_span and header_cutoff is not None:
+            inferred_parent_span = _infer_complete_physical_leaf_span(
+                atom, atoms, bands, header_cutoff
+            )
         if not inferred_parent_span and header_cutoff is not None:
             inferred_parent_span = _infer_centered_parent_span(
                 atom, atoms, bands, header_cutoff

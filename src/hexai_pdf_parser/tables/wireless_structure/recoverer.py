@@ -19,6 +19,7 @@ from .grid import build_grid
 from .header_topology import (
     annotate_columns,
     refine_leaf_bands,
+    rescue_header_only_note_bands,
     rescue_sparse_body_bands,
 )
 from .logical_grid import build_logical_grid, materialize_empty_cells, merge_header_spans
@@ -104,6 +105,7 @@ def recover_cells_from_region(
         atoms = merge_same_band_native_line_runs(atoms, bands)
         bands, header_cutoff = refine_leaf_bands(atoms, bands)
         bands = rescue_sparse_body_bands(atoms, bands, header_cutoff)
+        bands = rescue_header_only_note_bands(atoms, bands, header_cutoff)
         if len(bands) < 1:
             return 0, 0, []
 

@@ -1,3 +1,4 @@
+import hexai_pdf_parser.tables.wireless_structure.header_topology as header_topology
 from hexai_pdf_parser.tables.wireless_structure.header_topology import (
     _infer_complete_child_group_span,
     annotate_columns,
@@ -359,6 +360,50 @@ def test_annotate_columns_infers_top_parent_from_mixed_child_spans():
     assert (atoms[8]["column_start"], atoms[8]["column_end"], atoms[8]["colspan"]) == (5, 5, 1)
 
 
+def test_annotate_columns_infers_parent_over_complete_physical_leaf_run():
+    bands = [
+        {"id": 1, "x0": 0, "x1": 30},
+        {"id": 2, "x0": 40, "x1": 55, "kind": "header_only_note"},
+        {"id": 3, "x0": 60, "x1": 90},
+        {"id": 4, "x0": 95, "x1": 125, "kind": "sparse_body"},
+        {"id": 5, "x0": 130, "x1": 160, "kind": "sparse_body"},
+        {"id": 6, "x0": 165, "x1": 195, "kind": "sparse_body"},
+        {"id": 7, "x0": 200, "x1": 230},
+        {"id": 8, "x0": 235, "x1": 265, "kind": "sparse_body"},
+        {"id": 9, "x0": 270, "x1": 300},
+        {"id": 10, "x0": 305, "x1": 335},
+        {"id": 11, "x0": 340, "x1": 370},
+    ]
+    parent = _atom("年度", 205, 10, 225, 18, 1)
+    leaves = [
+        _atom(f"叶{column}", band["x0"] + 5, 30, band["x1"] - 5, 38, column)
+        for column, band in enumerate(bands[2:], 3)
+    ]
+
+    annotate_columns([parent, *leaves], bands, header_cutoff=40)
+
+    assert (parent["column_start"], parent["column_end"], parent["colspan"]) == (3, 11, 9)
+    assert parent["bbox"] == [205, 10, 225, 18]
+
+
+def test_annotate_columns_rejects_parent_when_physical_leaf_run_has_a_gap():
+    bands = [
+        {"id": 1, "x0": 0, "x1": 30},
+        {"id": 2, "x0": 40, "x1": 70},
+        {"id": 3, "x0": 80, "x1": 110},
+        {"id": 4, "x0": 120, "x1": 150},
+    ]
+    parent = _atom("年度", 82, 10, 102, 18, 1)
+    leaves = [
+        _atom("叶一", 85, 30, 105, 38, 2),
+        _atom("叶三", 125, 30, 145, 38, 3),
+    ]
+
+    annotate_columns([parent, *leaves], bands, header_cutoff=40)
+
+    assert parent["colspan"] == 1
+
+
 def test_annotate_columns_rejects_top_parent_when_child_coverage_is_incomplete():
     bands = [
         {"id": 1, "x0": 72.4, "x1": 167.1},
@@ -473,6 +518,123 @@ def test_rescue_sparse_body_bands_keeps_a_clear_inner_track():
 
     assert len(refined) == 3
     assert any(band.get("kind") == "sparse_body" for band in refined)
+
+
+def test_rescue_header_only_note_band_keeps_a_note_gap_as_a_physical_column():
+    bands = [
+        {"id": 1, "x0": 10, "x1": 40, "support": 5, "y_support": 5},
+        {"id": 2, "x0": 70, "x1": 100, "support": 5, "y_support": 5},
+        {"id": 3, "x0": 130, "x1": 160, "support": 5, "y_support": 5},
+    ]
+    atoms = [
+        _atom("项目", 16, 10, 34, 18, 1),
+        _atom("附注五", 45, 10, 60, 18, 2),
+        _atom("金额", 76, 30, 94, 38, 3),
+    ]
+
+    rescue = getattr(header_topology, "rescue_header_only_note_bands", None)
+    assert rescue is not None
+    rescued = rescue(atoms, bands, header_cutoff=25)
+
+    assert [(band["x0"], band["x1"], band.get("kind")) for band in rescued] == [
+        (10, 40, None),
+        (45, 60, "header_only_note"),
+        (70, 100, None),
+        (130, 160, None),
+    ]
+
+
+def test_rescue_header_only_note_band_rejects_parenthetical_annotation_text():
+    bands = [
+        {"id": 1, "x0": 10, "x1": 40, "support": 5, "y_support": 5},
+        {"id": 2, "x0": 70, "x1": 100, "support": 5, "y_support": 5},
+    ]
+    atoms = [
+        _atom("项目", 16, 10, 34, 18, 1),
+        _atom("（除特别注明外）", 45, 10, 65, 18, 2),
+        _atom("金额", 76, 30, 94, 38, 3),
+    ]
+
+    rescued = header_topology.rescue_header_only_note_bands(
+        atoms, bands, header_cutoff=25
+    )
+
+    assert len(rescued) == len(bands)
+
+
+def test_rescue_header_only_note_band_rejects_ordinary_english_note_phrase():
+    bands = [
+        {"id": 1, "x0": 10, "x1": 40, "support": 5, "y_support": 5},
+        {"id": 2, "x0": 70, "x1": 100, "support": 5, "y_support": 5},
+    ]
+    atoms = [
+        _atom("项目", 16, 10, 34, 18, 1),
+        _atom("Note payable", 45, 10, 65, 18, 2),
+        _atom("金额", 76, 30, 94, 38, 3),
+    ]
+
+    rescued = header_topology.rescue_header_only_note_bands(
+        atoms, bands, header_cutoff=25
+    )
+
+    assert len(rescued) == len(bands)
+
+
+def test_rescue_header_only_note_band_rejects_long_english_note_reference():
+    bands = [
+        {"id": 1, "x0": 10, "x1": 40, "support": 5, "y_support": 5},
+        {"id": 2, "x0": 70, "x1": 100, "support": 5, "y_support": 5},
+    ]
+    for text in ("Note (abc)", "(Note (abc))"):
+        atoms = [
+            _atom("项目", 16, 10, 34, 18, 1),
+            _atom(text, 45, 10, 65, 18, 2),
+            _atom("金额", 76, 30, 94, 38, 3),
+        ]
+
+        rescued = header_topology.rescue_header_only_note_bands(
+            atoms, bands, header_cutoff=25
+        )
+
+        assert len(rescued) == len(bands)
+
+
+def test_rescue_header_only_note_band_rejects_long_numeric_note_reference():
+    bands = [
+        {"id": 1, "x0": 10, "x1": 40, "support": 5, "y_support": 5},
+        {"id": 2, "x0": 70, "x1": 100, "support": 5, "y_support": 5},
+    ]
+    for text in ("45(abc)", "45(foo)"):
+        atoms = [
+            _atom("项目", 16, 10, 34, 18, 1),
+            _atom(text, 45, 10, 65, 18, 2),
+            _atom("金额", 76, 30, 94, 38, 3),
+        ]
+
+        rescued = header_topology.rescue_header_only_note_bands(
+            atoms, bands, header_cutoff=25
+        )
+
+        assert len(rescued) == len(bands)
+
+
+def test_rescue_header_only_note_band_accepts_english_note_references():
+    bands = [
+        {"id": 1, "x0": 10, "x1": 40, "support": 5, "y_support": 5},
+        {"id": 2, "x0": 70, "x1": 100, "support": 5, "y_support": 5},
+    ]
+    for text in ("Note i", "(note i)"):
+        atoms = [
+            _atom("项目", 16, 10, 34, 18, 1),
+            _atom(text, 45, 10, 65, 18, 2),
+            _atom("金额", 76, 30, 94, 38, 3),
+        ]
+
+        rescued = header_topology.rescue_header_only_note_bands(
+            atoms, bands, header_cutoff=25
+        )
+
+        assert len(rescued) == len(bands) + 1
 
 
 def test_rescue_sparse_body_bands_uses_line_height_for_wrapped_inner_field():
