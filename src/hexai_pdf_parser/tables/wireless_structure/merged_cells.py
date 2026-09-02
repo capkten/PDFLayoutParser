@@ -67,7 +67,7 @@ def _can_resolve_exact_slot_group(
         _STRICT_SINGLE_CJK.fullmatch(item["text"]) is not None
         and item.get("source_position_known", False)
         and item.get("script") == "cjk"
-        and item.get("source_blocks")
+        and len(item.get("source_blocks", [])) == 1
         and item.get("source_line_start") == item.get("source_line_end")
         for item in ordered
     ):

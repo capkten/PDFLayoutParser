@@ -1,3 +1,5 @@
+import pytest
+
 from hexai_pdf_parser.tables.wireless_structure.continuations import merge_column_continuations
 from hexai_pdf_parser.tables.wireless_structure.merged_cells import (
     merge_multiline_cells,
@@ -359,3 +361,39 @@ def test_resolve_exact_slot_conflicts_rejects_group_with_foreign_span_overlap():
     result = resolve_exact_slot_conflicts([left, right, spanning])
 
     assert [item["text"] for item in result] == ["合", "计", "跨列字段"]
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "different_block",
+        "shared_multiple_blocks",
+        "different_visual_row",
+        "reversed_x_flow",
+        "different_script",
+        "different_boldness",
+        "different_font_level",
+    ],
+)
+def test_resolve_exact_slot_conflicts_requires_complete_native_visual_evidence(case):
+    left = _cell("合", flow=1, row=1, x0=10, x1=20, source_line=0)
+    right = _cell("计", flow=2, row=1, x0=40, x1=50, source_line=0)
+
+    if case == "different_block":
+        right["source_blocks"] = [2]
+    elif case == "shared_multiple_blocks":
+        left["source_blocks"] = right["source_blocks"] = [1, 2]
+    elif case == "different_visual_row":
+        right["bbox"] = [40, 30, 50, 40]
+    elif case == "reversed_x_flow":
+        right["bbox"] = [5, 10, 15, 20]
+    elif case == "different_script":
+        right["script"] = "numeric"
+    elif case == "different_boldness":
+        right["bold"] = True
+    elif case == "different_font_level":
+        right["font_size"] = 12.0
+
+    result = resolve_exact_slot_conflicts([left, right])
+
+    assert [item["text"] for item in result] == ["合", "计"]

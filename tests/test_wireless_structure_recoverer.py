@@ -109,6 +109,13 @@ def test_final_occupancy_rejects_unresolved_duplicate_slot():
 
 def test_recover_cells_rebuilds_after_exact_slot_conflict_merge(monkeypatch):
     region = BBox(100, 260, 505, 385)
+    build_grid_calls = 0
+    real_build_grid = recoverer.build_grid
+
+    def counting_build_grid(candidates, bands):
+        nonlocal build_grid_calls
+        build_grid_calls += 1
+        return real_build_grid(candidates, bands)
 
     def candidate(text, flow, x0, x1, y0, column, source_line, source_span=0):
         return {
@@ -200,10 +207,12 @@ def test_recover_cells_rebuilds_after_exact_slot_conflict_merge(monkeypatch):
     monkeypatch.setattr(
         recoverer, "merge_column_continuations", lambda items, value: items
     )
+    monkeypatch.setattr(recoverer, "build_grid", counting_build_grid)
 
     rows, columns, cells = recover_cells_from_region(object(), region)
 
     assert (rows, columns) == (3, 3)
+    assert build_grid_calls == 2
     assert any(cell.text == "合计" for cell in cells)
     occupied = set()
     for cell in cells:

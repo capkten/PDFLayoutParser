@@ -1,5 +1,6 @@
 from hexai_pdf_parser.core.models import BBox
 from hexai_pdf_parser.tables.wireless_table_recovery import NativeSpan
+from hexai_pdf_parser.tables.wireless_structure import hybrid_body
 from hexai_pdf_parser.tables.wireless_structure.hybrid_body import (
     recover_hybrid_body_cells,
 )
@@ -93,6 +94,14 @@ def test_hybrid_body_merges_left_shifted_same_column_continuation(monkeypatch):
 
 def test_hybrid_body_rejects_independent_same_slot_fields(monkeypatch):
     region = BBox(0, 0, 200, 40)
+    build_grid_calls = 0
+    real_build_grid = hybrid_body.build_grid
+
+    def counting_build_grid(candidates, bands):
+        nonlocal build_grid_calls
+        build_grid_calls += 1
+        return real_build_grid(candidates, bands)
+
     spans = [
         _span("字段一", 10, 10, 35, 1),
         _span("字段二", 70, 10, 95, 2),
@@ -101,12 +110,22 @@ def test_hybrid_body_rejects_independent_same_slot_fields(monkeypatch):
         "hexai_pdf_parser.tables.wireless_structure.hybrid_body.collect_native_spans",
         lambda page, allowed_regions: spans,
     )
+    monkeypatch.setattr(hybrid_body, "build_grid", counting_build_grid)
 
     assert recover_hybrid_body_cells(object(), region, [0, 100, 200]) == (0, 0, [])
+    assert build_grid_calls == 1
 
 
 def test_hybrid_body_resolves_wide_spaced_single_cjk_exact_slot(monkeypatch):
     region = BBox(0, 0, 200, 60)
+    build_grid_calls = 0
+    real_build_grid = hybrid_body.build_grid
+
+    def counting_build_grid(candidates, bands):
+        nonlocal build_grid_calls
+        build_grid_calls += 1
+        return real_build_grid(candidates, bands)
+
     spans = [
         NativeSpan(
             "项目",
@@ -153,12 +172,14 @@ def test_hybrid_body_resolves_wide_spaced_single_cjk_exact_slot(monkeypatch):
         "hexai_pdf_parser.tables.wireless_structure.hybrid_body.collect_native_spans",
         lambda page, allowed_regions: spans,
     )
+    monkeypatch.setattr(hybrid_body, "build_grid", counting_build_grid)
 
     rows, columns, cells = recover_hybrid_body_cells(
         object(), region, [0, 100, 200]
     )
 
     assert (rows, columns) == (2, 2)
+    assert build_grid_calls == 2
     assert next(
         cell for cell in cells if cell.row_index == 1 and cell.col_index == 0
     ).text == "合计"
