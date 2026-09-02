@@ -1000,6 +1000,27 @@ def annotate_columns(atoms: Sequence[dict[str, Any]], bands: Sequence[dict[str, 
         # 轻微越界，尤其是中文储备类表头；把这种贴边解释为跨列会把
         # “重估储备 / 匯兌儲備”误写进同一列组。真实父表头已经由 direct
         # 的双列实质重叠和上面的 parent_band 规则覆盖。
+        # 全宽孤立注释行推断：表头内某 y 层仅此一个 atom，且已跨越 >=2 列带，
+        # 说明是居中对齐的全表注释行（如"(Dollars/Euros in Thousands...)"），
+        # 其 glyph bbox 只覆盖中间若干列，但语义横跨整个表头。
+        # 纯几何判断：该 y 层无其他表头 atom，则扩展 intersecting 至全表列带。
+        if (
+            in_header
+            and len(intersecting) >= 2
+            and not _is_temporal_leaf_header(atom)
+            and not _is_structural_header_atom(atom)
+        ):
+            atom_cy = _center_y(atom)
+            peer_header_atoms = [
+                other for other in atoms
+                if other is not atom
+                and header_cutoff is not None
+                and _center_y(other) <= header_cutoff
+                and abs(_center_y(other) - atom_cy) <= 2.4
+            ]
+            if not peer_header_atoms:
+                intersecting = [int(band["id"]) for band in bands]
+
         if len(intersecting) >= 2:
             atom["column_start"] = min(intersecting)
             atom["column_end"] = max(intersecting)

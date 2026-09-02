@@ -199,6 +199,47 @@ class TableExtractor:
 
         return [item for idx, item in enumerate(items) if idx not in suppressed]
 
+    @staticmethod
+    def _refine_overlapping_model_bboxes(items: List[Any], page: fitz.Page) -> List[Any]:
+        """Prevent adjacent distinct table bounding boxes from mutually invading across vertical boundaries."""
+        if len(items) <= 1:
+            return items
+
+        sorted_items = sorted(items, key=lambda it: (it[0].y0, it[0].x0))
+        refined = [sorted_items[0]]
+        for cur_bbox, score in sorted_items[1:]:
+            prev_bbox, prev_score = refined[-1]
+            if cur_bbox.y0 < prev_bbox.y1 and min(prev_bbox.x1, cur_bbox.x1) > max(prev_bbox.x0, cur_bbox.x0):
+                overlap_y0 = cur_bbox.y0
+                overlap_y1 = prev_bbox.y1
+                words = page.get_text("words")
+                ov_words = [w for w in words if overlap_y0 - 2.0 <= (w[1] + w[3]) / 2.0 <= overlap_y1 + 2.0]
+                drawings = page.get_drawings()
+                ov_lines = []
+                for d in drawings:
+                    for it in d.get("items", []):
+                        if it[0] in ("l", "re"):
+                            y = it[1].y if it[0] == "l" else (it[1].y0 + it[1].y1) / 2.0
+                            if overlap_y0 - 2.0 <= y <= overlap_y1 + 2.0:
+                                ov_lines.append(y)
+                candidates = []
+                if ov_lines:
+                    candidates.append(max(ov_lines) + 1.5)
+                if ov_words:
+                    candidates.append(max(w[3] for w in ov_words) + 2.0)
+                if candidates:
+                    split_y = max(candidates)
+                else:
+                    split_y = (overlap_y0 + overlap_y1) / 2.0
+
+                refined[-1] = (
+                    BBox(prev_bbox.x0, prev_bbox.y0, prev_bbox.x1, max(prev_bbox.y0 + 10.0, split_y)),
+                    prev_score,
+                )
+                cur_bbox = BBox(cur_bbox.x0, max(cur_bbox.y0, split_y), cur_bbox.x1, cur_bbox.y1)
+            refined.append((cur_bbox, score))
+        return refined
+
     def _detect_rule_candidates(
         self, page: fitz.Page, page_language: Optional[str] = None
     ) -> List[Table]:
@@ -257,6 +298,7 @@ class TableExtractor:
                 )
             model_items = self._ml_detector.detect_with_scores(page)
             model_items = self._filter_contained_bboxes(model_items)
+            model_items = self._refine_overlapping_model_bboxes(model_items, page)
         except Exception:
             return list(wired_tables or [])
 
@@ -523,9 +565,10 @@ class TableExtractor:
         if self._table_config and self._table_config.profiles:
             tables = self._apply_layout_rules(page, tables)
 
-        # Normalize grouped financial headers once, after all table rules.
-        tables = [normalize_table_headers(t, page) for t in tables]
-        tables = [normalize_complex_financial_header(t, page) for t in tables]
+        # Normalize grouped financial headers once for Chinese tables, after all table rules.
+        if page_language in {"zh", "mixed"}:
+            tables = [normalize_table_headers(t, page) for t in tables]
+            tables = [normalize_complex_financial_header(t, page) for t in tables]
         tables = [self._clamp_table_to_page(t, page) for t in tables]
 
         if self.debug_pipeline:
