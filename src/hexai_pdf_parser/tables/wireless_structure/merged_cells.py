@@ -16,6 +16,7 @@ _NUMBERED_ITEM_START = re.compile(
     r"^(?:\d+[.)、]|[（(]\d+[）)]|[一二三四五六七八九十百]+[.)、])"
 )
 _SINGLE_CJK = re.compile(r"^[\u3400-\u9fff\u2460-\u2473\uff00-\uffef\w()（）]$")
+_STRICT_SINGLE_CJK = re.compile(r"^[\u3400-\u9fff]$")
 
 
 def _horizontal_overlap(left: Sequence[float], right: Sequence[float]) -> float:
@@ -32,6 +33,66 @@ def _native_continuous(left: dict[str, Any], right: dict[str, Any]) -> bool:
 
 def _same_slot(left: dict[str, Any], right: dict[str, Any]) -> bool:
     return all(left[key] == right[key] for key in ("row_start", "row_end", "col_start", "col_end"))
+
+
+def _slot_key(cell: dict[str, Any]) -> tuple[int, int, int, int]:
+    return tuple(
+        int(cell[key])
+        for key in ("row_start", "row_end", "col_start", "col_end")
+    )
+
+
+def _slot_keys_overlap(
+    left: tuple[int, int, int, int],
+    right: tuple[int, int, int, int],
+) -> bool:
+    return not (
+        left[1] < right[0]
+        or right[1] < left[0]
+        or left[3] < right[2]
+        or right[3] < left[2]
+    )
+
+
+def _can_resolve_exact_slot_group(
+    group: Sequence[dict[str, Any]],
+    all_slot_keys: Sequence[tuple[int, int, int, int]],
+) -> bool:
+    slot = _slot_key(group[0])
+    if any(key != slot and _slot_keys_overlap(slot, key) for key in all_slot_keys):
+        return False
+
+    ordered = sorted(group, key=lambda item: item["flow_start"])
+    if not all(
+        _STRICT_SINGLE_CJK.fullmatch(item["text"]) is not None
+        and item.get("source_position_known", False)
+        and item.get("script") == "cjk"
+        and item.get("source_blocks")
+        and item.get("source_line_start") == item.get("source_line_end")
+        for item in ordered
+    ):
+        return False
+
+    first = ordered[0]
+    for previous, candidate in zip(ordered, ordered[1:]):
+        minimum_font_size = min(previous["font_size"], candidate["font_size"])
+        previous_center_y = (previous["bbox"][1] + previous["bbox"][3]) / 2.0
+        candidate_center_y = (candidate["bbox"][1] + candidate["bbox"][3]) / 2.0
+        if (
+            not _native_continuous(previous, candidate)
+            or candidate["bbox"][0] <= previous["bbox"][0]
+            or abs(previous_center_y - candidate_center_y)
+            > max(2.0, minimum_font_size * 0.35)
+            or abs(previous["font_size"] - candidate["font_size"])
+            > max(0.5, minimum_font_size * 0.1)
+        ):
+            return False
+    return all(
+        item.get("source_blocks") == first.get("source_blocks")
+        and item.get("source_line_start") == first.get("source_line_start")
+        and item.get("bold") == first.get("bold")
+        for item in ordered[1:]
+    )
 
 
 def _same_native_inline(left: dict[str, Any], right: dict[str, Any]) -> bool:
@@ -166,6 +227,41 @@ def _merge_pair(left: dict[str, Any], right: dict[str, Any], joiner: str, kind: 
     merged["cell_id"] = "+".join(merged["merged_from"])
     merged["merge_kind"] = kind
     return merged
+
+
+def resolve_exact_slot_conflicts(
+    cells: Sequence[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Merge evidence-complete single-CJK chains that conflict in one exact slot."""
+    ordered = [
+        dict(item) for item in sorted(cells, key=lambda item: item["flow_start"])
+    ]
+    groups: dict[tuple[int, int, int, int], list[dict[str, Any]]] = {}
+    for cell in ordered:
+        groups.setdefault(_slot_key(cell), []).append(cell)
+
+    all_slot_keys = list(groups)
+    resolved: dict[tuple[int, int, int, int], dict[str, Any]] = {}
+    for slot, group in groups.items():
+        if len(group) < 2 or not _can_resolve_exact_slot_group(
+            group, all_slot_keys
+        ):
+            continue
+        merged = group[0]
+        for candidate in group[1:]:
+            merged = _merge_pair(merged, candidate, "", "exact_slot_conflict")
+        resolved[slot] = merged
+
+    result: list[dict[str, Any]] = []
+    emitted: set[tuple[int, int, int, int]] = set()
+    for cell in ordered:
+        slot = _slot_key(cell)
+        if slot not in resolved:
+            result.append(cell)
+        elif slot not in emitted:
+            result.append(resolved[slot])
+            emitted.add(slot)
+    return sorted(result, key=lambda item: (item["flow_start"], item["flow_end"]))
 
 
 def merge_same_slot_fragments(

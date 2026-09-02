@@ -2,6 +2,7 @@ from hexai_pdf_parser.tables.wireless_structure.continuations import merge_colum
 from hexai_pdf_parser.tables.wireless_structure.merged_cells import (
     merge_multiline_cells,
     merge_same_slot_fragments,
+    resolve_exact_slot_conflicts,
 )
 
 
@@ -309,3 +310,52 @@ def test_merge_same_slot_fragments_joins_two_character_spread_cjk_pair():
     assert len(result) == 1
     assert result[0]["text"] == "目录"
 
+
+def test_resolve_exact_slot_conflicts_joins_wide_spaced_native_cjk_chain():
+    left = _cell(
+        "合", flow=16, row=3, x0=176.0415, x1=186.5415, source_line=0
+    )
+    right = _cell(
+        "计", flow=17, row=3, x0=212.8219, x1=223.3219, source_line=0
+    )
+    left["font_size"] = right["font_size"] = 10.5
+
+    result = resolve_exact_slot_conflicts([left, right])
+
+    assert len(result) == 1
+    assert result[0]["text"] == "合计"
+    assert result[0]["span_refs"] == ["S16", "S17"]
+    assert result[0]["merge_kind"] == "exact_slot_conflict"
+
+
+def test_resolve_exact_slot_conflicts_keeps_multi_character_fields():
+    left = _cell("比例", flow=1, row=1, x0=10, x1=30)
+    right = _cell("坏账准备", flow=2, row=1, x0=40, x1=80)
+
+    result = resolve_exact_slot_conflicts([left, right])
+
+    assert [item["text"] for item in result] == ["比例", "坏账准备"]
+
+
+def test_resolve_exact_slot_conflicts_requires_continuous_known_native_line():
+    left = _cell("合", flow=1, row=1, x0=10, x1=20, source_line=0)
+    skipped = _cell("计", flow=3, row=1, x0=40, x1=50, source_line=0)
+    different_line = _cell("额", flow=2, row=1, x0=40, x1=50, source_line=1)
+    unknown = _cell("数", flow=2, row=1, x0=40, x1=50, source_line=0)
+    unknown["source_position_known"] = False
+
+    assert len(resolve_exact_slot_conflicts([left, skipped])) == 2
+    assert len(resolve_exact_slot_conflicts([left, different_line])) == 2
+    assert len(resolve_exact_slot_conflicts([left, unknown])) == 2
+
+
+def test_resolve_exact_slot_conflicts_rejects_group_with_foreign_span_overlap():
+    left = _cell("合", flow=1, row=1, col=1, x0=10, x1=20)
+    right = _cell("计", flow=2, row=1, col=1, x0=40, x1=50)
+    spanning = _cell("跨列字段", flow=3, row=1, col=1, x0=10, x1=100)
+    spanning["col_end"] = 2
+    spanning["colspan"] = 2
+
+    result = resolve_exact_slot_conflicts([left, right, spanning])
+
+    assert [item["text"] for item in result] == ["合", "计", "跨列字段"]
