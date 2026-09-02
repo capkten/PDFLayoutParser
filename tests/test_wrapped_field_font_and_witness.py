@@ -112,3 +112,20 @@ def test_build_text_runs_keeps_consecutive_amount_rows_separate():
     result = build_text_runs(spans)
 
     assert [item["text"] for item in result] == ["100.00", "200.00", "右侧"]
+
+
+def test_build_text_runs_keeps_colon_ended_category_headers_separate():
+    """反例：以冒号结尾的分类标题（如流动负债：）与下一行具体科目（如短期借款）必须保持分离，即使右侧存在金额伴随。"""
+    spans = [
+        _span("流动负债：", 100, 150, 0, (1, 0, 0), y=10),
+        _span("短期借款", 100, 150, 1, (1, 1, 0), y=24),
+        _span("5,248,944,717.37", 250, 320, 2, (1, 2, 0), y=24),
+    ]
+
+    result = build_text_runs(spans)
+
+    assert [item["text"] for item in result] == [
+        "流动负债：",
+        "短期借款",
+        "5,248,944,717.37",
+    ]

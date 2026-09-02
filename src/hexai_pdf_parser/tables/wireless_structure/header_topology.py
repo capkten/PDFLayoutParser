@@ -665,6 +665,116 @@ def rescue_header_only_note_bands(
     return rescued
 
 
+def rescue_header_only_leaf_bands(
+    atoms: Sequence[dict[str, Any]],
+    bands: Sequence[dict[str, Any]],
+    header_cutoff: float | None,
+) -> list[dict[str, Any]]:
+    """Recover isolated leaf headers only when their row proves every stable band."""
+    rescued = [dict(band) for band in bands]
+    if header_cutoff is None:
+        return rescued
+
+    stable = sorted(
+        (
+            band
+            for band in rescued
+            if band.get("kind")
+            not in {"sparse_body", "header_only_note", "header_only_leaf"}
+        ),
+        key=lambda band: band["x0"],
+    )
+    if len(stable) < 2:
+        return rescued
+
+    stable_ids = {int(band["id"]) for band in stable}
+    header_atoms = [
+        atom for atom in atoms if _center_y(atom) <= header_cutoff
+    ]
+    for level in _levels(header_atoms):
+        row = [
+            atom
+            for atom in header_atoms
+            if abs(_center_y(atom) - level) <= 2.4
+        ]
+        covered_ids: set[int] = set()
+        candidates: list[dict[str, Any]] = []
+        has_parent = False
+        for atom in row:
+            overlaps = [
+                band
+                for band in stable
+                if _meaningful_header_band_overlap(atom, band)
+            ]
+            if len(overlaps) == 1:
+                covered_ids.add(int(overlaps[0]["id"]))
+            elif len(overlaps) > 1:
+                has_parent = True
+            else:
+                candidates.append(atom)
+        if has_parent or covered_ids != stable_ids:
+            continue
+
+        for atom in candidates:
+            if _is_structural_header_atom(atom):
+                continue
+            if any(
+                horizontal_overlap(
+                    atom,
+                    {"bbox": [band["x0"], 0.0, band["x1"], 1.0]},
+                )
+                > 0
+                for band in rescued
+            ):
+                continue
+
+            x0, x1 = atom["bbox"][0], atom["bbox"][2]
+            left = [item for item in row if item is not atom and item["bbox"][2] <= x0]
+            right = [item for item in row if item is not atom and item["bbox"][0] >= x1]
+            if not left and not right:
+                continue
+            neighbors = [
+                item
+                for item in (
+                    [max(left, key=lambda item: item["bbox"][2])] if left else []
+                )
+                + ([min(right, key=lambda item: item["bbox"][0])] if right else [])
+            ]
+            line_height = max(
+                [
+                    float(atom.get("font_size") or 0.0),
+                    atom["bbox"][3] - atom["bbox"][1],
+                ]
+                + [
+                    max(
+                        float(item.get("font_size") or 0.0),
+                        item["bbox"][3] - item["bbox"][1],
+                    )
+                    for item in neighbors
+                ]
+            )
+            minimum_gap = max(8.0, line_height * 1.25)
+            if left and x0 - max(item["bbox"][2] for item in left) < minimum_gap:
+                continue
+            if right and min(item["bbox"][0] for item in right) - x1 < minimum_gap:
+                continue
+
+            rescued.append(
+                {
+                    "x0": x0,
+                    "x1": x1,
+                    "support": 1,
+                    "y_support": 1,
+                    "kind": "header_only_leaf",
+                }
+            )
+
+    rescued.sort(key=lambda band: band["x0"])
+    for index, band in enumerate(rescued, 1):
+        band["id"] = index
+    return rescued
+
+
 def _infer_centered_parent_span(
     atom: dict[str, Any], atoms: Sequence[dict[str, Any]], bands: Sequence[dict[str, Any]], header_cutoff: float
 ) -> list[int]:

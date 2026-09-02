@@ -204,6 +204,53 @@ def test_recover_cells_from_region_materializes_missing_empty_slot(monkeypatch):
     assert empty.rowspan == empty.colspan == 1
 
 
+def test_recover_cells_restores_header_only_leaf_and_materializes_empty_body(monkeypatch):
+    region = BBox(0, 0, 300, 140)
+    raw = [
+        (10, 10, "类别"),
+        (10, 70, "使用寿命"),
+        (10, 130, "确定依据"),
+        (10, 190, "摊销方法"),
+        (10, 250, "空列表头"),
+    ]
+    for row_index, label in enumerate(("甲", "乙", "丙", "丁", "戊"), 1):
+        y = 20 + row_index * 20
+        raw.extend(
+            [
+                (y, 10, label),
+                (y, 70, str(row_index * 10)),
+                (y, 130, f"依据{row_index}"),
+                (y, 190, "直线法"),
+            ]
+        )
+    spans = [
+        NativeSpan(text, BBox(x0, y, x0 + 30, y + 10), "SimSun", 10, order)
+        for order, (y, x0, text) in enumerate(raw)
+    ]
+    monkeypatch.setattr(
+        recoverer,
+        "collect_native_spans",
+        lambda page, allowed_regions: spans,
+    )
+
+    rows, columns, cells = recover_cells_from_region(object(), region)
+
+    assert (rows, columns, len(cells)) == (6, 5, 30)
+    assert next(
+        cell for cell in cells if cell.row_index == 0 and cell.col_index == 4
+    ).text == "空列表头"
+    empty_body = [
+        cell
+        for cell in cells
+        if cell.col_index == 4 and cell.row_index in range(1, 6)
+    ]
+    assert len(empty_body) == 5
+    assert all(
+        cell.text == "" and cell.rowspan == 1 and cell.colspan == 1
+        for cell in empty_body
+    )
+
+
 def test_recover_cells_merges_wrapped_fields_before_physical_rows(monkeypatch):
     region = BBox(90, 0, 490, 120)
     raw = [

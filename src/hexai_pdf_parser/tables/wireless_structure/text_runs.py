@@ -354,6 +354,8 @@ def _is_wrapped_chain_pair(
     runs: Sequence[dict[str, Any]],
 ) -> bool:
     left = chain[-1]
+    if left["text"].rstrip().endswith((":", "：")):
+        return False
     if candidate["flow_start"] != left["flow_end"] + 1:
         return False
     base_bold = chain[0].get("bold") if chain else left.get("bold")
@@ -444,6 +446,8 @@ def _is_columnar_native_block_line_pair(
     chain: Sequence[dict[str, Any]], candidate: dict[str, Any]
 ) -> bool:
     previous = chain[-1]
+    if previous["text"].rstrip().endswith((":", "：")):
+        return False
     if not all(
         item.get("source_position_known", False)
         for item in (previous, candidate)

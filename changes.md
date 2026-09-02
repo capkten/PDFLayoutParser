@@ -2,6 +2,24 @@
 
 ## 2026-09-02
 
+- 修复 `fix/zh_all_table_pages.pdf` 页面索引 `915`（合并及公司资产负债表）等表格中末尾带冒号的分类标题（如 `流动负债：`、`非流动负债：`、`所有者权益：`）与下一行科目文本误并导致结构错位与横线穿透文字的问题。
+  - **根因分析与调用位置**：
+    在 `src/hexai_pdf_parser/tables/wireless_structure/text_runs.py` 的 `build_text_runs()` 阶段，`_is_wrapped_chain_pair()`（针对 row-interleaved 模式）与 `_is_columnar_native_block_line_pair()`（针对 columnar 模式）将原生 Span 组合为文本原子（Atom）时：
+    1. 缺少对前序文本末尾冒号的拦截判定。在中文财报中，以冒号结尾的文本（如 `流动负债：`）为独立分类大项标题，其下一行必然是子科目（如 `短期借款`），绝非折行文本；
+    2. `_right_witnesses()` 纵向搜索范围偏宽（`y1 = candidate.bbox.y1 + font_size * 4.0`），错误地将下一行科目（`短期借款`）右侧的附注与金额列判定为了伴随证明（witness），导致上一行标题与下一行科目在网格构建前即被粘连为一个多行复合 Atom（如 `流动负债：\n短期借款`）；
+    3. 下游 `src/hexai_pdf_parser/tables/wireless_structure/merged_cells.py` 中虽然存在 `previous["text"].rstrip().endswith((":", "："))` 防护，但因上游 `build_text_runs` 提前粘合而无法介入。后续行聚类将该复合 Atom 划分在标题行，导致真实数据行首列留空，且两行分界线计算取上下中点时切断了数据行文字。
+  - **修复判定条件**：
+    在 `src/hexai_pdf_parser/tables/wireless_structure/text_runs.py` 的 `_is_wrapped_chain_pair()` 和 `_is_columnar_native_block_line_pair()` 判定前增加前置校验：
+    `if left["text"].rstrip().endswith((":", "：")): return False`
+    一票否决末尾带冒号文本与后续文本的折行合并。内部带冒号文本（如 `其中：应付利息`、`减：库存股`）因冒号非末尾字符，继续正常解析保持独立。
+  - **不回读 words 约束**：
+    全流程严格基于 `native span`、`atom`、列带与逻辑网格拓扑决策，不回读 `page.get_text("words")`，不回退 legacy 或 zebra 路径，继续保持 0 Occupancy Conflict 契约与严格空槽位物化。
+  - **测试与页面验证**：
+    在 `tests/test_wrapped_field_font_and_witness.py` 中新增 `test_build_text_runs_keeps_colon_ended_category_headers_separate` 单元测试，相关测试集共 197 项全部通过（`197 passed`）。使用 `fix/zh_all_table_pages.pdf` 页面索引 `915` 独立重跑至 `output/test_colon_fix_page_915/`：
+    - 结构化数据：`pages/page-915.json`、`pages/page-915.md`
+    - 可视化渲染图：`tables/page-915.png`
+    核验确认：`流动负债：`、`非流动负债：`、`所有者权益：` 恢复为独立标题行且右侧 5 列物化为空单元格；`短期借款`、`长期借款`、`股本` 完美对齐所属数据行第 1 列，横穿文字的横线彻底消除。
+
 - 修复 `fix/zh_all_table_pages.pdf` 页面索引 `437` 与 `461` 中文无线表格因词内数字切断、占位符伪列误并与浮点 Level 容差截断导致的整表漏检问题。
   - **根因分析与调用位置**：
     1. **Page 437（印刷页码 47）顶部表格**：表头第 3 列包含排版混排的“未来 12 个月”（西文加粗数字 Arial-Bold 混排仿宋）换行接“内的预期信用损失率(%)”。在 `src/hexai_pdf_parser/tables/wireless_structure/text_runs.py` 的 `_can_join()` 中，因原逻辑对中文接纯数字盲目拦截，且 `_is_wrapped_chain_pair()` 强行卡 `left["bold"] == candidate["bold"]`，导致词内嵌入数字未能在同行与跨行合并，被切碎为 3 个独立 Atom；下游 `src/hexai_pdf_parser/tables/wireless_structure/header_topology.py` 的 `_infer_complete_physical_leaf_span()` 误将碎片判为跨全表 5 列的大表头，引发网格多重占用冲突并整表丢弃。

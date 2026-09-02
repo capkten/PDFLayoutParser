@@ -544,6 +544,96 @@ def test_rescue_header_only_note_band_keeps_a_note_gap_as_a_physical_column():
     ]
 
 
+def test_rescue_header_only_leaf_band_keeps_a_trailing_empty_body_column():
+    bands = [
+        {"id": 1, "x0": 10, "x1": 30, "support": 6, "y_support": 6},
+        {"id": 2, "x0": 70, "x1": 90, "support": 6, "y_support": 6},
+        {"id": 3, "x0": 130, "x1": 150, "support": 6, "y_support": 6},
+        {"id": 4, "x0": 190, "x1": 210, "support": 6, "y_support": 6},
+    ]
+    atoms = [
+        _atom("类别", 10, 10, 30, 20, 1),
+        _atom("寿命", 70, 10, 90, 20, 2),
+        _atom("依据", 130, 10, 150, 20, 3),
+        _atom("方法", 190, 10, 210, 20, 4),
+        _atom("空列表头", 250, 10, 290, 20, 5),
+    ]
+
+    rescue = getattr(header_topology, "rescue_header_only_leaf_bands", None)
+    assert rescue is not None
+    rescued = rescue(atoms, bands, header_cutoff=25)
+
+    assert [(band["x0"], band["x1"], band.get("kind")) for band in rescued] == [
+        (10, 30, None),
+        (70, 90, None),
+        (130, 150, None),
+        (190, 210, None),
+        (250, 290, "header_only_leaf"),
+    ]
+
+
+def test_rescue_header_only_leaf_band_keeps_an_inner_empty_body_column():
+    bands = [
+        {"id": 1, "x0": 10, "x1": 30, "support": 4, "y_support": 4},
+        {"id": 2, "x0": 90, "x1": 110, "support": 4, "y_support": 4},
+    ]
+    atoms = [
+        _atom("左列", 10, 10, 30, 20, 1),
+        _atom("空列表头", 45, 10, 70, 20, 2),
+        _atom("右列", 90, 10, 110, 20, 3),
+    ]
+
+    rescued = header_topology.rescue_header_only_leaf_bands(
+        atoms, bands, header_cutoff=25
+    )
+
+    assert [band.get("kind") for band in rescued] == [
+        None,
+        "header_only_leaf",
+        None,
+    ]
+
+
+def test_rescue_header_only_leaf_band_rejects_a_parent_header_level():
+    bands = [
+        {"id": 1, "x0": 10, "x1": 30, "support": 4, "y_support": 4},
+        {"id": 2, "x0": 70, "x1": 90, "support": 4, "y_support": 4},
+        {"id": 3, "x0": 130, "x1": 150, "support": 4, "y_support": 4},
+    ]
+    atoms = [
+        _atom("父标题", 180, 5, 220, 15, 1),
+        _atom("叶子一", 10, 25, 30, 35, 2),
+        _atom("叶子二", 70, 25, 90, 35, 3),
+        _atom("叶子三", 130, 25, 150, 35, 4),
+    ]
+
+    rescued = header_topology.rescue_header_only_leaf_bands(
+        atoms, bands, header_cutoff=40
+    )
+
+    assert len(rescued) == len(bands)
+
+
+def test_rescue_header_only_leaf_band_rejects_a_nearby_field_fragment():
+    bands = [
+        {"id": 1, "x0": 10, "x1": 30, "support": 4, "y_support": 4},
+        {"id": 2, "x0": 70, "x1": 90, "support": 4, "y_support": 4},
+        {"id": 3, "x0": 130, "x1": 150, "support": 4, "y_support": 4},
+    ]
+    atoms = [
+        _atom("类别", 10, 10, 30, 20, 1),
+        _atom("依据", 70, 10, 90, 20, 2),
+        _atom("摊销方", 130, 10, 150, 20, 3),
+        _atom("法", 153, 10, 163, 20, 4),
+    ]
+
+    rescued = header_topology.rescue_header_only_leaf_bands(
+        atoms, bands, header_cutoff=25
+    )
+
+    assert len(rescued) == len(bands)
+
+
 def test_rescue_header_only_note_band_rejects_parenthetical_annotation_text():
     bands = [
         {"id": 1, "x0": 10, "x1": 40, "support": 5, "y_support": 5},
@@ -749,4 +839,3 @@ def test_rescue_sparse_body_bands_ignores_header_region_atoms():
     refined = rescue_sparse_body_bands(atoms, bands, header_cutoff=25)
 
     assert len(refined) == 2
-
