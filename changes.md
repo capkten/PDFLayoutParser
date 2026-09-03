@@ -2,6 +2,23 @@
 
 ## 2026-09-03
 
+- 修复 `fix/zh_all_table_pages.pdf` 页面索引 `1002` 中文无线表格（关联方应收款项续表）因正文首列全空导致表头叶子列带丢失、进而引发同槽位冲突导致整表漏检的问题。
+  - **根因与调用位置**：
+    1. 在 `src/hexai_pdf_parser/tables/wireless_structure/columns.py` 的 `infer_column_bands()` 中，列带候选聚类要求 `len(component) >= 2 and len(y_support) >= 2`。Page 1002 为跨页续表，首列“项目名称”在正文 22 行中全部为空槽位（继承自前一页），导致在 $x \in [88.0, 140.0]$ 整个区域内仅有表头唯一的 atom“项目名称”，未能生成第 0 列列带，全表仅推断出 5 个列带。
+    2. 在 `src/hexai_pdf_parser/tables/wireless_structure/header_topology.py` 的 `rescue_header_only_leaf_bands()` 中，原先识别孤立叶子表头的条件 `covered_ids == stable_ids and candidates` 仅支持单行表头；由于本表为多级表头，“项目名称”所在的 Level 1 仅包含“项目名称”与“关联方”，`covered_ids` 仅有第 1 列带，不等于全量稳定列带集合，且 `len(candidates) == 1 < 2`，导致救援分支未命中，首列被遗漏。
+    3. 在后续 `columns.py` 的 `assign_column()` 中，“项目名称”因无重叠列带被就近错分给相邻的 Band 1（“关联方”列），与同行（$y \approx 108.6$）的“关联方”在物理槽位 `(Row 2, Col 1)` 产生重叠占用冲突（`R2C1 conflict: T1/T2`）。冲突无法消除触发防御性抛弃，函数返回空网格，导致 ML 模型以 0.9789 高置信度检出的上半部 25 行无线大表整表丢失。
+  - **修复判定与调用位置**：
+    在 `header_topology.py` 的 `rescue_header_only_leaf_bands()` 中扩展边界叶表头（boundary leaf header）救援机制：
+    1. 当表头某一行不存在跨列父标题（`has_parent == False`）且存在位于所有稳定列带最左外侧（`c.x1 <= min_stable_x0`）或最右外侧（`c.x0 >= max_stable_x1`）的候选 atom，且当前行覆盖了对应的边界稳定列带（`min_stable_id in covered_ids` 或 `max_stable_id in covered_ids`），且表头区域所有层联合覆盖了全量稳定列带集合时，确认为合法的边界叶子列候选。
+    2. 要求候选列在表头其他 level 的垂直投影范围内无遮挡冲突（`other_level_atoms == []`），且与左右相邻列带及同行相邻元素均保持充分几何间距（$\ge \text{minimum\_gap} = \max(8.0, 1.25 \times \text{line\_height})$）。
+    3. 严格禁止纯数字、占位符、附注编号或结构单位作为边界叶表头救援。
+  - **结构约束**：全流程严格只消费 native span、atom、列带、物理 Cell 和逻辑 Cell；不回读 `page.get_text("words")`，不进入 zebra 或 legacy 二次重建，不硬编码业务表头文字；遵循 0 Occupancy Conflict 契约与独立空槽位物化。
+  - **测试与页面验证**：
+    - 在 `tests/test_wireless_structure_header_topology.py` 中新增多级表头最左端叶子列救援正例、窄间距反例及纯数字反例；
+    - 新增页面集成测试 `tests/test_page_1002_table_recovery.py`，锁定无 words 守卫、Table 1 为 25 行 × 6 列（140 个 Cell 覆盖、0 槽位冲突、表头跨度精准、首列空槽位独立物化）、Table 2 为 7 行 × 4 列；
+    - 全量无线结构测试 169 项 100% 通过（`169 passed`）。
+    - 独立重跑 Page 1002 完整流水线至新输出目录 `output/fix_page_1002_sparse_header_leaf_band_20260903/`：成功导出 `pages/page-1002.json`、`pages/page-1002.md` 和可视化 PNG `tables/page-1002.png`，视觉核验确认 Table 1（`25x6`，置信度 0.98）与 Table 2（`7x4`，置信度 0.97）红框完全闭合、蓝线网格对齐贴合、22 行往来数据与左侧空单元格规整连续无错位。
+
 - 修复 `fix/zh_all_table_pages.pdf` 页面索引 `988`、`989` 中文无线表格将公司组间间距恢复为 5 条贯穿空列的问题。
   - **根因与调用位置**：`src/hexai_pdf_parser/tables/wireless_structure/columns.py::_compatible()` 对占位符与数值的同列兼容同时要求覆盖占位符宽度的 75% 且绝对重叠不少于 4pt。两页右对齐短横线 `-` 的 bbox 宽度仅为 2.064 至 3.764pt，即使与同列金额 bbox 100% 重叠也无法满足 4pt 下限；重复短横线因此在 `infer_column_bands()` 中形成 5 条独立窄带。`refine_leaf_bands()` 随后将六个公司宽带各拆成两个金额叶子列，结果从正确的 13 列膨胀为 18 列。列分配平局时短横线回到靠前的正常金额列，窄带本身没有内容，最终被 `materialize_empty_cells()` 逐行物化为空 Cell，所以 PNG 中空列位于短横线右侧。
   - **修复判定**：占位符与数值的列带兼容仅要求实际水平重叠至少覆盖占位符 bbox 宽度的 75%，移除不适用于窄字形的固定 4pt 下限。Page 988/989 的目标短横线覆盖率为 100%，可并入对应金额组件；Page 944 既有跨列尾部空白擦碰覆盖率约为 45.6%，继续被拒绝。普通 atom 的兼容条件、叶子列细化、表头跨度、occupancy conflict 检查和空槽位物化保持不变。

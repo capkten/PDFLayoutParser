@@ -1122,3 +1122,77 @@ def test_rescue_sparse_body_bands_ignores_header_region_atoms():
     refined = rescue_sparse_body_bands(atoms, bands, header_cutoff=25)
 
     assert len(refined) == 2
+
+
+def test_rescue_header_only_leaf_bands_accepts_multilevel_leftmost_leaf_header():
+    # 模拟 Page 1002 结构:
+    # Stable bands: Band 1 (关联方 140-240), Band 2 (270-320), Band 3 (330-370)
+    # Level 0 (y=10): 父表头覆盖 Band 2 和 Band 3 (x=270-370)
+    # Level 1 (y=25): 候选“项目名称”(x=88-124), “关联方”(x=180-210, 覆盖 Band 1)
+    # Level 2 (y=40): 子表头覆盖 Band 2 (x=270-310), Band 3 (x=330-370)
+    bands = [
+        {"id": 1, "x0": 140.0, "x1": 240.0, "support": 10, "y_support": 10},
+        {"id": 2, "x0": 270.0, "x1": 320.0, "support": 10, "y_support": 10},
+        {"id": 3, "x0": 330.0, "x1": 370.0, "support": 10, "y_support": 10},
+    ]
+    atoms = [
+        _atom("余额汇总", 270.0, 5, 370.0, 15, 1),
+        _atom("项目名称", 88.0, 20, 124.0, 30, 2),
+        _atom("关联方", 180.0, 20, 210.0, 30, 3),
+        _atom("账面余额", 270.0, 35, 310.0, 45, 4),
+        _atom("坏账准备", 330.0, 35, 370.0, 45, 5),
+    ]
+
+    rescued = header_topology.rescue_header_only_leaf_bands(
+        atoms, bands, header_cutoff=50.0
+    )
+
+    header_only = [
+        band for band in rescued if band.get("kind") == "header_only_leaf"
+    ]
+    assert len(header_only) == 1
+    assert header_only[0]["x0"] == 88.0
+    assert header_only[0]["x1"] == 124.0
+    assert rescued[0]["id"] == 1
+    assert rescued[0]["x0"] == 88.0
+
+
+def test_rescue_header_only_leaf_bands_rejects_boundary_candidate_with_insufficient_gap():
+    bands = [
+        {"id": 1, "x0": 130.0, "x1": 240.0, "support": 10, "y_support": 10},
+        {"id": 2, "x0": 270.0, "x1": 320.0, "support": 10, "y_support": 10},
+    ]
+    atoms = [
+        _atom("余额汇总", 270.0, 5, 320.0, 15, 1),
+        _atom("项目名称", 125.0, 20, 128.0, 30, 2),  # 间距仅 2.0pt < minimum_gap
+        _atom("关联方", 180.0, 20, 210.0, 30, 3),
+    ]
+
+    rescued = header_topology.rescue_header_only_leaf_bands(
+        atoms, bands, header_cutoff=50.0
+    )
+    header_only = [
+        band for band in rescued if band.get("kind") == "header_only_leaf"
+    ]
+    assert len(header_only) == 0
+
+
+def test_rescue_header_only_leaf_bands_rejects_numeric_or_note_boundary_candidate():
+    bands = [
+        {"id": 1, "x0": 140.0, "x1": 240.0, "support": 10, "y_support": 10},
+        {"id": 2, "x0": 270.0, "x1": 320.0, "support": 10, "y_support": 10},
+    ]
+    atoms = [
+        _atom("余额汇总", 270.0, 5, 320.0, 15, 1),
+        _atom("123", 88.0, 20, 110.0, 30, 2),  # 纯数字
+        _atom("关联方", 180.0, 20, 210.0, 30, 3),
+    ]
+
+    rescued = header_topology.rescue_header_only_leaf_bands(
+        atoms, bands, header_cutoff=50.0
+    )
+    header_only = [
+        band for band in rescued if band.get("kind") == "header_only_leaf"
+    ]
+    assert len(header_only) == 0
+
