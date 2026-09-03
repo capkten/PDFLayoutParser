@@ -2,6 +2,11 @@
 
 ## 2026-09-03
 
+- 修复 `fix/zh_all_table_pages.pdf` 页面索引 `988`、`989` 中文无线表格将公司组间间距恢复为 5 条贯穿空列的问题。
+  - **根因与调用位置**：`src/hexai_pdf_parser/tables/wireless_structure/columns.py::_compatible()` 对占位符与数值的同列兼容同时要求覆盖占位符宽度的 75% 且绝对重叠不少于 4pt。两页右对齐短横线 `-` 的 bbox 宽度仅为 2.064 至 3.764pt，即使与同列金额 bbox 100% 重叠也无法满足 4pt 下限；重复短横线因此在 `infer_column_bands()` 中形成 5 条独立窄带。`refine_leaf_bands()` 随后将六个公司宽带各拆成两个金额叶子列，结果从正确的 13 列膨胀为 18 列。列分配平局时短横线回到靠前的正常金额列，窄带本身没有内容，最终被 `materialize_empty_cells()` 逐行物化为空 Cell，所以 PNG 中空列位于短横线右侧。
+  - **修复判定**：占位符与数值的列带兼容仅要求实际水平重叠至少覆盖占位符 bbox 宽度的 75%，移除不适用于窄字形的固定 4pt 下限。Page 988/989 的目标短横线覆盖率为 100%，可并入对应金额组件；Page 944 既有跨列尾部空白擦碰覆盖率约为 45.6%，继续被拒绝。普通 atom 的兼容条件、叶子列细化、表头跨度、occupancy conflict 检查和空槽位物化保持不变。
+  - **结构约束**：修改只发生在 native-span 的 atom 列带推断阶段；页面结构验证使用 `NoWordsPage` 守卫确认未调用 `page.get_text("words")`，未进入 `extract_zebra()` 或 legacy 二次重建。空槽继续按独立 `1x1` Cell 物化，每个逻辑槽位保持唯一占用。
+  - **测试与页面验证**：先新增宽度 3.764pt、与金额 100% 重叠的短横线正例并确认 RED 为 2 个列带，再以最小修改转 GREEN；与 Page 944 的 45.6% 擦碰反例及列带、表头拓扑、恢复器相关测试合计 `77 passed, 1 skipped`，skip 为 worktree 未复制本地大 PDF。扩展测试为 `578 passed, 40 skipped, 3 failed`，三个既有失败分别为缺失 `camelot_stream_demo`、LayoutBuilder 的 IoU=0.5 边界行为及已记录的 hybrid source 预期，均不涉及本次修改；默认全仓收集另有缺失 `camelot_stream_demo`、`layout_model_utils` 和 `benchmark_utils.extract_model_profile` 的 3 个既有导入错误。使用最终 worktree 源码直接验证 Page 944/988/989，三页均为 13 列、无整列为空、occupancy conflict 为 0，槽位覆盖分别为 `117/117`、`260/260`、`117/117`。Page 988/989 完整单页管线独立输出至 `D:\codes\PDFLayoutParser\output\fix_page_988_989_placeholder_columns_20260903\page-988\` 和 `...\page-989\`：两页均为 1 张 `wireless_span_recovery` 表，分别为 `20x13`（240 个 Cell）与 `9x13`（97 个 Cell），六个公司父表头均为连续 `colspan=2`。最终 PNG 分别为 `page-988\tables\page-988.png`、`page-989\tables\page-989.png`；视觉核验确认 5 条贯穿空列消失，短横线保留在金额列，表格边界、组内/组间线框及相邻公司组均无明显异常。
 - 修复 `fix/zh_all_table_pages.pdf` 页面索引 `969` 中文无线复合表头表格（Table 2“资产负债表中归属于母公司的其他综合收益”、Table 3“利润表中归属于母公司的其他综合收益”）漏检与结构列塌陷问题。
   - **根因与调用位置**：
     1. 在 `src/hexai_pdf_parser/tables/wireless_structure/columns.py` 的 `infer_column_bands()` 中，原过滤宽表头的条件 `_is_wide_header()` 写死了宽度比例 `item_width >= width * 0.28`。Table 2 和 Table 3 的父表头“本期发生额”（宽度约 52.8pt，占区域总宽仅 12.5%）未被过滤进入连通分量合并。由于“本期发生额”横跨左右两个独立叶子列轨道，在连通图无差别传递闭包合并中将本应独立的叶子列带桥接为一个宽列带（Band 3），导致 Table 2 的“税后归属于母公司”与“减：前期计入...”被吸入同一列带。

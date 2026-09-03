@@ -28,6 +28,21 @@ def test_infer_column_bands_uses_repeated_overlapping_x_tracks():
     assert assign_column(_atom("150", 102, 50, 118), bands) == bands[1]["id"]
 
 
+def test_infer_column_bands_merges_narrow_placeholder_with_right_aligned_amounts():
+    atoms = [
+        _atom("100.00", 180.0, 10.0, 225.9),
+        _atom("200.00", 180.0, 30.0, 225.9),
+        _atom("-", 222.14, 50.0, 225.904),
+        _atom("-", 222.14, 70.0, 225.904),
+    ]
+
+    bands = infer_column_bands(atoms, BBox(0.0, 0.0, 400.0, 90.0))
+
+    assert len(bands) == 1
+    assert bands[0]["x0"] == 180.0
+    assert bands[0]["x1"] == 225.904
+
+
 def test_wide_spanning_header_does_not_bridge_body_columns():
     atoms = [
         _atom("项目", 10, 10, 35),
@@ -188,4 +203,3 @@ def test_infer_column_bands_excludes_sparse_left_section_title():
         (260, 285),
         (320, 360),
     ]
-
