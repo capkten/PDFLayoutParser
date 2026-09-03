@@ -2,6 +2,27 @@
 
 ## 2026-09-03
 
+- 修复 `fix/zh_all_table_pages.pdf` 页面索引 `969` 中文无线复合表头表格（Table 2“资产负债表中归属于母公司的其他综合收益”、Table 3“利润表中归属于母公司的其他综合收益”）漏检与结构列塌陷问题。
+  - **根因与调用位置**：
+    1. 在 `src/hexai_pdf_parser/tables/wireless_structure/columns.py` 的 `infer_column_bands()` 中，原过滤宽表头的条件 `_is_wide_header()` 写死了宽度比例 `item_width >= width * 0.28`。Table 2 和 Table 3 的父表头“本期发生额”（宽度约 52.8pt，占区域总宽仅 12.5%）未被过滤进入连通分量合并。由于“本期发生额”横跨左右两个独立叶子列轨道，在连通图无差别传递闭包合并中将本应独立的叶子列带桥接为一个宽列带（Band 3），导致 Table 2 的“税后归属于母公司”与“减：前期计入...”被吸入同一列带。
+    2. 在 `src/hexai_pdf_parser/tables/wireless_structure/header_topology.py` 的 `_is_numeric_body_atom()` 中，原先使用 `any(char.isdigit() for char in item["text"])`。财报表头中广泛存在的列序号（如 `（1）`、`（2）`）与计算公式（如 `（4）=（1）+（2）-（3）`、`（5）=（1）-（2）-（3）-（4）`、`（1）-`）均因包含数字被误判为“正文数值”，导致 `_header_cutoff()` 在表头公式处过早截断（Table 2 截断于 y=297.1，Table 3 截断于 y=524.8），使得大量表头叶子文本落入正文区间。同时，正文首行若为全占位符（`-`）未被计入正文范围。
+    3. 在 `src/hexai_pdf_parser/tables/wireless_structure/header_topology.py` 的 `_infer_centered_parent_span()` 中，原先只检查跨度宽度比例与中心差值，未检验候选跨列单元格是否在几何上实质覆盖所提议跨度的两侧边界列带。导致完全位于单列内的叶子表头“税后归属于母公司”被误扩散为跨 2-4 列，与同行的“减：前期计入...”产生槽位占用冲突（Occupancy Conflict），最终触发整表抛弃返回空表。
+  - **修复判定与调用位置**：
+    1. 在 `columns.py` 中引入拓扑跨列表头判定 `is_spanning_header(atom, atoms, region)`：在表格上部 45% 区域内，若 atom 下方存在至少两个水平互斥（无水平交集）且被该 atom 实质重叠（两端重叠均 >= 5.0pt）的独立文本轨迹，判定该 atom 为跨列父表头，在 `infer_column_bands()` 候选池中予以排除，防止多米诺式桥接合并叶子列。
+    2. 在 `header_topology.py` 中增加 `_is_header_index_or_formula()` 判定：对带括号的列序号（如 `（1）`）或带等号/运算符的表头公式（如 `（4）=（1）`、`（5）=`、`+（2）-`）予以识别，排除在正文数值原子之外；同时排除带列序号后缀的中文长标题。
+    3. 在 `header_topology.py` 的 `_header_cutoff()` 中，当首个数值正文行上方紧邻一行由连续占位符（`-`）构成的记录时，将正文边界向上延伸覆盖该占位符行。
+    4. 在 `header_topology.py` 的 `_infer_centered_parent_span()` 中增加几何物理覆盖守卫：要求提议跨列的 atom 必须物理触达跨度起始列带与终止列带（`atom["bbox"][0] <= first["x1"] and atom["bbox"][2] >= last["x0"]`），严禁将单列内部的叶表头误扩成跨多列。
+  - **结构约束**：全流程严格基于 native span、atom、列带、物理 Cell 和逻辑网格拓扑决策，严禁回读 `page.get_text("words")`，不回退 zebra 或 legacy 二次重建，不硬编码业务表头文字；遵循 0 Occupancy Conflict 契约与独立空槽位物化。
+  - **测试与页面验证**：
+    - 新增针对性单元与集成测试 `tests/test_page_969_spanning_headers.py`（包含 Table 2 恢复为 5 列且“本期发生额”恢复 colspan=2 正例、Table 3 恢复为 6 列且占位符列完整独立分立正例、以及 `is_spanning_header` 单列叶表头/正文标题不误判反例）；
+    - 全量 190 个无线表格测试套件 100% 通过（`190 passed`）。
+    - 独立重跑 Page 969 完整流水线至新输出目录 `D:\codes\PDFLayoutParser\.worktrees\fix-page-969-parent-span\output\fix_page_969_20260903\`，成功提取出全部 3 张表格：
+      - Table 1（资本公积）：`5x5`，source=`wireless_span_recovery`，置信度 0.967；
+      - Table 2（资产负债表其他综合收益）：`8x5`，36 cells，source=`wireless_span_recovery`，置信度 0.978，“本期发生额”精准赋予 `[R0C2, rs=1, cs=2]`，下方两个叶子列分立，4 行正文数值与横杠列完全对齐；
+      - Table 3（利润表其他综合收益）：`11x6`，65 cells，source=`wireless_span_recovery`，置信度 0.979，彻底解决列合并与 `--` 畸变问题，6 列完全分立且 4 行数据完整；
+      - 可视化 PNG `page-969-visualized.png` 经视觉核验，三个表格边界完全闭合、网格划分精确贴合、文字与框体无误并无错位。
+
+
 - 修复 `fix/zh_all_table_pages.pdf` 页面索引 `464` 中文无线表格（政府补助明细表）因占位符与金额连带 Span 拆分间距未计空格宽度导致整表漏检的问题。
   - **根因与调用位置**：在 `src/hexai_pdf_parser/tables/wireless_structure/span_chain.py` 的 `_split_packed_numeric_fields()` 中，原先计算空白处相邻字符间距时采用切片循环 `gaps = [char_boxes[right]["bbox"][0] - char_boxes[right - 1]["bbox"][2] for right in range(whitespace_start, whitespace_end + 1)]`。在 PyMuPDF 原生字符流中，空格字符自身带有独立字符框（例如 Page 464 合计行中空格字符 bbox 宽度达 2.41pt）。原切片循环分别计算了占位符 `'-'` 与空格之间（0.00pt）以及空格与后续数字 `'7'` 之间（0.71pt）的间隙，两者均小于阈值 `gap_limit = max(1.5, 10.56 * 0.18) = 1.90pt`，错误地排除了空格字符本身的几何宽度，导致实际达 3.12pt 的跨列物理空白未被识别，`'-- 74,956,072.71'` 原样返回未拆分。未拆分的复合 Atom 导致下游 `infer_column_bands()` 将第 5 列（其他变动）与第 6 列（期末余额）合并为一个宽列带，引发 `(Row 3, Col 5)` 等多个网格槽位占用冲突（occupancy conflict），`recover_cells_from_region()` 触发防御性抛弃返回空结果，使 ML 模型以 0.9637 置信度检出的顶部 4x7 表格整表丢失。
   - **修复判定与调用位置**：在 `span_chain.py` 的 `_split_packed_numeric_fields()` 中，引入前序实体字符右沿到后续实体字符左沿的完整跨空白几何距离 `total_gap = char_boxes[whitespace_end]["bbox"][0] - char_boxes[whitespace_start - 1]["bbox"][2]`，只要 `total_gap >= gap_limit` 或局部残差间隙 `max(gaps) >= gap_limit`，均判定达到拆分条件。

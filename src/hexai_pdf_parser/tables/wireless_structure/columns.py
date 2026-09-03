@@ -67,6 +67,38 @@ def _is_wide_header(item: dict[str, Any], region: BBox) -> bool:
     return item_width >= width * 0.28 and item["bbox"][0] >= region.x0 + width * 0.18
 
 
+def is_spanning_header(atom: dict[str, Any], atoms: Sequence[dict[str, Any]], region: BBox) -> bool:
+    """Check if atom spans across multiple horizontally separated tracks below it."""
+    region_h = max(1.0, region.y1 - region.y0)
+    if (atom["bbox"][1] - region.y0) > region_h * 0.45:
+        return False
+    region_w = max(1.0, region.x1 - region.x0)
+    atom_w = atom["bbox"][2] - atom["bbox"][0]
+    if atom_w >= region_w * 0.85:
+        return False
+    atom_cy = (atom["bbox"][1] + atom["bbox"][3]) / 2.0
+    below_atoms = [
+        a for a in atoms
+        if (a["bbox"][1] + a["bbox"][3]) / 2.0 > atom_cy + 4.0
+    ]
+    if not below_atoms:
+        return False
+    overlapping_below = [
+        a for a in below_atoms
+        if min(a["bbox"][2], atom["bbox"][2]) - max(a["bbox"][0], atom["bbox"][0]) > 2.0
+    ]
+    if len(overlapping_below) < 2:
+        return False
+    for a1 in overlapping_below:
+        for a2 in overlapping_below:
+            if a1["bbox"][2] + 2.0 <= a2["bbox"][0]:
+                ov1 = min(a1["bbox"][2], atom["bbox"][2]) - max(a1["bbox"][0], atom["bbox"][0])
+                ov2 = min(a2["bbox"][2], atom["bbox"][2]) - max(a2["bbox"][0], atom["bbox"][0])
+                if ov1 >= 5.0 and ov2 >= 5.0:
+                    return True
+    return False
+
+
 def infer_column_bands(atoms: Sequence[dict[str, Any]], region: BBox) -> list[dict[str, Any]]:
     """Build column bands from repeated x-overlap components."""
     candidates = [
@@ -74,6 +106,7 @@ def infer_column_bands(atoms: Sequence[dict[str, Any]], region: BBox) -> list[di
         for item in atoms
         if item["bbox"][2] - item["bbox"][0] < (region.x1 - region.x0) * 0.86
         and not _is_wide_header(item, region)
+        and not is_spanning_header(item, atoms, region)
         and not is_sparse_left_section_title(item, atoms, region)
     ]
     components: list[list[dict[str, Any]]] = []

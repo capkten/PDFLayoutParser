@@ -42,6 +42,7 @@ _NOTE_REFERENCE = re.compile(
 _CHECKMARK = re.compile(r"^\s*[\u2713\u2714\u2611]\s*$")
 _NUMERIC = re.compile(r"^[+-]?(?:\d{1,3}(?:,\d{3})*|\d+)(?:\.\d+)?%?$")
 _PLACEHOLDER = re.compile(r"^(?:--+|——+|—+|-+|/|\*+|NA|N/A|\.)$", re.IGNORECASE)
+_HEADER_INDEX_OR_FORMULA = re.compile(r"^[()（）\d+=\—–*/\s\-]+$")
 
 
 def _is_placeholder(item: dict[str, Any]) -> bool:
@@ -141,6 +142,14 @@ def _header_cutoff(atoms: Sequence[dict[str, Any]]) -> float | None:
             numeric_body_levels.append(index)
     if len(numeric_body_levels) >= 2:
         first_body_index = numeric_body_levels[0]
+        if first_body_index >= 2:
+            prev_row = [
+                item for item in atoms
+                if abs(_center_y(item) - levels[first_body_index - 1]) < 0.5
+            ]
+            dash_count = sum(1 for item in prev_row if _is_placeholder(item))
+            if dash_count >= 2:
+                first_body_index -= 1
         return (levels[first_body_index - 1] + levels[first_body_index]) / 2.0
     # In a dense, multi-row header the first large gap is the body boundary.
     # Do not use the globally largest gap: bilingual body rows can create later
@@ -263,9 +272,26 @@ def _is_note_reference_atom(atom: dict[str, Any]) -> bool:
     return bool(_NOTE_REFERENCE.match(str(atom.get("text", ""))))
 
 
+def _is_header_index_or_formula(text: str) -> bool:
+    s = text.strip()
+    if not s:
+        return False
+    if not _HEADER_INDEX_OR_FORMULA.fullmatch(s):
+        return False
+    if re.fullmatch(r"^[+-]?\d+(?:\.\d+)?%?$", s):
+        return False
+    # Must have parentheses (e.g. （1）) or formula equals sign (e.g. =)
+    return bool(re.search(r"[（()）=]", s))
+
+
 def _is_numeric_body_atom(item: dict[str, Any]) -> bool:
     """金额、百分比和年份等数值对象可作为叶子数值列的稳定锚点。"""
-    return any(char.isdigit() for char in item["text"])
+    text = str(item.get("text", "")).strip()
+    if _is_header_index_or_formula(text):
+        return False
+    if any(0x4E00 <= ord(c) <= 0x9FFF for c in text) and re.search(r"[（(]\d+[)）]$", text):
+        return False
+    return any(char.isdigit() for char in text)
 
 
 def _is_latin_body_atom(item: dict[str, Any]) -> bool:
@@ -916,6 +942,8 @@ def _infer_centered_parent_span(
             width = last["x1"] - first["x0"]
             centre = (first["x0"] + last["x1"]) / 2.0
             if width < atom_width * 1.55 or width > atom_width * 3.05:
+                continue
+            if atom["bbox"][0] > first["x1"] or atom["bbox"][2] < last["x0"]:
                 continue
             if abs(centre - atom_center) <= max(4.0, width * 0.08):
                 viable.append((abs(centre - atom_center), span))
