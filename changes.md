@@ -2,6 +2,12 @@
 
 ## 2026-09-03
 
+- 修复 `fix/zh_all_table_pages.pdf` 页面索引 `469` 中文无线表格（上年年末余额续表）因单行数据续表导致表头下界推断失效、进而引发叶子列拆分冲突整表漏检的问题。
+  - **根因与调用位置**：在 `src/hexai_pdf_parser/tables/wireless_structure/header_topology.py` 的 `_header_cutoff()` 中，原先识别数值正文行作为表头下界的条件硬编码要求 `len(numeric_body_levels) >= 2`（至少两行数值行）。当跨页续表尾部仅有 1 行合计数据行（包含“金融负债和或有负债合计”及 5 列金额数值）时，`len(numeric_body_levels) == 1` 导致未能识别正文行；随后的最大空白回退逻辑因本页包含父子表头大间距（20.04pt），导致 `minimum_gap = median_gap * 2.0 = 40.08pt` 错杀了真实的表头正文间距（33.82pt），使 `_header_cutoff` 返回 `None`。由于缺少表头分界线，`refine_leaf_bands()` 放弃将跨列父表头“上年年末余额”桥接的第 3、4 列带拆分为独立叶子列，导致“一年至三年以内”与“三年至五年以内”落入同一网格槽位 `R1C3`，触发 `occupancy conflict` 后整表抛弃。
+  - **修复判定与调用位置**：在 `header_topology.py` 的 `_header_cutoff()` 中完善单行多数值数据续表的判定：统计每个候选层级中非结构化数值字段数量，当 `len(numeric_body_levels) >= 2` 或 `len(numeric_body_levels) == 1 and numeric_row_counts[numeric_body_levels[0]] >= 2` 时，均确认为合法的正文行起点并计算表头分界。单个字段的偶发数字或附注编号继续被保护不误判。
+  - **结构约束**：全流程严格基于 native span、atom、列带与逻辑网格拓扑决策，不回读 `page.get_text("words")`，不回退 zebra 或 legacy 路径，严格遵循 0 Occupancy Conflict 契约与严格空槽位物化。
+  - **测试与页面验证**：新增 `tests/test_page_469_table_recovery.py`，锁定无 words 守卫、2 张表格完整恢复、Table 1 为 3 行 x 6 列（13 个 Cell 覆盖、0 冲突、父表头 colspan=2、独立表头 rowspan=2）、Table 2 为 5 行 x 3 列；在 `tests/test_wireless_structure_header_topology.py` 中新增单行多金额数据行正例及单表头数字注释反例。无线结构与相关专项共 `87 passed, 1 skipped`。页面索引 `469` 独立重跑至 `output/page_469_continuation_table_recovery_20260903/`：成功导出 `pages/page-469.json`、`pages/page-469.md` 和可视化 PNG `tables/page-469.png`，视觉核验确认顶部续表与下部表格均完整框选标注，网格规整无重叠。
+
 - 修复 `fix/zh_all_table_pages.pdf` 页面索引 `960` 上下两张中文无线三线表因相邻列 span 被同行间距规则误合并而整页漏表的问题。
   - **根因与调用位置**：模型分别以 `0.9803`、`0.9779` 置信度正确检出 `[84.3,117.8,505.5,352.8]` 与 `[84.2,384.5,505.5,608.9]`，但金额右沿与下一列文本左沿仅相距约 `3.232pt`，小于 `build_text_runs()` 当前约 `3.696pt` 的混合脚本合并上限，因而形成 `1,734,597.85诉讼冻结`、`2,660,785,019.27借款抵押` 等跨列 atom。跨列 atom 将“账面价值”和“受限类型”桥接成同一列带，表头及正文产生同槽位 occupancy conflict，`recover_cells_from_region()` 返回空结果。
   - **修复判定**：在 `src/hexai_pdf_parser/tables/wireless_structure/text_runs.py` 的 span 到 atom 同行组合入口增加纯几何 veto。现有 `_can_join()` 仍是唯一正向合并判定；只有当前 span 对及至少 2 个外部视觉行共同形成稳定成对对齐轨迹、两侧非锚边宽度存在实质变化，并且全部支持行之间存在宽于 `max(1.0pt, min_font_size * 0.12)` 的共同空白走廊时，才拒绝本次合并。数字优先使用右边界轨迹，普通文本比较左/右/中心轨迹，两个纯中心轨迹不能互相证明；支持不足、固定宽度字段碎片或共同走廊不成立时保持原合并行为。判断只消费当前 region 已有 native span 及 bbox，不回读 `page.get_text("words")`，不进入 zebra、legacy、列带后补救或业务文字白名单路径。

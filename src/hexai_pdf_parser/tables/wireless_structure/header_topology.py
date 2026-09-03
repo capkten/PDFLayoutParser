@@ -130,16 +130,22 @@ def _header_cutoff(atoms: Sequence[dict[str, Any]]) -> float | None:
     # body note can create a later sparse level and a larger gap, so this must be
     # checked before the generic large-gap heuristic.
     numeric_body_levels = []
+    numeric_row_counts = {}
     for index, level in enumerate(levels[1:], 1):
         row = [item for item in atoms if abs(_center_y(item) - level) < 0.5]
-        if any(
-            _is_numeric_body_atom(item)
+        num_count = sum(
+            1
+            for item in row
+            if _is_numeric_body_atom(item)
             and not _is_structural_header_atom(item)
             and not _is_temporal_leaf_header(item)
-            for item in row
-        ):
+        )
+        if num_count > 0:
             numeric_body_levels.append(index)
-    if len(numeric_body_levels) >= 2:
+            numeric_row_counts[index] = num_count
+    if len(numeric_body_levels) >= 2 or (
+        len(numeric_body_levels) == 1 and numeric_row_counts[numeric_body_levels[0]] >= 2
+    ):
         first_body_index = numeric_body_levels[0]
         return (levels[first_body_index - 1] + levels[first_body_index]) / 2.0
     # In a dense, multi-row header the first large gap is the body boundary.

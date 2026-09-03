@@ -109,6 +109,43 @@ def test_infer_header_cutoff_treats_repeated_latin_rows_after_header_as_body():
     assert 38 < cutoff < 50
 
 
+def test_infer_header_cutoff_identifies_single_numeric_body_row_with_multiple_fields():
+    # Multi-tier header followed by a single continuation row with multiple currency/numeric amounts (Page 469 pattern)
+    atoms = [
+        _atom("上年年末余额", 333.67, 102.15, 405.91, 114.15, 1),
+        _atom("项目", 90.5, 122.19, 114.62, 134.19, 1),
+        _atom("一年\n以内", 233.57, 122.91, 257.69, 150.51, 1),
+        _atom("一年至\n三年以内", 292.01, 122.91, 340.26, 150.51, 1),
+        _atom("三年至\n五年以内", 371.47, 122.91, 419.7, 150.51, 1),
+        _atom("五年\n以上", 449.26, 122.91, 473.38, 150.51, 1),
+        _atom("合计", 508.9, 130.71, 533.02, 142.71, 1),
+        _atom("金融负债和\n或有负债合计", 90.5, 158.07, 162.72, 185.67, 1),
+        _atom("17,927.57", 213.89, 163.39, 260.43, 177.14, 1),
+        _atom("612.04", 310.15, 163.39, 343.01, 177.14, 1),
+        _atom("194.48", 389.59, 163.39, 422.48, 177.14, 1),
+        _atom("2,500.00", 435.1, 163.39, 476.12, 177.14, 1),
+        _atom("21,234.09", 489.22, 163.39, 535.78, 177.14, 1),
+    ]
+
+    cutoff = infer_header_cutoff(atoms)
+
+    assert cutoff is not None
+    assert 142.71 < cutoff < 163.39
+
+
+def test_infer_header_cutoff_rejects_header_only_numeric_annotation_single_row():
+    # A single note/number in header level must not be treated as a body row
+    atoms = [
+        _atom("项目", 10, 10, 40, 20, 1),
+        _atom("附注(1)", 50, 10, 80, 20, 2),
+        _atom("说明", 10, 25, 40, 35, 3),
+        _atom("内容", 50, 25, 80, 35, 4),
+    ]
+
+    cutoff = infer_header_cutoff(atoms)
+    assert cutoff is None
+
+
 def test_refine_leaf_bands_stops_before_a_numeric_body_row_with_later_wraps():
     bands = [
         {"id": 1, "x0": 87.74, "x1": 147.74, "support": 5, "y_support": 5},
