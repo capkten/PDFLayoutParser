@@ -2,6 +2,13 @@
 
 ## 2026-09-03
 
+- 修复 `fix/zh_all_table_pages.pdf` 页面索引 `469` 中文无线表格（上年年末余额续表）因单行数据续表导致表头下界推断失效、进而引发叶子列拆分冲突整表漏检的问题。
+  - **根因与调用位置**：在 `src/hexai_pdf_parser/tables/wireless_structure/header_topology.py` 的 `_header_cutoff()` 中，原先识别数值正文行作为表头下界的条件硬编码要求 `len(numeric_body_levels) >= 2`（至少两行数值行）。当跨页续表尾部仅有 1 行合计数据行（包含“金融负债和或有负债合计”及 5 列金额数值）时，`len(numeric_body_levels) == 1` 导致未能识别正文行；随后的最大空白回退逻辑因本页包含父子表头大间距（20.04pt），导致 `minimum_gap = median_gap * 2.0 = 40.08pt` 错杀了真实的表头正文间距（33.82pt），使 `_header_cutoff` 返回 `None`。由于缺少表头分界线，`refine_leaf_bands()` 放弃将跨列父表头“上年年末余额”桥接的第 3、4 列带拆分为独立叶子列，导致“一年至三年以内”与“三年至五年以内”落入同一网格槽位 `R1C3`，触发 `occupancy conflict` 后整表抛弃。
+  - **修复判定与调用位置**：在 `header_topology.py` 的 `_header_cutoff()` 中完善单行多数值数据续表的判定：统计每个候选层级中非结构化数值字段数量，当 `len(numeric_body_levels) >= 2` 或 `len(numeric_body_levels) == 1 and numeric_row_counts[numeric_body_levels[0]] >= 2` 时，均确认为合法的正文行起点并计算表头分界。单个字段的偶发数字或附注编号继续被保护不误判。
+  - **结构约束**：全流程严格基于 native span、atom、列带与逻辑网格拓扑决策，不回读 `page.get_text("words")`，不回退 zebra 或 legacy 路径，严格遵循 0 Occupancy Conflict 契约与严格空槽位物化。
+  - **测试与页面验证**：新增 `tests/test_page_469_table_recovery.py`，锁定无 words 守卫、2 张表格完整恢复、Table 1 为 3 行 x 6 列（13 个 Cell 覆盖、0 冲突、父表头 colspan=2、独立表头 rowspan=2）、Table 2 为 5 行 x 3 列；在 `tests/test_wireless_structure_header_topology.py` 中新增单行多金额数据行正例及单表头数字注释反例。无线结构与相关专项共 `87 passed, 1 skipped`。页面索引 `469` 独立重跑至 `output/page_469_continuation_table_recovery_20260903/`：成功导出 `pages/page-469.json`、`pages/page-469.md` 和可视化 PNG `tables/page-469.png`，视觉核验确认顶部续表与下部表格均完整框选标注，网格规整无重叠。
+
+
 - 修复 `fix/zh_all_table_pages.pdf` 页面索引 `938` 上方“开发成本”中文无线表格因跨 native line 的日期片段产生占位冲突而整表丢失的问题。
   - **根因与调用位置**：模型已以 `0.9799` 置信度检出 `[83.4, 117.1, 753.5, 425.4]`，但 `build_text_runs()` 处理“开始陆续完成竣工验收，2022 年 6 / 月开始陆续完工”时，只接受同一 native line 内的“中文 + 数字 + 中文”见证；行末数字 `6` 因后置中文“月”位于同一 block 的下一 native line 而被保留为独立 atom。该 atom 与前面的多行说明同时落入 `R5C3`，`recover_cells_from_region()` 检测到 occupancy conflict 后返回空结果。
   - **修复判定**：在 `src/hexai_pdf_parser/tables/wireless_structure/text_runs.py` 的 `_can_join()` 增加跨行中文后缀见证。仅当数字与前文同 native line 且 flow 连续、全局下一 span 属于同一 block 的紧邻下一行首 span、下一行含中文、垂直间距受限、横向回行并与当前字段明显重叠时，才允许行末数字进入当前 atom；不同 block 的下一条记录和无后置中文的独立数值字段仍保持分离。修复不在网格或冲突兜底阶段合并字段，不回读 `page.get_text("words")`，不进入 zebra 或 legacy 路径。
