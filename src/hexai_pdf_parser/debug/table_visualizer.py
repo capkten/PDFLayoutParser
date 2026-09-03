@@ -70,9 +70,14 @@ def _compute_cell_grid_rects(table: Table) -> list[tuple[Cell, fitz.Rect]]:
     if table.rows <= 0 or table.cols <= 0:
         return [(c, fitz.Rect(c.bbox.x0, c.bbox.y0, c.bbox.x1, c.bbox.y1)) for c in table.cells]
 
-    if table.source in ("line_projection", "zebra_background", "wireless", "ml_detection") or (
-        len(table.cells) == table.rows * table.cols
+    has_span = any(c.rowspan > 1 or c.colspan > 1 for c in table.cells)
+    if (
+        not has_span
         and table.source != "wireless_span_recovery"
+        and (
+            table.source in ("line_projection", "zebra_background", "wireless", "ml_detection")
+            or len(table.cells) == table.rows * table.cols
+        )
     ):
         return [(c, fitz.Rect(c.bbox.x0, c.bbox.y0, c.bbox.x1, c.bbox.y1)) for c in table.cells]
 
@@ -107,11 +112,13 @@ def _compute_cell_grid_rects(table: Table) -> list[tuple[Cell, fitz.Rect]]:
 
     for c in geometry_cells:
         ri_start = c.row_index
-        ri_end = c.row_index + max(1, c.rowspan) - 1
         ci_start = c.col_index
         ci_end = c.col_index + max(1, c.colspan) - 1
+        # 仅用 ri_start 行的 top 边界（rowspan 单元格的 y1 不代表跨越行的真实底部）
         row_tops[ri_start] = min(row_tops.get(ri_start, c.bbox.y0), c.bbox.y0)
-        row_bottoms[ri_end] = max(row_bottoms.get(ri_end, c.bbox.y1), c.bbox.y1)
+        # rowspan=1 时才用 y1 更新行底部（rowspan>1 的底部由相邻 rowspan=1 单元格决定）
+        if c.rowspan == 1:
+            row_bottoms[ri_start] = max(row_bottoms.get(ri_start, c.bbox.y1), c.bbox.y1)
         if c.text.strip():
             col_lefts[ci_start] = min(col_lefts.get(ci_start, c.bbox.x0), c.bbox.x0)
             col_rights[ci_end] = max(col_rights.get(ci_end, c.bbox.x1), c.bbox.x1)
@@ -175,7 +182,7 @@ LAYOUT_TEXT_FILL = (0.15, 0.65, 0.35)        # Emerald green for text badge fill
 def draw_tables_on_page(
     page: fitz.Page,
     tables: Sequence[Table],
-    draw_text_boxes: bool = False,
+    draw_text_boxes: bool = True,
     layout_elements: Optional[Sequence[Any]] = None,
     blocks: Optional[Sequence[Any]] = None,
 ) -> None:
