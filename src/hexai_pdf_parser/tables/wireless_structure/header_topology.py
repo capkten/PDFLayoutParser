@@ -829,6 +829,41 @@ def rescue_header_only_leaf_bands(
         if covered_ids == stable_ids and candidates:
             eligible_levels.append((level, row, candidates, False))
             continue
+
+        min_stable_x0 = min(b["x0"] for b in stable)
+        max_stable_x1 = max(b["x1"] for b in stable)
+        min_stable_id = min(stable_id_order)
+        max_stable_id = max(stable_id_order)
+        boundary_candidates = [
+            c
+            for c in candidates
+            if (c["bbox"][2] <= min_stable_x0 and min_stable_id in covered_ids)
+            or (c["bbox"][0] >= max_stable_x1 and max_stable_id in covered_ids)
+        ]
+        if boundary_candidates:
+            all_header_covered_ids = {
+                int(b["id"])
+                for a in header_atoms
+                for b in stable
+                if _meaningful_header_band_overlap(a, b)
+            }
+            if all_header_covered_ids == stable_ids:
+                non_conflicting = []
+                for bc in boundary_candidates:
+                    other_level_atoms = [
+                        a
+                        for a in header_atoms
+                        if abs(_center_y(a) - level) > 2.4
+                        and min(a["bbox"][2], bc["bbox"][2])
+                        - max(a["bbox"][0], bc["bbox"][0])
+                        > 0
+                    ]
+                    if not other_level_atoms:
+                        non_conflicting.append(bc)
+                if non_conflicting:
+                    eligible_levels.append((level, row, non_conflicting, True))
+                    continue
+
         if len(candidates) < 2 or len(covered_ids) < 2 or level_index == 0:
             continue
 
@@ -931,6 +966,17 @@ def rescue_header_only_leaf_bands(
                 return rescued
             continue
         if right and min(item["bbox"][0] for item in right) - x1 < minimum_gap:
+            if require_complete_group:
+                return rescued
+            continue
+
+        bands_to_right = [b for b in rescued if b["x0"] >= x1]
+        if bands_to_right and min(b["x0"] for b in bands_to_right) - x1 < minimum_gap:
+            if require_complete_group:
+                return rescued
+            continue
+        bands_to_left = [b for b in rescued if b["x1"] <= x0]
+        if bands_to_left and x0 - max(b["x1"] for b in bands_to_left) < minimum_gap:
             if require_complete_group:
                 return rescued
             continue
