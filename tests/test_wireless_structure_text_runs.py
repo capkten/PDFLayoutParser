@@ -90,6 +90,43 @@ def test_build_text_runs_vetoes_repeated_right_left_aligned_column_join():
     ]
 
 
+def test_build_text_runs_vetoes_fixed_width_diverse_aligned_column_join():
+    atoms = [
+        _atom("1,000.00", 184.0, 219.9, 0, (1, 0, 0), y=10),
+        _atom("深圳", 223.13, 244.25, 1, (1, 0, 1), y=10),
+        _atom("15,000.00", 179.2, 219.9, 2, (2, 0, 0), y=28),
+        _atom("上海", 223.13, 244.25, 3, (2, 0, 1), y=28),
+        _atom("500.00", 188.8, 219.9, 4, (3, 0, 0), y=46),
+        _atom("南宁", 223.13, 244.25, 5, (3, 0, 1), y=46),
+    ]
+
+    assert [item["text"] for item in build_text_runs(atoms)] == [
+        "1,000.00",
+        "深圳",
+        "15,000.00",
+        "上海",
+        "500.00",
+        "南宁",
+    ]
+
+
+def test_build_text_runs_keeps_varying_amounts_with_fixed_unit_joined():
+    atoms = [
+        _atom("100.00", 188.8, 219.9, 0, (1, 0, 0), y=10),
+        _atom("万元", 223.13, 244.25, 1, (1, 0, 1), y=10),
+        _atom("1,000.00", 184.0, 219.9, 2, (2, 0, 0), y=28),
+        _atom("万元", 223.13, 244.25, 3, (2, 0, 1), y=28),
+        _atom("10,000.00", 179.2, 219.9, 4, (3, 0, 0), y=46),
+        _atom("万元", 223.13, 244.25, 5, (3, 0, 1), y=46),
+    ]
+
+    assert [item["text"] for item in build_text_runs(atoms)] == [
+        "100.00万元",
+        "1,000.00万元",
+        "10,000.00万元",
+    ]
+
+
 def test_build_text_runs_keeps_existing_join_with_only_two_alignment_rows():
     atoms = [
         _atom("100.00", 120, 160, 0, (1, 0, 0), y=10),
