@@ -56,12 +56,6 @@ def main() -> int:
         help="Specific page indices to parse (0-indexed)",
     )
     parser.add_argument(
-        "--ml",
-        action="store_true",
-        default=False,
-        help="Enable ML-based table region detection with the bundled YOLO model (requires hexai_pdf_parser[ml])",
-    )
-    parser.add_argument(
         "--ml-model",
         default=None,
         help="Path to custom ONNX model for table detection",
@@ -69,8 +63,8 @@ def main() -> int:
     parser.add_argument(
         "--ml-confidence",
         type=float,
-        default=0.70,
-        help="Confidence threshold for ML table detection (default: 0.70)",
+        default=0.40,
+        help="Confidence threshold for ML table detection (default: 0.40)",
     )
     parser.add_argument(
         "--table-config",
@@ -119,7 +113,6 @@ def main() -> int:
         output_dir=args.output,
         render_dpi=args.dpi,
         page_indices=args.pages,
-        use_ml=args.ml,
         ml_model_path=args.ml_model,
         ml_confidence=args.ml_confidence,
         debug=args.debug,

@@ -31,11 +31,78 @@ from hexai_pdf_parser.tables.table_extractor import TableExtractor
 from hexai_pdf_parser.debug.table_visualizer import render_table_visualization
 from hexai_pdf_parser.debug.text_alignment_debug import render_text_alignment_debug_page
 from hexai_pdf_parser.extractors.text_extractor import TextExtractor
+from hexai_pdf_parser.page_normalizer import normalize_page_rotation
 
 
 # Persistent process pool for multi-processing execution backend
 _PROCESS_POOL = None
 _PROCESS_POOL_WORKERS = None
+
+
+def _run_scanned_page_pipeline(
+    pdf_doc: fitz.Document,
+    page: Page,
+    pdf_path: str,
+    pages_dir: str,
+    render_dpi: int,
+    output_dir,
+):
+    """Render and serialize a scanned page without native extraction."""
+    stage_totals: dict[str, float] = {}
+
+    def time_stage(stage: str, func):
+        start = perf_counter()
+        result = func()
+        elapsed = perf_counter() - start
+        stage_totals[stage] = stage_totals.get(stage, 0.0) + elapsed
+        return result
+
+    page.blocks = []
+    page.tables = []
+    page.images = []
+    page.seals = []
+    page.layout_elements = []
+
+    if output_dir is not None:
+        page.render = time_stage(
+            "render",
+            lambda: RenderEngine(
+                output_dir, render_dpi
+            ).render(pdf_path, page.index, page_type=page.page_type),
+        )
+
+        page_json_path = os.path.join(
+            pages_dir, f"page-{page.index:03d}.json"
+        )
+        time_stage(
+            "write_page_json",
+            lambda: JSONWriter().write_page(page, page_json_path),
+        )
+
+        page_md_path = os.path.join(
+            pages_dir, f"page-{page.index:03d}.md"
+        )
+        if os.path.exists(page_md_path):
+            os.remove(page_md_path)
+
+        tables_dir = os.path.join(output_dir, "tables")
+        os.makedirs(tables_dir, exist_ok=True)
+        table_vis_path = os.path.join(
+            tables_dir, f"page-{page.index:03d}.png"
+        )
+        time_stage(
+            "write_table_visualization",
+            lambda: render_table_visualization(
+                source=pdf_path,
+                tables=page.tables,
+                output_path=table_vis_path,
+                page_index=page.index,
+                dpi=render_dpi,
+                page_type=page.page_type,
+            ),
+        )
+
+    return stage_totals
 
 
 def _run_page_pipeline(
@@ -47,7 +114,6 @@ def _run_page_pipeline(
     text_alignment_debug_dir: str,
     render_dpi: int,
     seal_coords,
-    use_ml: bool,
     ml_model_path,
     ml_confidence: float,
     debug: bool,
@@ -74,6 +140,16 @@ def _run_page_pipeline(
     page_handle = pdf_doc[page.index]
     normalize_page_rotation(page_handle)
 
+    if page.page_type == "scanned":
+        return _run_scanned_page_pipeline(
+            pdf_doc=pdf_doc,
+            page=page,
+            pdf_path=pdf_path,
+            pages_dir=pages_dir,
+            render_dpi=render_dpi,
+            output_dir=output_dir,
+        )
+
     # a. Text extraction
     text_extractor = TextExtractor()
     page.blocks = time_stage(
@@ -84,7 +160,6 @@ def _run_page_pipeline(
     # b. Table extraction
     if table_extractor_factory is None:
         table_extractor = table_extractor_cls(
-            use_ml=use_ml,
             ml_model_path=ml_model_path,
             ml_confidence=ml_confidence,
             table_config=table_config,
@@ -212,7 +287,11 @@ def _run_page_pipeline(
             "render",
             lambda: RenderEngine(
                 output_dir, render_dpi
-            ).render(pdf_path, page.index),
+            ).render(
+                pdf_path,
+                page.index,
+                page_type=page.page_type,
+            ),
         )
 
     # j. Per-page output
@@ -244,6 +323,7 @@ def _run_page_pipeline(
                 output_path=table_vis_path,
                 page_index=page.index,
                 dpi=render_dpi,
+                page_type=page.page_type,
             ),
         )
 
@@ -258,7 +338,6 @@ def _process_page_process_worker(
     text_alignment_debug_dir: str,
     render_dpi: int,
     seal_coords,
-    use_ml: bool,
     ml_model_path,
     ml_confidence: float,
     debug: bool,
@@ -267,6 +346,7 @@ def _process_page_process_worker(
     page_size: dict,
     page_rotation: int,
     table_extractor_cls=TableExtractor,
+    page_type: str = "vector",
 ) -> tuple[int, Page, dict[str, float], float]:
     """Worker function for process-based parallelism.
 
@@ -279,6 +359,7 @@ def _process_page_process_worker(
         index=page_index,
         size=page_size,
         rotation=page_rotation,
+        page_type=page_type,
     )
 
     output_dir = os.path.dirname(images_dir) if images_dir else None
@@ -294,7 +375,6 @@ def _process_page_process_worker(
             text_alignment_debug_dir=text_alignment_debug_dir,
             render_dpi=render_dpi,
             seal_coords=seal_coords,
-            use_ml=use_ml,
             ml_model_path=ml_model_path,
             ml_confidence=ml_confidence,
             debug=debug,
@@ -326,9 +406,8 @@ class Pipeline:
         render_dpi: int = 200,
         seal_coords: Optional[List[dict]] = None,
         page_indices: Optional[List[int]] = None,
-        use_ml: bool = False,
         ml_model_path: Optional[str] = None,
-        ml_confidence: float = 0.70,
+        ml_confidence: float = 0.40,
         debug: bool = False,
         debug_pipeline: bool = False,
         table_config: Optional[TableConfig] = None,
@@ -340,7 +419,6 @@ class Pipeline:
         self.render_dpi = render_dpi
         self.seal_coords = seal_coords or []
         self.page_indices = page_indices
-        self.use_ml = use_ml
         self._ml_model_path = ml_model_path
         self._ml_confidence = ml_confidence
         self.debug = debug
@@ -360,7 +438,6 @@ class Pipeline:
     def _create_table_extractor(self):
         """Create the table extractor used for the current page."""
         return self._get_table_extractor_class()(
-            use_ml=self.use_ml,
             ml_model_path=self._ml_model_path,
             ml_confidence=self._ml_confidence,
             table_config=self._table_config,
@@ -471,7 +548,6 @@ class Pipeline:
                 text_alignment_debug_dir=text_alignment_debug_dir,
                 render_dpi=self.render_dpi,
                 seal_coords=self.seal_coords,
-                use_ml=self.use_ml,
                 ml_model_path=self._ml_model_path,
                 ml_confidence=self._ml_confidence,
                 debug=self.debug,
@@ -557,7 +633,6 @@ class Pipeline:
                             text_alignment_debug_dir,
                             self.render_dpi,
                             self.seal_coords,
-                            self.use_ml,
                             self._ml_model_path,
                             self._ml_confidence,
                             self.debug,
@@ -566,6 +641,7 @@ class Pipeline:
                             page.size,
                             page.rotation,
                             self._get_table_extractor_class(),
+                            page_type=page.page_type,
                         )
                     )
                 for future in futures:

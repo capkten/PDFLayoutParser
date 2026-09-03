@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+import fitz
 import pytest
 
 from hexai_pdf_parser.loader import Loader
@@ -25,6 +26,19 @@ class TestLoader:
         assert page.size["width"] == pytest.approx(595.0, rel=1e-3)
         assert page.size["height"] == pytest.approx(842.0, rel=1e-3)
         assert page.rotation == 0
+        assert page.page_type == "vector"
+
+    def test_load_classifies_garbled_page_as_scanned(self, tmp_dir):
+        pdf_path = Path(tmp_dir) / "garbled.pdf"
+        pdf = fitz.open()
+        page = pdf.new_page(width=595, height=842)
+        page.insert_text((50, 100), "\x00" * 20, fontsize=12)
+        pdf.save(str(pdf_path))
+        pdf.close()
+
+        doc = Loader(str(pdf_path)).load()
+
+        assert doc.pages[0].page_type == "scanned"
 
     def test_load_multi_page_pdf(self, tmp_dir):
         pdf_path = Path(tmp_dir) / "multi.pdf"

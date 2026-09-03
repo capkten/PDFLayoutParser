@@ -15,6 +15,8 @@ except ImportError:
     import fitz
 
 from hexai_pdf_parser.core.models import Table
+from hexai_pdf_parser.page_normalizer import normalize_page_rotation
+from hexai_pdf_parser.page_type_label import draw_page_type_label
 
 # ==============================================================================
 # 路径与参数配置区域（可直接在此修改路径）
@@ -22,7 +24,6 @@ from hexai_pdf_parser.core.models import Table
 PDF_INPUT_DIR = r"C:\Users\92410\Desktop\git\hexai_pdf_parser\src\hexai_pdf_parser\data\zh_all_pages"
 OUTPUT_DIR = r"C:\Users\92410\Desktop\git\hexai_pdf_parser\src\hexai_pdf_parser\data\zh_all_pages\out_debug"
 RENDER_DPI = 200
-USE_ML = True
 # ==============================================================================
 
 # Color palette for table visualization
@@ -69,15 +70,38 @@ def _compute_cell_grid_rects(table: Table) -> list[tuple[Cell, fitz.Rect]]:
     if table.rows <= 0 or table.cols <= 0:
         return [(c, fitz.Rect(c.bbox.x0, c.bbox.y0, c.bbox.x1, c.bbox.y1)) for c in table.cells]
 
-    if table.source == "line_projection":
+    has_span = any(c.rowspan > 1 or c.colspan > 1 for c in table.cells)
+    if (
+        not has_span
+        and table.source != "wireless_span_recovery"
+        and (
+            table.source in ("line_projection", "zebra_background", "wireless", "ml_detection")
+            or len(table.cells) == table.rows * table.cols
+        )
+    ):
         return [(c, fitz.Rect(c.bbox.x0, c.bbox.y0, c.bbox.x1, c.bbox.y1)) for c in table.cells]
 
     row_tops: dict[int, float] = {}
     row_bottoms: dict[int, float] = {}
     col_lefts: dict[int, float] = {}
     col_rights: dict[int, float] = {}
+    content_rows = {
+        row
+        for cell in table.cells
+        if cell.text.strip()
+        for row in range(cell.row_index, cell.row_index + max(1, cell.rowspan))
+    }
+    geometry_cells = [
+        cell
+        for cell in table.cells
+        if cell.text.strip()
+        or not any(
+            row in content_rows
+            for row in range(cell.row_index, cell.row_index + max(1, cell.rowspan))
+        )
+    ]
 
-    for c in table.cells:
+    for c in geometry_cells:
         ri, ci = c.row_index, c.col_index
         if c.rowspan == 1:
             row_tops[ri] = min(row_tops.get(ri, c.bbox.y0), c.bbox.y0)
@@ -86,13 +110,15 @@ def _compute_cell_grid_rects(table: Table) -> list[tuple[Cell, fitz.Rect]]:
             col_lefts[ci] = min(col_lefts.get(ci, c.bbox.x0), c.bbox.x0)
             col_rights[ci] = max(col_rights.get(ci, c.bbox.x1), c.bbox.x1)
 
-    for c in table.cells:
+    for c in geometry_cells:
         ri_start = c.row_index
-        ri_end = c.row_index + max(1, c.rowspan) - 1
         ci_start = c.col_index
         ci_end = c.col_index + max(1, c.colspan) - 1
+        # 仅用 ri_start 行的 top 边界（rowspan 单元格的 y1 不代表跨越行的真实底部）
         row_tops[ri_start] = min(row_tops.get(ri_start, c.bbox.y0), c.bbox.y0)
-        row_bottoms[ri_end] = max(row_bottoms.get(ri_end, c.bbox.y1), c.bbox.y1)
+        # rowspan=1 时才用 y1 更新行底部（rowspan>1 的底部由相邻 rowspan=1 单元格决定）
+        if c.rowspan == 1:
+            row_bottoms[ri_start] = max(row_bottoms.get(ri_start, c.bbox.y1), c.bbox.y1)
         if c.text.strip():
             col_lefts[ci_start] = min(col_lefts.get(ci_start, c.bbox.x0), c.bbox.x0)
             col_rights[ci_end] = max(col_rights.get(ci_end, c.bbox.x1), c.bbox.x1)
@@ -149,50 +175,162 @@ def _compute_cell_grid_rects(table: Table) -> list[tuple[Cell, fitz.Rect]]:
     return results
 
 
+LAYOUT_TEXT_COLOR = (0.15, 0.65, 0.35)       # Emerald green for natural text blocks
+LAYOUT_TEXT_FILL = (0.15, 0.65, 0.35)        # Emerald green for text badge fill
+
+
 def draw_tables_on_page(
     page: fitz.Page,
     tables: Sequence[Table],
     draw_text_boxes: bool = True,
+    layout_elements: Optional[Sequence[Any]] = None,
+    blocks: Optional[Sequence[Any]] = None,
 ) -> None:
-    """Draw table bounding boxes, tags, score badges, full cell grids, and text boxes onto a fitz.Page."""
-    if not tables:
-        return
-
+    """Draw table bounding boxes, tags, score badges, full cell grids, and natural reading order text blocks."""
+    try:
+        page.clean_contents()
+    except Exception:
+        pass
     shape = page.new_shape()
+
+    # 1. Draw natural reading order text blocks outside tables (pure green box, no "Text" badge)
+    if layout_elements:
+        for le in layout_elements:
+            if getattr(le, "type", "") == "text":
+                tb = le.bbox
+                shape.draw_rect(fitz.Rect(tb.x0, tb.y0, tb.x1, tb.y1))
+                shape.finish(color=LAYOUT_TEXT_COLOR, width=1.0)
+    elif blocks:
+        for b in blocks:
+            tb = b.bbox
+            shape.draw_rect(fitz.Rect(tb.x0, tb.y0, tb.x1, tb.y1))
+            shape.finish(color=LAYOUT_TEXT_COLOR, width=1.0)
+
+    # 2. Draw tables: cell grids + text inside cells + table borders
+    tables = sorted(tables, key=lambda t: (t.bbox.y0, t.bbox.x0))
+    page_words = []
+    page_chars: list[tuple[float, float, float, float, str]] = []
+    if tables:
+        try:
+            words = page.get_text("words")
+            if isinstance(words, list):
+                page_words = words
+        except Exception:
+            page_words = []
+
+        try:
+            rawdict = page.get_text("rawdict")
+            if isinstance(rawdict, dict):
+                for block in rawdict.get("blocks", []):
+                    for line in block.get("lines", []):
+                        for span in line.get("spans", []):
+                            for char in span.get("chars", []):
+                                c = char.get("c")
+                                bbox = char.get("bbox")
+                                if c and bbox and len(bbox) >= 4 and not str(c).isspace():
+                                    page_chars.append(
+                                        (float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3]), str(c))
+                                    )
+        except Exception:
+            page_chars = []
+
     for idx, table in enumerate(tables):
         tb = table.bbox
         table_rect = fitz.Rect(tb.x0, tb.y0, tb.x1, tb.y1)
 
-        # 1. Compute and draw full 2D Cell Grid boundaries
+        # 2a. Draw full 2D Cell Grid boundaries (Blue) & cell text blocks (Green)
         cell_grid_pairs = _compute_cell_grid_rects(table)
         for cell, grid_rect in cell_grid_pairs:
-            # Draw outer 2D cell grid
             shape.draw_rect(grid_rect)
             shape.finish(color=CELL_BORDER_COLOR, width=0.8)
 
-            # Draw inner text bounding box if different from grid
-            if draw_text_boxes and cell.text.strip():
-                cb = cell.bbox
-                text_rect = fitz.Rect(cb.x0, cb.y0, cb.x1, cb.y1)
-                # If text box is smaller than grid cell, outline it with subtle amber border
-                if abs(text_rect.width - grid_rect.width) > 3.0 or abs(text_rect.height - grid_rect.height) > 3.0:
-                    shape.draw_rect(text_rect)
-                    shape.finish(color=TEXT_BORDER_COLOR, width=0.5)
+            if cell.text.strip():
+                bx0 = max(grid_rect.x0, cell.bbox.x0)
+                by0 = max(grid_rect.y0, cell.bbox.y0)
+                bx1 = min(grid_rect.x1, cell.bbox.x1)
+                by1 = min(grid_rect.y1, cell.bbox.y1)
 
-        # 2. Draw table outer rectangle
+                text_rect: Optional[fitz.Rect] = None
+                if page_chars:
+                    matched_chars = [
+                        c for c in page_chars
+                        if bx0 - 1.5 <= (c[0] + c[2]) / 2.0 <= bx1 + 1.5
+                        and by0 - 1.5 <= (c[1] + c[3]) / 2.0 <= by1 + 1.5
+                    ]
+                    if matched_chars:
+                        wx0 = min(c[0] for c in matched_chars)
+                        wy0 = min(c[1] for c in matched_chars)
+                        wx1 = max(c[2] for c in matched_chars)
+                        wy1 = max(c[3] for c in matched_chars)
+                        candidate_rect = fitz.Rect(
+                            max(wx0, grid_rect.x0),
+                            max(wy0, grid_rect.y0),
+                            min(wx1, grid_rect.x1),
+                            min(wy1, grid_rect.y1),
+                        )
+                        if not candidate_rect.is_empty:
+                            text_rect = candidate_rect
+
+                if text_rect is None and page_words:
+                    cell_words = [
+                        w for w in page_words
+                        if cell.bbox.x0 - 2.0 <= (w[0] + w[2]) / 2.0 <= cell.bbox.x1 + 2.0
+                        and cell.bbox.y0 - 2.0 <= (w[1] + w[3]) / 2.0 <= cell.bbox.y1 + 2.0
+                    ]
+                    if cell_words:
+                        wx0 = min(w[0] for w in cell_words)
+                        wy0 = min(w[1] for w in cell_words)
+                        wx1 = max(w[2] for w in cell_words)
+                        wy1 = max(w[3] for w in cell_words)
+                        candidate_rect = fitz.Rect(
+                            max(wx0, grid_rect.x0),
+                            max(wy0, grid_rect.y0),
+                            min(wx1, grid_rect.x1),
+                            min(wy1, grid_rect.y1),
+                        )
+                        if not candidate_rect.is_empty:
+                            text_rect = candidate_rect
+
+                if text_rect is None or text_rect.is_empty:
+                    candidate_rect = fitz.Rect(
+                        max(cell.bbox.x0, grid_rect.x0),
+                        max(cell.bbox.y0, grid_rect.y0),
+                        min(cell.bbox.x1, grid_rect.x1),
+                        min(cell.bbox.y1, grid_rect.y1),
+                    )
+                    if not candidate_rect.is_empty:
+                        text_rect = candidate_rect
+
+                if text_rect and not text_rect.is_empty:
+                    shape.draw_rect(text_rect)
+                    shape.finish(color=LAYOUT_TEXT_COLOR, width=0.8)
+
+        # 2b. Draw table outer rectangle
         shape.draw_rect(table_rect)
         shape.finish(color=TABLE_BORDER_COLOR, width=2.0)
 
-        # 3. Draw left label badge (Index, source, shape)
+        # 2c. Draw left label badge (Index, source, shape)
         label = _format_table_label(table, idx)
         font_size = 7.5
         badge_w = min(page.rect.width - tb.x0, len(label) * 5.0 + 8.0)
         badge_h = 11.0
 
         badge_y0 = max(0.0, tb.y0 - badge_h)
-        badge_y1 = badge_y0 + badge_h
-        badge_rect = fitz.Rect(tb.x0, badge_y0, tb.x0 + badge_w, badge_y1)
+        badge_y1 = max(badge_h, tb.y0)
+        top_badge_has_text = any(
+            char[0] < tb.x1
+            and char[2] > tb.x0
+            and char[1] < badge_y1
+            and char[3] > badge_y0
+            for char in page_chars
+        )
+        if top_badge_has_text:
+            lower_badge_y0 = tb.y1 + 2.0
+            lower_badge_y1 = lower_badge_y0 + badge_h
+            if lower_badge_y1 <= page.rect.height:
+                badge_y0, badge_y1 = lower_badge_y0, lower_badge_y1
 
+        badge_rect = fitz.Rect(tb.x0, badge_y0, tb.x0 + badge_w, badge_y1)
         shape.draw_rect(badge_rect)
         shape.finish(fill=TABLE_BADGE_FILL, color=TABLE_BORDER_COLOR)
         shape.insert_text(
@@ -202,7 +340,7 @@ def draw_tables_on_page(
             color=TABLE_TEXT_COLOR,
         )
 
-        # 4. Draw right score badge (Confidence metric)
+        # 2d. Draw right score badge (Confidence metric)
         score = _get_table_score(table)
         score_text = f"Score: {score:.2f}"
         score_w = len(score_text) * 5.2 + 8.0
@@ -215,13 +353,12 @@ def draw_tables_on_page(
 
         score_rect = fitz.Rect(score_x0, badge_y0, score_x1, badge_y1)
 
-        # Color coding by score level
         if score >= 0.90:
-            score_fill = (0.13, 0.60, 0.32)  # Emerald Green
+            score_fill = (0.13, 0.60, 0.32)
         elif score >= 0.75:
-            score_fill = (0.12, 0.50, 0.85)  # Sky Blue
+            score_fill = (0.12, 0.50, 0.85)
         else:
-            score_fill = (0.88, 0.50, 0.12)  # Amber Orange
+            score_fill = (0.88, 0.50, 0.12)
 
         shape.draw_rect(score_rect)
         shape.finish(fill=score_fill, color=score_fill)
@@ -241,6 +378,7 @@ def render_table_visualization(
     output_path: str,
     page_index: Optional[int] = None,
     dpi: int = 200,
+    page_type: Optional[str] = None,
 ) -> str:
     """Render a PDF page with table detection overlays and save to output_path.
 
@@ -267,7 +405,9 @@ def render_table_visualization(
 
     if isinstance(source, fitz.Page):
         # Draw directly on the provided page
+        normalize_page_rotation(source)
         draw_tables_on_page(source, tables)
+        draw_page_type_label(source, page_type)
         pix = source.get_pixmap(matrix=matrix, alpha=False)
         pix.save(output_path)
         return output_path
@@ -277,7 +417,11 @@ def render_table_visualization(
     doc = fitz.open(source)
     try:
         page = doc[idx]
+        # Tables are extracted after rotation normalization; use the same
+        # coordinate system when reopening the source for the overlay.
+        normalize_page_rotation(page)
         draw_tables_on_page(page, tables)
+        draw_page_type_label(page, page_type)
         pix = page.get_pixmap(matrix=matrix, alpha=False)
         pix.save(output_path)
         return output_path
@@ -292,7 +436,6 @@ def batch_visualize_directory(
     input_dir: str = PDF_INPUT_DIR,
     output_dir: str = OUTPUT_DIR,
     dpi: int = RENDER_DPI,
-    use_ml: bool = USE_ML,
 ) -> list[str]:
     """Batch parse and visualize all PDF files in input_dir.
 
@@ -308,9 +451,6 @@ def batch_visualize_directory(
         Root output directory.
     dpi:
         Rendering resolution DPI.
-    use_ml:
-        Whether to enable YOLO table detector assistance.
-
     Returns
     -------
     list[str]:
@@ -351,7 +491,7 @@ def batch_visualize_directory(
         print(f"\n[table_visualizer] Processing: {pdf_file.name} -> {pdf_parent_dir}")
 
         try:
-            with PDFParser(str(pdf_file), render_dpi=dpi, use_ml=use_ml) as parser:
+            with PDFParser(str(pdf_file), render_dpi=dpi) as parser:
                 res = parser.parse()
                 if res.code != 1 or not res.data:
                     print(f"[table_visualizer] Error parsing {pdf_file.name}: {res.message}")
@@ -383,6 +523,7 @@ def batch_visualize_directory(
 
                         # Page Preview
                         matrix = fitz.Matrix(dpi / 72.0, dpi / 72.0)
+                        draw_page_type_label(page_handle, page.page_type)
                         page_pix = page_handle.get_pixmap(matrix=matrix, alpha=False)
                         page_img_path = os.path.join(pages_dir, f"{pdf_stem}_page_{page_idx:03d}.png")
                         page_pix.save(page_img_path)
@@ -392,7 +533,11 @@ def batch_visualize_directory(
                         json_writer.write_page(page, page_json_path)
 
                         page_md_path = os.path.join(pages_dir, f"{pdf_stem}_page_{page_idx:03d}.md")
-                        md_writer.write_page(page, page_md_path)
+                        if page.page_type == "scanned":
+                            if os.path.exists(page_md_path):
+                                os.remove(page_md_path)
+                        else:
+                            md_writer.write_page(page, page_md_path)
 
                         # Single Page PDF
                         page_pdf_path = os.path.join(pages_dir, f"{pdf_stem}_page_{page_idx:03d}.pdf")
@@ -404,6 +549,7 @@ def batch_visualize_directory(
                         # Table Visualization with Score Badges
                         table_img_path = os.path.join(tables_dir, f"{pdf_stem}_page_{page_idx:03d}.png")
                         draw_tables_on_page(page_handle, page.tables)
+                        draw_page_type_label(page_handle, page.page_type)
                         table_pix = page_handle.get_pixmap(matrix=matrix, alpha=False)
                         table_pix.save(table_img_path)
 
@@ -426,6 +572,4 @@ if __name__ == "__main__":
         input_dir=PDF_INPUT_DIR,
         output_dir=OUTPUT_DIR,
         dpi=RENDER_DPI,
-        use_ml=USE_ML,
     )
-

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
+from typing_extensions import Literal
 
 
 @dataclass
@@ -218,6 +219,7 @@ class Page:
     seals: List[Seal] = field(default_factory=list)
     render: RenderInfo = field(default_factory=RenderInfo)
     layout_elements: List[LayoutElement] = field(default_factory=list)
+    page_type: Literal["vector", "scanned"] = "vector"
 
 
 @dataclass

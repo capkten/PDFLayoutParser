@@ -1,9 +1,8 @@
 """YOLO-based table region detector.
 
 This module wraps the bundled ``layoutanalysis.onnx`` model and extracts
-only the ``Table`` class regions.  It is used as the optional ML backend
-for table-region detection when the line-based extractor cannot find a
-table structure on its own.
+only the ``Table`` class regions.  The pipeline invokes it on pages that
+the recall-oriented rule pass identifies as table candidates.
 """
 
 from __future__ import annotations
@@ -87,7 +86,7 @@ class MLTableDetector:
     def __init__(
         self,
         model_path: Optional[Union[str, Path]] = None,
-        confidence_threshold: float = 0.70,
+        confidence_threshold: float = 0.40,
         iou_threshold: float = 0.50,
         table_class_ids: Optional[set[int]] = None,
         input_size: int = 640,
@@ -143,7 +142,7 @@ class MLTableDetector:
             all_words = page.get_text("words")
             if all_words:
                 results = [
-                    (self._expand_bbox_to_touching_words(bbox, all_words), score)
+                    (self._expand_bbox_to_touching_words(bbox, all_words, page=page), score)
                     for bbox, score in results
                 ]
         except Exception:
@@ -156,41 +155,42 @@ class MLTableDetector:
         bbox: BBox,
         words: List[Tuple[float, float, float, float, str]],
         margin: float = 3.0,
+        page: Optional[fitz.Page] = None,
     ) -> BBox:
         """Expand table bbox outward if boundary overlaps or cuts into text words."""
         if not words:
             return bbox
 
-        x0, y0, x1, y1 = bbox.x0, bbox.y0, bbox.x1, bbox.y1
-        expanded = True
-        while expanded:
-            expanded = False
-            for w in words:
-                wx0, wy0, wx1, wy1 = w[0], w[1], w[2], w[3]
-                if wx1 < x0 - margin or wx0 > x1 + margin or wy1 < y0 - margin or wy0 > y1 + margin:
-                    continue
+        original_x0, original_y0 = bbox.x0, bbox.y0
+        original_x1, original_y1 = bbox.x1, bbox.y1
+        x0, y0, x1, y1 = original_x0, original_y0, original_x1, original_y1
 
-                overlap_x = max(0.0, min(wx1, x1) - max(wx0, x0))
-                overlap_y = max(0.0, min(wy1, y1) - max(wy0, y0))
+        p_x0, p_y0, p_x1, p_y1 = (
+            (float(page.rect.x0), float(page.rect.y0), float(page.rect.x1), float(page.rect.y1))
+            if page is not None else (-1e9, -1e9, 1e9, 1e9)
+        )
 
-                should_expand = False
-                if overlap_x > 0 and overlap_y > 0:
-                    should_expand = True
-                elif overlap_x > 0 and (wy0 >= y0 - margin and wy1 <= y1 + margin):
-                    should_expand = True
-                elif overlap_y > 0 and (wx0 >= x0 - margin and wx1 <= x1 + margin):
-                    should_expand = True
+        for w in words:
+            wx0, wy0, wx1, wy1 = w[0], w[1], w[2], w[3]
+            # Only words intersecting the original detection bbox may expand it.
+            if (
+                wx1 > original_x0
+                and wx0 < original_x1
+                and wy1 > original_y0
+                and wy0 < original_y1
+            ):
+                x0 = min(x0, wx0)
+                y0 = min(y0, wy0)
+                x1 = max(x1, wx1)
+                y1 = max(y1, wy1)
 
-                if should_expand:
-                    new_x0 = min(x0, wx0)
-                    new_y0 = min(y0, wy0)
-                    new_x1 = max(x1, wx1)
-                    new_y1 = max(y1, wy1)
-                    if new_x0 < x0 or new_y0 < y0 or new_x1 > x1 or new_y1 > y1:
-                        x0, y0, x1, y1 = new_x0, new_y0, new_x1, new_y1
-                        expanded = True
+        if page is not None:
+            x0 = max(p_x0, min(x0, p_x1))
+            y0 = max(p_y0, min(y0, p_y1))
+            x1 = max(p_x0, min(x1, p_x1))
+            y1 = max(p_y0, min(y1, p_y1))
 
-        return BBox(x0=x0, y0=y0, x1=x1, y1=y1)
+        return BBox(x0=round(x0, 1), y0=round(y0, 1), x1=round(x1, 1), y1=round(y1, 1))
 
     # ------------------------------------------------------------------
     # ONNX session

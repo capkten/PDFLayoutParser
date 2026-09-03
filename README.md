@@ -32,10 +32,10 @@ with PDFParser("input.pdf") as parser:
         print(result.message)
 ```
 
-## Optional ML Table Detection
+## Table Detection
 
 ```bash
-python -m hexai_pdf_parser.cli input.pdf -o out --ml
+python -m hexai_pdf_parser.cli input.pdf -o out
 ```
 
 ## Table Layout Rules

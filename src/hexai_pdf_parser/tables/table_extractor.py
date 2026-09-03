@@ -38,6 +38,7 @@ import fitz
 import copy
 
 from hexai_pdf_parser.core.models import BBox, Cell, CellStructure, Table, TableStructure, TextBlock
+from hexai_pdf_parser.page_normalizer import normalize_page_rotation
 
 # Pre-compiled regex for numeric token classification (used per-word)
 _NUMERIC_RE = re.compile(
@@ -74,7 +75,12 @@ from hexai_pdf_parser.tables.extractors import (
     WiredTableExtractor,
     WirelessTableExtractor,
 )
+from hexai_pdf_parser.page_normalizer import normalize_page_rotation
 from hexai_pdf_parser.tables.wireless_table_recovery import recover_wireless_tables
+from hexai_pdf_parser.tables.wireless_structure.hybrid_body import (
+    recover_hybrid_body_cells,
+)
+from hexai_pdf_parser.tables.wireless_structure.recoverer import recover_cells_from_region
 
 
 @dataclass
@@ -99,9 +105,8 @@ class TableExtractor:
         row_gap_threshold: float = 30.0,
         fallback_max_cols: int = 30,
         fallback_max_tables: int = 10,
-        use_ml: bool = False,
         ml_model_path: Optional[str] = None,
-        ml_confidence: float = 0.70,
+        ml_confidence: float = 0.40,
         table_config: Optional[TableConfig] = None,
         debug_pipeline: bool = False,
     ):
@@ -110,7 +115,6 @@ class TableExtractor:
         self.row_gap_threshold = row_gap_threshold
         self.fallback_max_cols = fallback_max_cols
         self.fallback_max_tables = fallback_max_tables
-        self.use_ml = use_ml
         self._ml_model_path = ml_model_path
         self._ml_confidence = ml_confidence
         self._ml_detector = None  # Lazy initialization
@@ -127,6 +131,9 @@ class TableExtractor:
             line_tolerance=self.line_tolerance, merge_group_tol=self.merge_group_tol
         )
         self._wireless_extractor = WirelessTableExtractor(line_tolerance=self.line_tolerance)
+        self._wireless_extractor._legacy_text_alignment_callback = (
+            self._extract_legacy_text_alignment
+        )
 
         # Override scalar args from config when provided
         if table_config is not None:
@@ -189,12 +196,394 @@ class TableExtractor:
             if len(contained_children) >= 2:
                 # Parent encloses 2 or more distinct sub-tables -> suppress parent
                 suppressed.add(i)
+            elif len(contained_children) == 1:
+                # Single child: suppress redundant/partial child so extractor splits parent into complete sub-tables
+                suppressed.add(contained_children[0])
 
         return [item for idx, item in enumerate(items) if idx not in suppressed]
 
+    @staticmethod
+    def _refine_overlapping_model_bboxes(items: List[Any], page: fitz.Page) -> List[Any]:
+        """Prevent adjacent distinct table bounding boxes from mutually invading across vertical boundaries."""
+        if len(items) <= 1:
+            return items
+
+        sorted_items = sorted(items, key=lambda it: (it[0].y0, it[0].x0))
+        refined = [sorted_items[0]]
+        for cur_bbox, score in sorted_items[1:]:
+            prev_bbox, prev_score = refined[-1]
+            if cur_bbox.y0 < prev_bbox.y1 and min(prev_bbox.x1, cur_bbox.x1) > max(prev_bbox.x0, cur_bbox.x0):
+                overlap_y0 = cur_bbox.y0
+                overlap_y1 = prev_bbox.y1
+                words = page.get_text("words")
+                ov_words = [w for w in words if overlap_y0 - 2.0 <= (w[1] + w[3]) / 2.0 <= overlap_y1 + 2.0]
+                drawings = page.get_drawings()
+                ov_lines = []
+                for d in drawings:
+                    for it in d.get("items", []):
+                        if it[0] in ("l", "re"):
+                            y = it[1].y if it[0] == "l" else (it[1].y0 + it[1].y1) / 2.0
+                            if overlap_y0 - 2.0 <= y <= overlap_y1 + 2.0:
+                                ov_lines.append(y)
+                candidates = []
+                if ov_lines:
+                    candidates.append(max(ov_lines) + 1.5)
+                if ov_words:
+                    candidates.append(max(w[3] for w in ov_words) + 2.0)
+                if candidates:
+                    split_y = max(candidates)
+                else:
+                    split_y = (overlap_y0 + overlap_y1) / 2.0
+
+                refined[-1] = (
+                    BBox(prev_bbox.x0, prev_bbox.y0, prev_bbox.x1, max(prev_bbox.y0 + 10.0, split_y)),
+                    prev_score,
+                )
+                cur_bbox = BBox(cur_bbox.x0, max(cur_bbox.y0, split_y), cur_bbox.x1, cur_bbox.y1)
+            refined.append((cur_bbox, score))
+        return refined
+
+    def _detect_rule_candidates(
+        self, page: fitz.Page, page_language: Optional[str] = None
+    ) -> List[Table]:
+        """Find recall-oriented table candidates used only to gate the model."""
+        from hexai_pdf_parser.extractors.language_detector import detect_page_language
+
+        if page_language is None:
+            page_language = detect_page_language(page)
+
+        candidates: List[Table] = []
+        if page_language == "en":
+            candidates.extend(self._wireless_extractor.extract_zebra(page))
+
+        line_tables = self._wired_extractor.extract(page)
+        candidates.extend(line_tables)
+
+        wired_regions = [
+            table.bbox
+            for table in line_tables
+            if table.source == "line_projection"
+        ]
+        alignment_tables = self._extract_via_text_alignment(
+            page,
+            excluded_regions=wired_regions,
+        )
+        candidates.extend(alignment_tables)
+
+        recovery_debug = self._last_wireless_recovery
+        page_signal = (
+            recovery_debug.get("page_signal")
+            if isinstance(recovery_debug, dict)
+            else None
+        )
+        if (
+            page_language in {"zh", "mixed"}
+            and not alignment_tables
+            and isinstance(page_signal, dict)
+            and page_signal.get("matched") is True
+        ):
+            bbox_data = page_signal.get("bbox")
+            try:
+                signal_bbox = BBox(
+                    float(bbox_data["x0"]),
+                    float(bbox_data["y0"]),
+                    float(bbox_data["x1"]),
+                    float(bbox_data["y1"]),
+                )
+                valid_bbox = (
+                    signal_bbox.x1 > signal_bbox.x0
+                    and signal_bbox.y1 > signal_bbox.y0
+                )
+            except (KeyError, TypeError, ValueError):
+                signal_bbox = None
+                valid_bbox = False
+            if valid_bbox:
+                candidates.append(
+                    Table(
+                        bbox=signal_bbox,
+                        rows=0,
+                        cols=0,
+                        cells=[],
+                        source="wireless_page_signal",
+                    )
+                )
+        return candidates
+
+    @staticmethod
+    def _bbox_overlaps(left: BBox, right: BBox) -> bool:
+        """Return whether two regions overlap with positive area."""
+        return (
+            min(left.x1, right.x1) > max(left.x0, right.x0)
+            and min(left.y1, right.y1) > max(left.y0, right.y0)
+        )
+
+    def _extract_model_tables(
+        self,
+        page: fitz.Page,
+        wired_tables: Optional[List[Table]] = None,
+        page_language: Optional[str] = None,
+    ) -> List[Table]:
+        """Locate tables on a rule-selected page, preferring overlapping wired results."""
+        if page_language is None:
+            from hexai_pdf_parser.extractors.language_detector import detect_page_language
+
+            page_language = detect_page_language(page)
+        try:
+            if self._ml_detector is None:
+                from hexai_pdf_parser.ml.ml_table_detector import MLTableDetector
+
+                self._ml_detector = MLTableDetector(
+                    model_path=self._ml_model_path,
+                    confidence_threshold=self._ml_confidence,
+                )
+            model_items = self._ml_detector.detect_with_scores(page)
+            model_items = self._filter_contained_bboxes(model_items)
+            model_items = self._refine_overlapping_model_bboxes(model_items, page)
+        except Exception:
+            return list(wired_tables or [])
+
+        if not model_items:
+            return list(wired_tables or [])
+
+        tables: List[Table] = []
+        valid_wired_tables = list(wired_tables or [])
+        if page_language in {"zh", "mixed"}:
+            valid_wired_tables = [
+                self._recover_hybrid_wired_table(page, table, page_language)
+                for table in valid_wired_tables
+            ]
+        included_wired: set[int] = set()
+        for bbox, score in model_items:
+            bbox_h = max(1.0, bbox.y1 - bbox.y0)
+            full_matching_wired = [
+                table
+                for table in valid_wired_tables
+                if id(table) not in included_wired
+                and self._bbox_overlaps(table.bbox, bbox)
+                and (min(table.bbox.y1, bbox.y1) - max(table.bbox.y0, bbox.y0)) >= 0.5 * bbox_h
+            ]
+            if full_matching_wired:
+                tables.extend(full_matching_wired)
+                included_wired.update(id(table) for table in full_matching_wired)
+                continue
+
+            region_tables = self._wireless_extractor.extract(
+                page,
+                table_bbox=bbox,
+                confidence=score,
+                page_language=page_language,
+            )
+            overlapping_wired = [
+                table
+                for table in valid_wired_tables
+                if id(table) not in included_wired
+                and self._bbox_overlaps(table.bbox, bbox)
+            ]
+            if region_tables:
+                included_wired.update(id(table) for table in overlapping_wired)
+            else:
+                if overlapping_wired:
+                    region_tables = overlapping_wired
+                    included_wired.update(id(table) for table in overlapping_wired)
+                else:
+                    try:
+                        region_tables = self._wired_extractor.extract(
+                            page,
+                            table_bbox=bbox,
+                            confidence=score,
+                        )
+                    except TypeError:
+                        try:
+                            region_tables = self._wired_extractor.extract(page)
+                        except Exception:
+                            region_tables = []
+                    except Exception:
+                        region_tables = []
+                    region_tables = [t for t in region_tables if t.cols > 1]
+            tables.extend(region_tables)
+
+        tables.extend(
+            table
+            for table in valid_wired_tables
+            if id(table) not in included_wired
+            and not any(self._bbox_overlaps(table.bbox, t.bbox) for t in tables)
+        )
+        return tables
+
+    def _recover_hybrid_wired_table(
+        self, page: fitz.Page, table: Table, page_language: str
+    ) -> Table:
+        """Recover only an unusually tall wired body row with native spans.
+
+        Financial tables often retain outer/column rules while omitting body
+        row rules.  Keep the wired header/footer and replace just that body
+        band when native-span recovery returns a compatible set of rows.
+        """
+        if page_language not in {"zh", "mixed"} or table.source != "line_projection":
+            return table
+        row_cells: Dict[int, List[Cell]] = defaultdict(list)
+        for cell in table.cells:
+            row_cells[cell.row_index].append(cell)
+        if len(row_cells) < 3:
+            return table
+
+        heights = {
+            row: max(cell.bbox.y1 - cell.bbox.y0 for cell in cells)
+            for row, cells in row_cells.items()
+        }
+        body_row = max(heights, key=heights.get)
+        other_heights = [height for row, height in heights.items() if row != body_row]
+        if not other_heights or heights[body_row] < max(60.0, 3.0 * max(other_heights)):
+            return table
+
+        body_cells = row_cells[body_row]
+        body_bbox = BBox(
+            min(cell.bbox.x0 for cell in body_cells),
+            min(cell.bbox.y0 for cell in body_cells),
+            max(cell.bbox.x1 for cell in body_cells),
+            max(cell.bbox.y1 for cell in body_cells),
+        )
+        column_edges = sorted(
+            {
+                edge
+                for cell in body_cells
+                for edge in (cell.bbox.x0, cell.bbox.x1)
+            }
+        )
+        if len(column_edges) < 2:
+            return table
+
+        recovered_rows, recovered_cols, recovered = recover_hybrid_body_cells(
+            page, body_bbox, column_edges
+        )
+        if (
+            recovered_rows < 2
+            or not recovered
+            or recovered_cols > len(column_edges) - 1
+        ):
+            return table
+
+        mapped: List[Cell] = []
+        for cell in recovered:
+            if (
+                cell.col_index < 0
+                or cell.col_index + max(1, cell.colspan) > len(column_edges) - 1
+            ):
+                return table
+            mapped.append(
+                Cell(
+                    text=cell.text,
+                    row_index=body_row + cell.row_index,
+                    col_index=cell.col_index,
+                    rowspan=cell.rowspan,
+                    colspan=cell.colspan,
+                    bbox=cell.bbox,
+                )
+            )
+
+        row_bounds = [body_bbox.y0]
+        for row_offset in range(recovered_rows - 1):
+            current = [cell for cell in mapped if cell.row_index == body_row + row_offset]
+            following = [cell for cell in mapped if cell.row_index == body_row + row_offset + 1]
+            if not current or not following:
+                return table
+            current_bottom = max(cell.bbox.y1 for cell in current)
+            following_top = min(cell.bbox.y0 for cell in following)
+            row_bounds.append((current_bottom + following_top) / 2.0)
+        row_bounds.append(body_bbox.y1)
+
+        mapped = [
+            Cell(
+                text=cell.text,
+                row_index=cell.row_index,
+                col_index=cell.col_index,
+                rowspan=cell.rowspan,
+                colspan=cell.colspan,
+                bbox=BBox(
+                    column_edges[cell.col_index],
+                    row_bounds[cell.row_index - body_row],
+                    column_edges[min(cell.col_index + cell.colspan, len(column_edges) - 1)],
+                    row_bounds[min(cell.row_index - body_row + cell.rowspan, recovered_rows)],
+                ),
+            )
+            for cell in mapped
+        ]
+
+        fixed_cells = []
+        for cell in table.cells:
+            if cell.row_index == body_row:
+                continue
+            row_index = (
+                cell.row_index + recovered_rows - 1
+                if cell.row_index > body_row
+                else cell.row_index
+            )
+            fixed_cells.append(
+                Cell(
+                    text=cell.text,
+                    row_index=row_index,
+                    col_index=cell.col_index,
+                    rowspan=cell.rowspan,
+                    colspan=cell.colspan,
+                    bbox=cell.bbox,
+                )
+            )
+        for row_offset in range(recovered_rows):
+            occupied = {
+                column
+                for cell in mapped
+                if cell.row_index == body_row + row_offset
+                for column in range(
+                    cell.col_index, cell.col_index + max(1, cell.colspan)
+                )
+            }
+            for column in range(len(column_edges) - 1):
+                if column in occupied:
+                    continue
+                mapped.append(
+                    Cell(
+                        text="",
+                        row_index=body_row + row_offset,
+                        col_index=column,
+                        bbox=BBox(
+                            column_edges[column],
+                            row_bounds[row_offset],
+                            column_edges[column + 1],
+                            row_bounds[row_offset + 1],
+                        ),
+                    )
+                )
+
+        all_cells = sorted(
+            fixed_cells + mapped,
+            key=lambda cell: (cell.row_index, cell.col_index),
+        )
+        occupied: set[tuple[int, int]] = set()
+        for cell in all_cells:
+            for row in range(cell.row_index, cell.row_index + max(1, cell.rowspan)):
+                for column in range(cell.col_index, cell.col_index + max(1, cell.colspan)):
+                    slot = (row, column)
+                    if slot in occupied:
+                        return table
+                    occupied.add(slot)
+
+        return Table(
+            bbox=table.bbox,
+            rows=table.rows - 1 + recovered_rows,
+            cols=table.cols,
+            cells=all_cells,
+            confidence=table.confidence,
+            source="hybrid_line_span_recovery",
+            h_lines=table.h_lines,
+            v_lines=table.v_lines,
+        )
+
     def extract(self, page: fitz.Page) -> List[Table]:
-        """Return a list of :class:`Table` objects detected on *page*."""
+        """Detect rule candidates, then use the model for final table results."""
         normalize_page_rotation(page)
+        from hexai_pdf_parser.extractors.language_detector import detect_page_language
+
+        page_language = detect_page_language(page)
         self._last_text_alignment_debug = None
         self._last_pipeline_debug = {
             "page_index": page.number,
@@ -209,111 +598,27 @@ class TableExtractor:
         } if self.debug_pipeline else None
         self._last_wireless_recovery = None
 
-        if self.use_ml:
-            from hexai_pdf_parser.extractors.language_detector import detect_page_language
-            lang = detect_page_language(page)
+        candidates = self._detect_rule_candidates(page, page_language=page_language)
+        if not candidates:
+            return []
 
-            # 获取 ML 深度学习模型检测的表格外框与置信度
-            ml_items = []
-            try:
-                if self._ml_detector is None:
-                    from hexai_pdf_parser.ml.ml_table_detector import MLTableDetector
-                    self._ml_detector = MLTableDetector(
-                        model_path=self._ml_model_path,
-                        confidence_threshold=self._ml_confidence,
-                    )
-                ml_items = self._ml_detector.detect_with_scores(page)
-                ml_items = self._filter_contained_bboxes(ml_items)
-            except Exception:
-                ml_items = []
-
-            # ----------------------------------------------------
-            # 1. 英文分支：模型无线/斑马纹表格区域提取
-            # ----------------------------------------------------
-            if lang == "en":
-                eng_tables = []
-                if ml_items:
-                    for bbox, score in ml_items:
-                        # 走无线提取器 (自适应斑马纹底色与纯文本无线对齐)
-                        t = self._wireless_extractor.extract(page, table_bbox=bbox, confidence=score)
-                        if t:
-                            eng_tables.extend(t)
-                else:
-                    t = self._wireless_extractor.extract_zebra(page)
-                    if t:
-                        eng_tables.extend(t)
-
-                if eng_tables:
-                    tables = eng_tables
-                    if self._table_config and self._table_config.profiles:
-                        tables = self._apply_layout_rules(page, tables)
-                    return tables
-
-            # ----------------------------------------------------
-            # 2. 中文分支：模型无线/三线表 + 物理矢量有线表补充
-            # ----------------------------------------------------
-            # 2.1 中文无线 / 三线表格模型区域提取
-            ml_tables = []
-            for bbox, score in ml_items:
-                t = self._wireless_extractor.extract(page, table_bbox=bbox, confidence=score)
-                if t:
-                    ml_tables.extend(t)
-
-            # 2.2 物理矢量线网格表格提取与合并补充
-            line_tables = self._wired_extractor.extract(page)
-            tables = list(ml_tables)
-            existing_bboxes = [t.bbox for t in tables]
-            for lt in line_tables:
-                if not self._bbox_overlaps_any(lt.bbox, existing_bboxes):
-                    tables.append(lt)
-        else:
-            # 未开启模型时（纯规则模式）
-            from hexai_pdf_parser.extractors.language_detector import detect_page_language
-            lang = detect_page_language(page)
-
-            if lang == "en":
-                tables = self._wireless_extractor.extract_zebra(page)
-                if tables:
-                    if self._table_config and self._table_config.profiles:
-                        tables = self._apply_layout_rules(page, tables)
-                    return tables
-
-            tables = self._wired_extractor.extract(page)
-
-            # 补充无线文本对齐启发式表格扫描
-            wired_regions = [
-                table.bbox
-                for table in tables
-                if table.source == "line_projection"
-            ]
-            text_tables = self._extract_via_text_alignment(
-                page,
-                excluded_regions=wired_regions,
-            )
-            if text_tables:
-                existing_bboxes = [t.bbox for t in tables]
-                for tt in text_tables:
-                    overlap_idx = self._bbox_overlaps_any_index(tt.bbox, existing_bboxes)
-                    if overlap_idx is None:
-                        tables.append(tt)
-                        existing_bboxes.append(tt.bbox)
-                    else:
-                        existing = tables[overlap_idx]
-                        existing_empty = sum(
-                            1 for c in existing.cells if not c.text.strip()
-                        )
-                        tt_empty = sum(1 for c in tt.cells if not c.text.strip())
-                        if tt_empty < existing_empty:
-                            tables[overlap_idx] = tt
-                            existing_bboxes[overlap_idx] = tt.bbox
+        wired_tables = [
+            table for table in candidates if table.source == "line_projection"
+        ]
+        tables = self._extract_model_tables(
+            page, wired_tables=wired_tables, page_language=page_language
+        )
 
         # Apply layout rule system when a config with profiles is provided.
         if self._table_config and self._table_config.profiles:
             tables = self._apply_layout_rules(page, tables)
 
-        # Normalize grouped financial headers once, after all table rules.
-        tables = [normalize_table_headers(t, page) for t in tables]
-        tables = [normalize_complex_financial_header(t, page) for t in tables]
+        # Normalize grouped financial headers once for Chinese tables, after all table rules.
+        if page_language in {"zh", "mixed"}:
+            tables = [normalize_table_headers(t, page) for t in tables]
+            tables = [normalize_complex_financial_header(t, page) for t in tables]
+        tables = [self._clamp_table_to_page(t, page) for t in tables]
+        tables = sorted(tables, key=lambda t: (t.bbox.y0, t.bbox.x0))
 
         if self.debug_pipeline:
             self._last_pipeline_debug["text_alignment"] = copy.deepcopy(
@@ -324,6 +629,46 @@ class TableExtractor:
             ]
 
         return tables
+
+    @staticmethod
+    def _clamp_table_to_page(table: Table, page: fitz.Page) -> Table:
+        """Clamp table bounding box and all cells to the visible page boundaries."""
+        p_x0 = float(page.rect.x0)
+        p_y0 = float(page.rect.y0)
+        p_x1 = float(page.rect.x1)
+        p_y1 = float(page.rect.y1)
+
+        t_x0 = max(p_x0, min(table.bbox.x0, p_x1))
+        t_y0 = max(p_y0, min(table.bbox.y0, p_y1))
+        t_x1 = max(p_x0, min(table.bbox.x1, p_x1))
+        t_y1 = max(p_y0, min(table.bbox.y1, p_y1))
+        clamped_table_bbox = BBox(round(t_x0, 1), round(t_y0, 1), round(t_x1, 1), round(t_y1, 1))
+
+        clamped_cells: list[Cell] = []
+        for c in table.cells:
+            c_x0 = max(t_x0, min(c.bbox.x0, t_x1))
+            c_y0 = max(t_y0, min(c.bbox.y0, t_y1))
+            c_x1 = max(t_x0, min(c.bbox.x1, t_x1))
+            c_y1 = max(t_y0, min(c.bbox.y1, t_y1))
+            clamped_cells.append(
+                Cell(
+                    text=c.text,
+                    row_index=c.row_index,
+                    col_index=c.col_index,
+                    colspan=c.colspan,
+                    rowspan=c.rowspan,
+                    bbox=BBox(round(c_x0, 1), round(c_y0, 1), round(c_x1, 1), round(c_y1, 1)),
+                )
+            )
+
+        return Table(
+            bbox=clamped_table_bbox,
+            rows=table.rows,
+            cols=table.cols,
+            cells=clamped_cells,
+            confidence=table.confidence,
+            source=table.source,
+        )
 
     @staticmethod
     def _rect_to_dict(rect: fitz.Rect) -> dict:
@@ -2788,9 +3133,43 @@ class TableExtractor:
         page: fitz.Page,
         excluded_regions: Optional[List[BBox]] = None,
     ) -> List[Table]:
-        """Extract tables from aligned text when drawing lines are absent."""
+        """Extract text-aligned candidates through the language facade."""
+        from hexai_pdf_parser.extractors.language_detector import detect_page_language
+
         self._last_text_alignment_debug = None
         allowed_regions = self._get_text_alignment_regions(page)
+        if allowed_regions == []:
+            self._last_wireless_recovery = {"regions": [], "disabled": True}
+            return []
+
+        tables = self._wireless_extractor.extract_text_alignment_candidates(
+            page,
+            excluded_regions=excluded_regions,
+            allowed_regions=allowed_regions,
+            use_legacy_fallback=(
+                self._use_legacy_text_alignment_fallback()
+                and detect_page_language(page) == "en"
+            ),
+        )
+        self._last_wireless_recovery = getattr(
+            self._wireless_extractor, "_last_wireless_recovery", None
+        )
+        if self._last_text_alignment_debug is None:
+            self._last_text_alignment_debug = getattr(
+                self._wireless_extractor, "_last_text_alignment_debug", None
+            )
+        return tables
+
+    def _extract_legacy_text_alignment(
+        self,
+        page: fitz.Page,
+        excluded_regions: Optional[List[BBox]] = None,
+        allowed_regions: Optional[List[BBox]] = None,
+    ) -> List[Table]:
+        """Extract tables from aligned text when drawing lines are absent."""
+        self._last_text_alignment_debug = None
+        if allowed_regions is None:
+            allowed_regions = self._get_text_alignment_regions(page)
         if allowed_regions == []:
             self._last_wireless_recovery = {"regions": [], "disabled": True}
             return []
@@ -3397,55 +3776,19 @@ class TableExtractor:
         numeric_chars = set("0123456789,.-+()% ")
         return all(ch in numeric_chars for ch in stripped)
 
-    # ------------------------------------------------------------------
-    # ML-based table detection
-    # ------------------------------------------------------------------
-
     def _extract_via_ml(self, page: fitz.Page) -> List[Table]:
-        """Detect table regions using ML model and build cells via text alignment."""
-        try:
-            if self._ml_detector is None:
-                from hexai_pdf_parser.ml.ml_table_detector import MLTableDetector
-                self._ml_detector = MLTableDetector(
-                    model_path=self._ml_model_path,
-                    confidence_threshold=self._ml_confidence,
-                )
-            items = self._ml_detector.detect_with_scores(page)
-        except ImportError:
-            import warnings
-            warnings.warn(
-                "ML table detection unavailable (onnxruntime not installed). "
-                "Install with: pip install hexai_pdf_parser[ml]",
-                stacklevel=2,
-            )
-            return []
-        except Exception:
-            return []
-
-        if not items:
-            return []
-
-        tables: List[Table] = []
-        for bbox, score in items:
-            row_count, col_count, cells = self._extract_cells_from_region(page, bbox)
-            if row_count >= 1 and col_count >= 1 and cells:
-                tables.append(
-                    Table(
-                        bbox=bbox,
-                        rows=row_count,
-                        cols=col_count,
-                        cells=cells,
-                        confidence=round(score, 4),
-                        source="ml_detection",
-                    )
-                )
-        return tables
+        """Compatibility wrapper for model-only extraction on a selected page."""
+        return self._extract_model_tables(page)
 
     def _extract_cells_from_region(
         self, page: fitz.Page, region_bbox: BBox
     ) -> tuple[int, int, List[Cell]]:
         """Recover a table grid from text inside a trusted table region."""
-        return self._zh_wireless._extract_cells_from_region(page, region_bbox)
+        from hexai_pdf_parser.tables.wireless_structure.recoverer import (
+            recover_cells_from_region,
+        )
+
+        return recover_cells_from_region(page, region_bbox)
 
     def _prune_empty_columns(
         self, cells: List[Cell], num_cols: int

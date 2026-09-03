@@ -72,6 +72,7 @@ class JSONWriter:
             "index": page.index,
             "size": page.size,
             "rotation": page.rotation,
+            "page_type": page.page_type,
             "blocks": [block_to_dict(b) for b in page.blocks],
             "tables": [table_to_dict(t) for t in page.tables],
             "images": [image_to_dict(i) for i in page.images],
@@ -274,4 +275,3 @@ class JSONWriter:
         if ts.source is not None:
             result["source"] = ts.source
         return result
-

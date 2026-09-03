@@ -12,6 +12,7 @@ def test_write_document_json(tmp_dir):
             index=0,
             size={"width": 595, "height": 842},
             rotation=0,
+            page_type="scanned",
             blocks=[Block(text="Hi", bbox=BBox(0, 0, 10, 10))],
         )
     )
@@ -25,4 +26,5 @@ def test_write_document_json(tmp_dir):
     assert data["document"]["page_count"] == 1
     assert len(data["pages"]) == 1
     assert data["pages"][0]["index"] == 0
+    assert data["pages"][0]["page_type"] == "scanned"
     assert data["pages"][0]["blocks"][0]["text"] == "Hi"

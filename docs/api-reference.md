@@ -56,7 +56,6 @@ PDFParser(
     *,
     render_dpi=200,                # int: 渲染 PNG 的分辨率
     seal_coords=None,              # list[dict]: 印章坐标（可选）
-    use_ml=False,                  # bool: 启用 ML 表格检测
     ml_model_path=None,            # str: 自定义 ONNX 模型路径
     ml_confidence=0.25,            # float: ML 置信度阈值
 )

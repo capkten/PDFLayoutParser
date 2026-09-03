@@ -5,6 +5,7 @@ from hexai_pdf_parser.extractors.image_extractor import ImageExtractor
 from hexai_pdf_parser.extractors.layout_mapper import LayoutMapper
 from hexai_pdf_parser.extractors.layout_builder import LayoutBuilder
 from hexai_pdf_parser.extractors.language_detector import detect_page_language
+from hexai_pdf_parser.extractors.page_classifier import classify_page_type, is_scanned_page
 
 __all__ = [
     "TextExtractor",
@@ -12,5 +13,7 @@ __all__ = [
     "LayoutMapper",
     "LayoutBuilder",
     "detect_page_language",
+    "classify_page_type",
+    "is_scanned_page",
 ]
 

@@ -151,7 +151,6 @@ def _draw_final_tables(page: fitz.Page, tables: list[dict]) -> None:
 PDF_INPUT_DIR = r"C:\Users\92410\Desktop\git\hexai_pdf_parser"
 OUTPUT_DIR = r"C:\Users\92410\Desktop\git\hexai_pdf_parser\out_pipeline_debug"
 RENDER_DPI = 200
-USE_ML = True
 # ==============================================================================
 
 
@@ -159,7 +158,6 @@ def batch_debug_directory(
     input_dir: str = PDF_INPUT_DIR,
     output_dir: str = OUTPUT_DIR,
     dpi: int = RENDER_DPI,
-    use_ml: bool = USE_ML,
 ) -> list[str]:
     """Batch run deep pipeline diagnostics for all PDFs in input_dir.
 
@@ -190,7 +188,7 @@ def batch_debug_directory(
         print(f"\n[pipeline_debug] Processing diagnostics for: {pdf_file.name} -> {pdf_out_dir}")
 
         try:
-            with PDFParser(str(pdf_file), render_dpi=dpi, use_ml=use_ml, debug_pipeline=True) as parser:
+            with PDFParser(str(pdf_file), render_dpi=dpi, debug_pipeline=True) as parser:
                 res = parser.parse(output_dir=pdf_out_dir)
                 if res.code == 1:
                     print(f"[pipeline_debug] Success! Diagnostics written to:\n  - {os.path.join(pdf_out_dir, 'debug')}\n  - {os.path.join(pdf_out_dir, 'tables')}")
@@ -208,6 +206,4 @@ if __name__ == "__main__":
         input_dir=PDF_INPUT_DIR,
         output_dir=OUTPUT_DIR,
         dpi=RENDER_DPI,
-        use_ml=USE_ML,
     )
-

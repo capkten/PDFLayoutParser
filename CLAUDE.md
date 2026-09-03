@@ -1,5 +1,3 @@
-# CLAUDE.md
-
 Behavioral guidelines to reduce common LLM coding mistakes. Merge with project-specific instructions as needed.
 
 **Tradeoff:** These guidelines bias toward caution over speed. For trivial tasks, use judgment.
@@ -64,14 +62,6 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 
 **These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
 
+## Project development workflow
 
-## Image / Screenshot Handling
-
-Default model is `opus`, mapped to `mimo-v2.5-pro`, which is not multimodal.
-
-Whenever the task requires reading an image, screenshot, UI screenshot, PDF rendered page, chart, diagram, table image, or visual layout:
-1. Do not inspect the image in the main conversation.
-2. Invoke the `vision-check` skill or delegate to the `image-reader` subagent.
-3. The `image-reader` subagent uses `model: haiku`, which is mapped to `mimo-v2.5`.
-4. Use only the returned visual facts from the subagent for subsequent reasoning.
-5. After visual inspection, continue code analysis in the main model.
+For PDF table debugging, single-page runs, CodeGraph usage, visual verification, language-aware extraction, testing, and commit conventions, load [DEVELOPMENT_WORKFLOW.md](DEVELOPMENT_WORKFLOW.md) when needed.
