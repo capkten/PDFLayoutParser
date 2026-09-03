@@ -185,6 +185,75 @@ def test_hybrid_body_resolves_wide_spaced_single_cjk_exact_slot(monkeypatch):
     ).text == "合计"
 
 
+def test_hybrid_body_rebuilds_after_same_slot_native_continuation(monkeypatch):
+    region = BBox(0, 0, 200, 60)
+    build_grid_calls = 0
+    real_build_grid = hybrid_body.build_grid
+
+    def counting_build_grid(candidates, bands):
+        nonlocal build_grid_calls
+        build_grid_calls += 1
+        return real_build_grid(candidates, bands)
+
+    spans = [
+        NativeSpan(
+            "以摊余成本计量的金融资产终止确",
+            BBox(18, 10, 90, 20),
+            "SimSun",
+            10,
+            1,
+            source_position=(1, 0, 0),
+        ),
+        NativeSpan(
+            "认收益（损失以\"-\"号填列）",
+            BBox(0, 21, 17, 31),
+            "SimSun",
+            10,
+            2,
+            source_position=(1, 1, 0),
+        ),
+        NativeSpan(
+            "-",
+            BBox(120, 16, 130, 26),
+            "SimSun",
+            10,
+            3,
+            source_position=(2, 1, 0),
+        ),
+        NativeSpan(
+            "后续项目",
+            BBox(20, 40, 60, 50),
+            "SimSun",
+            10,
+            4,
+            source_position=(3, 2, 0),
+        ),
+        NativeSpan(
+            "200",
+            BBox(120, 40, 140, 50),
+            "SimSun",
+            10,
+            5,
+            source_position=(4, 2, 0),
+        ),
+    ]
+    monkeypatch.setattr(
+        "hexai_pdf_parser.tables.wireless_structure.hybrid_body.collect_native_spans",
+        lambda page, allowed_regions: spans,
+    )
+    monkeypatch.setattr(hybrid_body, "build_grid", counting_build_grid)
+
+    rows, columns, cells = recover_hybrid_body_cells(
+        object(), region, [0, 100, 200]
+    )
+
+    assert (rows, columns) == (2, 2)
+    assert build_grid_calls == 2
+    assert next(cell for cell in cells if cell.row_index == 0 and cell.col_index == 0).text == (
+        "以摊余成本计量的金融资产终止确\n认收益（损失以\"-\"号填列）"
+    )
+
+
 def test_hybrid_body_rejects_overlapping_span_occupancy(monkeypatch):
     region = BBox(0, 0, 200, 40)
     spans = [

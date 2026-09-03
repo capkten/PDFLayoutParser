@@ -205,6 +205,60 @@ def _is_left_shifted_cjk_continuation(
     return False
 
 
+def _is_same_slot_native_continuation(
+    previous: dict[str, Any], candidate: dict[str, Any]
+) -> bool:
+    """Recognize a vertically wrapped native continuation in one exact slot."""
+    if not _same_slot(previous, candidate) or not _native_continuous(
+        previous, candidate
+    ):
+        return False
+    if not (
+        previous.get("source_position_known", False)
+        and candidate.get("source_position_known", False)
+        and previous.get("source_blocks") == candidate.get("source_blocks")
+        and len(previous.get("source_blocks", [])) == 1
+        and candidate.get("source_line_start")
+        == previous.get("source_line_end") + 1
+    ):
+        return False
+    if candidate["script"] != previous["script"] or candidate["script"] != "cjk":
+        return False
+    if candidate["bbox"][1] <= previous["bbox"][1]:
+        return False
+    font_size = min(previous["font_size"], candidate["font_size"])
+    vertical_gap = candidate["bbox"][1] - previous["bbox"][3]
+    if vertical_gap < 0.0 or vertical_gap > max(6.0, font_size):
+        return False
+    if (
+        _NUMBERED_ITEM_START.match(candidate["text"].strip()) is not None
+        or _LIST_CONTINUATION.match(candidate["text"].strip())
+        or _VALUE_ONLY.fullmatch(candidate["text"].strip())
+    ):
+        return False
+    previous_width = previous["bbox"][2] - previous["bbox"][0]
+    return (
+        previous_width >= font_size * 4.0
+        and candidate["bbox"][0] < previous["bbox"][0]
+        and candidate["bbox"][2]
+        <= previous["bbox"][0] + max(2.0, font_size * 0.5)
+    )
+
+
+def _can_resolve_same_slot_continuation_group(
+    group: Sequence[dict[str, Any]],
+    all_slot_keys: Sequence[tuple[int, int, int, int]],
+) -> bool:
+    slot = _slot_key(group[0])
+    if any(key != slot and _slot_keys_overlap(slot, key) for key in all_slot_keys):
+        return False
+    ordered = sorted(group, key=lambda item: item["flow_start"])
+    return all(
+        _is_same_slot_native_continuation(previous, candidate)
+        for previous, candidate in zip(ordered, ordered[1:])
+    )
+
+
 def _merge_pair(left: dict[str, Any], right: dict[str, Any], joiner: str, kind: str) -> dict[str, Any]:
     merged = dict(left)
     merged["text"] = left["text"] + joiner + right["text"]
@@ -232,7 +286,7 @@ def _merge_pair(left: dict[str, Any], right: dict[str, Any], joiner: str, kind: 
 def resolve_exact_slot_conflicts(
     cells: Sequence[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Merge evidence-complete single-CJK chains that conflict in one exact slot."""
+    """Merge evidence-complete chains that conflict in one exact slot."""
     ordered = [
         dict(item) for item in sorted(cells, key=lambda item: item["flow_start"])
     ]
@@ -243,13 +297,19 @@ def resolve_exact_slot_conflicts(
     all_slot_keys = list(groups)
     resolved: dict[tuple[int, int, int, int], dict[str, Any]] = {}
     for slot, group in groups.items():
-        if len(group) < 2 or not _can_resolve_exact_slot_group(
-            group, all_slot_keys
-        ):
+        if len(group) < 2:
+            continue
+        if _can_resolve_exact_slot_group(group, all_slot_keys):
+            joiner = ""
+            merge_kind = "exact_slot_conflict"
+        elif _can_resolve_same_slot_continuation_group(group, all_slot_keys):
+            joiner = "\n"
+            merge_kind = "same_slot_native_continuation"
+        else:
             continue
         merged = group[0]
         for candidate in group[1:]:
-            merged = _merge_pair(merged, candidate, "", "exact_slot_conflict")
+            merged = _merge_pair(merged, candidate, joiner, merge_kind)
         resolved[slot] = merged
 
     result: list[dict[str, Any]] = []
@@ -343,9 +403,15 @@ def _can_merge_multiline(
         if bold["col_start"] == bold["col_end"] == 1 and row_columns.get(bold["row_start"], {1}) == {1}:
             return False
     minimum_width = min(previous["bbox"][2] - previous["bbox"][0], candidate["bbox"][2] - candidate["bbox"][0])
+    same_slot_native_continuation = _is_same_slot_native_continuation(
+        previous, candidate
+    )
     if (
         _horizontal_overlap(previous["bbox"], candidate["bbox"]) < minimum_width * 0.45
-        and not _is_left_shifted_cjk_continuation(previous, candidate, row_columns)
+        and not (
+            same_slot_native_continuation
+            or _is_left_shifted_cjk_continuation(previous, candidate, row_columns)
+        )
     ):
         return False
     gap = candidate["bbox"][1] - previous["bbox"][3]

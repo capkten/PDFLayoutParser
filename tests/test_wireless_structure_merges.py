@@ -233,6 +233,86 @@ def test_merge_multiline_cells_accepts_multi_char_left_shifted_continuation():
     assert result[0]["text"] == "长期应收款-融资租赁\n保证金"
 
 
+def test_merge_multiline_cells_accepts_same_slot_continuation_with_peer_column():
+    first = _cell(
+        "以摊余成本计量的金融资产终止确",
+        flow=1,
+        row=1,
+        x0=18,
+        y0=10,
+        x1=90,
+        y1=20,
+        source_line=1,
+    )
+    second = _cell(
+        "认收益（损失以\"-\"号填列）",
+        flow=2,
+        row=1,
+        x0=10,
+        y0=22,
+        x1=17,
+        y1=32,
+        source_line=2,
+    )
+    peer = _cell(
+        "-",
+        flow=3,
+        row=1,
+        col=2,
+        x0=120,
+        y0=22,
+        x1=130,
+        y1=32,
+    )
+
+    result = merge_multiline_cells([first, second, peer], header_cutoff=None)
+
+    merged = next(item for item in result if item["col_start"] == 1)
+    assert merged["text"] == "以摊余成本计量的金融资产终止确\n认收益（损失以\"-\"号填列）"
+    assert len(result) == 2
+
+
+def test_merge_multiline_cells_keeps_unrelated_same_slot_multichar_fields_separate():
+    first = _cell(
+        "字段一",
+        flow=1,
+        row=1,
+        x0=18,
+        y0=10,
+        x1=90,
+        y1=20,
+        source_line=1,
+    )
+    second = _cell(
+        "字段二",
+        flow=2,
+        row=1,
+        x0=10,
+        y0=22,
+        x1=17,
+        y1=32,
+        source_line=1,
+    )
+    peer = _cell(
+        "-",
+        flow=3,
+        row=1,
+        col=2,
+        x0=120,
+        y0=22,
+        x1=130,
+        y1=32,
+    )
+
+    result = merge_multiline_cells([first, second, peer], header_cutoff=None)
+
+    assert [item["text"] for item in result if item["col_start"] == 1] == [
+        "字段一",
+        "字段二",
+    ]
+    assert len(result) == 3
+
+
 def test_merge_multiline_cells_keeps_left_shifted_independent_label_separate():
     first = _cell("项目明细", flow=1, row=1, x0=40, y0=10, x1=70, y1=20)
     second = _cell("金额", flow=2, row=1, x0=10, y0=22, x1=30, y1=32, source_line=2)
