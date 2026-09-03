@@ -2,6 +2,21 @@
 
 ## 2026-09-03
 
+- 验证 `fix/zh_all_table_pages.pdf` 页面索引 `979` 中文无线表格（子公司情况表）在“固定宽度右列 + 左侧多样金额/地点”场景下的恢复结果，确认 Page 979 的 `注册资本`、`主要经营地`、`持股比例%` 等列已恢复为稳定的 8 列结构。
+  - **根因与调用位置**：
+    1. `src/hexai_pdf_parser/tables/wireless_structure/text_runs.py` 的 `_has_alignment_corridor_veto()` 原先只把“左右任一侧边界随支持行明显变化”视为独立列证据。Page 979 中，`注册资本` 与 `主要经营地` 所在列的右侧字段宽度相对固定、对齐锚点稳定，但文本值分别跨 `1,000.00 / 2,000.00 / 15,000.00 / 52,000.00` 等金额和 `深圳 / 惠州 / 九江 / 南宁` 等地点持续变化；若缺少文本多样性证据，`build_text_runs()` 在 `if can_join and not _has_alignment_corridor_veto(groups[-1], span, rows)` 处会把同一视觉行的“金额 + 地点”错误拼成同一个 atom，进而在后续列带恢复中把两列吸并。
+  - **修复判定与调用位置**：
+    1. `text_runs.py` 新增 `_has_diverse_text_values()`，对支持行文本做去空白去重；当同一对齐走廊一侧累计出现 `>= 3` 个不同文本值时，即使该侧边界不明显变化，也视为存在独立字段证据。
+    2. `_has_alignment_corridor_veto()` 在保留原始对齐走廊、支持行数量和 opposite-edge variation 约束的前提下，对“边界稳定但文本多样”的固定宽度列补入 veto 条件，避免 Page 979 这类“右列宽度稳定、左列金额多样”的场景被误并。
+    3. `build_text_runs()` 继续保持 veto-only 语义：上述判断只会阻止 `groups[-1].append(span)` 发生，不会主动制造新的 join，也不会改变 native span -> atom 之后不回读 `page.get_text("words")` 的结构恢复约束。
+  - **结构约束**：本页结构恢复仍严格只消费 native span、atom、列带、物理 Cell 和逻辑 Cell，不回退 `extract_zebra()`、legacy `_rebuild_text_aligned_table()` 或其他 words 二次重建路径；跨度调整后继续满足“每个逻辑槽位恰好唯一占用”与独立空槽位物化契约。
+  - **测试与页面验证**：
+    - 复跑 `tests/test_wireless_output_order.py tests/test_wireless_structure_text_runs.py tests/test_wireless_structure_recoverer.py`，结果为 `56 passed, 5 warnings`，仅保留既有的 PyMuPDF / SWIG 弃用警告；
+    - 使用当前 worktree 模型 `src/hexai_pdf_parser/ml/table_detector_model/best.onnx` 独立重跑页面索引 `979` 至 `D:\codes\PDFLayoutParser\.worktrees\fix-page-979-alignment-corridor\output\page_979_fixed_width_alignment_corridor_20260903\`；
+    - 页面成功恢复出 `1` 张 `wireless_span_recovery` 表格，结构为 `24x8`、`177` 个 Cell、bbox=`[71.5, 90.9, 519.0, 756.6]`、置信度 `0.9807`；
+    - `持股比例%` 在结构化结果中恢复为 `R0C5` 的 `rowspan=2, colspan=2` 父表头，下方 `直接/间接` 两个叶子列独立存在；其余首列表头保持 `rowspan=3`；
+    - 结构审计确认 `192/192` 个逻辑槽位全部唯一覆盖，`0` 缺失、`0` occupancy conflict、`0` 越界，空单元格共 `17` 个；`pages/page-979.json`、`pages/page-979.md` 与最终 `tables/page-979.png` 已生成，PNG 留待后续视觉复核。
+
 - 修复 `fix/zh_all_table_pages.pdf` 页面索引 `969` 中文无线复合表头表格（Table 2“资产负债表中归属于母公司的其他综合收益”、Table 3“利润表中归属于母公司的其他综合收益”）漏检与结构列塌陷问题。
   - **根因与调用位置**：
     1. 在 `src/hexai_pdf_parser/tables/wireless_structure/columns.py` 的 `infer_column_bands()` 中，原过滤宽表头的条件 `_is_wide_header()` 写死了宽度比例 `item_width >= width * 0.28`。Table 2 和 Table 3 的父表头“本期发生额”（宽度约 52.8pt，占区域总宽仅 12.5%）未被过滤进入连通分量合并。由于“本期发生额”横跨左右两个独立叶子列轨道，在连通图无差别传递闭包合并中将本应独立的叶子列带桥接为一个宽列带（Band 3），导致 Table 2 的“税后归属于母公司”与“减：前期计入...”被吸入同一列带。
