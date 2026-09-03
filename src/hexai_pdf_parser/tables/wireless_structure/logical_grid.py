@@ -18,14 +18,14 @@ def _wrapped_leaf_header_span(
     if (
         candidate.get("merge_kind") != "multiline_cell"
         or "\n" not in str(candidate.get("text", ""))
-        or int(candidate.get("row_end", 0)) != int(candidate.get("row_start", 0)) + 1
+        or int(candidate.get("row_end", 0)) <= int(candidate.get("row_start", 0))
         or int(candidate.get("col_start", 0)) != int(candidate.get("col_end", 0))
         or int(candidate.get("colspan", 1)) != 1
         or not candidate.get("bbox")
     ):
         return None
     center_y = (candidate["bbox"][1] + candidate["bbox"][3]) / 2.0
-    if center_y > header_cutoff:
+    if center_y > header_cutoff or candidate["bbox"][3] > header_cutoff:
         return None
 
     start = int(candidate["row_start"])
@@ -38,19 +38,37 @@ def _wrapped_leaf_header_span(
     if len(started) != 1 or started[0] is not candidate:
         return None
 
-    sibling_columns = {
-        int(cell["col_start"])
-        for cell in cells
-        if cell is not candidate
-        and int(cell["row_start"]) == end
-        and int(cell["row_end"]) == end
-        and int(cell["col_start"]) != int(candidate["col_start"])
-        and int(cell.get("colspan", 1)) == 1
-        and cell.get("bbox")
-        and (cell["bbox"][1] + cell["bbox"][3]) / 2.0 <= header_cutoff
-        and str(cell.get("text", "")).strip()
-    }
-    if len(sibling_columns) < 2:
+    candidate_column = int(candidate["col_start"])
+    for cell in cells:
+        if cell is candidate or not cell.get("bbox"):
+            continue
+        rows_overlap = not (
+            int(cell["row_end"]) < start or int(cell["row_start"]) > end
+        )
+        columns_overlap = int(cell["col_start"]) <= candidate_column <= int(
+            cell["col_end"]
+        )
+        if rows_overlap and columns_overlap:
+            return None
+
+    sibling_columns_by_row: dict[int, set[int]] = {}
+    for cell in cells:
+        if (
+            cell is candidate
+            or int(cell["row_start"]) < start
+            or int(cell["row_end"]) > end
+            or int(cell["row_start"]) != int(cell["row_end"])
+            or int(cell["col_start"]) == candidate_column
+            or int(cell.get("colspan", 1)) != 1
+            or not cell.get("bbox")
+            or (cell["bbox"][1] + cell["bbox"][3]) / 2.0 > header_cutoff
+            or not str(cell.get("text", "")).strip()
+        ):
+            continue
+        sibling_columns_by_row.setdefault(int(cell["row_start"]), set()).add(
+            int(cell["col_start"])
+        )
+    if not any(len(columns) >= 2 for columns in sibling_columns_by_row.values()):
         return None
     return start, end
 

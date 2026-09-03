@@ -2,6 +2,37 @@
 
 ## 2026-09-03
 
+- 收紧中文无线表格物理行聚类中的 Y 轴重叠判定，覆盖 PDF 文本框不紧贴、上下框局部重叠且高度不对称的情况。
+  - **根因与调用位置**：`src/hexai_pdf_parser/tables/wireless_structure/grid.py` 的 `_cluster_rows()` 通过 `_can_join_row_group()` 处理候选行；其中 `_y_overlap_ratio()` 原先按较短文本框高度归一化。异常偏高的上框只要包含了下方短框的一部分，就可能得到较高比例，再叠加中心 Y 容差把同列上下两行合并，最终产生物理槽位冲突。
+  - **修复判定**：`_y_overlap_ratio()` 现在取交集相对双方高度覆盖率中的较小值（等价于除以较高框高），要求两个候选框都对重叠负责；同列且列跨度相同的候选仍需达到 `0.45` 稳定重叠，左移中文续写保留原有 native flow 特例；列区间相交但跨度不同的父子表头直接拆分。不同列的候选仍可依据中心 Y 和视觉行条件聚类，因此 435 页“账龄”这种跨两行居中的首列表头不被误拆。
+  - **结构约束**：修改只发生在 native span -> atom -> 列带 -> 物理 Cell 的行划分阶段，后续继续只消费 native span、atom、列带、物理 Cell 和逻辑 Cell；不回读 `page.get_text("words")`，不进入 `extract_zebra()` 或 legacy 二次重建。所有跨度调整后继续执行 occupancy conflict 检查，空槽位仍在逻辑网格阶段独立物化。
+  - **测试与页面验证**：新增不对称上下框回归测试，先确认当前短框归一化实现产生 `R1C1` 冲突，再以对称覆盖率修复为 `GREEN`。无线结构/页面集成专项为 `98 passed`，跨页面与无线恢复补充专项为 `39 passed`。使用最终代码独立重跑 `fix/zh_all_table_pages.pdf` 页索引 `435、436`，输出位于 `D:\codes\PDFLayoutParser\output\page_435_436_reciprocal_y_overlap_final_20260903\`；435 页 4 张表（目标账龄表 `7x5`），436 页 4 张表（`5x3、10x3、6x7、5x5`），结构化槽位无冲突，PNG 已生成用于视觉复核。
+
+- 修复 `fix/zh_all_table_pages.pdf` 页面索引 `931` 的中文无线表格表头续行与逻辑行压缩问题。第一张表右侧“预期信用损失率”末尾的 `(%)` 原本因独立 symbol atom 被脚本差异拦截，形成第 10 个物理/逻辑行；第三张表最右标题被拆成 5 个 native 行时，逻辑网格只支持恰好 2 行的叶子表头压缩，导致前五个“单位名称”等表头落在另一行，并把最右列错误恢复为 `rowspan=2`。
+  - **根因与调用位置**：`src/hexai_pdf_parser/tables/wireless_structure/merged_cells.py` 的 `_can_merge_multiline()` 原先对非 numeric 的 CJK/symbol 脚本差异直接拒绝，且 `merge_multiline_cells()` 丢弃了 `header_cutoff`；`src/hexai_pdf_parser/tables/wireless_structure/logical_grid.py` 的 `_wrapped_leaf_header_span()` 原先要求候选 Cell 恰好覆盖两个物理行，并只在候选结束行寻找同层叶子标题。中心 Y 的基础物理行聚类并非根因。
+  - **修复判定与调用位置**：保留中心 Y 物理行划分。在 `merged_cells.py` 中仅对同列、native flow 连续、垂直间隙紧密、候选与前一段 bbox 均位于 `header_cutoff` 内、且候选文本严格为 `(%)`/`（%）` 的结构单位符号放宽脚本限制；普通 symbol、数值、正文和越过表头 bbox 边界的候选继续拒绝。在 `logical_grid.py` 中将 wrapped leaf header 从两行推广为任意连续物理行区间，在区间内寻找至少两个同层单列叶子标题，并拒绝候选列发生占用冲突或起始行存在其他非空表头的情况。空槽位仍在逻辑行压缩和冲突检查之后物化。
+  - **结构约束**：恢复链仍只消费 native span、atom、列带、物理 Cell 和逻辑 Cell，不回读 `page.get_text("words")`，不进入 `extract_zebra()` 或 legacy 二次重建；未硬编码业务表头文字，`(%)` 只作为结构单位标记处理。
+  - **测试与页面验证**：新增 `(%)` 表头续行正例、普通 symbol/独立字段拒绝反例，以及覆盖 3 个物理行的 wrapped leaf header 正例；新增测试先确认 RED，再以最小实现转 GREEN。`tests/test_wireless_structure_merges.py tests/test_wireless_structure_grid.py` 为 `50 passed`。扩展无线结构、hybrid、表格提取和可视化集合为 `101 passed, 1 failed`；唯一失败为工作区已有的 `test_hybrid_wired_table_replaces_full_rowspan_body_before_shifting_footer`，与本次无线表头修改无关（预期 `hybrid_line_span_recovery`，当前实际 `line_projection`）。页面索引 `931` 使用最终代码独立重跑至 `D:\codes\PDFLayoutParser\output\fix_zh_all_table_pages_page_931_boundary_fix_20260903\`：三张表分别为 `wireless_span_recovery` 的 `9x7`、`7x2`、`7x6`，槽位覆盖分别为 `63/63`、`14/14`、`42/42` 且无冲突；结构化结果为 `pages\page-931.json`，最终可视化为 `tables\page-931.png`，视觉核验确认 `(%)` 不再形成单独逻辑行，第三表六个表头在同一表头行且最右列不再错误跨行。
+
+- 修复中文无线表格多级表头物理行过度聚合与同列冲突导致大面积整表丢失问题（如 `fix/zh_all_table_pages.pdf` 页面索引 `1014`、`1015`、`1016`、`1017`、`1013`、`932`、`933` 等）。
+  - **根因与调用位置**：
+    1. 在 `src/hexai_pdf_parser/tables/wireless_structure/grid.py` 的 `_cluster_rows()` 中，物理行聚类采用最近邻贪心单链比较（`min(groups[-1], key=abs(y - candidate_y))`）。当表头排版较为紧凑时（例如“本期增减变动” $y=100.1$ 与下方折行/各子列标题中心 $y=106.9 \sim 122.3$ 的相邻级差仅为 $6.8\text{pt}$），小于通用容差 $8.5\text{pt}$，触发多米诺式连续链式吸附，将处于不同层级的跨列父表头与下方单列子表头强制压并进同一个物理行 `Row 1`。由于跨列父表头（占 col 5-6）与子表头（占 col 5）在物理网格中同一槽位 `(1, 5)` 重叠，引发不可消除的 `occupancy conflict`，导致 `recover_cells_from_region()` 触发防御性抛弃，ML 模型以高置信度检出的无线大表全部整表丢失。
+    2. 在 `src/hexai_pdf_parser/tables/wireless_structure/header_topology.py` 的 `_is_structural_header_atom()` 中，原先使用 `_HEADER_UNIT_TOKEN` 将凡是结尾带 `%` 的文本均视为层级单位标签，导致“比例%”、“损失率%”等叶子列标题被过滤，使 `_infer_two_leaf_parent_spans()` 无法将父表头“期末余额”与子列“金额、比例%”完成 `1:2` 配对推断。
+  - **修复判定与调用位置**：
+    1. **同列互斥约束与链式防吸附**：在 `grid.py` 的 `_cluster_rows()` 中引入 `_can_join_row_group()`：首先检查候选框与组中心均值（`mean_y`）的距离不得超过 `tolerance * 1.5`，截断长链漂移；其次检查同列互斥，若候选框与当前行内已有元素存在列区间重叠（`_cols_overlap`）但列跨度不一致（`span_differs`，如跨列父表头与单列子表头），且纵向无实质重叠（`v_overlap < min_height * 0.30`），坚决拒绝并入同一行，强制开启新物理行。对于单列表头内的多行折行文本（`span_differs=False`），保持原有合并通道，零干扰既有单列文本。
+    2. **叶子列百分比标题放行**：在 `header_topology.py` 的 `_is_structural_header_atom()` 中，仅对纯单位符号（`"%"`, `"(%)"`, `"（%）"`）视为结构单位，放行“比例%”等实体子列标题参与二叶子列配对。
+  - **结构约束**：全流程只消费 native span、atom、列带、物理 Cell 和逻辑 Cell，不回读 `page.get_text("words")`，不进入 `extract_zebra()` 或 legacy 重建，不硬编码业务文字。物理行分立后，下游 `logical_grid.py` 原有的 `merge_header_spans()` 自动将两端单列表头延伸为 `rowspan=2`，所有槽位唯建物化。
+  - **测试与页面验证**：
+    - 新增单元测试 `test_build_grid_separates_column_overlapping_vertical_tiers`（覆盖同列跨度不同垂直层级物理分行）；
+    - 新增 Page 1014 集成测试 `tests/test_page_1014_table_recovery.py`（验证无槽位冲突、两端 `rowspan=2`、父表头跨列与子表头在 Row 1）；
+    - 守护回归测试 `tests/test_page_944_table_recovery.py`、Page 185 及全量无线测试套件共 `131 passed` 零回归。
+    - 页面独立重跑至 `D:\codes\PDFLayoutParser\output\verify_multilevel_header_fix_20260903\`：
+      - **Page 1014**：由原来的 0 个表格恢复为 `11x10`、102 个 Cell、槽位 100% 唯一占用的完整无线大表，可视化 PNG `zh_all_table_pages_page_1014_visualized.png` 表头两层分明，网格完全贴合；
+      - **Page 932**：原本丢失的第 (1) 项预付款项账龄表（`7x5`、32 cells）完整恢复，全页 5 个表格 100% 提取；
+      - **Page 933**：全页 4 个表格完整恢复（含第 2 项 `7x7` 大表）；
+      - **Page 1013~1017**：原本全部丢失的跨页长期股权投资明细大表全部成功恢复提取。
+
+
 - 修复 `fix/zh_all_table_pages.pdf` 页面索引 `968` 中文无线表格金额横向粘连及连锁导致“期末余额”整列丢失问题。
   - **根因与调用位置**：在 `src/hexai_pdf_parser/tables/wireless_structure/span_chain.py` 的 `_split_packed_numeric_fields()` 中，负责将底层 PyMuPDF `rawdict` 返回的连续同字体纯数值 Span 拆分；原拆分阈值 `gap_limit = max(2.5, float(span.get("font_size") or 0) * 0.35)` 在 10.56pt 字号下为 3.696pt，而 Page 968 递延收益表（递延租金、合计行）中“452,516,878.89”与“1,573,970,660.26”、股本表数据行中“-”与“1,696,964,131.00”之间的实际字符多余间距为 3.352pt，因相差约 0.34pt 未能触发拆分。递延收益表中两个金额粘连为一个 Atom 被分配至期末余额列，导致本期减少列物化为空槽并在可视化上形成横向穿列粘连；股本表中数据行最右两列“-”与“1,696,964,131.00”粘连为单一跨列 Atom，在 `infer_column_bands()` 列带推断时导致表头“小计”与“期末余额”同时映射到同一列带，整表丢失第 8 列，表头“期末余额”被挤压为仅 1.7pt 高度的伪单元格。
   - **修复判定与隔离约束**：将 `_split_packed_numeric_fields()` 中针对纯数值的拆分门槛收紧为正常的一半：`gap_limit = max(1.5, float(span.get("font_size") or 0) * 0.18)`。该函数被 `_PACKED_NUMERIC_FIELDS = re.compile(r"^[\s\d,().%+\-–—−]+$")` 严格保护，仅匹配 100% 纯数值和标点，任何含中文字符的 Span（如“未来 12 个月”、“50年”、“附注1”）在首行即被拦截原样返回，与下游 `text_runs.py` 中“文本内部带数字”（中西文混排放大合并）完全物理隔离，保证零回退。

@@ -141,6 +141,51 @@ def test_merge_multiline_cells_requires_continuous_same_column_evidence():
     assert result[0]["rowspan"] == 2
 
 
+def test_merge_multiline_cells_accepts_percent_unit_as_header_continuation():
+    first = _cell("预期信用", flow=1, row=1, y0=10, y1=20, source_line=10)
+    second = _cell("损失率", flow=2, row=2, y0=21.35, y1=31.35, source_line=11)
+    unit = _cell("(%)", flow=3, row=3, y0=32.70, y1=44.80, source_line=12)
+    first["source_blocks"] = [7]
+    second["source_blocks"] = [8]
+    unit["source_blocks"] = [9]
+    unit["script"] = "symbol"
+
+    result = merge_multiline_cells(
+        [first, second, unit], header_cutoff=50.0
+    )
+
+    assert len(result) == 1
+    assert result[0]["text"] == "预期信用\n损失率\n(%)"
+    assert result[0]["row_end"] == 3
+    assert result[0]["rowspan"] == 3
+
+
+def test_merge_multiline_cells_keeps_non_unit_symbol_and_distant_header_text_separate():
+    first = _cell("项目", flow=1, row=1, y0=10, y1=20, source_line=10)
+    symbol = _cell("备注", flow=2, row=2, y0=21, y1=31, source_line=11)
+    distant = _cell("(%)", flow=3, row=3, y0=45, y1=55, source_line=12)
+    symbol["script"] = "symbol"
+    distant["script"] = "symbol"
+
+    result = merge_multiline_cells(
+        [first, symbol, distant], header_cutoff=60.0
+    )
+
+    assert [item["text"] for item in result] == ["项目", "备注", "(%)"]
+
+
+def test_merge_multiline_cells_rejects_unit_that_crosses_header_bbox_boundary():
+    first = _cell("项目", flow=1, row=1, y0=10, y1=20, source_line=10)
+    unit = _cell("(%)", flow=2, row=2, y0=21, y1=33, source_line=11)
+    unit["script"] = "symbol"
+
+    result = merge_multiline_cells(
+        [first, unit], header_cutoff=30.0
+    )
+
+    assert [item["text"] for item in result] == ["项目", "(%)"]
+
+
 def test_merge_multiline_cells_columnar_keeps_different_native_blocks_separate():
     first = _cell("项目一", flow=1, row=1, y0=10, y1=20, source_line=1)
     second = _cell("项目二", flow=2, row=2, y0=22, y1=32, source_line=2)

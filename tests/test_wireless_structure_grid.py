@@ -182,6 +182,69 @@ def test_build_logical_grid_collapses_wrapped_leaf_header_row():
     assert not any(cell.get("merge_kind") == "empty_slot" and cell["row_start"] == 1 for cell in materialized)
 
 
+def test_build_logical_grid_collapses_wrapped_leaf_header_spanning_three_physical_rows():
+    physical_rows = [
+        {"id": 1, "y": 10},
+        {"id": 2, "y": 20},
+        {"id": 3, "y": 30},
+        {"id": 4, "y": 50},
+    ]
+    columns = [
+        {"id": column, "x0": column * 20, "x1": column * 20 + 10}
+        for column in range(1, 6)
+    ]
+    cells = [
+        {
+            **_logical_cell(
+                "H3",
+                "第一行\n第二行\n第三行",
+                1,
+                3,
+                y=10,
+            ),
+            "row_end": 3,
+            "rowspan": 3,
+            "merge_kind": "multiline_cell",
+            "bbox": [50, 10, 70, 38],
+        },
+        _logical_cell("H1", "类别", 3, 1, y=30),
+        _logical_cell("H2", "账面余额", 3, 2, y=30),
+        _logical_cell("H4", "坏账准备", 3, 4, y=30),
+        _logical_cell("H5", "账面价值", 3, 5, y=30),
+        *[_logical_cell(f"B{column}", f"正文{column}", 4, column, y=50) for column in range(1, 6)],
+    ]
+
+    rows, _, logical_cells = build_logical_grid(
+        physical_rows,
+        columns,
+        cells,
+        header_cutoff=40,
+    )
+
+    assert [row["source_rows"] for row in rows] == [[1, 2, 3], [4]]
+    header = [
+        cell
+        for cell in logical_cells
+        if cell["cell_id"].startswith("H")
+    ]
+    assert all(
+        (cell["row_start"], cell["row_end"], cell["rowspan"]) == (1, 1, 1)
+        for cell in header
+    )
+
+    materialized = logical_grid.materialize_empty_cells(
+        rows,
+        physical_rows,
+        columns,
+        logical_cells,
+        BBox(0, 0, 120, 60),
+    )
+    assert not any(
+        cell.get("merge_kind") == "empty_slot" and cell["row_start"] == 1
+        for cell in materialized
+    )
+
+
 def test_build_logical_grid_keeps_wrapped_leaf_below_a_real_parent_header():
     physical_rows = [
         {"id": 1, "y": 10},
@@ -335,3 +398,178 @@ def test_merge_header_spans_keeps_stub_short_when_its_column_has_another_header(
 
     stub = next(cell for cell in result if cell["cell_id"] == "S1")
     assert (stub["row_start"], stub["row_end"], stub["rowspan"]) == (2, 2, 1)
+
+
+def test_build_grid_separates_column_overlapping_vertical_tiers():
+    """存在列重叠且纵向一上一下的候选项，严禁被贪心单链吸附进同一个物理行。"""
+    bands = [
+        {"id": 1, "x0": 10, "x1": 30},
+        {"id": 2, "x0": 40, "x1": 60},
+        {"id": 3, "x0": 70, "x1": 90},
+    ]
+    # PARENT (center=15) -> STUB (center=20, diff=5) -> CHILD (center=25, diff=5)
+    # 当 tolerance >= 6 时，无同列冲突防护将链式合并为同一行，产生 R1C2/R1C3 冲突
+    candidates = [
+        {
+            "cell_id": "PARENT",
+            "text": "本期增减变动",
+            "bbox": [40, 10, 90, 20],
+            "column_id": 2,
+            "column_start": 2,
+            "column_end": 3,
+            "colspan": 2,
+        },
+        {
+            "cell_id": "STUB",
+            "text": "项目名称",
+            "bbox": [10, 11, 30, 29],
+            "column_id": 1,
+            "column_start": 1,
+            "column_end": 1,
+            "colspan": 1,
+        },
+        {
+            "cell_id": "CHILD1",
+            "text": "追加投资",
+            "bbox": [40, 20, 60, 30],
+            "column_id": 2,
+            "column_start": 2,
+            "column_end": 2,
+            "colspan": 1,
+        },
+        {
+            "cell_id": "CHILD2",
+            "text": "减少投资",
+            "bbox": [70, 20, 90, 30],
+            "column_id": 3,
+            "column_start": 3,
+            "column_end": 3,
+            "colspan": 1,
+        },
+    ]
+
+    rows, columns, cells, issues = build_grid(candidates, bands)
+    assert not issues, f"Expected no issues, got {issues}"
+    cell_map = {c["cell_id"]: c for c in cells}
+    assert cell_map["PARENT"]["row_start"] < cell_map["CHILD1"]["row_start"]
+    assert cell_map["CHILD1"]["row_start"] == cell_map["CHILD2"]["row_start"]
+
+
+def test_build_grid_separates_partially_overlapping_column_tiers():
+    """部分 y 重叠的跨列父子表头也不能被桥接到同一物理行。"""
+    bands = [
+        {"id": 1, "x0": 10, "x1": 30},
+        {"id": 2, "x0": 40, "x1": 60},
+        {"id": 3, "x0": 70, "x1": 90},
+    ]
+    candidates = [
+        {
+            "cell_id": "PARENT",
+            "text": "本期增减变动",
+            "bbox": [40, 10, 90, 22],
+            "column_id": 2,
+            "column_start": 2,
+            "column_end": 3,
+            "colspan": 2,
+        },
+        {
+            "cell_id": "STUB",
+            "text": "项目名称",
+            "bbox": [10, 11, 30, 29],
+            "column_id": 1,
+            "column_start": 1,
+            "column_end": 1,
+            "colspan": 1,
+        },
+        {
+            "cell_id": "CHILD1",
+            "text": "追加投资",
+            "bbox": [40, 18, 60, 30],
+            "column_id": 2,
+            "column_start": 2,
+            "column_end": 2,
+            "colspan": 1,
+        },
+        {
+            "cell_id": "CHILD2",
+            "text": "减少投资",
+            "bbox": [70, 18, 90, 30],
+            "column_id": 3,
+            "column_start": 3,
+            "column_end": 3,
+            "colspan": 1,
+        },
+    ]
+
+    rows, columns, cells, issues = build_grid(candidates, bands)
+
+    assert not issues, f"Expected no issues, got {issues}"
+    cell_map = {c["cell_id"]: c for c in cells}
+    assert cell_map["PARENT"]["row_start"] < cell_map["CHILD1"]["row_start"]
+    assert cell_map["CHILD1"]["row_start"] == cell_map["CHILD2"]["row_start"]
+
+
+def test_build_grid_keeps_partially_overlapping_boxes_in_one_row_across_columns():
+    """不同列的文本框只部分重叠时，仍应识别为同一物理行。"""
+    bands = [
+        {"id": 1, "x0": 10, "x1": 30},
+        {"id": 2, "x0": 40, "x1": 60},
+    ]
+    candidates = [
+        {
+            **_candidate("左列", 10, 10, 1, 1),
+            "bbox": [10, 10, 30, 22],
+        },
+        {
+            **_candidate("右列", 40, 18, 2, 2),
+            "bbox": [40, 18, 60, 30],
+        },
+    ]
+
+    rows, _, cells, issues = build_grid(candidates, bands)
+
+    assert not issues
+    assert len(rows) == 1
+    assert {cell["row_start"] for cell in cells} == {1}
+
+
+def test_build_grid_separates_partially_overlapping_boxes_in_one_column():
+    """同列上下两行的文本框部分重叠时，不得仅凭中心距离合并。"""
+    bands = [{"id": 1, "x0": 10, "x1": 30}]
+    candidates = [
+        {
+            **_candidate("上一行", 10, 10, 1, 1),
+            "bbox": [10, 10, 30, 22],
+        },
+        {
+            **_candidate("下一行", 10, 18, 1, 2),
+            "bbox": [10, 18, 30, 30],
+        },
+    ]
+
+    rows, _, cells, issues = build_grid(candidates, bands)
+
+    assert not issues
+    assert len(rows) == 2
+    assert [cell["row_start"] for cell in cells] == [1, 2]
+
+
+def test_build_grid_requires_reciprocal_y_overlap_for_asymmetric_boxes():
+    """异常偏高的上框不能因下框被其局部包含而合并到同一行。"""
+    bands = [{"id": 1, "x0": 10, "x1": 30}]
+    candidates = [
+        {
+            **_candidate("上方文本块", 10, 10, 1, 1),
+            "bbox": [10, 10, 30, 36],
+        },
+        {
+            **_candidate("下方文本块", 10, 30, 1, 2),
+            "bbox": [10, 30, 30, 42],
+        },
+    ]
+
+    rows, _, cells, issues = build_grid(candidates, bands)
+
+    assert not issues
+    assert len(rows) == 2
+    assert [cell["row_start"] for cell in cells] == [1, 2]

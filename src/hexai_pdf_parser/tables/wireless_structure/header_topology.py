@@ -251,7 +251,11 @@ def _is_bare_year_parent_header(atom: dict[str, Any]) -> bool:
 def _is_structural_header_atom(atom: dict[str, Any]) -> bool:
     """Years and unit labels describe hierarchy, rather than a child column name."""
     text = str(atom.get("text", "")).strip()
-    return _is_bare_year_parent_header(atom) or bool(_HEADER_UNIT_TOKEN.search(text))
+    if _is_bare_year_parent_header(atom):
+        return True
+    if text.endswith("%") and text not in {"%", "(%)", "（%）"}:
+        return False
+    return bool(_HEADER_UNIT_TOKEN.search(text))
 
 
 def _is_note_reference_atom(atom: dict[str, Any]) -> bool:

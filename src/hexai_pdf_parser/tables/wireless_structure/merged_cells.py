@@ -15,6 +15,7 @@ _NUMBERED_MARKER = re.compile(
 _NUMBERED_ITEM_START = re.compile(
     r"^(?:\d+[.)、]|[（(]\d+[）)]|[一二三四五六七八九十百]+[.)、])"
 )
+_HEADER_UNIT_MARKER = re.compile(r"^[（(]\s*%\s*[）)]$")
 _SINGLE_CJK = re.compile(r"^[\u3400-\u9fff\u2460-\u2473\uff00-\uffef\w()（）]$")
 _STRICT_SINGLE_CJK = re.compile(r"^[\u3400-\u9fff]$")
 
@@ -245,6 +246,31 @@ def _is_same_slot_native_continuation(
     )
 
 
+def _is_header_unit_continuation(
+    previous: dict[str, Any],
+    candidate: dict[str, Any],
+    header_cutoff: float | None,
+) -> bool:
+    """Recognize a tight header unit marker following a wrapped text label."""
+    if header_cutoff is None or not _HEADER_UNIT_MARKER.fullmatch(
+        candidate["text"].strip()
+    ):
+        return False
+    if previous.get("script") not in {"cjk", "latin"}:
+        return False
+    if previous["bbox"][3] > header_cutoff or candidate["bbox"][3] > header_cutoff:
+        return False
+    vertical_gap = candidate["bbox"][1] - previous["bbox"][3]
+    if vertical_gap < 0.0 or vertical_gap > max(
+        2.0, min(previous["font_size"], candidate["font_size"]) * 0.5
+    ):
+        return False
+    return _horizontal_overlap(previous["bbox"], candidate["bbox"]) >= min(
+        candidate["bbox"][2] - candidate["bbox"][0],
+        previous["bbox"][2] - previous["bbox"][0],
+    ) * 0.45
+
+
 def _can_resolve_same_slot_continuation_group(
     group: Sequence[dict[str, Any]],
     all_slot_keys: Sequence[tuple[int, int, int, int]],
@@ -366,6 +392,7 @@ def _can_merge_multiline(
     candidate: dict[str, Any],
     row_columns: dict[int, set[int]],
     output_mode: str,
+    header_cutoff: float | None,
 ) -> bool:
     if previous["col_start"] != candidate["col_start"] or previous["col_end"] != candidate["col_end"]:
         return False
@@ -392,7 +419,11 @@ def _can_merge_multiline(
     candidate_center_y = (candidate["bbox"][1] + candidate["bbox"][3]) / 2.0
     if candidate_center_y <= previous_center_y:
         return False
-    if previous["script"] != candidate["script"] and "numeric" not in {previous["script"], candidate["script"]}:
+    if (
+        previous["script"] != candidate["script"]
+        and "numeric" not in {previous["script"], candidate["script"]}
+        and not _is_header_unit_continuation(previous, candidate, header_cutoff)
+    ):
         return False
     if _VALUE_ONLY.fullmatch(previous["text"]) and _VALUE_ONLY.fullmatch(candidate["text"]):
         return False
@@ -425,7 +456,6 @@ def merge_multiline_cells(
     output_mode: str = "row_interleaved",
 ) -> list[dict[str, Any]]:
     """Merge only evidence-complete same-column Chinese continuation chains."""
-    del header_cutoff  # Header topology is handled by the dedicated topology layer.
     pending = [dict(item) for item in sorted(cells, key=lambda item: item["flow_start"])]
     row_columns: dict[int, set[int]] = {}
     for cell in pending:
@@ -437,7 +467,7 @@ def merge_multiline_cells(
         current = pending.pop(0)
         current["merged_from"] = list(current.get("merged_from", [current["candidate_label"]]))
         while pending and _can_merge_multiline(
-            current, pending[0], row_columns, output_mode
+            current, pending[0], row_columns, output_mode, header_cutoff
         ):
             candidate = pending.pop(0)
             current = _merge_pair(current, candidate, "\n", "multiline_cell")
