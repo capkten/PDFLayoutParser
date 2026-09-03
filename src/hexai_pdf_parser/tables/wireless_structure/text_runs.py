@@ -324,8 +324,8 @@ def _has_alignment_corridor_veto(
         "bbox": _union(group),
         "font_size": min(item["font_size"] for item in group),
     }
-    tolerance = _alignment_tolerance([left, candidate])
-    if candidate["bbox"][0] - left["bbox"][2] <= tolerance:
+    base_tolerance = _alignment_tolerance([left, candidate])
+    if candidate["bbox"][0] - left["bbox"][2] <= base_tolerance:
         return False
 
     current_flows = {item["flow"] for item in group} | {candidate["flow"]}
@@ -342,7 +342,7 @@ def _has_alignment_corridor_veto(
                 for witness_left, witness_right in zip(ordered, ordered[1:]):
                     if (
                         witness_right["bbox"][0] - witness_left["bbox"][2]
-                        <= tolerance
+                        <= base_tolerance
                     ):
                         continue
                     if (
@@ -350,12 +350,12 @@ def _has_alignment_corridor_veto(
                             _alignment_anchor(witness_left, left_mode)
                             - _alignment_anchor(left, left_mode)
                         )
-                        <= tolerance
+                        <= base_tolerance
                         and abs(
                             _alignment_anchor(witness_right, right_mode)
                             - _alignment_anchor(candidate, right_mode)
                         )
-                        <= tolerance
+                        <= base_tolerance
                     ):
                         matches.append((witness_left, witness_right))
                 if len(matches) == 1:
@@ -365,10 +365,14 @@ def _has_alignment_corridor_veto(
                 continue
             left_items = [item for item, _ in support]
             right_items = [item for _, item in support]
-            tolerance = _alignment_tolerance(left_items + right_items)
-            if not _opposite_edges_vary(left_items, left_mode, tolerance):
+            support_tolerance = _alignment_tolerance(left_items + right_items)
+            if not _opposite_edges_vary(
+                left_items, left_mode, support_tolerance
+            ):
                 continue
-            if not _opposite_edges_vary(right_items, right_mode, tolerance):
+            if not _opposite_edges_vary(
+                right_items, right_mode, support_tolerance
+            ):
                 continue
             left_anchors = [
                 _alignment_anchor(item, left_mode) for item in left_items
@@ -376,13 +380,13 @@ def _has_alignment_corridor_veto(
             right_anchors = [
                 _alignment_anchor(item, right_mode) for item in right_items
             ]
-            if max(left_anchors) - min(left_anchors) > tolerance:
+            if max(left_anchors) - min(left_anchors) > support_tolerance:
                 continue
-            if max(right_anchors) - min(right_anchors) > tolerance:
+            if max(right_anchors) - min(right_anchors) > support_tolerance:
                 continue
             corridor_x0 = max(item["bbox"][2] for item in left_items)
             corridor_x1 = min(item["bbox"][0] for item in right_items)
-            if corridor_x1 - corridor_x0 > tolerance:
+            if corridor_x1 - corridor_x0 > support_tolerance:
                 return True
     return False
 

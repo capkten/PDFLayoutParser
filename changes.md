@@ -2,6 +2,11 @@
 
 ## 2026-09-03
 
+- 修复 `fix/zh_all_table_pages.pdf` 页面索引 `960` 上下两张中文无线三线表因相邻列 span 被同行间距规则误合并而整页漏表的问题。
+  - **根因与调用位置**：模型分别以 `0.9803`、`0.9779` 置信度正确检出 `[84.3,117.8,505.5,352.8]` 与 `[84.2,384.5,505.5,608.9]`，但金额右沿与下一列文本左沿仅相距约 `3.232pt`，小于 `build_text_runs()` 当前约 `3.696pt` 的混合脚本合并上限，因而形成 `1,734,597.85诉讼冻结`、`2,660,785,019.27借款抵押` 等跨列 atom。跨列 atom 将“账面价值”和“受限类型”桥接成同一列带，表头及正文产生同槽位 occupancy conflict，`recover_cells_from_region()` 返回空结果。
+  - **修复判定**：在 `src/hexai_pdf_parser/tables/wireless_structure/text_runs.py` 的 span 到 atom 同行组合入口增加纯几何 veto。现有 `_can_join()` 仍是唯一正向合并判定；只有当前 span 对及至少 2 个外部视觉行共同形成稳定成对对齐轨迹、两侧非锚边宽度存在实质变化，并且全部支持行之间存在宽于 `max(1.0pt, min_font_size * 0.12)` 的共同空白走廊时，才拒绝本次合并。数字优先使用右边界轨迹，普通文本比较左/右/中心轨迹，两个纯中心轨迹不能互相证明；支持不足、固定宽度字段碎片或共同走廊不成立时保持原合并行为。判断只消费当前 region 已有 native span 及 bbox，不回读 `page.get_text("words")`，不进入 zebra、legacy、列带后补救或业务文字白名单路径。
+  - **测试与页面验证**：先增加 Page 960 风格右对齐金额 + 左对齐文本失败用例，确认 RED 时三组字段均被错误拼接；实现后新增正例及“两行支持不足、无共同走廊、重复固定宽度字段碎片”反例共 `4 passed`，`tests/test_wireless_structure_text_runs.py` 为 `33 passed`。无线结构、输出顺序、换行字段和表格入口扩大回归为 `262 passed, 1 failed`；唯一失败为工作区已有 `test_hybrid_wired_table_replaces_full_rowspan_body_before_shifting_footer`，对应既有 hybrid 路径，当前实际 `line_projection`、预期 `hybrid_line_span_recovery`，与本次修改无关。使用最终代码独立重跑页面索引 `960` 至 `D:\codes\PDFLayoutParser\output\page_960_alignment_corridor_veto_20260903\`：两张表均为 `wireless_span_recovery`、`13x5`、55 个 Cell，逻辑槽位均为 `65/65` 唯一覆盖且无冲突；结构化结果为 `pages\page-960.json`，最终 PNG 为 `tables\page-960.png`。视觉复核确认上下表独立，金额、受限类型和受限情况保持分列，标题、“续：”及下方说明均未被吸收，未见跨列、穿字或明显线框错位。
+
 - 修复 `fix/zh_all_table_pages.pdf` 页面索引 `938` 上方“开发成本”中文无线表格因跨 native line 的日期片段产生占位冲突而整表丢失的问题。
   - **根因与调用位置**：模型已以 `0.9799` 置信度检出 `[83.4, 117.1, 753.5, 425.4]`，但 `build_text_runs()` 处理“开始陆续完成竣工验收，2022 年 6 / 月开始陆续完工”时，只接受同一 native line 内的“中文 + 数字 + 中文”见证；行末数字 `6` 因后置中文“月”位于同一 block 的下一 native line 而被保留为独立 atom。该 atom 与前面的多行说明同时落入 `R5C3`，`recover_cells_from_region()` 检测到 occupancy conflict 后返回空结果。
   - **修复判定**：在 `src/hexai_pdf_parser/tables/wireless_structure/text_runs.py` 的 `_can_join()` 增加跨行中文后缀见证。仅当数字与前文同 native line 且 flow 连续、全局下一 span 属于同一 block 的紧邻下一行首 span、下一行含中文、垂直间距受限、横向回行并与当前字段明显重叠时，才允许行末数字进入当前 atom；不同 block 的下一条记录和无后置中文的独立数值字段仍保持分离。修复不在网格或冲突兜底阶段合并字段，不回读 `page.get_text("words")`，不进入 zebra 或 legacy 路径。
