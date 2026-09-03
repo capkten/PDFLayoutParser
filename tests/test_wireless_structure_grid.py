@@ -281,6 +281,113 @@ def test_build_logical_grid_keeps_wrapped_leaf_below_a_real_parent_header():
     assert (header["row_start"], header["row_end"], header["rowspan"]) == (1, 2, 2)
 
 
+def test_build_logical_grid_collapses_mixed_leaf_headers_under_proven_two_column_parent():
+    physical_rows = [
+        {"id": 1, "y": 10},
+        {"id": 2, "y": 20},
+        {"id": 3, "y": 30},
+        {"id": 4, "y": 40},
+        {"id": 5, "y": 50},
+        {"id": 6, "y": 70},
+    ]
+    columns = [
+        {"id": column, "x0": column * 20, "x1": column * 20 + 10}
+        for column in range(1, 8)
+    ]
+    cells = [
+        _logical_cell("PARENT", "分组表头", 1, 5, 6, y=10),
+        {
+            **_logical_cell("LAST", "末列表头", 1, 7, y=10),
+            "row_end": 5,
+            "rowspan": 5,
+            "merge_kind": "multiline_cell",
+        },
+        *[
+            _logical_cell(f"STUB{column}", f"独立表头{column}", 3, column, y=30)
+            for column in range(1, 5)
+        ],
+        _logical_cell("DIRECT", "叶标题甲", 4, 5, y=40),
+        {
+            **_logical_cell("INDIRECT", "叶\n标题乙", 3, 6, y=30),
+            "row_end": 4,
+            "rowspan": 2,
+            "merge_kind": "multiline_cell",
+        },
+        *[
+            _logical_cell(f"BODY{column}", f"正文{column}", 6, column, y=70)
+            for column in range(1, 8)
+        ],
+    ]
+
+    rows, _, logical_cells = build_logical_grid(
+        physical_rows,
+        columns,
+        cells,
+        header_cutoff=55,
+    )
+
+    assert [row["source_rows"] for row in rows] == [[1, 2], [3, 4, 5], [6]]
+
+    spanned = logical_grid.merge_header_spans(logical_cells, header_cutoff=55)
+    cell_map = {cell["cell_id"]: cell for cell in spanned}
+    assert (cell_map["PARENT"]["row_start"], cell_map["PARENT"]["colspan"]) == (1, 2)
+    assert cell_map["DIRECT"]["row_start"] == cell_map["INDIRECT"]["row_start"] == 2
+    for cell_id in ["STUB1", "STUB2", "STUB3", "STUB4", "LAST"]:
+        assert (
+            cell_map[cell_id]["row_start"],
+            cell_map[cell_id]["row_end"],
+            cell_map[cell_id]["rowspan"],
+        ) == (1, 2, 2)
+
+    materialized = logical_grid.materialize_empty_cells(
+        rows,
+        physical_rows,
+        columns,
+        spanned,
+        BBox(0, 0, 180, 80),
+    )
+    assert not any(
+        cell.get("merge_kind") == "empty_slot" and cell["row_start"] <= 2
+        for cell in materialized
+    )
+    assert _has_occupancy_conflict(materialized) is False
+
+
+def test_build_logical_grid_keeps_mixed_leaf_rows_when_two_column_parent_is_incomplete():
+    physical_rows = [
+        {"id": 1, "y": 10},
+        {"id": 2, "y": 20},
+        {"id": 3, "y": 30},
+        {"id": 4, "y": 40},
+        {"id": 5, "y": 50},
+    ]
+    columns = [
+        {"id": column, "x0": column * 20, "x1": column * 20 + 10}
+        for column in range(1, 7)
+    ]
+    cells = [
+        _logical_cell("PARENT", "分组表头", 1, 5, 6, y=10),
+        _logical_cell("STUB_START", "独立表头", 3, 1, y=30),
+        {
+            **_logical_cell("WRAPPED", "叶\n标题", 3, 6, y=30),
+            "row_end": 4,
+            "rowspan": 2,
+            "merge_kind": "multiline_cell",
+        },
+        _logical_cell("STUB_END", "另一层标题", 4, 2, y=40),
+        _logical_cell("BODY", "正文", 5, 1, y=50),
+    ]
+
+    rows, _, _ = build_logical_grid(
+        physical_rows,
+        columns,
+        cells,
+        header_cutoff=45,
+    )
+
+    assert [row["source_rows"] for row in rows] == [[1, 2], [3], [4], [5]]
+
+
 def test_materialize_empty_cells_fills_every_unoccupied_logical_slot():
     logical_rows = [{"id": 1, "source_rows": [1]}, {"id": 2, "source_rows": [2]}]
     physical_rows = [{"id": 1, "y": 10}, {"id": 2, "y": 30}]
