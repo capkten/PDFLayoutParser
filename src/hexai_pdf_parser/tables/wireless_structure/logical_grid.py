@@ -29,14 +29,29 @@ def _wrapped_leaf_header_span(
         return None
 
     start = int(candidate["row_start"])
-    end = int(candidate["row_end"])
     started = [
         cell
         for cell in cells
         if int(cell["row_start"]) == start and str(cell.get("text", "")).strip()
     ]
-    if len(started) != 1 or started[0] is not candidate:
+    if not started or candidate not in started:
         return None
+    # 首行启动的所有非空单元格必须全部是单列多行叶表头，不得包含单行独立表头或跨列父表头
+    for item in started:
+        if (
+            item.get("merge_kind") != "multiline_cell"
+            or "\n" not in str(item.get("text", ""))
+            or int(item.get("row_end", 0)) <= start
+            or int(item.get("col_start", 0)) != int(item.get("col_end", 0))
+            or int(item.get("colspan", 1)) != 1
+            or not item.get("bbox")
+            or (item["bbox"][1] + item["bbox"][3]) / 2.0 > header_cutoff
+            or item["bbox"][3] > header_cutoff
+        ):
+            return None
+
+    end = max(int(item["row_end"]) for item in started)
+    started_columns = {int(item["col_start"]) for item in started}
 
     candidate_column = int(candidate["col_start"])
     for cell in cells:
@@ -54,11 +69,11 @@ def _wrapped_leaf_header_span(
     sibling_columns_by_row: dict[int, set[int]] = {}
     for cell in cells:
         if (
-            cell is candidate
+            cell in started
             or int(cell["row_start"]) < start
             or int(cell["row_end"]) > end
             or int(cell["row_start"]) != int(cell["row_end"])
-            or int(cell["col_start"]) == candidate_column
+            or int(cell["col_start"]) in started_columns
             or int(cell.get("colspan", 1)) != 1
             or not cell.get("bbox")
             or (cell["bbox"][1] + cell["bbox"][3]) / 2.0 > header_cutoff

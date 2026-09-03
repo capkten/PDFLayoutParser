@@ -2,6 +2,24 @@
 
 ## 2026-09-03
 
+- 修复 `fix/zh_all_table_pages.pdf` 页面索引 `464` 中文无线表格（政府补助明细表）因占位符与金额连带 Span 拆分间距未计空格宽度导致整表漏检的问题。
+  - **根因与调用位置**：在 `src/hexai_pdf_parser/tables/wireless_structure/span_chain.py` 的 `_split_packed_numeric_fields()` 中，原先计算空白处相邻字符间距时采用切片循环 `gaps = [char_boxes[right]["bbox"][0] - char_boxes[right - 1]["bbox"][2] for right in range(whitespace_start, whitespace_end + 1)]`。在 PyMuPDF 原生字符流中，空格字符自身带有独立字符框（例如 Page 464 合计行中空格字符 bbox 宽度达 2.41pt）。原切片循环分别计算了占位符 `'-'` 与空格之间（0.00pt）以及空格与后续数字 `'7'` 之间（0.71pt）的间隙，两者均小于阈值 `gap_limit = max(1.5, 10.56 * 0.18) = 1.90pt`，错误地排除了空格字符本身的几何宽度，导致实际达 3.12pt 的跨列物理空白未被识别，`'-- 74,956,072.71'` 原样返回未拆分。未拆分的复合 Atom 导致下游 `infer_column_bands()` 将第 5 列（其他变动）与第 6 列（期末余额）合并为一个宽列带，引发 `(Row 3, Col 5)` 等多个网格槽位占用冲突（occupancy conflict），`recover_cells_from_region()` 触发防御性抛弃返回空结果，使 ML 模型以 0.9637 置信度检出的顶部 4x7 表格整表丢失。
+  - **修复判定与调用位置**：在 `span_chain.py` 的 `_split_packed_numeric_fields()` 中，引入前序实体字符右沿到后续实体字符左沿的完整跨空白几何距离 `total_gap = char_boxes[whitespace_end]["bbox"][0] - char_boxes[whitespace_start - 1]["bbox"][2]`，只要 `total_gap >= gap_limit` 或局部残差间隙 `max(gaps) >= gap_limit`，均判定达到拆分条件。
+  - **结构约束**：修复仅发生在 native span 规范化输入阶段，全流程严格只消费 native span、atom、列带、物理 Cell 和逻辑 Cell；不回读 `page.get_text("words")`，不进入 zebra 或 legacy 二次重建，不硬编码业务表头文字；继续遵循 0 occupancy conflict 契约与严格空槽位物化。
+  - **测试与页面验证**：在 `tests/test_packed_numeric_fields_split.py` 中新增空格宽度主导间距正例（先确认 RED 再转 GREEN）与极窄间距不误拆反例；新增页面集成测试 `tests/test_page_464_table_recovery.py`，锁定无 words 守卫、7 列分立、4 行 x 7 列 28 个 Cell 100% 槽位唯一覆盖；相关无线结构、数值拆分与页面集成测试共 `91 passed`。页面索引 `464` 独立重跑到 `D:\codes\PDFLayoutParser\output\fix_page_464_packed_numeric_split_20260903\`，完整提取出全部 2 张表格（Table 1 为 `4x7`、28 个 Cell；Table 2 为 `26x4`、104 个 Cell）；最终可视化图 `zh_all_table_pages_page_464_visualized.png` 经视觉核验，顶部表格 7 列完全分立，数据行与合计行 `--` 及金额绿框精准贴合，网格完整连续。
+
+
+- 修复 `fix/zh_all_table_pages.pdf` 页面索引 `471` 中文无线表格（母公司情况表）因多列折行叶表头被拆分为多层物理行导致顶部产生多余空单元格与伪 `rowspan` 的问题。
+  - **根因与调用位置**：
+    1. 在 `src/hexai_pdf_parser/tables/wireless_structure/logical_grid.py` 的 `_wrapped_leaf_header_span()` 中，原先针对单列折行叶表头硬编码限制物理首行只能有恰好 1 个非空单元格起点（`len(started) == 1`）。当表头存在 2 列或更多列同时折行跨行（例如第 471 页第 4 列“注册资本\n(万元)”与第 6 列“母公司对本公司\n表决权比例\n（%）”首行均偏高并在物理行 1 启动）时，`len(started) == 2` 导致该判定失效返回 `None`，物理行 1 未能折叠进下一物理行，保留为独立的逻辑表头行。
+    2. 在 `src/hexai_pdf_parser/tables/wireless_structure/text_runs.py` 的 `build_text_runs()` 中，TextRun 的加粗状态原先直接取首个 Span 的 `group[0]["bold"]`。由于西文括号 `(` 在 PDF 中使用了带粗体的西文字体（`Arial Narrow,Bold`），导致“`(万元)`”整体被打上 `bold=True`，与未加粗仿宋中文“`注册资本`”样式冲突，阻断了前期换行合并。
+    3. 后续网格物化 `materialize_empty_cells()` 遂在保留下来的逻辑行 1 中，对起点位于逻辑行 2 的列 0、1、2、4 补齐了 4 个空单元格 `<td></td>`，并将列 3 和列 5 赋予 `rowspan=2`。
+  - **修复判定与调用位置**：
+    1. 在 `logical_grid.py` 中泛化折行叶表头物理行压缩逻辑：当物理行 `start` 上启动的所有非空单元格 `started` 全部为合法的单列多行叶表头（`colspan == 1`、`col_start == col_end`、`row_end > start`、`merge_kind == "multiline_cell"`、在 `header_cutoff` 范围内），且 `start` 行不存在任何单行独立表头（`row_start == row_end`）或多列父表头（`colspan > 1`），且在后续物理行存在同层兄弟叶列表头时，将 `[start, max(row_end)]` 识别为可压缩折行表头区间，统一折叠至同一逻辑行。包含真正多级父表头或单行独立表头的行坚决拒绝折叠。
+    2. 在 `text_runs.py` 中优化 TextRun 的加粗计算：当 TextRun 包含多个 Span 且存在非空 CJK 字符时，`run["bold"]` 取字符数最多的 CJK Span 的加粗状态，避免单个西文开括号等标点符号的字体元数据污染整体文本的加粗属性。
+  - **结构约束**：全流程严格基于 native span、atom、列带与逻辑网格拓扑决策，不回读 `page.get_text("words")`，不回退 zebra 或 legacy 路径，继续保持 0 Occupancy Conflict 契约与严格空槽位物化。
+  - **测试与页面验证**：新增 `tests/test_wrapped_leaf_headers.py`，覆盖多列折行叶表头折叠正例、真正多级父表头保护反例、首行独立单行表头保护反例及西文括号粗体隔离正例（`4 passed`）；全量无线结构测试 150 项 100% 通过（`150 passed`）。使用完整单页流水线重跑页面索引 `471` 至独立输出目录 `output/fix_page_471_header_leaf_20260903/`：Table 1 完美恢复为标准的 2 行 × 6 列（1 行表头 + 1 行数据，12 个 Cell 覆盖 12/12 槽位，0 空单元格，0 Occupancy Conflict），表头 6 个单元格均为 `rowspan=1`；Table 2（`6x2`）与 Table 3（`2x4`）完全正常无回归；可视化 PNG `tables/page-471.png` 经视觉子 agent 核验确认表头规整对齐、网格连续。
+
 - 收紧中文无线表格物理行聚类中的 Y 轴重叠判定，覆盖 PDF 文本框不紧贴、上下框局部重叠且高度不对称的情况。
   - **根因与调用位置**：`src/hexai_pdf_parser/tables/wireless_structure/grid.py` 的 `_cluster_rows()` 通过 `_can_join_row_group()` 处理候选行；其中 `_y_overlap_ratio()` 原先按较短文本框高度归一化。异常偏高的上框只要包含了下方短框的一部分，就可能得到较高比例，再叠加中心 Y 容差把同列上下两行合并，最终产生物理槽位冲突。
   - **修复判定**：`_y_overlap_ratio()` 现在取交集相对双方高度覆盖率中的较小值（等价于除以较高框高），要求两个候选框都对重叠负责；同列且列跨度相同的候选仍需达到 `0.45` 稳定重叠，左移中文续写保留原有 native flow 特例；列区间相交但跨度不同的父子表头直接拆分。不同列的候选仍可依据中心 Y 和视觉行条件聚类，因此 435 页“账龄”这种跨两行居中的首列表头不被误拆。

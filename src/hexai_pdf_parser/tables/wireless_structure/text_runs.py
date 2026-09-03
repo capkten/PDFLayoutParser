@@ -572,6 +572,19 @@ def build_text_runs(
                 groups.append([span])
         for group in groups:
             positions = [_native_position(item) for item in group]
+            cjk_spans = [item for item in group if _CJK.search(item.get("text", ""))]
+            if cjk_spans:
+                run_bold = max(cjk_spans, key=lambda item: len(item.get("text", ""))).get("bold", False)
+            else:
+                alnum_spans = [
+                    item
+                    for item in group
+                    if any(char.isalnum() for char in item.get("text", ""))
+                ]
+                if alnum_spans:
+                    run_bold = max(alnum_spans, key=lambda item: len(item.get("text", ""))).get("bold", False)
+                else:
+                    run_bold = group[0].get("bold", False)
             result.append(
                 {
                     "span_refs": [item["span_ref"] for item in group],
@@ -581,7 +594,7 @@ def build_text_runs(
                     "text": _join_text(group),
                     "font": group[0]["font"],
                     "font_size": group[0]["font_size"],
-                    "bold": group[0]["bold"],
+                    "bold": run_bold,
                     "script": script_kind(_join_text(group)),
                     "char_boxes": [char for item in group for char in item.get("char_boxes", [])],
                     "source_blocks": sorted({position[0] for position in positions}),
