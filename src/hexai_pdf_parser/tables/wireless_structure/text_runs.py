@@ -142,6 +142,7 @@ def _can_join(
     candidate: dict[str, Any],
     normal_gap: float | None,
     row_spans: Sequence[dict[str, Any]] | None = None,
+    all_spans: Sequence[dict[str, Any]] | None = None,
 ) -> bool:
     previous = group[-1]
     if previous["text"] == "$" or candidate["text"] == "$":
@@ -213,6 +214,10 @@ def _can_join(
             except ValueError:
                 pass
         if not has_following_cjk:
+            has_following_cjk = _has_wrapped_cjk_suffix(
+                group, candidate, all_spans
+            )
+        if not has_following_cjk:
             return False
     normal_gap_join = native_line and -0.8 <= gap <= _join_gap_limit(previous, candidate, normal_gap)
     spaced_single_cjk = (
@@ -222,6 +227,53 @@ def _can_join(
         and -0.8 <= gap <= min(previous["font_size"], candidate["font_size"]) * 1.25
     )
     return superscript or normal_gap_join or spaced_single_cjk
+
+
+def _has_wrapped_cjk_suffix(
+    group: Sequence[dict[str, Any]],
+    candidate: dict[str, Any],
+    spans: Sequence[dict[str, Any]] | None,
+) -> bool:
+    """Recognize a field whose numeric line tail continues in CJK after a wrap."""
+    if not spans or not group or not _same_native_line(group[-1], candidate):
+        return False
+    candidate_position = candidate.get("source_position")
+    if not candidate_position or len(candidate_position) < 3:
+        return False
+    following = next(
+        (
+            item
+            for item in spans
+            if item.get("flow") == candidate.get("flow", 0) + 1
+        ),
+        None,
+    )
+    if following is None or _CJK.search(following.get("text", "")) is None:
+        return False
+    following_position = following.get("source_position")
+    if not following_position or len(following_position) < 3:
+        return False
+    if (
+        following_position[0] != candidate_position[0]
+        or following_position[1] != candidate_position[1] + 1
+        or following_position[2] != 0
+    ):
+        return False
+    vertical_gap = following["bbox"][1] - candidate["bbox"][3]
+    if not 0 <= vertical_gap <= max(
+        6.0, min(candidate["font_size"], following["font_size"])
+    ):
+        return False
+    group_bbox = _union(group)
+    minimum_width = min(
+        group_bbox[2] - group_bbox[0],
+        following["bbox"][2] - following["bbox"][0],
+    )
+    return (
+        following["bbox"][0] < candidate["bbox"][0]
+        and _horizontal_overlap(group_bbox, following["bbox"])
+        >= max(2.0, minimum_width * 0.45)
+    )
 
 
 def _join_text(group: Sequence[dict[str, Any]]) -> str:
@@ -566,7 +618,13 @@ def build_text_runs(
         groups: list[list[dict[str, Any]]] = []
         sorted_row = sorted(row, key=lambda item: item["bbox"][0])
         for span in sorted_row:
-            if groups and _can_join(groups[-1], span, normal_gap, row_spans=sorted_row):
+            if groups and _can_join(
+                groups[-1],
+                span,
+                normal_gap,
+                row_spans=sorted_row,
+                all_spans=spans,
+            ):
                 groups[-1].append(span)
             else:
                 groups.append([span])

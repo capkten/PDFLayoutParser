@@ -766,10 +766,12 @@ def rescue_header_only_leaf_bands(
     header_atoms = [
         atom for atom in atoms if _center_y(atom) <= header_cutoff
     ]
+    levels = _levels(header_atoms)
     eligible_levels: list[
-        tuple[float, list[dict[str, Any]], list[dict[str, Any]]]
+        tuple[float, list[dict[str, Any]], list[dict[str, Any]], bool]
     ] = []
-    for level in _levels(header_atoms):
+    stable_id_order = [int(band["id"]) for band in stable]
+    for level_index, level in enumerate(levels):
         row = [
             atom
             for atom in header_atoms
@@ -790,31 +792,86 @@ def rescue_header_only_leaf_bands(
                 has_parent = True
             else:
                 candidates.append(atom)
-        if has_parent or covered_ids != stable_ids:
+        if has_parent:
             continue
-        if candidates:
-            eligible_levels.append((level, row, candidates))
+        if covered_ids == stable_ids and candidates:
+            eligible_levels.append((level, row, candidates, False))
+            continue
+        if len(candidates) < 2 or len(covered_ids) < 2 or level_index == 0:
+            continue
+
+        covered_order = [
+            band_id for band_id in stable_id_order if band_id in covered_ids
+        ]
+        suffix_start = len(stable_id_order) - len(covered_order)
+        if covered_order != stable_id_order[suffix_start:] or suffix_start == 0:
+            continue
+
+        missing_prefix = stable[:suffix_start]
+        previous_level = levels[level_index - 1]
+        previous_row = [
+            atom
+            for atom in header_atoms
+            if abs(_center_y(atom) - previous_level) <= 2.4
+        ]
+        prefix_is_proven = all(
+            any(
+                [
+                    int(overlap["id"])
+                    for overlap in stable
+                    if _meaningful_header_band_overlap(atom, overlap)
+                ]
+                == [int(band["id"])]
+                for atom in previous_row
+            )
+            for band in missing_prefix
+        )
+        first_covered = stable[suffix_start]
+        last_covered = stable[-1]
+        candidates_are_bounded = all(
+            first_covered["x0"] <= atom["bbox"][0]
+            and atom["bbox"][2] <= last_covered["x1"]
+            for atom in candidates
+        )
+        if prefix_is_proven and candidates_are_bounded:
+            eligible_levels.append((level, row, candidates, True))
 
     if not eligible_levels:
         return rescued
-    _, row, candidates = max(eligible_levels, key=lambda item: item[0])
+    _, row, candidates, require_complete_group = max(
+        eligible_levels, key=lambda item: item[0]
+    )
+    additions: list[dict[str, Any]] = []
     for atom in candidates:
+        text = str(atom.get("text", "")).strip()
         if _is_structural_header_atom(atom):
+            if require_complete_group:
+                return rescued
             continue
+        if require_complete_group and (
+            _is_note_reference_atom(atom)
+            or _NUMERIC.fullmatch(text)
+            or _is_placeholder(atom)
+        ):
+            return rescued
         if any(
             horizontal_overlap(
                 atom,
                 {"bbox": [band["x0"], 0.0, band["x1"], 1.0]},
             )
             > 0
-            for band in rescued
+            for band in [*rescued, *additions]
         ):
+            if require_complete_group:
+                return rescued
             continue
 
         x0, x1 = atom["bbox"][0], atom["bbox"][2]
         left = [item for item in row if item is not atom and item["bbox"][2] <= x0]
         right = [item for item in row if item is not atom and item["bbox"][0] >= x1]
         if not left and not right:
+            if require_complete_group:
+                return rescued
             continue
         neighbors = [
             item
@@ -838,11 +895,15 @@ def rescue_header_only_leaf_bands(
         )
         minimum_gap = max(8.0, line_height * 1.25)
         if left and x0 - max(item["bbox"][2] for item in left) < minimum_gap:
+            if require_complete_group:
+                return rescued
             continue
         if right and min(item["bbox"][0] for item in right) - x1 < minimum_gap:
+            if require_complete_group:
+                return rescued
             continue
 
-        rescued.append(
+        additions.append(
             {
                 "x0": x0,
                 "x1": x1,
@@ -851,6 +912,8 @@ def rescue_header_only_leaf_bands(
                 "kind": "header_only_leaf",
             }
         )
+
+    rescued.extend(additions)
 
     rescued.sort(key=lambda band: band["x0"])
     for index, band in enumerate(rescued, 1):

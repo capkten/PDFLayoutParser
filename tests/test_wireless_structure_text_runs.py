@@ -38,6 +38,106 @@ def test_build_text_runs_merges_adjacent_chinese_fragments_on_one_native_line():
     assert result[0]["merge_kind"] == "same_line"
 
 
+def test_build_text_runs_merges_numeric_tail_with_wrapped_cjk_suffix():
+    atoms = [
+        _atom("开始陆续完成竣工验收，", 100, 180, 0, (12, 1, 0), y=10),
+        _atom("2022", 180, 202, 1, (12, 1, 1), y=10),
+        _atom("年", 202, 212, 2, (12, 1, 2), y=10),
+        _atom("6", 214, 219, 3, (12, 1, 3), y=10),
+        _atom("月开始陆续完工", 100, 180, 4, (12, 2, 0), y=24),
+        _atom("右侧数值", 260, 310, 5, (13, 0, 0), y=17),
+    ]
+
+    result = build_text_runs(atoms)
+
+    assert result[0]["text"] == (
+        "开始陆续完成竣工验收，2022年6\n月开始陆续完工"
+    )
+    assert result[0]["span_refs"] == ["S0", "S1", "S2", "S3", "S4"]
+
+
+def test_build_text_runs_keeps_numeric_field_before_new_block_separate():
+    atoms = [
+        _atom("项目甲", 100, 140, 0, (12, 1, 0), y=10),
+        _atom("100", 142, 160, 1, (12, 1, 1), y=10),
+        _atom("项目乙", 100, 140, 2, (13, 0, 0), y=24),
+    ]
+
+    result = build_text_runs(atoms)
+
+    assert [item["text"] for item in result] == ["项目甲", "100", "项目乙"]
+
+
+def test_build_text_runs_vetoes_repeated_right_left_aligned_column_join():
+    atoms = [
+        _atom("1,734,597.85", 298.4, 351.1, 0, (1, 0, 0), y=10),
+        _atom("诉讼冻结", 354.3, 396.4, 1, (1, 0, 1), y=10),
+        _atom("4,020,986.29", 298.4, 351.1, 2, (2, 0, 0), y=28),
+        _atom("商铺按揭保证金", 354.3, 428.0, 3, (2, 0, 1), y=28),
+        _atom("2,660,785,019.27", 281.6, 351.1, 4, (3, 0, 0), y=46),
+        _atom("借款抵押", 354.3, 396.4, 5, (3, 0, 1), y=46),
+    ]
+
+    result = build_text_runs(atoms)
+
+    assert [item["text"] for item in result] == [
+        "1,734,597.85",
+        "诉讼冻结",
+        "4,020,986.29",
+        "商铺按揭保证金",
+        "2,660,785,019.27",
+        "借款抵押",
+    ]
+
+
+def test_build_text_runs_keeps_existing_join_with_only_two_alignment_rows():
+    atoms = [
+        _atom("100.00", 120, 160, 0, (1, 0, 0), y=10),
+        _atom("冻结", 163.2, 183.2, 1, (1, 0, 1), y=10),
+        _atom("1,000.00", 110, 160, 2, (2, 0, 0), y=28),
+        _atom("保证金", 163.2, 193.2, 3, (2, 0, 1), y=28),
+    ]
+
+    assert [item["text"] for item in build_text_runs(atoms)] == [
+        "100.00冻结",
+        "1,000.00保证金",
+    ]
+
+
+def test_build_text_runs_keeps_existing_join_without_common_corridor():
+    atoms = [
+        _atom("100.00", 80, 100, 0, (1, 0, 0), y=10),
+        _atom("冻结", 102, 122, 1, (1, 0, 1), y=10),
+        _atom("1,000.00", 82, 100.5, 2, (2, 0, 0), y=28),
+        _atom("保证金", 102.5, 132.5, 3, (2, 0, 1), y=28),
+        _atom("10,000.00", 84, 101, 4, (3, 0, 0), y=46),
+        _atom("抵押借款", 103, 143, 5, (3, 0, 1), y=46),
+    ]
+
+    assert [item["text"] for item in build_text_runs(atoms)] == [
+        "100.00冻结",
+        "1,000.00保证金",
+        "10,000.00抵押借款",
+    ]
+
+
+def test_build_text_runs_keeps_repeated_fixed_width_field_fragments_joined():
+    atoms = [
+        _atom("2024", 10, 30, 0, (1, 0, 0), y=10),
+        _atom("年度", 33.2, 53.2, 1, (1, 0, 1), y=10),
+        _atom("2024", 10, 30, 2, (2, 0, 0), y=28),
+        _atom("年度", 33.2, 53.2, 3, (2, 0, 1), y=28),
+        _atom("2024", 10, 30, 4, (3, 0, 0), y=46),
+        _atom("年度", 33.2, 53.2, 5, (3, 0, 1), y=46),
+    ]
+
+    assert [item["text"] for item in build_text_runs(atoms)] == [
+        "2024年度",
+        "2024年度",
+        "2024年度",
+    ]
+
+
 def test_build_text_runs_joins_same_line_spans_across_skipped_whitespace_span():
     atoms = [
         _atom("项", 10, 17, 1, (2, 3, 0)),
