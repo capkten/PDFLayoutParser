@@ -56,7 +56,7 @@ def _compatible(left: dict[str, Any], right: dict[str, Any]) -> bool:
     if (left_ph and right_num) or (right_ph and left_num):
         ph = left if left_ph else right
         ph_w = max(1.0, ph["bbox"][2] - ph["bbox"][0])
-        return overlap >= ph_w * 0.75 and overlap >= 4.0
+        return overlap >= ph_w * 0.75
 
     return overlap >= max(2.0, narrow * 0.25)
 
