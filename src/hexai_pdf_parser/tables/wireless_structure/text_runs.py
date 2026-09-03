@@ -281,6 +281,112 @@ def _join_text(group: Sequence[dict[str, Any]]) -> str:
     return "".join(item["text"] for item in group)
 
 
+def _alignment_anchor(item: dict[str, Any], mode: str) -> float:
+    x0, _, x1, _ = item["bbox"]
+    if mode == "left":
+        return x0
+    if mode == "right":
+        return x1
+    return (x0 + x1) / 2.0
+
+
+def _alignment_tolerance(items: Sequence[dict[str, Any]]) -> float:
+    return max(1.0, min(item["font_size"] for item in items) * 0.12)
+
+
+def _alignment_modes(item: dict[str, Any]) -> Sequence[str]:
+    if _NUMERIC.fullmatch(str(item.get("text", "")).strip()):
+        return ("right",)
+    return ("left", "right", "center")
+
+
+def _opposite_edges_vary(
+    items: Sequence[dict[str, Any]], mode: str, tolerance: float
+) -> bool:
+    x0_values = [item["bbox"][0] for item in items]
+    x1_values = [item["bbox"][2] for item in items]
+    x0_spread = max(x0_values) - min(x0_values)
+    x1_spread = max(x1_values) - min(x1_values)
+    if mode == "left":
+        return x1_spread > tolerance
+    if mode == "right":
+        return x0_spread > tolerance
+    return x0_spread > tolerance and x1_spread > tolerance
+
+
+def _has_alignment_corridor_veto(
+    group: Sequence[dict[str, Any]],
+    candidate: dict[str, Any],
+    visual_rows: Sequence[Sequence[dict[str, Any]]],
+) -> bool:
+    left = {
+        "text": _join_text(group),
+        "bbox": _union(group),
+        "font_size": min(item["font_size"] for item in group),
+    }
+    tolerance = _alignment_tolerance([left, candidate])
+    if candidate["bbox"][0] - left["bbox"][2] <= tolerance:
+        return False
+
+    current_flows = {item["flow"] for item in group} | {candidate["flow"]}
+    for left_mode in _alignment_modes(left):
+        for right_mode in _alignment_modes(candidate):
+            if left_mode == right_mode == "center":
+                continue
+            support = [(left, candidate)]
+            for row in visual_rows:
+                if current_flows.intersection(item["flow"] for item in row):
+                    continue
+                matches = []
+                ordered = sorted(row, key=lambda item: item["bbox"][0])
+                for witness_left, witness_right in zip(ordered, ordered[1:]):
+                    if (
+                        witness_right["bbox"][0] - witness_left["bbox"][2]
+                        <= tolerance
+                    ):
+                        continue
+                    if (
+                        abs(
+                            _alignment_anchor(witness_left, left_mode)
+                            - _alignment_anchor(left, left_mode)
+                        )
+                        <= tolerance
+                        and abs(
+                            _alignment_anchor(witness_right, right_mode)
+                            - _alignment_anchor(candidate, right_mode)
+                        )
+                        <= tolerance
+                    ):
+                        matches.append((witness_left, witness_right))
+                if len(matches) == 1:
+                    support.append(matches[0])
+
+            if len(support) < 3:
+                continue
+            left_items = [item for item, _ in support]
+            right_items = [item for _, item in support]
+            tolerance = _alignment_tolerance(left_items + right_items)
+            if not _opposite_edges_vary(left_items, left_mode, tolerance):
+                continue
+            if not _opposite_edges_vary(right_items, right_mode, tolerance):
+                continue
+            left_anchors = [
+                _alignment_anchor(item, left_mode) for item in left_items
+            ]
+            right_anchors = [
+                _alignment_anchor(item, right_mode) for item in right_items
+            ]
+            if max(left_anchors) - min(left_anchors) > tolerance:
+                continue
+            if max(right_anchors) - min(right_anchors) > tolerance:
+                continue
+            corridor_x0 = max(item["bbox"][2] for item in left_items)
+            corridor_x1 = min(item["bbox"][0] for item in right_items)
+            if corridor_x1 - corridor_x0 > tolerance:
+                return True
+    return False
+
+
 def _native_position(item: dict[str, Any]) -> Sequence[int]:
     position = item.get("source_position")
     if position is None:
@@ -618,12 +724,15 @@ def build_text_runs(
         groups: list[list[dict[str, Any]]] = []
         sorted_row = sorted(row, key=lambda item: item["bbox"][0])
         for span in sorted_row:
-            if groups and _can_join(
+            can_join = groups and _can_join(
                 groups[-1],
                 span,
                 normal_gap,
                 row_spans=sorted_row,
                 all_spans=spans,
+            )
+            if can_join and not _has_alignment_corridor_veto(
+                groups[-1], span, rows
             ):
                 groups[-1].append(span)
             else:
