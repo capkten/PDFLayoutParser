@@ -314,6 +314,12 @@ def _opposite_edges_vary(
     return x0_spread > tolerance and x1_spread > tolerance
 
 
+def _has_diverse_text_values(items: Sequence[dict[str, Any]]) -> bool:
+    values = {"".join(str(item.get("text", "")).split()) for item in items}
+    values.discard("")
+    return len(values) >= 3
+
+
 def _has_alignment_corridor_veto(
     group: Sequence[dict[str, Any]],
     candidate: dict[str, Any],
@@ -366,13 +372,17 @@ def _has_alignment_corridor_veto(
             left_items = [item for item, _ in support]
             right_items = [item for _, item in support]
             support_tolerance = _alignment_tolerance(left_items + right_items)
-            if not _opposite_edges_vary(
+            left_varies = _opposite_edges_vary(
                 left_items, left_mode, support_tolerance
-            ):
-                continue
-            if not _opposite_edges_vary(
+            )
+            right_varies = _opposite_edges_vary(
                 right_items, right_mode, support_tolerance
-            ):
+            )
+            if not (left_varies or right_varies):
+                continue
+            if not left_varies and not _has_diverse_text_values(left_items):
+                continue
+            if not right_varies and not _has_diverse_text_values(right_items):
                 continue
             left_anchors = [
                 _alignment_anchor(item, left_mode) for item in left_items
