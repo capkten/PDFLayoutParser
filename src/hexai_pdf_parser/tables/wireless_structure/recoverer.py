@@ -19,11 +19,16 @@ from .grid import build_grid
 from .header_topology import (
     annotate_columns,
     refine_leaf_bands,
+    rescue_header_only_leaf_bands,
     rescue_header_only_note_bands,
     rescue_sparse_body_bands,
 )
 from .logical_grid import build_logical_grid, materialize_empty_cells, merge_header_spans
-from .merged_cells import merge_multiline_cells, merge_same_slot_fragments
+from .merged_cells import (
+    merge_multiline_cells,
+    merge_same_slot_fragments,
+    resolve_exact_slot_conflicts,
+)
 from .span_chain import region_spans
 from .text_runs import (
     build_text_runs,
@@ -106,6 +111,7 @@ def recover_cells_from_region(
         bands, header_cutoff = refine_leaf_bands(atoms, bands)
         bands = rescue_sparse_body_bands(atoms, bands, header_cutoff)
         bands = rescue_header_only_note_bands(atoms, bands, header_cutoff)
+        bands = rescue_header_only_leaf_bands(atoms, bands, header_cutoff)
         if len(bands) < 1:
             return 0, 0, []
 
@@ -116,6 +122,13 @@ def recover_cells_from_region(
             return 0, 0, []
 
         cells = merge_same_slot_fragments(grid_cells, header_cutoff)
+        if _has_occupancy_conflict(cells):
+            resolved_cells = resolve_exact_slot_conflicts(cells)
+            if len(resolved_cells) < len(cells):
+                physical_rows, columns, grid_cells, _issues = build_grid(
+                    resolved_cells, bands
+                )
+                cells = merge_same_slot_fragments(grid_cells, header_cutoff)
         cells = merge_multiline_cells(
             cells, header_cutoff, output_mode=output_mode
         )

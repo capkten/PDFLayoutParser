@@ -1,6 +1,7 @@
 import hexai_pdf_parser.tables.wireless_structure.header_topology as header_topology
 from hexai_pdf_parser.tables.wireless_structure.header_topology import (
     _infer_complete_child_group_span,
+    _coalesce_pure_header_and_body_leaf_bands,
     annotate_columns,
     infer_header_cutoff,
     refine_leaf_bands,
@@ -386,6 +387,98 @@ def test_annotate_columns_infers_parent_over_complete_physical_leaf_run():
     assert parent["bbox"] == [205, 10, 225, 18]
 
 
+def test_annotate_columns_keeps_grazing_leaf_separate_when_parent_starts_after_it():
+    bands = [
+        {"id": 3, "x0": 241.34, "x1": 264.90},
+        {"id": 4, "x0": 276.17, "x1": 291.54},
+        {"id": 5, "x0": 289.13, "x1": 358.50},
+        {"id": 6, "x0": 371.57, "x1": 434.46},
+        {"id": 7, "x0": 434.46, "x1": 478.64},
+        {"id": 8, "x0": 488.35, "x1": 511.88},
+        {"id": 9, "x0": 509.47, "x1": 572.72},
+        {"id": 10, "x0": 582.67, "x1": 606.23},
+        {"id": 11, "x0": 614.86, "x1": 627.83},
+    ]
+    parent = _atom("父表头", 415.25, 90.43, 478.61, 100.99, 1)
+    leaves = [
+        _atom("叶三", 241.34, 119.47, 262.49, 170.83, 2),
+        # Its right edge grazes the next band by 0.13pt, but it is one leaf.
+        _atom("叶四", 276.17, 105.79, 289.26, 184.42, 3),
+        _atom("叶五", 313.97, 139.87, 356.21, 150.43, 4),
+        _atom("叶六", 387.41, 126.19, 429.65, 163.99, 5),
+        _atom("叶七", 444.55, 119.47, 476.23, 170.83, 6),
+        _atom("叶八", 488.35, 126.19, 509.47, 163.99, 7),
+        _atom("叶九", 517.63, 126.19, 570.43, 163.99, 8),
+        _atom("叶十", 582.67, 126.19, 603.79, 163.99, 9),
+        _atom("叶十一", 614.86, 133.03, 625.42, 157.15, 10),
+    ]
+
+    annotate_columns([parent, *leaves], bands, header_cutoff=200)
+
+    assert (parent["column_start"], parent["column_end"], parent["colspan"]) == (
+        4,
+        11,
+        8,
+    )
+    assert (leaves[1]["column_start"], leaves[1]["column_end"], leaves[1]["colspan"]) == (
+        4,
+        4,
+        1,
+    )
+
+
+def test_coalesce_pure_header_and_body_rejects_unaligned_adjacent_bands():
+    bands = [
+        {"id": 1, "x0": 10.0, "x1": 30.0},
+        {"id": 2, "x0": 29.0, "x1": 52.0},
+    ]
+    atoms = [
+        _atom("表头", 12.0, 10.0, 28.0, 20.0, 1),
+        _atom("100", 34.0, 40.0, 50.0, 50.0, 2),
+    ]
+
+    result = _coalesce_pure_header_and_body_leaf_bands(atoms, bands, cutoff=30.0)
+
+    assert [(band["x0"], band["x1"]) for band in result] == [
+        (10.0, 30.0),
+        (29.0, 52.0),
+    ]
+
+
+def test_coalesce_pure_header_and_body_keeps_equal_width_placeholder_columns():
+    bands = [
+        {"id": 1, "x0": 10.0, "x1": 30.0},
+        {"id": 2, "x0": 31.0, "x1": 51.0},
+    ]
+    atoms = [
+        _atom("表头", 12.0, 10.0, 28.0, 20.0, 1),
+        _atom("-", 35.0, 40.0, 45.0, 50.0, 2),
+        _atom("-", 35.0, 55.0, 45.0, 65.0, 3),
+        _atom("-", 35.0, 70.0, 45.0, 80.0, 4),
+    ]
+
+    result = _coalesce_pure_header_and_body_leaf_bands(atoms, bands, cutoff=30.0)
+
+    assert len(result) == 2
+
+
+def test_coalesce_pure_header_and_body_accepts_terminal_narrow_placeholder_track():
+    bands = [
+        {"id": 1, "x0": 10.0, "x1": 40.0},
+        {"id": 2, "x0": 40.5, "x1": 47.0},
+    ]
+    atoms = [
+        _atom("表头", 14.0, 10.0, 36.0, 20.0, 1),
+        _atom("-", 41.0, 40.0, 46.0, 50.0, 2),
+        _atom("-", 41.0, 55.0, 46.0, 65.0, 3),
+        _atom("-", 41.0, 70.0, 46.0, 80.0, 4),
+    ]
+
+    result = _coalesce_pure_header_and_body_leaf_bands(atoms, bands, cutoff=30.0)
+
+    assert [(band["x0"], band["x1"]) for band in result] == [(10.0, 47.0)]
+
+
 def test_annotate_columns_rejects_parent_when_physical_leaf_run_has_a_gap():
     bands = [
         {"id": 1, "x0": 0, "x1": 30},
@@ -544,6 +637,120 @@ def test_rescue_header_only_note_band_keeps_a_note_gap_as_a_physical_column():
     ]
 
 
+def test_rescue_header_only_leaf_band_keeps_a_trailing_empty_body_column():
+    bands = [
+        {"id": 1, "x0": 10, "x1": 30, "support": 6, "y_support": 6},
+        {"id": 2, "x0": 70, "x1": 90, "support": 6, "y_support": 6},
+        {"id": 3, "x0": 130, "x1": 150, "support": 6, "y_support": 6},
+        {"id": 4, "x0": 190, "x1": 210, "support": 6, "y_support": 6},
+    ]
+    atoms = [
+        _atom("类别", 10, 10, 30, 20, 1),
+        _atom("寿命", 70, 10, 90, 20, 2),
+        _atom("依据", 130, 10, 150, 20, 3),
+        _atom("方法", 190, 10, 210, 20, 4),
+        _atom("空列表头", 250, 10, 290, 20, 5),
+    ]
+
+    rescue = getattr(header_topology, "rescue_header_only_leaf_bands", None)
+    assert rescue is not None
+    rescued = rescue(atoms, bands, header_cutoff=25)
+
+    assert [(band["x0"], band["x1"], band.get("kind")) for band in rescued] == [
+        (10, 30, None),
+        (70, 90, None),
+        (130, 150, None),
+        (190, 210, None),
+        (250, 290, "header_only_leaf"),
+    ]
+
+
+def test_rescue_header_only_leaf_band_keeps_an_inner_empty_body_column():
+    bands = [
+        {"id": 1, "x0": 10, "x1": 30, "support": 4, "y_support": 4},
+        {"id": 2, "x0": 90, "x1": 110, "support": 4, "y_support": 4},
+    ]
+    atoms = [
+        _atom("左列", 10, 10, 30, 20, 1),
+        _atom("空列表头", 45, 10, 70, 20, 2),
+        _atom("右列", 90, 10, 110, 20, 3),
+    ]
+
+    rescued = header_topology.rescue_header_only_leaf_bands(
+        atoms, bands, header_cutoff=25
+    )
+
+    assert [band.get("kind") for band in rescued] == [
+        None,
+        "header_only_leaf",
+        None,
+    ]
+
+
+def test_rescue_header_only_leaf_band_rejects_a_parent_header_level():
+    bands = [
+        {"id": 1, "x0": 10, "x1": 30, "support": 4, "y_support": 4},
+        {"id": 2, "x0": 70, "x1": 90, "support": 4, "y_support": 4},
+        {"id": 3, "x0": 130, "x1": 150, "support": 4, "y_support": 4},
+    ]
+    atoms = [
+        _atom("父标题", 180, 5, 220, 15, 1),
+        _atom("叶子一", 10, 25, 30, 35, 2),
+        _atom("叶子二", 70, 25, 90, 35, 3),
+        _atom("叶子三", 130, 25, 150, 35, 4),
+    ]
+
+    rescued = header_topology.rescue_header_only_leaf_bands(
+        atoms, bands, header_cutoff=40
+    )
+
+    assert len(rescued) == len(bands)
+
+
+def test_rescue_header_only_leaf_band_uses_lowest_complete_candidate_level():
+    bands = [
+        {"id": 1, "x0": 10, "x1": 30, "support": 4, "y_support": 4},
+        {"id": 2, "x0": 90, "x1": 110, "support": 4, "y_support": 4},
+    ]
+    atoms = [
+        _atom("上层左", 10, 5, 30, 15, 1),
+        _atom("上层孤立标题", 45, 5, 65, 15, 2),
+        _atom("上层右", 90, 5, 110, 15, 3),
+        _atom("叶子左", 10, 25, 30, 35, 4),
+        _atom("叶子空列", 48, 25, 68, 35, 5),
+        _atom("叶子右", 90, 25, 110, 35, 6),
+    ]
+
+    rescued = header_topology.rescue_header_only_leaf_bands(
+        atoms, bands, header_cutoff=40
+    )
+
+    header_only = [
+        band for band in rescued if band.get("kind") == "header_only_leaf"
+    ]
+    assert [(band["x0"], band["x1"]) for band in header_only] == [(48, 68)]
+
+
+def test_rescue_header_only_leaf_band_rejects_a_nearby_field_fragment():
+    bands = [
+        {"id": 1, "x0": 10, "x1": 30, "support": 4, "y_support": 4},
+        {"id": 2, "x0": 70, "x1": 90, "support": 4, "y_support": 4},
+        {"id": 3, "x0": 130, "x1": 150, "support": 4, "y_support": 4},
+    ]
+    atoms = [
+        _atom("类别", 10, 10, 30, 20, 1),
+        _atom("依据", 70, 10, 90, 20, 2),
+        _atom("摊销方", 130, 10, 150, 20, 3),
+        _atom("法", 153, 10, 163, 20, 4),
+    ]
+
+    rescued = header_topology.rescue_header_only_leaf_bands(
+        atoms, bands, header_cutoff=25
+    )
+
+    assert len(rescued) == len(bands)
+
+
 def test_rescue_header_only_note_band_rejects_parenthetical_annotation_text():
     bands = [
         {"id": 1, "x0": 10, "x1": 40, "support": 5, "y_support": 5},
@@ -689,3 +896,63 @@ def test_rescue_sparse_body_bands_accepts_none_font_size_with_line_bbox_fallback
     refined = rescue_sparse_body_bands(atoms, bands, header_cutoff=148)
 
     assert len(refined) == 3
+
+
+def test_refine_leaf_bands_rejects_split_when_body_atom_crosses_split_line():
+    bands = [{"id": 1, "x0": 470.0, "x1": 512.2, "support": 4, "y_support": 3}]
+    atoms = [
+        _atom("页", 470.0, 10, 484.1, 20, 1),
+        _atom("次", 498.1, 10, 512.2, 20, 2),
+        _atom("1-6", 480.6, 30, 501.5, 40, 3),
+        _atom("11-12", 473.5, 50, 508.6, 60, 4),
+    ]
+
+    refined, cutoff = refine_leaf_bands(atoms, bands)
+
+    assert cutoff is not None
+    assert len(refined) == 1
+    assert refined[0]["x0"] == 470.0
+    assert refined[0]["x1"] == 512.2
+
+
+def test_refine_leaf_bands_accepts_split_when_body_atoms_are_independent_columns():
+    bands = [{"id": 1, "x0": 10.0, "x1": 90.0, "support": 7, "y_support": 4}]
+    atoms = [
+        _atom("股权比例", 25.0, 10, 75.0, 20, 1),
+        _atom("直接", 15.0, 30, 35.0, 40, 2),
+        _atom("间接", 65.0, 30, 85.0, 40, 3),
+        _atom("60", 15.0, 60, 35.0, 70, 4),
+        _atom("40", 65.0, 60, 85.0, 70, 5),
+        _atom("70", 15.0, 80, 35.0, 90, 6),
+        _atom("30", 65.0, 80, 85.0, 90, 7),
+    ]
+
+    refined, cutoff = refine_leaf_bands(atoms, bands)
+
+    assert cutoff is not None
+    assert len(refined) == 2
+    assert refined[0]["x0"] == 10.0
+    assert refined[0]["x1"] == 50.0
+    assert refined[1]["x0"] == 50.0
+    assert refined[1]["x1"] == 90.0
+
+
+
+
+
+def test_rescue_sparse_body_bands_ignores_header_region_atoms():
+    bands = [
+        {"id": 1, "x0": 140.0, "x1": 280.0, "support": 3, "y_support": 3},
+        {"id": 2, "x0": 470.0, "x1": 512.0, "support": 3, "y_support": 3},
+    ]
+    atoms = [
+        _atom("目", 250.0, 10, 264.0, 20, 1),
+        _atom("录", 300.0, 10, 314.0, 20, 2),
+        _atom("页次", 470.0, 10, 512.0, 20, 3),
+        _atom("审计报告", 140.0, 30, 200.0, 40, 4),
+        _atom("1-6", 480.0, 30, 500.0, 40, 5),
+    ]
+
+    refined = rescue_sparse_body_bands(atoms, bands, header_cutoff=25)
+
+    assert len(refined) == 2

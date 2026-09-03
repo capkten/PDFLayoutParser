@@ -1,7 +1,10 @@
+import pytest
+
 from hexai_pdf_parser.tables.wireless_structure.continuations import merge_column_continuations
 from hexai_pdf_parser.tables.wireless_structure.merged_cells import (
     merge_multiline_cells,
     merge_same_slot_fragments,
+    resolve_exact_slot_conflicts,
 )
 
 
@@ -59,6 +62,71 @@ def test_merge_same_slot_fragments_joins_same_visual_line_from_split_native_line
 
     assert len(result) == 1
     assert result[0]["text"] == "FRASERSPROPERTY"
+
+
+def test_merge_same_slot_fragments_joins_right_side_numbered_prefix():
+    marker = _cell(
+        "2.", flow=1, row=1, x0=10, y0=20, x1=15, y1=30, source_line=0
+    )
+    body = _cell(
+        "权益法下的其他综合收益",
+        flow=2,
+        row=1,
+        x0=18,
+        y0=16,
+        x1=90,
+        y1=26,
+        source_line=0,
+    )
+    marker["font_size"] = body["font_size"] = 6.72
+
+    result = merge_same_slot_fragments([marker, body], header_cutoff=None)
+
+    assert len(result) == 1
+    assert result[0]["text"] == "2.权益法下的其他综合收益"
+    assert result[0]["merge_kind"] == "same_slot_horizontal_prefix"
+
+
+def test_merge_same_slot_fragments_keeps_right_side_prefix_in_different_column():
+    marker = _cell(
+        "2.", flow=1, row=1, col=1, x0=10, y0=20, x1=15, y1=30, source_line=0
+    )
+    body = _cell(
+        "金额",
+        flow=2,
+        row=1,
+        col=2,
+        x0=18,
+        y0=16,
+        x1=40,
+        y1=26,
+        source_line=0,
+    )
+
+    result = merge_same_slot_fragments([marker, body], header_cutoff=None)
+
+    assert [item["text"] for item in result] == ["2.", "金额"]
+
+
+def test_merge_same_slot_fragments_joins_numbered_marker_with_right_ellipsis():
+    marker = _cell(
+        "3.", flow=1, row=1, x0=10, y0=20, x1=15, y1=30, source_line=0
+    )
+    ellipsis = _cell(
+        "……",
+        flow=2,
+        row=1,
+        x0=18,
+        y0=20,
+        x1=30,
+        y1=30,
+        source_line=0,
+    )
+    marker["font_size"] = ellipsis["font_size"] = 6.72
+
+    result = merge_same_slot_fragments([marker, ellipsis], header_cutoff=None)
+
+    assert [item["text"] for item in result] == ["3.……"]
 
 
 def test_merge_multiline_cells_requires_continuous_same_column_evidence():
@@ -183,6 +251,19 @@ def test_merge_multiline_cells_requires_candidate_to_be_below_previous_fragment(
     assert [item["text"] for item in result] == ["上方片段", "下方片段"]
 
 
+def test_merge_multiline_cells_keeps_next_numbered_item_separate():
+    first = _cell("2.权益法下的其他综合收益", flow=1, row=1, y0=10, y1=20)
+    second = _cell("3.……", flow=2, row=2, y0=22, y1=32)
+    second["script"] = "numeric"
+
+    result = merge_multiline_cells([first, second], header_cutoff=None)
+
+    assert [item["text"] for item in result] == [
+        "2.权益法下的其他综合收益",
+        "3.……",
+    ]
+
+
 def test_merge_multiline_cells_keeps_independent_project_rows_separate():
     first = _cell("项目一", flow=1, row=1, y0=10, y1=20)
     second = _cell("项目二", flow=3, row=2, y0=22, y1=32)
@@ -219,3 +300,100 @@ def test_merge_same_slot_fragments_does_not_join_wide_multi_character_labels():
     result = merge_same_slot_fragments([left, right], header_cutoff=None)
 
     assert [item["text"] for item in result] == ["比例", "坏账准备"]
+
+
+def test_merge_same_slot_fragments_joins_two_character_spread_cjk_pair():
+    left = _cell("目", flow=1, row=1, x0=250.7, x1=264.7)
+    right = _cell("录", flow=2, row=1, x0=299.8, x1=313.8, source_line=1)
+    left["font_size"] = right["font_size"] = 14.05
+
+    result = merge_same_slot_fragments([left, right], header_cutoff=None)
+
+    assert len(result) == 1
+    assert result[0]["text"] == "目录"
+
+
+def test_resolve_exact_slot_conflicts_joins_wide_spaced_native_cjk_chain():
+    left = _cell(
+        "合", flow=16, row=3, x0=176.0415, x1=186.5415, source_line=0
+    )
+    right = _cell(
+        "计", flow=17, row=3, x0=212.8219, x1=223.3219, source_line=0
+    )
+    left["font_size"] = right["font_size"] = 10.5
+
+    result = resolve_exact_slot_conflicts([left, right])
+
+    assert len(result) == 1
+    assert result[0]["text"] == "合计"
+    assert result[0]["span_refs"] == ["S16", "S17"]
+    assert result[0]["merge_kind"] == "exact_slot_conflict"
+
+
+def test_resolve_exact_slot_conflicts_keeps_multi_character_fields():
+    left = _cell("比例", flow=1, row=1, x0=10, x1=30)
+    right = _cell("坏账准备", flow=2, row=1, x0=40, x1=80)
+
+    result = resolve_exact_slot_conflicts([left, right])
+
+    assert [item["text"] for item in result] == ["比例", "坏账准备"]
+
+
+def test_resolve_exact_slot_conflicts_requires_continuous_known_native_line():
+    left = _cell("合", flow=1, row=1, x0=10, x1=20, source_line=0)
+    skipped = _cell("计", flow=3, row=1, x0=40, x1=50, source_line=0)
+    different_line = _cell("额", flow=2, row=1, x0=40, x1=50, source_line=1)
+    unknown = _cell("数", flow=2, row=1, x0=40, x1=50, source_line=0)
+    unknown["source_position_known"] = False
+
+    assert len(resolve_exact_slot_conflicts([left, skipped])) == 2
+    assert len(resolve_exact_slot_conflicts([left, different_line])) == 2
+    assert len(resolve_exact_slot_conflicts([left, unknown])) == 2
+
+
+def test_resolve_exact_slot_conflicts_rejects_group_with_foreign_span_overlap():
+    left = _cell("合", flow=1, row=1, col=1, x0=10, x1=20)
+    right = _cell("计", flow=2, row=1, col=1, x0=40, x1=50)
+    spanning = _cell("跨列字段", flow=3, row=1, col=1, x0=10, x1=100)
+    spanning["col_end"] = 2
+    spanning["colspan"] = 2
+
+    result = resolve_exact_slot_conflicts([left, right, spanning])
+
+    assert [item["text"] for item in result] == ["合", "计", "跨列字段"]
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "different_block",
+        "shared_multiple_blocks",
+        "different_visual_row",
+        "reversed_x_flow",
+        "different_script",
+        "different_boldness",
+        "different_font_level",
+    ],
+)
+def test_resolve_exact_slot_conflicts_requires_complete_native_visual_evidence(case):
+    left = _cell("合", flow=1, row=1, x0=10, x1=20, source_line=0)
+    right = _cell("计", flow=2, row=1, x0=40, x1=50, source_line=0)
+
+    if case == "different_block":
+        right["source_blocks"] = [2]
+    elif case == "shared_multiple_blocks":
+        left["source_blocks"] = right["source_blocks"] = [1, 2]
+    elif case == "different_visual_row":
+        right["bbox"] = [40, 30, 50, 40]
+    elif case == "reversed_x_flow":
+        right["bbox"] = [5, 10, 15, 20]
+    elif case == "different_script":
+        right["script"] = "numeric"
+    elif case == "different_boldness":
+        right["bold"] = True
+    elif case == "different_font_level":
+        right["font_size"] = 12.0
+
+    result = resolve_exact_slot_conflicts([left, right])
+
+    assert [item["text"] for item in result] == ["合", "计"]

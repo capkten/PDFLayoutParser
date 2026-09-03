@@ -9,11 +9,22 @@ from typing import Any, Sequence
 _VALUE_ONLY = re.compile(r"^[\s$¥£€HKRMB,'’()\-–—.\d%]+$")
 _LIST_CONTINUATION = re.compile(r"^[\s\-–—•·]")
 _INLINE_MARKER = re.compile(r"^[*#†‡\-–—]+$")
+_NUMBERED_MARKER = re.compile(
+    r"^(?:\d+[.)、]|[（(]\d+[）)]|[一二三四五六七八九十百]+[.)、])$"
+)
+_NUMBERED_ITEM_START = re.compile(
+    r"^(?:\d+[.)、]|[（(]\d+[）)]|[一二三四五六七八九十百]+[.)、])"
+)
 _SINGLE_CJK = re.compile(r"^[\u3400-\u9fff\u2460-\u2473\uff00-\uffef\w()（）]$")
+_STRICT_SINGLE_CJK = re.compile(r"^[\u3400-\u9fff]$")
 
 
 def _horizontal_overlap(left: Sequence[float], right: Sequence[float]) -> float:
     return max(0.0, min(left[2], right[2]) - max(left[0], right[0]))
+
+
+def _has_substantive_text(text: str) -> bool:
+    return any(character.isalnum() for character in text)
 
 
 def _native_continuous(left: dict[str, Any], right: dict[str, Any]) -> bool:
@@ -22,6 +33,66 @@ def _native_continuous(left: dict[str, Any], right: dict[str, Any]) -> bool:
 
 def _same_slot(left: dict[str, Any], right: dict[str, Any]) -> bool:
     return all(left[key] == right[key] for key in ("row_start", "row_end", "col_start", "col_end"))
+
+
+def _slot_key(cell: dict[str, Any]) -> tuple[int, int, int, int]:
+    return tuple(
+        int(cell[key])
+        for key in ("row_start", "row_end", "col_start", "col_end")
+    )
+
+
+def _slot_keys_overlap(
+    left: tuple[int, int, int, int],
+    right: tuple[int, int, int, int],
+) -> bool:
+    return not (
+        left[1] < right[0]
+        or right[1] < left[0]
+        or left[3] < right[2]
+        or right[3] < left[2]
+    )
+
+
+def _can_resolve_exact_slot_group(
+    group: Sequence[dict[str, Any]],
+    all_slot_keys: Sequence[tuple[int, int, int, int]],
+) -> bool:
+    slot = _slot_key(group[0])
+    if any(key != slot and _slot_keys_overlap(slot, key) for key in all_slot_keys):
+        return False
+
+    ordered = sorted(group, key=lambda item: item["flow_start"])
+    if not all(
+        _STRICT_SINGLE_CJK.fullmatch(item["text"]) is not None
+        and item.get("source_position_known", False)
+        and item.get("script") == "cjk"
+        and len(item.get("source_blocks", [])) == 1
+        and item.get("source_line_start") == item.get("source_line_end")
+        for item in ordered
+    ):
+        return False
+
+    first = ordered[0]
+    for previous, candidate in zip(ordered, ordered[1:]):
+        minimum_font_size = min(previous["font_size"], candidate["font_size"])
+        previous_center_y = (previous["bbox"][1] + previous["bbox"][3]) / 2.0
+        candidate_center_y = (candidate["bbox"][1] + candidate["bbox"][3]) / 2.0
+        if (
+            not _native_continuous(previous, candidate)
+            or candidate["bbox"][0] <= previous["bbox"][0]
+            or abs(previous_center_y - candidate_center_y)
+            > max(2.0, minimum_font_size * 0.35)
+            or abs(previous["font_size"] - candidate["font_size"])
+            > max(0.5, minimum_font_size * 0.1)
+        ):
+            return False
+    return all(
+        item.get("source_blocks") == first.get("source_blocks")
+        and item.get("source_line_start") == first.get("source_line_start")
+        and item.get("bold") == first.get("bold")
+        for item in ordered[1:]
+    )
 
 
 def _same_native_inline(left: dict[str, Any], right: dict[str, Any]) -> bool:
@@ -46,6 +117,8 @@ def _same_slot_single_cjk(left: dict[str, Any], right: dict[str, Any]) -> bool:
         if left.get("source_line_start") is not None and right.get("source_line_start") is not None
         else True
     )
+    is_toc_title_pair = (left["text"], right["text"]) in {("目", "录"), ("页", "次")}
+    max_gap_multiplier = 2.8 if is_toc_title_pair else 2.1
     return (
         _SINGLE_CJK.fullmatch(left["text"]) is not None
         and _SINGLE_CJK.fullmatch(right["text"]) is not None
@@ -55,8 +128,49 @@ def _same_slot_single_cjk(left: dict[str, Any], right: dict[str, Any]) -> bool:
         and abs((left["bbox"][1] + left["bbox"][3]) / 2 - (right["bbox"][1] + right["bbox"][3]) / 2)
         <= max(2.0, min(left["font_size"], right["font_size"]) * 0.35)
         and right["bbox"][0] - left["bbox"][2]
-        <= min(left["font_size"], right["font_size"]) * 2.1
+        <= min(left["font_size"], right["font_size"]) * max_gap_multiplier
     )
+
+
+
+
+def _same_slot_horizontal_prefix(
+    left: dict[str, Any], right: dict[str, Any]
+) -> bool:
+    """Join a numbered prefix with its right-hand text in one visual row."""
+    left_text = left["text"].strip()
+    right_text = right["text"].strip()
+    if (
+        _NUMBERED_MARKER.fullmatch(left_text) is None
+        or _NUMBERED_MARKER.fullmatch(right_text) is not None
+        or _VALUE_ONLY.fullmatch(right_text) is not None
+        or not _has_substantive_text(right_text)
+        or not left.get("source_position_known", False)
+        or not right.get("source_position_known", False)
+    ):
+        return False
+    same_source_line = (
+        left.get("source_blocks") == right.get("source_blocks")
+        and left.get("source_line_start") == left.get("source_line_end")
+        and right.get("source_line_start") == right.get("source_line_end")
+        and left.get("source_line_start") == right.get("source_line_start")
+    )
+    if not same_source_line or not _native_continuous(left, right):
+        return False
+    vertical_overlap = max(
+        0.0,
+        min(left["bbox"][3], right["bbox"][3])
+        - max(left["bbox"][1], right["bbox"][1]),
+    )
+    minimum_height = min(
+        left["bbox"][3] - left["bbox"][1],
+        right["bbox"][3] - right["bbox"][1],
+    )
+    if vertical_overlap < minimum_height * 0.35:
+        return False
+    minimum_font_size = min(left["font_size"], right["font_size"])
+    gap = right["bbox"][0] - left["bbox"][2]
+    return 0.0 <= gap <= max(4.0, minimum_font_size * 2.1)
 
 
 def _is_left_shifted_cjk_continuation(
@@ -115,6 +229,41 @@ def _merge_pair(left: dict[str, Any], right: dict[str, Any], joiner: str, kind: 
     return merged
 
 
+def resolve_exact_slot_conflicts(
+    cells: Sequence[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Merge evidence-complete single-CJK chains that conflict in one exact slot."""
+    ordered = [
+        dict(item) for item in sorted(cells, key=lambda item: item["flow_start"])
+    ]
+    groups: dict[tuple[int, int, int, int], list[dict[str, Any]]] = {}
+    for cell in ordered:
+        groups.setdefault(_slot_key(cell), []).append(cell)
+
+    all_slot_keys = list(groups)
+    resolved: dict[tuple[int, int, int, int], dict[str, Any]] = {}
+    for slot, group in groups.items():
+        if len(group) < 2 or not _can_resolve_exact_slot_group(
+            group, all_slot_keys
+        ):
+            continue
+        merged = group[0]
+        for candidate in group[1:]:
+            merged = _merge_pair(merged, candidate, "", "exact_slot_conflict")
+        resolved[slot] = merged
+
+    result: list[dict[str, Any]] = []
+    emitted: set[tuple[int, int, int, int]] = set()
+    for cell in ordered:
+        slot = _slot_key(cell)
+        if slot not in resolved:
+            result.append(cell)
+        elif slot not in emitted:
+            result.append(resolved[slot])
+            emitted.add(slot)
+    return sorted(result, key=lambda item: (item["flow_start"], item["flow_end"]))
+
+
 def merge_same_slot_fragments(
     cells: Sequence[dict[str, Any]], header_cutoff: float | None
 ) -> list[dict[str, Any]]:
@@ -132,12 +281,19 @@ def merge_same_slot_fragments(
                 _native_continuous(current, candidate)
                 and (_INLINE_MARKER.fullmatch(current["text"]) or _INLINE_MARKER.fullmatch(candidate["text"]))
             )
+            horizontal_prefix = _same_slot_horizontal_prefix(current, candidate)
             if _same_slot(current, candidate) and (
                 _same_native_inline(current, candidate)
                 or _same_slot_single_cjk(current, candidate)
                 or inline_marker
+                or horizontal_prefix
             ):
-                current = _merge_pair(current, candidate, "", "same_slot_native_inline")
+                merge_kind = (
+                    "same_slot_horizontal_prefix"
+                    if horizontal_prefix
+                    else "same_slot_native_inline"
+                )
+                current = _merge_pair(current, candidate, "", merge_kind)
                 pending.pop(index)
                 continue
             index += 1
@@ -158,6 +314,8 @@ def _can_merge_multiline(
         previous["row_end"] + 1,
     }
     if not same_or_adjacent_row or not _native_continuous(previous, candidate):
+        return False
+    if _NUMBERED_ITEM_START.match(candidate["text"].strip()) is not None:
         return False
     if output_mode == "columnar":
         previous_blocks = previous.get("source_blocks", [])

@@ -63,6 +63,25 @@ def test_build_text_runs_keeps_chinese_label_and_numeric_field_separate():
     ]
 
 
+def test_build_text_runs_merges_mixed_script_land_name_with_measured_zero_gap():
+    atoms = [
+        _atom("甲", 10, 20, 0, (1, 0, 0)),
+        _atom("乙", 20, 30, 1, (1, 0, 1)),
+        _atom("丙", 10, 20, 2, (2, 0, 0), y=30),
+        _atom("丁", 20, 30, 3, (2, 0, 1), y=30),
+        _atom("戊", 10, 20, 4, (3, 0, 0), y=50),
+        _atom("己", 20, 30, 5, (3, 0, 1), y=50),
+        _atom("清远市新城", 100.68, 153.18, 6, (12, 0, 0), font_size=10.5, y=70),
+        _atom("B30", 155.82, 171.57, 7, (12, 0, 1), font_size=10.5, y=70),
+        _atom("号开发用土地", 171.57, 237.18, 8, (12, 0, 2), font_size=10.5, y=70),
+    ]
+
+    result = build_text_runs(atoms)
+
+    assert [item["text"] for item in result][-1] == "清远市新城B30号开发用土地"
+    assert result[-1]["span_refs"] == ["S6", "S7", "S8"]
+
+
 def test_build_text_runs_keeps_currency_and_adjacent_numeric_fields_separate():
     atoms = [_atom("$", 10, 16, 1, (2, 3, 0)), _atom("100", 17, 34, 2, (2, 3, 1)), _atom("200", 36, 53, 3, (2, 3, 2))]
     result = build_text_runs(atoms)
@@ -121,6 +140,18 @@ def test_build_text_runs_does_not_join_placeholder_to_positive_gap_neighbor():
     result = build_text_runs(atoms)
 
     assert [item["text"] for item in result] == ["项目", "---"]
+
+
+def test_build_text_runs_keeps_small_gap_inside_inline_hyphenated_text():
+    atoms = [
+        _atom("高质量发展", 100, 150, 1, (2, 3, 0)),
+        _atom("-", 150.5, 156.5, 2, (2, 3, 1)),
+        _atom("专项资金", 157.0, 197.0, 3, (2, 3, 2)),
+    ]
+
+    result = build_text_runs(atoms)
+
+    assert [item["text"] for item in result] == ["高质量发展-专项资金"]
 
 
 def test_build_text_runs_caps_measured_gap_before_separate_headers():

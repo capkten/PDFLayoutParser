@@ -68,7 +68,7 @@ def _split_packed_numeric_fields(span: dict[str, Any]) -> list[dict[str, Any]]:
         return [span]
 
     split_points = [0]
-    gap_limit = max(3.0, float(span.get("font_size") or 0) * 0.45)
+    gap_limit = max(2.5, float(span.get("font_size") or 0) * 0.35)
     index = 0
     while index < len(text):
         if not text[index].isspace():
