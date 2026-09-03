@@ -4,7 +4,7 @@
 
 - 验证 `fix/zh_all_table_pages.pdf` 页面索引 `979` 中文无线表格（子公司情况表）在“固定宽度右列 + 左侧多样金额/地点”场景下的恢复结果，确认 Page 979 的 `注册资本`、`主要经营地`、`持股比例%` 等列已恢复为稳定的 8 列结构。
   - **根因与调用位置**：
-    1. `src/hexai_pdf_parser/tables/wireless_structure/text_runs.py` 的 `_has_alignment_corridor_veto()` 原先只把“左右任一侧边界随支持行明显变化”视为独立列证据。Page 979 中，`注册资本` 与 `主要经营地` 所在列的右侧字段宽度相对固定、对齐锚点稳定，但文本值分别跨 `1,000.00 / 2,000.00 / 15,000.00 / 52,000.00` 等金额和 `深圳 / 惠州 / 九江 / 南宁` 等地点持续变化；若缺少文本多样性证据，`build_text_runs()` 在 `if can_join and not _has_alignment_corridor_veto(groups[-1], span, rows)` 处会把同一视觉行的“金额 + 地点”错误拼成同一个 atom，进而在后续列带恢复中把两列吸并。
+    1. `src/hexai_pdf_parser/tables/wireless_structure/text_runs.py` 的 `_has_alignment_corridor_veto()` 原先要求对齐走廊两侧都出现 opposite edge variation，才把该走廊视为独立列证据。Page 979 中，左侧 `注册资本` 金额列随 `1,000.00 / 2,000.00 / 15,000.00 / 52,000.00` 等值变化，能满足 opposite-edge variation；但右侧 `主要经营地` 地点列在 `深圳 / 惠州 / 九江 / 南宁` 等支持行里宽度近似等宽，`x0/x1` 都基本不变，导致旧条件整体失败。若缺少文本多样性证据，`build_text_runs()` 在 `if can_join and not _has_alignment_corridor_veto(groups[-1], span, rows)` 处会把同一视觉行的“金额 + 地点”错误拼成同一个 atom，进而在后续列带恢复中把两列吸并。
   - **修复判定与调用位置**：
     1. `text_runs.py` 新增 `_has_diverse_text_values()`，对支持行文本做去空白去重；当同一对齐走廊一侧累计出现 `>= 3` 个不同文本值时，即使该侧边界不明显变化，也视为存在独立字段证据。
     2. `_has_alignment_corridor_veto()` 在保留原始对齐走廊、支持行数量和 opposite-edge variation 约束的前提下，对“边界稳定但文本多样”的固定宽度列补入 veto 条件，避免 Page 979 这类“右列宽度稳定、左列金额多样”的场景被误并。
@@ -15,7 +15,8 @@
     - 使用当前 worktree 模型 `src/hexai_pdf_parser/ml/table_detector_model/best.onnx` 独立重跑页面索引 `979` 至 `D:\codes\PDFLayoutParser\.worktrees\fix-page-979-alignment-corridor\output\page_979_fixed_width_alignment_corridor_20260903\`；
     - 页面成功恢复出 `1` 张 `wireless_span_recovery` 表格，结构为 `24x8`、`177` 个 Cell、bbox=`[71.5, 90.9, 519.0, 756.6]`、置信度 `0.9807`；
     - `持股比例%` 在结构化结果中恢复为 `R0C5` 的 `rowspan=2, colspan=2` 父表头，下方 `直接/间接` 两个叶子列独立存在；其余首列表头保持 `rowspan=3`；
-    - 结构审计确认 `192/192` 个逻辑槽位全部唯一覆盖，`0` 缺失、`0` occupancy conflict、`0` 越界，空单元格共 `17` 个；`pages/page-979.json`、`pages/page-979.md` 与最终 `tables/page-979.png` 已生成，PNG 留待后续视觉复核。
+    - 结构审计确认 `192/192` 个逻辑槽位全部唯一覆盖，`0` 缺失、`0` occupancy conflict、`0` 越界，空单元格共 `17` 个；
+    - 独立视觉验收已通过：最终 `tables/page-979.png` 中仅有 `1` 张 Table 1（`wireless_span_recovery`，`24x8`），`注册资本` 与 `主要经营地` 之间的独立列界贯穿表头和正文，`持股比例%` 仅覆盖 `直接/间接` 两列，bbox 未吸收上方公司名、`财务报表附注`、年度说明、下划线或底部页码 `96`，正文换行与空值合理，且无网格重叠、断裂、相邻误并或文字越界；对应结构化结果 `pages/page-979.json`、`pages/page-979.md` 与 PNG 一致。
 
 - 修复 `fix/zh_all_table_pages.pdf` 页面索引 `969` 中文无线复合表头表格（Table 2“资产负债表中归属于母公司的其他综合收益”、Table 3“利润表中归属于母公司的其他综合收益”）漏检与结构列塌陷问题。
   - **根因与调用位置**：
