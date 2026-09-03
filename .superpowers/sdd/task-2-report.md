@@ -206,3 +206,58 @@ git diff --check
 
 - 真实 build 使用了主仓库下的绝对 `fix/` 与 `output/` 路径，因为这些 Git 忽略输入/输出目录在当前 worktree 中并不存在；脚本默认相对路径仍按“当前仓库根目录”解析。
 - `manifest.pages` 目前额外记录了 `testset_root` 字段，任务要求并未禁止，但它不是最小必需字段；若后续想进一步收紧 manifest，可考虑删除这一项。
+
+## 追加修复（Task 2 审查反馈）
+
+### RED 5：默认排除页必须精确命中 482，manifest 不保留环境字段
+
+根据审查反馈，新增两类回归测试后先运行：
+
+```powershell
+conda run -n base python scripts/markdown_golden_testset.py self-test
+```
+
+结果：
+
+- `test_build_testset_creates_manifest_and_labels` 失败：manifest 顶层仍包含 `testset_root` / `output_root`，每页记录仍包含 `testset_root`。
+- `test_build_testset_rejects_default_excluded_stem_on_wrong_page_index` 失败：默认排除 stem 唯一命中页 481 时未报错。
+
+说明：
+
+- 原实现只校验 `excluded_visual_stems` “恰好命中一页”，没有进一步约束默认排除 stem `part_004_pages_0458_0486_page_024` 必须映射到 `page_index=482`。
+- manifest 里保留了不必要的环境路径字段，不符合这轮收紧要求。
+
+### GREEN 3：补默认排除页号断言并删除冗余 manifest 字段
+
+最小修复后再次运行：
+
+```powershell
+conda run -n base python scripts/markdown_golden_testset.py self-test
+```
+
+结果：
+
+- `Ran 16 tests`
+- `OK`
+
+本轮修改：
+
+- 新增默认排除 stem 到预期页号的映射：`part_004_pages_0458_0486_page_024 -> 482`。
+- 对默认排除 stem 增加严格校验：唯一命中的页号若不是 482，直接抛 `ValueError`。
+- 保留自定义 `excluded_visual_stems` 的通用能力，仅对默认 stem 应用固定页号约束。
+- 删除 manifest 顶层的 `output_root`、`testset_root`。
+- 删除每页记录中的 `testset_root`。
+
+### 本轮验证
+
+命令：
+
+```powershell
+conda run -n base python scripts/markdown_golden_testset.py self-test
+git diff --check
+```
+
+结果：
+
+- self-test：16 个测试全部通过。
+- `git diff --check`：通过。

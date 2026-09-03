@@ -17,6 +17,7 @@ DEFAULT_INPUT_PDF = Path("fix/zh_all_table_pages.pdf")
 DEFAULT_OUTPUT_ROOT = Path("output/fix_zh_all_table_pages_rerun_20260903")
 DEFAULT_TESTSET_ROOT = DEFAULT_OUTPUT_ROOT / "testset_markdown"
 DEFAULT_EXCLUDED_VISUAL_STEMS = {"part_004_pages_0458_0486_page_024"}
+DEFAULT_EXCLUDED_PAGE_BY_STEM = {"part_004_pages_0458_0486_page_024": 482}
 DEFAULT_FAILED_PAGE_INDEXES = {408, 410}
 
 
@@ -205,6 +206,11 @@ def build_testset(
     for excluded_stem, matched_pages in sorted(excluded_matches.items()):
         if len(matched_pages) != 1:
             raise ValueError(f"excluded visual stem {excluded_stem} matched {len(matched_pages)} pages: {matched_pages}")
+        expected_page_index = DEFAULT_EXCLUDED_PAGE_BY_STEM.get(excluded_stem)
+        if expected_page_index is not None and matched_pages != [expected_page_index]:
+            raise ValueError(
+                f"default excluded visual stem {excluded_stem} expected page {expected_page_index}, got {matched_pages}"
+            )
 
     labels_dir = testset_root / "labels"
     if labels_dir.exists():
@@ -221,8 +227,6 @@ def build_testset(
         "input_pdf_posix": input_pdf.as_posix(),
         "page_count": page_count,
         "generated_at": generated_at,
-        "output_root": str(output_root),
-        "testset_root": str(testset_root),
         "excluded_visuals": excluded_visuals,
         "failed_pages": failed_pages,
         "pages": pages,
@@ -363,7 +367,6 @@ def _page_record(output_root: Path, testset_root: Path, page_output: dict) -> di
         "json_index": page_output["json_index"],
         "local_page_index": page_output["local_page_index"],
         "source_page_index": page_output["source_page_index"],
-        "testset_root": str(testset_root),
     }
 
 
@@ -654,9 +657,12 @@ class MarkdownGoldenTestsetTests(unittest.TestCase):
 
             manifest = json.loads((testset_root / "manifest.json").read_text(encoding="utf-8"))
             self.assertEqual(manifest["page_count"], 5)
+            self.assertNotIn("testset_root", manifest)
+            self.assertNotIn("output_root", manifest)
             self.assertEqual(manifest["excluded_visuals"][0]["page_index"], 3)
             self.assertEqual(manifest["failed_pages"][0]["page_index"], 4)
             self.assertEqual(manifest["pages"][1]["markdown_status"], "absent_expected")
+            self.assertNotIn("testset_root", manifest["pages"][0])
             self.assertEqual(
                 manifest["pages"][2]["source_visual_name"],
                 "part_000_pages_0000_0002__tables__part_000_pages_0000_0002_page_002.png",
@@ -751,6 +757,44 @@ class MarkdownGoldenTestsetTests(unittest.TestCase):
                     testset_root=testset_root,
                     excluded_visual_stems={"part_004_pages_0458_0486_page_024"},
                     failed_page_indexes=set(),
+                )
+
+    def test_build_testset_rejects_default_excluded_stem_on_wrong_page_index(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_pdf = root / "input.pdf"
+            output_root = root / "output"
+            testset_root = root / "testset_markdown"
+            pages_dir = output_root / "part_004_pages_0457_0485" / "pages"
+            tables_dir = output_root / "part_004_pages_0457_0485" / "tables"
+            visualized_dir = output_root / "visualized_images"
+
+            doc = fitz.open()
+            for _ in range(486):
+                doc.new_page()
+            doc.save(input_pdf)
+            doc.close()
+
+            pages_dir.mkdir(parents=True)
+            tables_dir.mkdir(parents=True)
+            visualized_dir.mkdir(parents=True)
+
+            (pages_dir / "part_004_pages_0458_0486_page_024.json").write_text(
+                json.dumps({"index": 24, "page_type": "vector"}), encoding="utf-8"
+            )
+            (pages_dir / "part_004_pages_0458_0486_page_024.md").write_text("wrong-page", encoding="utf-8")
+            (tables_dir / "part_004_pages_0458_0486_page_024.png").write_bytes(b"png")
+            (
+                visualized_dir
+                / "part_004_pages_0457_0485__tables__part_004_pages_0458_0486_page_024.png"
+            ).write_bytes(b"png")
+
+            with self.assertRaisesRegex(ValueError, "default excluded visual stem .* expected page 482, got \\[481\\]"):
+                build_testset(
+                    input_pdf=input_pdf,
+                    output_root=output_root,
+                    testset_root=testset_root,
+                    failed_page_indexes=set(range(486)) - {481},
                 )
 
 
