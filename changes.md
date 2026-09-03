@@ -2,12 +2,22 @@
 
 ## 2026-09-03
 
+- 修复 `fix/zh_all_table_pages.pdf` 页面索引 `968` 中文无线表格金额横向粘连及连锁导致“期末余额”整列丢失问题。
+  - **根因与调用位置**：在 `src/hexai_pdf_parser/tables/wireless_structure/span_chain.py` 的 `_split_packed_numeric_fields()` 中，负责将底层 PyMuPDF `rawdict` 返回的连续同字体纯数值 Span 拆分；原拆分阈值 `gap_limit = max(2.5, float(span.get("font_size") or 0) * 0.35)` 在 10.56pt 字号下为 3.696pt，而 Page 968 递延收益表（递延租金、合计行）中“452,516,878.89”与“1,573,970,660.26”、股本表数据行中“-”与“1,696,964,131.00”之间的实际字符多余间距为 3.352pt，因相差约 0.34pt 未能触发拆分。递延收益表中两个金额粘连为一个 Atom 被分配至期末余额列，导致本期减少列物化为空槽并在可视化上形成横向穿列粘连；股本表中数据行最右两列“-”与“1,696,964,131.00”粘连为单一跨列 Atom，在 `infer_column_bands()` 列带推断时导致表头“小计”与“期末余额”同时映射到同一列带，整表丢失第 8 列，表头“期末余额”被挤压为仅 1.7pt 高度的伪单元格。
+  - **修复判定与隔离约束**：将 `_split_packed_numeric_fields()` 中针对纯数值的拆分门槛收紧为正常的一半：`gap_limit = max(1.5, float(span.get("font_size") or 0) * 0.18)`。该函数被 `_PACKED_NUMERIC_FIELDS = re.compile(r"^[\s\d,().%+\-–—−]+$")` 严格保护，仅匹配 100% 纯数值和标点，任何含中文字符的 Span（如“未来 12 个月”、“50年”、“附注1”）在首行即被拦截原样返回，与下游 `text_runs.py` 中“文本内部带数字”（中西文混排放大合并）完全物理隔离，保证零回退。
+  - **测试与页面验证**：新增 `tests/test_packed_numeric_fields_split.py` 覆盖窄间距多金额正例、占位符加金额正例、无空格纯数字反例及 CJK 混排文本跳过反例（`4 passed`）；相关无线恢复、混排内嵌数字及可视化测试 `39 passed`（仅既有 5 条 PyMuPDF/SWIG 弃用警告）。Page 968 独立重跑到 `D:\codes\PDFLayoutParser\output\page_968_packed_numeric_split_20260903\`：递延收益表恢复为 `4x6`、24 个 Cell、24/24 槽位唯一覆盖，“本期减少”与“期末余额”正文数值独立分立且无空槽；股本表恢复为 `4x8`、17 个 Cell、32/32 槽位唯一覆盖，“期末余额”作为第 8 列独立多级表头完整恢复，数据行“-”与金额分立。最终 PNG 为 `tables\page-968.png`，视觉核验确认网格列线连续，两表列结构与文字框清晰无误。
+
 - 修复 `fix/zh_all_table_pages.pdf` 页面索引 `336` 的有线候选误报：根因是 `WiredTableExtractor._extract_lines_from_drawings()` 将 `type="f"`、无描边的非窄填充路径中的正交 `l` 轮廓直接当作 stroked line，复杂 logo 路径因此形成 4 个空的 `line_projection` 表。现在仅在逐项消费 `l` 时拒绝 `type="f"` 填充路径边界；已有窄填充路径中心线特例仍先行保留，`re` 细线、`s/fs` 可见描边 `l` 线和图像 tile 线均保持原逻辑。修复位于 `src/hexai_pdf_parser/tables/extractors/wired_table_extractor.py`，不修改无线 native-span、上层过滤或 page words 调用。
   - **测试与页面验证**：新增反例 `test_extract_lines_ignores_non_narrow_filled_path_outline` 由 RED 转为 GREEN；`tests/test_wired_table_extractor.py` 为 `22 passed`，`tests/test_table_extractor.py` 为 `86 passed`，均仅有既有 5 条 PyMuPDF/SWIG 弃用警告。页面索引 `336` 独立重跑至 `D:\codes\PDFLayoutParser\output\fix_zh_all_table_pages_page_336_fill_only_path_semantics_20260903\`，结构化结果为 0 个表格；最终 PNG 为 `tables\page-336.png`，视觉核验确认没有表格网格叠加。
   - **本轮审查覆盖命令与实际结果**：
     - `$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; & 'C:\Users\23662\AppData\Local\Programs\Python\Python312\Scripts\pytest.exe' -q tests/test_wired_table_extractor.py -k 'test_extract_lines_ignores_non_narrow_filled_path_outline or test_extract_lines_keeps_re_rule_in_non_narrow_fill_path'` → `2 passed, 21 deselected, 5 warnings`。
     - `$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; & 'C:\Users\23662\AppData\Local\Programs\Python\Python312\Scripts\pytest.exe' -q tests/test_wired_table_extractor.py` → `23 passed, 5 warnings`。
     - `$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; & 'C:\Users\23662\AppData\Local\Programs\Python\Python312\Scripts\pytest.exe' -q tests/test_table_extractor.py` → `86 passed, 5 warnings`。
+
+- 修复 `fix/zh_all_table_pages.pdf` 页面索引 `916` 有线/无线混合主体因同槽位多字续写冲突而回退为大 Cell 的问题。根因是首列文本“以摊余成本计量的金融资产终止确”与下一原生输出片段“认收益（损失以“-”号填列）”的 `flow` 连续、列归属相同，但行聚类被同排数值占位符桥接到同一物理行；原有冲突兜底只接受单字 CJK，左移多字续写又因没有水平交集和右侧空白见证而被拒绝。
+  - **修复判定与调用位置**：在 `src/hexai_pdf_parser/tables/wireless_structure/merged_cells.py` 增加同一物理槽位的 native continuation 判定，要求来源位置已知、同一 native block、source line 连续、CJK 文本、下方左移且首段具有实体长度；`resolve_exact_slot_conflicts()` 通过后用换行合并，并复用 `hybrid_body.py` 既有逻辑重新执行一次 `build_grid()`。后续 `merge_multiline_cells()` 保持同一判定，避免未经过冲突兜底的调用丢失该形态。
+  - **结构约束**：仍按 native span、atom、列带、物理 Cell、逻辑 Cell 和空槽位物化处理，不回读 `page.get_text("words")`，不进入 zebra 或 legacy 文本重建；独立同槽位多字字段、编号/纯数值片段继续拒绝合并。
+  - **测试与页面验证**：新增 page-916 形态正例、同行 peer 列反例及 hybrid 二次 `build_grid()` 集成测试；无线/混合结构专项为 `55 passed`，合并相关扩展集为 `48 passed`。入口相关集合为 `117 passed, 1 failed`，唯一失败来自工作区已有未提交测试 `test_hybrid_wired_table_replaces_full_rowspan_body_before_shifting_footer`，本次未修改其对应入口代码。页面独立重跑至 `D:\codes\PDFLayoutParser\output\fix_zh_all_table_pages_page916_same_slot_continuation_20260903_final\`，最终表格为 `hybrid_line_span_recovery`、`54x6`、320 个 Cell，逻辑槽位 `324/324` 唯一覆盖；结构化结果为 `pages\page-916.json`，可视化为 `tables\page-916.png`。
 
 ## 2026-09-02
 
