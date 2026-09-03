@@ -70,3 +70,35 @@ def test_packed_numeric_field_ignores_cjk_embedded_numbers():
     fragments = _split_packed_numeric_fields(span)
     assert len(fragments) == 1
     assert fragments[0]["text"] == "未来12个月"
+
+
+def test_split_placeholder_and_amount_space_dominates_gap():
+    # 模拟 Page 464 合计行：'-- 74,956,072.71'
+    # '-' 右沿 405.79，' ' 405.79~408.20 (宽 2.41pt)，'7' 左沿 408.91 (残差间隙仅 0.71pt < gap_limit 1.90pt，但总跨度 3.12pt >= 1.90pt)
+    specs = [
+        ("-", 400.03, 402.91),
+        ("-", 402.91, 405.79),
+        (" ", 405.79, 408.20),
+        ("7", 408.91, 413.73),
+        ("4", 413.71, 418.53),
+    ]
+    span = _make_span("-- 74", specs, font_size=10.56)
+    fragments = _split_packed_numeric_fields(span)
+    assert len(fragments) == 2
+    assert fragments[0]["text"] == "--"
+    assert fragments[1]["text"] == "74"
+
+
+def test_tight_space_below_threshold_does_not_split():
+    # 反例：字符总间距小于 gap_limit (1.5pt) 时坚决不拆分
+    specs = [
+        ("1", 10.0, 15.0),
+        (" ", 15.0, 15.8),
+        ("2", 16.0, 21.0),
+    ]
+    # 总间隙 16.0 - 15.0 = 1.0pt < 1.5pt
+    span = _make_span("1 2", specs, font_size=5.0)
+    fragments = _split_packed_numeric_fields(span)
+    assert len(fragments) == 1
+    assert fragments[0]["text"] == "1 2"
+
