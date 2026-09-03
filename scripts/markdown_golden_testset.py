@@ -16,6 +16,7 @@ import fitz
 DEFAULT_INPUT_PDF = Path("fix/zh_all_table_pages.pdf")
 DEFAULT_OUTPUT_ROOT = Path("output/fix_zh_all_table_pages_rerun_20260903")
 DEFAULT_TESTSET_ROOT = DEFAULT_OUTPUT_ROOT / "testset_markdown"
+DEFAULT_DIFF_ROOT = DEFAULT_TESTSET_ROOT / "diffs"
 DEFAULT_EXCLUDED_VISUAL_STEMS = {"part_004_pages_0458_0486_page_024"}
 DEFAULT_EXCLUDED_PAGE_BY_STEM = {"part_004_pages_0458_0486_page_024": 482}
 DEFAULT_FAILED_PAGE_INDEXES = {408, 410}
@@ -263,6 +264,105 @@ def build_testset(
     }
 
 
+def compare_testset(testset_root: Path, actual_root: Path, diff_root: Path) -> int:
+    testset_root = Path(testset_root).resolve()
+    actual_root = Path(actual_root).resolve()
+    diff_root = Path(diff_root).resolve()
+
+    _reset_directory(diff_root)
+
+    try:
+        manifest = _load_manifest(testset_root)
+    except Exception as exc:
+        _write_status_diff(diff_root / "manifest.diff.md", f"manifest validation failed: {exc}")
+        print(f"manifest validation failed: {exc}")
+        return 1
+
+    try:
+        actual_pages = scan_page_outputs(actual_root)
+    except Exception as exc:
+        _write_status_diff(diff_root / "scan_error.diff.md", f"actual output scan failed: {exc}")
+        print(f"actual output scan failed: {exc}")
+        return 1
+
+    manifest_pages = {page["page_index"]: page for page in manifest["pages"]}
+    failed_page_indexes = {page["page_index"] for page in manifest["failed_pages"]}
+    recorded_indexes = set(manifest_pages) | failed_page_indexes
+
+    passed_pages = 0
+    failed_pages = 0
+    missing_pages = 0
+    extra_pages = 0
+
+    for page_index in sorted(actual_pages):
+        if page_index not in recorded_indexes:
+            extra_pages += 1
+            failed_pages += 1
+            _write_status_diff(
+                diff_root / f"page-{page_index:03d}.diff.md",
+                f"extra actual page {page_index} is not recorded in manifest",
+            )
+
+    for page_index in sorted(manifest_pages):
+        page_record = manifest_pages[page_index]
+        status = page_record["markdown_status"]
+        actual_page = actual_pages.get(page_index)
+
+        if status == "markdown":
+            if actual_page is None:
+                missing_pages += 1
+                failed_pages += 1
+                _write_status_diff(diff_root / f"page-{page_index:03d}.diff.md", f"missing actual output for page {page_index}")
+                continue
+            if actual_page["markdown_path"] is None:
+                failed_pages += 1
+                _write_status_diff(
+                    diff_root / f"page-{page_index:03d}.diff.md",
+                    f"expected Markdown for page {page_index}, but actual output has no Markdown",
+                )
+                continue
+
+            label_path = testset_root / page_record["label_path"]
+            expected = normalize_markdown(label_path.read_text(encoding="utf-8"))
+            actual_text = actual_page["markdown_path"].read_text(encoding="utf-8")
+            actual = normalize_markdown(actual_text)
+            if expected != actual:
+                failed_pages += 1
+                write_diff(expected, actual, diff_root / f"page-{page_index:03d}.diff.md")
+                (diff_root / f"page-{page_index:03d}.actual.md").write_text(actual_text, encoding="utf-8")
+                continue
+            passed_pages += 1
+            continue
+
+        if status == "absent_expected":
+            if actual_page is None:
+                missing_pages += 1
+                failed_pages += 1
+                _write_status_diff(diff_root / f"page-{page_index:03d}.diff.md", f"missing actual output for page {page_index}")
+                continue
+            if actual_page["markdown_path"] is not None:
+                failed_pages += 1
+                _write_status_diff(
+                    diff_root / f"page-{page_index:03d}.diff.md",
+                    f"expected absent Markdown for page {page_index}, but actual Markdown exists",
+                )
+                continue
+            passed_pages += 1
+            continue
+
+        if status == "excluded":
+            passed_pages += 1
+            continue
+
+        failed_pages += 1
+        _write_status_diff(diff_root / f"page-{page_index:03d}.diff.md", f"unknown markdown_status for page {page_index}: {status}")
+
+    print(
+        f"compare summary: passed={passed_pages} failed={failed_pages} missing={missing_pages} extra={extra_pages} diff_root={diff_root}"
+    )
+    return 0 if failed_pages == 0 and missing_pages == 0 and extra_pages == 0 else 1
+
+
 def source_page_index(path: Path, local_page_index: int) -> int:
     path = Path(path)
     local_page_index = int(local_page_index)
@@ -420,7 +520,12 @@ def _build_readme(
         "",
         "## 比较命令",
         "",
-        "后续补充 compare 子命令后，在这里替换为实际比较命令。",
+        "```powershell",
+        "conda run -n base python scripts/markdown_golden_testset.py compare \\",
+        f"  --testset-root {testset_root} \\",
+        f"  --actual-root {output_root} \\",
+        f"  --diff-root {testset_root / 'diffs'}",
+        "```",
         "",
         "## 当前实际数量",
         "",
@@ -450,6 +555,81 @@ def _build_readme(
         "",
     ]
     return "\n".join(lines)
+
+
+def _reset_directory(path: Path) -> None:
+    if path.exists():
+        shutil.rmtree(path)
+    path.mkdir(parents=True, exist_ok=True)
+
+
+def _load_manifest(testset_root: Path) -> dict:
+    manifest_path = testset_root / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if manifest.get("schema_version") != 1:
+        raise ValueError(f"{manifest_path}: schema_version must be 1")
+
+    pages = manifest.get("pages")
+    failed_pages = manifest.get("failed_pages")
+    if not isinstance(pages, list) or not isinstance(failed_pages, list):
+        raise ValueError(f"{manifest_path}: pages and failed_pages must be lists")
+
+    seen_indexes: set[int] = set()
+    for page in pages:
+        page_index = page.get("page_index")
+        if page_index in seen_indexes:
+            raise ValueError(f"{manifest_path}: duplicate page_index {page_index} in pages")
+        seen_indexes.add(page_index)
+        label_path = page.get("label_path")
+        if page.get("markdown_status") == "markdown":
+            if not label_path:
+                raise ValueError(f"{manifest_path}: page {page_index} missing label_path")
+            resolved = (testset_root / label_path).resolve()
+            if testset_root not in resolved.parents:
+                raise ValueError(f"{manifest_path}: page {page_index} label_path escapes testset_root")
+            if not resolved.exists():
+                raise ValueError(f"{manifest_path}: page {page_index} label_path does not exist: {resolved}")
+
+    failed_seen: set[int] = set()
+    for page in failed_pages:
+        page_index = page.get("page_index")
+        if page_index in failed_seen or page_index in seen_indexes:
+            raise ValueError(f"{manifest_path}: duplicate page_index {page_index} across manifest records")
+        failed_seen.add(page_index)
+
+    return manifest
+
+
+def _write_status_diff(path: Path, message: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f"# Compare Failure\n\n{message}\n", encoding="utf-8")
+
+
+def _write_test_page(
+    output_root: Path,
+    container_name: str,
+    local_page_index: int,
+    page_type: str,
+    markdown_text: str | None,
+    extra_json: dict | None = None,
+) -> Path:
+    container_dir = output_root / container_name
+    pages_dir = container_dir / "pages"
+    tables_dir = container_dir / "tables"
+    visualized_dir = output_root / "visualized_images"
+    pages_dir.mkdir(parents=True, exist_ok=True)
+    tables_dir.mkdir(parents=True, exist_ok=True)
+    visualized_dir.mkdir(parents=True, exist_ok=True)
+    stem = f"{container_name}_page_{local_page_index:03d}"
+    page_json = {"index": local_page_index, "page_type": page_type}
+    if extra_json:
+        page_json.update(extra_json)
+    (pages_dir / f"{stem}.json").write_text(json.dumps(page_json), encoding="utf-8")
+    if markdown_text is not None:
+        (pages_dir / f"{stem}.md").write_text(markdown_text, encoding="utf-8")
+    (tables_dir / f"{stem}.png").write_bytes(b"png")
+    (visualized_dir / f"{container_name}__tables__{stem}.png").write_bytes(b"png")
+    return container_dir
 
 
 class MarkdownGoldenTestsetTests(unittest.TestCase):
@@ -797,6 +977,278 @@ class MarkdownGoldenTestsetTests(unittest.TestCase):
                     failed_page_indexes=set(range(486)) - {481},
                 )
 
+    def test_compare_testset_passes_for_matching_outputs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            testset_root = root / "testset_markdown"
+            actual_root = root / "actual"
+            diff_root = testset_root / "diffs"
+            (diff_root / "stale.txt").parent.mkdir(parents=True, exist_ok=True)
+            (diff_root / "stale.txt").write_text("stale", encoding="utf-8")
+
+            labels_dir = testset_root / "labels"
+            labels_dir.mkdir(parents=True)
+            (labels_dir / "page-000.md").write_text("Hello\n\n<table>\n<tr><td>A</td><td></td></tr>\n</table>\n", encoding="utf-8")
+            manifest = {
+                "schema_version": 1,
+                "input_pdf": str(root / "input.pdf"),
+                "input_pdf_posix": (root / "input.pdf").as_posix(),
+                "page_count": 4,
+                "generated_at": "2026-09-03T00:00:00+08:00",
+                "excluded_visuals": [],
+                "failed_pages": [{"page_index": 3, "markdown_status": "failed_no_output"}],
+                "pages": [
+                    {
+                        "page_index": 0,
+                        "markdown_status": "markdown",
+                        "label_path": "labels/page-000.md",
+                        "source_json": "x.json",
+                        "source_markdown": "x.md",
+                        "source_table_png": "x.png",
+                        "source_visual_name": None,
+                        "source_visual_path": None,
+                        "json_index": 0,
+                        "local_page_index": 0,
+                        "source_page_index": 0,
+                    },
+                    {
+                        "page_index": 1,
+                        "markdown_status": "absent_expected",
+                        "label_path": None,
+                        "source_json": "y.json",
+                        "source_markdown": None,
+                        "source_table_png": "y.png",
+                        "source_visual_name": None,
+                        "source_visual_path": None,
+                        "json_index": 1,
+                        "local_page_index": 1,
+                        "source_page_index": 1,
+                    },
+                    {
+                        "page_index": 2,
+                        "markdown_status": "excluded",
+                        "label_path": None,
+                        "source_json": "z.json",
+                        "source_markdown": "z.md",
+                        "source_table_png": "z.png",
+                        "source_visual_name": None,
+                        "source_visual_path": None,
+                        "json_index": 2,
+                        "local_page_index": 2,
+                        "source_page_index": 2,
+                    },
+                ],
+            }
+            (testset_root / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+
+            _write_test_page(actual_root, "part_000_pages_0000_0002", 0, "vector", "Hello\n\n![img](C:/tmp/x.png)\n\n<table>\n<tr><td>A</td><td></td></tr>\n</table>\n")
+            _write_test_page(actual_root, "part_000_pages_0000_0002", 1, "scanned", None)
+            _write_test_page(actual_root, "part_000_pages_0000_0002", 2, "vector", "ignored")
+
+            self.assertEqual(compare_testset(testset_root, actual_root, diff_root), 0)
+            self.assertFalse((diff_root / "stale.txt").exists())
+            self.assertEqual(sorted(diff_root.iterdir()), [])
+
+    def test_compare_testset_writes_diff_and_actual_copy_for_markdown_change(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            testset_root = root / "testset_markdown"
+            actual_root = root / "actual"
+            diff_root = testset_root / "diffs"
+            labels_dir = testset_root / "labels"
+            labels_dir.mkdir(parents=True)
+            (labels_dir / "page-000.md").write_text("<table>\n<tr><td>A</td><td></td></tr>\n</table>\n", encoding="utf-8")
+            manifest = {
+                "schema_version": 1,
+                "input_pdf": str(root / "input.pdf"),
+                "input_pdf_posix": (root / "input.pdf").as_posix(),
+                "page_count": 1,
+                "generated_at": "2026-09-03T00:00:00+08:00",
+                "excluded_visuals": [],
+                "failed_pages": [],
+                "pages": [
+                    {
+                        "page_index": 0,
+                        "markdown_status": "markdown",
+                        "label_path": "labels/page-000.md",
+                        "source_json": "x.json",
+                        "source_markdown": "x.md",
+                        "source_table_png": "x.png",
+                        "source_visual_name": None,
+                        "source_visual_path": None,
+                        "json_index": 0,
+                        "local_page_index": 0,
+                        "source_page_index": 0,
+                    }
+                ],
+            }
+            (testset_root / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+            _write_test_page(actual_root, "part_000_pages_0000_0000", 0, "vector", "<table>\n<tr><td>__TEST_DIFF__</td><td colspan=\"2\"></td></tr>\n</table>\n")
+
+            self.assertEqual(compare_testset(testset_root, actual_root, diff_root), 1)
+            self.assertTrue((diff_root / "page-000.diff.md").exists())
+            self.assertTrue((diff_root / "page-000.actual.md").exists())
+            self.assertIn("__TEST_DIFF__", (diff_root / "page-000.actual.md").read_text(encoding="utf-8"))
+
+    def test_compare_testset_writes_diff_for_rowspan_change(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            testset_root = root / "testset_markdown"
+            actual_root = root / "actual"
+            diff_root = testset_root / "diffs"
+            labels_dir = testset_root / "labels"
+            labels_dir.mkdir(parents=True)
+            (labels_dir / "page-000.md").write_text("<table>\n<tr><td rowspan=\"2\">A</td></tr>\n</table>\n", encoding="utf-8")
+            manifest = {
+                "schema_version": 1,
+                "input_pdf": str(root / "input.pdf"),
+                "input_pdf_posix": (root / "input.pdf").as_posix(),
+                "page_count": 1,
+                "generated_at": "2026-09-03T00:00:00+08:00",
+                "excluded_visuals": [],
+                "failed_pages": [],
+                "pages": [
+                    {
+                        "page_index": 0,
+                        "markdown_status": "markdown",
+                        "label_path": "labels/page-000.md",
+                        "source_json": "x.json",
+                        "source_markdown": "x.md",
+                        "source_table_png": "x.png",
+                        "source_visual_name": None,
+                        "source_visual_path": None,
+                        "json_index": 0,
+                        "local_page_index": 0,
+                        "source_page_index": 0,
+                    }
+                ],
+            }
+            (testset_root / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+            _write_test_page(actual_root, "part_000_pages_0000_0000", 0, "vector", "<table>\n<tr><td>A</td></tr>\n</table>\n")
+
+            self.assertEqual(compare_testset(testset_root, actual_root, diff_root), 1)
+            self.assertTrue((diff_root / "page-000.diff.md").exists())
+
+    def test_compare_testset_ignores_image_paths_and_json_bbox_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            testset_root = root / "testset_markdown"
+            actual_root = root / "actual"
+            diff_root = testset_root / "diffs"
+            labels_dir = testset_root / "labels"
+            labels_dir.mkdir(parents=True)
+            (labels_dir / "page-000.md").write_text("Hello\n\n![old](C:/a.png)\n\n<table>\n<tr><td>A</td></tr>\n</table>\n", encoding="utf-8")
+            manifest = {
+                "schema_version": 1,
+                "input_pdf": str(root / "input.pdf"),
+                "input_pdf_posix": (root / "input.pdf").as_posix(),
+                "page_count": 1,
+                "generated_at": "2026-09-03T00:00:00+08:00",
+                "excluded_visuals": [],
+                "failed_pages": [],
+                "pages": [
+                    {
+                        "page_index": 0,
+                        "markdown_status": "markdown",
+                        "label_path": "labels/page-000.md",
+                        "source_json": "x.json",
+                        "source_markdown": "x.md",
+                        "source_table_png": "x.png",
+                        "source_visual_name": None,
+                        "source_visual_path": None,
+                        "json_index": 0,
+                        "local_page_index": 0,
+                        "source_page_index": 0,
+                    }
+                ],
+            }
+            (testset_root / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+            _write_test_page(
+                actual_root,
+                "part_000_pages_0000_0000",
+                0,
+                "vector",
+                "Hello\n\n![new](D:/b.png)\n\n<table>\n<tr><td>A</td></tr>\n</table>\n",
+                extra_json={"bbox": [1, 2, 3, 4], "render_path": "D:/elsewhere/page.png"},
+            )
+
+            self.assertTrue(
+                (actual_root / "visualized_images" / "part_000_pages_0000_0000__tables__part_000_pages_0000_0000_page_000.png").exists()
+            )
+            self.assertEqual(compare_testset(testset_root, actual_root, diff_root), 0)
+
+    def test_compare_testset_fails_for_missing_extra_and_absent_expected_markdown(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            testset_root = root / "testset_markdown"
+            actual_root = root / "actual"
+            diff_root = testset_root / "diffs"
+            labels_dir = testset_root / "labels"
+            labels_dir.mkdir(parents=True)
+            (labels_dir / "page-000.md").write_text("keep", encoding="utf-8")
+            manifest = {
+                "schema_version": 1,
+                "input_pdf": str(root / "input.pdf"),
+                "input_pdf_posix": (root / "input.pdf").as_posix(),
+                "page_count": 5,
+                "generated_at": "2026-09-03T00:00:00+08:00",
+                "excluded_visuals": [],
+                "failed_pages": [{"page_index": 4, "markdown_status": "failed_no_output"}],
+                "pages": [
+                    {
+                        "page_index": 0,
+                        "markdown_status": "markdown",
+                        "label_path": "labels/page-000.md",
+                        "source_json": "x.json",
+                        "source_markdown": "x.md",
+                        "source_table_png": "x.png",
+                        "source_visual_name": None,
+                        "source_visual_path": None,
+                        "json_index": 0,
+                        "local_page_index": 0,
+                        "source_page_index": 0,
+                    },
+                    {
+                        "page_index": 1,
+                        "markdown_status": "absent_expected",
+                        "label_path": None,
+                        "source_json": "y.json",
+                        "source_markdown": None,
+                        "source_table_png": "y.png",
+                        "source_visual_name": None,
+                        "source_visual_path": None,
+                        "json_index": 1,
+                        "local_page_index": 1,
+                        "source_page_index": 1,
+                    },
+                    {
+                        "page_index": 3,
+                        "markdown_status": "excluded",
+                        "label_path": None,
+                        "source_json": "z.json",
+                        "source_markdown": "z.md",
+                        "source_table_png": "z.png",
+                        "source_visual_name": None,
+                        "source_visual_path": None,
+                        "json_index": 0,
+                        "local_page_index": 0,
+                        "source_page_index": 3,
+                    },
+                ],
+            }
+            (testset_root / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+            _write_test_page(actual_root, "part_000_pages_0000_0001", 1, "scanned", "__unexpected__")
+            _write_test_page(actual_root, "part_001_pages_0003_0004", 0, "vector", "excluded present")
+            _write_test_page(actual_root, "part_002_pages_0002_0002", 0, "vector", "extra page")
+
+            self.assertEqual(compare_testset(testset_root, actual_root, diff_root), 1)
+            self.assertTrue((diff_root / "page-000.diff.md").exists())
+            self.assertTrue((diff_root / "page-001.diff.md").exists())
+            self.assertTrue((diff_root / "page-002.diff.md").exists())
+            self.assertIn("missing actual output", (diff_root / "page-000.diff.md").read_text(encoding="utf-8"))
+            self.assertIn("expected absent Markdown", (diff_root / "page-001.diff.md").read_text(encoding="utf-8"))
+            self.assertIn("extra actual page", (diff_root / "page-002.diff.md").read_text(encoding="utf-8"))
+
 
 def _run_self_test() -> int:
     suite = unittest.defaultTestLoader.loadTestsFromTestCase(MarkdownGoldenTestsetTests)
@@ -810,6 +1262,8 @@ def main() -> int:
     parser.add_argument("--pdf", type=Path)
     parser.add_argument("--output-root", type=Path)
     parser.add_argument("--testset-root", type=Path)
+    parser.add_argument("--actual-root", type=Path)
+    parser.add_argument("--diff-root", type=Path)
     args = parser.parse_args()
 
     if args.command == "self-test":
@@ -823,6 +1277,13 @@ def main() -> int:
         )
         print(json.dumps({key: _stringify_path(value) if isinstance(value, Path) else value for key, value in result.items()}, ensure_ascii=False, indent=2))
         return 0
+    if args.command == "compare":
+        repo_root = Path(__file__).resolve().parents[1]
+        return compare_testset(
+            testset_root=repo_root / (args.testset_root or DEFAULT_TESTSET_ROOT),
+            actual_root=repo_root / (args.actual_root or DEFAULT_OUTPUT_ROOT),
+            diff_root=repo_root / (args.diff_root or DEFAULT_DIFF_ROOT),
+        )
     raise SystemExit(f"unknown command: {args.command}")
 
 
