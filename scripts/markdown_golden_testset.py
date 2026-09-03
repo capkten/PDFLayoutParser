@@ -154,6 +154,10 @@ class MarkdownGoldenTestsetTests(unittest.TestCase):
     def test_source_page_index_from_page_directory(self) -> None:
         self.assertEqual(source_page_index(Path("page_0405/pages/file_page_000.json"), 0), 405)
 
+    def test_source_page_index_rejects_local_index_out_of_range(self) -> None:
+        with self.assertRaisesRegex(ValueError, "out of range"):
+            source_page_index(Path("page_0405/pages/file_page_001.json"), 1)
+
     def test_source_page_index_from_zero_based_range(self) -> None:
         self.assertEqual(
             source_page_index(Path("part_000_pages_0000_0170/pages/file_page_000.json"), 0),
@@ -188,6 +192,61 @@ class MarkdownGoldenTestsetTests(unittest.TestCase):
             self.assertEqual(result[482]["json_path"], json_path)
             self.assertEqual(result[482]["markdown_path"], pages_dir / "file_page_024.md")
             self.assertEqual(result[482]["visual_path"], tables_dir / "file_page_024.png")
+
+    def test_scan_page_outputs_rejects_conflicting_same_source_page(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first_pages = root / "page_0405" / "pages"
+            first_tables = root / "page_0405" / "tables"
+            second_pages = root / "part_000_pages_0405_0405" / "pages"
+            second_tables = root / "part_000_pages_0405_0405" / "tables"
+            first_pages.mkdir(parents=True)
+            first_tables.mkdir(parents=True)
+            second_pages.mkdir(parents=True)
+            second_tables.mkdir(parents=True)
+
+            first_json = first_pages / "file_page_000.json"
+            first_json.write_text(json.dumps({"index": 0, "page_type": "vector"}), encoding="utf-8")
+            (first_pages / "file_page_000.md").write_text("first", encoding="utf-8")
+            (first_tables / "file_page_000.png").write_bytes(b"png")
+
+            second_json = second_pages / "file_page_000.json"
+            second_json.write_text(json.dumps({"index": 0, "page_type": "vector"}), encoding="utf-8")
+            (second_pages / "file_page_000.md").write_text("second", encoding="utf-8")
+            (second_tables / "file_page_000.png").write_bytes(b"png")
+
+            with self.assertRaisesRegex(ValueError, "conflicting outputs for page 405"):
+                scan_page_outputs(root)
+
+    def test_scan_page_outputs_rejects_missing_markdown(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            pages_dir = root / "part_000_pages_0000_0170" / "pages"
+            tables_dir = root / "part_000_pages_0000_0170" / "tables"
+            pages_dir.mkdir(parents=True)
+            tables_dir.mkdir(parents=True)
+
+            json_path = pages_dir / "file_page_000.json"
+            json_path.write_text(json.dumps({"index": 0, "page_type": "vector"}), encoding="utf-8")
+            (tables_dir / "file_page_000.png").write_bytes(b"png")
+
+            with self.assertRaisesRegex(ValueError, "missing Markdown companion"):
+                scan_page_outputs(root)
+
+    def test_scan_page_outputs_rejects_missing_png(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            pages_dir = root / "part_000_pages_0000_0170" / "pages"
+            tables_dir = root / "part_000_pages_0000_0170" / "tables"
+            pages_dir.mkdir(parents=True)
+            tables_dir.mkdir(parents=True)
+
+            json_path = pages_dir / "file_page_000.json"
+            json_path.write_text(json.dumps({"index": 0, "page_type": "vector"}), encoding="utf-8")
+            (pages_dir / "file_page_000.md").write_text("hello", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "missing table visualization"):
+                scan_page_outputs(root)
 
     def test_write_diff_emits_unified_diff(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

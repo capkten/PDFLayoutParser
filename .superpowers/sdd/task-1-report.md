@@ -84,3 +84,63 @@ conda run -n base python scripts/markdown_golden_testset.py self-test
 ## 提交
 
 - `bd273cf` - `fix: add markdown golden testset helpers`
+
+## Task 1 审查修复补充
+
+日期：2026-09-03
+
+### 目标
+
+补上审查反馈要求的真实行为回归测试，只在 `D:\codes\PDFLayoutParser\.worktrees\markdown-golden-testset` 内修改 `scripts/markdown_golden_testset.py` 和本报告，不改 PDF 解析主流程。
+
+### 变更文件
+
+- `scripts/markdown_golden_testset.py`
+- `.superpowers/sdd/task-1-report.md`
+
+### 测试前失败
+
+- 这次补测前先跑了现有自测：
+
+```powershell
+conda run -n base python scripts/markdown_golden_testset.py self-test
+```
+
+- 结果为 `10` 个测试全部通过，说明审查指出的边界在当前实现里已经满足。
+- 因此这次没有出现“先红后绿”的生产代码失败，也没有改动生产逻辑。
+
+### 新增回归测试
+
+- `test_source_page_index_rejects_local_index_out_of_range`
+  - 固定 `Path("page_0405/pages/file_page_001.json"), 1`，确认必须抛 `ValueError`
+- `test_scan_page_outputs_rejects_conflicting_same_source_page`
+  - 用两个不同来源目录但同一原始页索引 `405` 的输出，确认冲突抛 `ValueError`
+- `test_scan_page_outputs_rejects_missing_markdown`
+  - 当前 Task1 扫描契约下，缺 Markdown 必须抛 `ValueError`
+- `test_scan_page_outputs_rejects_missing_png`
+  - 当前 Task1 扫描契约下，缺 PNG 必须抛 `ValueError`
+
+### 修复后结果
+
+再次运行：
+
+```powershell
+conda run -n base python scripts/markdown_golden_testset.py self-test
+git diff --check
+```
+
+结果：
+
+- `10` 个自测全部通过
+- `git diff --check` 通过
+- 未修改生产代码，只补了回归测试
+
+### 自审
+
+- `source_page_index` 的越界测试覆盖了审查者担心的 `page_0405` 场景，确认现有实现已经会抛 `ValueError`
+- `scan_page_outputs` 的冲突、缺 Markdown、缺 PNG 三个边界都被真实文件结构驱动，不依赖 mock
+- 没有碰其他 agent 的改动，也没有回退既有提交
+
+### 提交
+
+- 待生成
