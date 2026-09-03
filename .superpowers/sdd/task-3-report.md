@@ -255,3 +255,105 @@ compare summary: passed=1021 failed=0 missing=0 extra=0 diff_root=D:\codes\PDFLa
 
 - `compare summary` 当前会把 `excluded` 也计入 `passed`，这对返回码没有影响，但“通过页数”语义更接近“已处理且未失败的记录页数”，不是“实际比较了 Markdown 的页数”。
 - 正式 build / compare 仍依赖主仓库下被 Git 忽略的 `fix/` 和 `output/` 绝对路径，因为当前 worktree 内没有同名输入输出目录。
+
+## 追加修复（Final Review）
+
+### RED 4：manifest 严格校验与 diff_root 安全门
+
+根据 final review，新增以下失败测试后先运行：
+
+```powershell
+conda run -n base python scripts/markdown_golden_testset.py self-test
+```
+
+新增覆盖：
+
+- Manifest `pages` 的 `markdown_status` 只能是 `markdown / absent_expected / excluded`
+- `failed_pages` 每条必须是 `failed_no_output`
+- `page_index` 必须是合法整数且位于 `0..page_count-1`
+- `pages` 与 `failed_pages` 合起来必须完整覆盖 `0..page_count-1`
+- 非 `markdown` 页不允许设置 `label_path`
+- 外部 `diff_root` 必须被拒绝，且不能清理 sentinel
+
+首次结果：
+
+- 新增 manifest 校验测试失败；
+- 外部 `diff_root` sentinel 被提前清掉；
+- 说明原实现先清空任意 `diff_root`，且 `_load_manifest()` 只做了最少校验。
+
+### GREEN 3：补严格校验与安全清理
+
+最小修复后再次运行：
+
+```powershell
+conda run -n base python scripts/markdown_golden_testset.py self-test
+```
+
+结果：
+
+- `Ran 25 tests`
+- `OK`
+
+本轮修改：
+
+- 新增 `VALID_MARKDOWN_STATUSES`
+- `_load_manifest()` 现在校验：
+  - `page_count` 必须是非负整数
+  - `pages.markdown_status` 只能是 `markdown / absent_expected / excluded`
+  - `failed_pages.markdown_status` 必须是 `failed_no_output`
+  - 所有 `page_index` 必须为整数且在范围内
+  - `pages` 与 `failed_pages` 不允许重复
+  - Manifest 记录页集合必须完整覆盖 `0..page_count-1`
+  - `markdown` 页必须有位于 `testset_root` 内且存在的 `label_path`
+  - 其他状态的 `label_path` 必须为 `None` 或空
+- `compare_testset()` 在清理前先校验 `diff_root`
+  - 仅允许 `testset_root` 或 `actual_root` 的严格后代目录
+  - 若 `diff_root` 等于根目录或在根目录外，直接返回非 0
+  - 拒绝时不会清理外部目录内容
+- compare summary 改成 `passed / skipped / failed / missing / extra`
+  - `excluded` 不再计入 `passed`
+
+### 本轮正式验证
+
+命令：
+
+```powershell
+conda run -n base python scripts/markdown_golden_testset.py self-test
+conda run -n base python scripts/markdown_golden_testset.py build --pdf D:/codes/PDFLayoutParser/fix/zh_all_table_pages.pdf --output-root D:/codes/PDFLayoutParser/output/fix_zh_all_table_pages_rerun_20260903 --testset-root D:/codes/PDFLayoutParser/output/fix_zh_all_table_pages_rerun_20260903/testset_markdown
+conda run -n base python scripts/markdown_golden_testset.py compare --testset-root D:/codes/PDFLayoutParser/output/fix_zh_all_table_pages_rerun_20260903/testset_markdown --actual-root D:/codes/PDFLayoutParser/output/fix_zh_all_table_pages_rerun_20260903 --diff-root D:/codes/PDFLayoutParser/output/fix_zh_all_table_pages_rerun_20260903/testset_markdown/diffs
+git diff --check
+```
+
+结果：
+
+- self-test：`25 tests OK`
+- 正式 build：`941 markdown / 79 absent_expected / 1 excluded / 2 failed_no_output`
+- 正式 compare：`passed=1020 skipped=1 failed=0 missing=0 extra=0`
+- `git diff --check`：通过
+
+### 本轮负向与恢复
+
+负向验证：
+
+- 临时复制正式 `testset_markdown`
+- 仅将 `labels/page-000.md` 中一个 `<td>1.</td>` 替换为 `<td>__TEST_DIFF__</td>`
+- compare 结果：
+
+```text
+compare summary: passed=1019 skipped=1 failed=1 missing=0 extra=0 diff_root=D:\codes\PDFLayoutParser\output\_tmp_compare_negative_20260903_review\testset_markdown\diffs-negative
+```
+
+差异证据：
+
+- `page-000.diff.md`
+- `page-000.actual.md`
+
+恢复验证：
+
+```text
+compare summary: passed=1020 skipped=1 failed=0 missing=0 extra=0 diff_root=D:\codes\PDFLayoutParser\output\fix_zh_all_table_pages_rerun_20260903\testset_markdown\diffs
+```
+
+清理：
+
+- 临时负向目录 `D:\codes\PDFLayoutParser\output\_tmp_compare_negative_20260903_review` 已删除，删除后 `exists() -> False`
