@@ -36,7 +36,7 @@ class WiredTableExtractor(BaseTableExtractor):
             return []
 
         h_lines = self._merge_h_lines(h_lines)
-        v_lines = self._merge_v_lines(v_lines)
+        v_lines = self._merge_v_lines(v_lines, h_lines=h_lines)
 
         if len(h_lines) < 2 or not v_lines:
             return []
@@ -444,7 +444,9 @@ class WiredTableExtractor(BaseTableExtractor):
         return merged
 
     def _merge_v_lines(
-        self, lines: List[Tuple[float, float, float, float]]
+        self,
+        lines: List[Tuple[float, float, float, float]],
+        h_lines: Optional[List[Tuple[float, float, float, float]]] = None,
     ) -> List[Tuple[float, float, float, float]]:
         if not lines:
             return []
@@ -470,7 +472,8 @@ class WiredTableExtractor(BaseTableExtractor):
             cur_y0, cur_y1 = segs[0]
 
             for s_y0, s_y1 in segs[1:]:
-                if s_y0 <= cur_y1 + 1.2:
+                gap = s_y0 - cur_y1
+                if gap <= self.line_tolerance:
                     cur_y1 = max(cur_y1, s_y1)
                 else:
                     merged.append((avg_x, cur_y0, avg_x, cur_y1))
@@ -700,22 +703,31 @@ class WiredTableExtractor(BaseTableExtractor):
     ) -> List[Cell]:
         existing_v_xs = [line[0] for line in v_lines]
         if existing_v_xs:
-            start_groups: Dict[float, List[Tuple[float, float, float, float]]] = defaultdict(list)
-            for line in h_lines:
-                start_groups[round(line[0], 1)].append(line)
             left_v_x = min(existing_v_xs)
-            for start_x, supporting_lines in start_groups.items():
+            start_clusters: List[List[Tuple[float, float, float, float]]] = []
+            for line in sorted(h_lines, key=lambda l: l[0]):
+                matched_cluster = None
+                for cluster in start_clusters:
+                    if abs(cluster[0][0] - line[0]) <= self.line_tolerance:
+                        matched_cluster = cluster
+                        break
+                if matched_cluster is not None:
+                    matched_cluster.append(line)
+                else:
+                    start_clusters.append([line])
+
+            for cluster in start_clusters:
+                avg_start_x = sum(l[0] for l in cluster) / len(cluster)
                 if (
-                    len(supporting_lines) < 3
-                    or start_x <= bbox.x0 + self.line_tolerance
-                    or start_x >= left_v_x - self.line_tolerance
+                    len(cluster) >= 2
+                    and avg_start_x > bbox.x0 + self.line_tolerance
+                    and avg_start_x < left_v_x - self.line_tolerance
                 ):
-                    continue
-                v_lines = [
-                    *v_lines,
-                    (start_x, bbox.y0, start_x, bbox.y1),
-                ]
-                break
+                    v_lines = [
+                        *v_lines,
+                        (avg_start_x, bbox.y0, avg_start_x, bbox.y1),
+                    ]
+                    break
 
         tol = self.line_tolerance
         raw_h = [bbox.y0, bbox.y1, *(line[1] for line in h_lines)]
@@ -890,6 +902,12 @@ class WiredTableExtractor(BaseTableExtractor):
                     colspan=max_col - min_col + 1,
                 )
             )
+
+        if cells:
+            min_c = min(cell.col_index for cell in cells)
+            if min_c > 0:
+                for cell in cells:
+                    cell.col_index -= min_c
 
         cells.sort(key=lambda cell: (cell.row_index, cell.col_index))
         return cells
