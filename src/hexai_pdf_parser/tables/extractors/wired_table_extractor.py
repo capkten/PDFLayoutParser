@@ -55,6 +55,10 @@ class WiredTableExtractor(BaseTableExtractor):
 
             cells = self._assign_text_to_line_cells(cells, page)
             cells = self._merge_oversegmented_line_columns(cells)
+            cells = self._trim_empty_edge_rows(cells)
+            if not cells:
+                continue
+
             if (
                 len(cells) == 1
                 and cells[0].rowspan == 1
@@ -71,14 +75,20 @@ class WiredTableExtractor(BaseTableExtractor):
 
             if row_count >= 1 and col_count >= 1 and cells:
                 has_text = any(c.text.strip() for c in cells)
-                table_height = region_bbox.y1 - region_bbox.y0
+                actual_bbox = BBox(
+                    min(c.bbox.x0 for c in cells),
+                    min(c.bbox.y0 for c in cells),
+                    max(c.bbox.x1 for c in cells),
+                    max(c.bbox.y1 for c in cells),
+                )
+                table_height = actual_bbox.y1 - actual_bbox.y0
                 if not has_text and (table_height < 6.0 or row_count * col_count <= 1):
                     continue
 
                 conf_score = round(confidence, 4) if confidence is not None else 0.90
                 tables.append(
                     Table(
-                        bbox=region_bbox,
+                        bbox=actual_bbox,
                         rows=row_count,
                         cols=col_count,
                         cells=cells,
@@ -462,7 +472,7 @@ class WiredTableExtractor(BaseTableExtractor):
             cur_y0, cur_y1 = segs[0]
 
             for s_y0, s_y1 in segs[1:]:
-                if s_y0 <= cur_y1 + 3.0:
+                if s_y0 <= cur_y1 + 1.2:
                     cur_y1 = max(cur_y1, s_y1)
                 else:
                     merged.append((avg_x, cur_y0, avg_x, cur_y1))
@@ -583,6 +593,73 @@ class WiredTableExtractor(BaseTableExtractor):
             and vy0 - tolerance <= hy <= vy1 + tolerance
         )
 
+    @staticmethod
+    def _snap_coordinates(
+        coords: List[float],
+        anchor_coords: List[float],
+        tol: float = 1.5,
+    ) -> List[float]:
+        """Snap close coordinates to actual line anchors and merge duplicates within tol."""
+        snapped = []
+        for c in coords:
+            matched = [a for a in anchor_coords if abs(a - c) <= tol]
+            if matched:
+                best = min(matched, key=lambda a: abs(a - c))
+                snapped.append(round(best, 1))
+            else:
+                snapped.append(round(c, 1))
+
+        unique_sorted = sorted(set(snapped))
+        merged: List[float] = []
+        for val in unique_sorted:
+            if not merged:
+                merged.append(val)
+            elif val - merged[-1] <= tol:
+                curr_is_anchor = any(abs(a - val) <= 0.05 for a in anchor_coords)
+                prev_is_anchor = any(abs(a - merged[-1]) <= 0.05 for a in anchor_coords)
+                if curr_is_anchor and not prev_is_anchor:
+                    merged[-1] = val
+            else:
+                merged.append(val)
+        return merged
+
+    @staticmethod
+    def _trim_empty_edge_rows(cells: List[Cell]) -> List[Cell]:
+        """Trim completely empty leading and trailing rows from wired tables."""
+        if not cells:
+            return cells
+
+        row_indices = sorted({c.row_index for c in cells})
+        if not row_indices:
+            return cells
+
+        min_row = row_indices[0]
+        max_row = row_indices[-1]
+
+        while min_row <= max_row:
+            row_cells = [c for c in cells if c.row_index == min_row]
+            if row_cells and all(c.text.strip() == "" for c in row_cells):
+                min_row += 1
+            else:
+                break
+
+        while max_row >= min_row:
+            row_cells = [c for c in cells if c.row_index == max_row]
+            if row_cells and all(c.text.strip() == "" for c in row_cells):
+                max_row -= 1
+            else:
+                break
+
+        if min_row > max_row:
+            return []
+
+        trimmed = []
+        for c in cells:
+            if min_row <= c.row_index <= max_row:
+                c.row_index -= min_row
+                trimmed.append(c)
+        return trimmed
+
     def _build_cells_for_region(
         self,
         bbox: BBox,
@@ -608,37 +685,28 @@ class WiredTableExtractor(BaseTableExtractor):
                 ]
                 break
 
-        h_ys = sorted(
-            {
-                round(bbox.y0, 1),
-                round(bbox.y1, 1),
-                *(round(line[1], 1) for line in h_lines),
-            }
-        )
-        v_xs = sorted(
-            {
-                round(bbox.x0, 1),
-                round(bbox.x1, 1),
-                *(round(line[0], 1) for line in v_lines),
-            }
-        )
+        tol = self.line_tolerance
+        raw_h = [bbox.y0, bbox.y1, *(line[1] for line in h_lines)]
+        raw_v = [bbox.x0, bbox.x1, *(line[0] for line in v_lines)]
+
+        h_ys = self._snap_coordinates(raw_h, [line[1] for line in h_lines], tol=tol)
+        v_xs = self._snap_coordinates(raw_v, [line[0] for line in v_lines], tol=tol)
 
         if len(h_ys) < 2 or len(v_xs) < 2:
             return []
 
         rows = len(h_ys) - 1
         cols = len(v_xs) - 1
-        tol = self.line_tolerance
         effective_h_lines = list(h_lines)
         effective_v_lines = list(v_lines)
-        if not any(abs(line[1] - bbox.y0) <= tol for line in h_lines):
-            effective_h_lines.append((bbox.x0, bbox.y0, bbox.x1, bbox.y0))
-        if not any(abs(line[1] - bbox.y1) <= tol for line in h_lines):
-            effective_h_lines.append((bbox.x0, bbox.y1, bbox.x1, bbox.y1))
-        if not any(abs(line[0] - bbox.x0) <= tol for line in v_lines):
-            effective_v_lines.append((bbox.x0, bbox.y0, bbox.x0, bbox.y1))
-        if not any(abs(line[0] - bbox.x1) <= tol for line in v_lines):
-            effective_v_lines.append((bbox.x1, bbox.y0, bbox.x1, bbox.y1))
+        if not any(abs(line[1] - h_ys[0]) <= tol for line in h_lines):
+            effective_h_lines.append((v_xs[0], h_ys[0], v_xs[-1], h_ys[0]))
+        if not any(abs(line[1] - h_ys[-1]) <= tol for line in h_lines):
+            effective_h_lines.append((v_xs[0], h_ys[-1], v_xs[-1], h_ys[-1]))
+        if not any(abs(line[0] - v_xs[0]) <= tol for line in v_lines):
+            effective_v_lines.append((v_xs[0], h_ys[0], v_xs[0], h_ys[-1]))
+        if not any(abs(line[0] - v_xs[-1]) <= tol for line in v_lines):
+            effective_v_lines.append((v_xs[-1], h_ys[0], v_xs[-1], h_ys[-1]))
 
         def has_h_segment(y: float, x0: float, x1: float) -> bool:
             span = x1 - x0

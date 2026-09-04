@@ -643,3 +643,67 @@ def test_assign_text_to_line_cells_splits_word_at_physical_column_boundary():
     result = extractor._assign_text_to_line_cells(cells, page)
 
     assert [cell.text for cell in result] == ["减：", "专项"]
+
+
+def test_build_cells_does_not_create_thin_empty_edge_rows_from_line_width_difference():
+    extractor = WiredTableExtractor()
+    # 模拟真实 PDF 中线宽造成的 0.4pt 偏差：
+    # 竖线从 149.1 到 173.9；横线中心在 149.5 和 173.5
+    h_lines = [
+        (28.4, 149.5, 135.0, 149.5),
+        (28.4, 161.5, 135.0, 161.5),
+        (28.4, 173.5, 135.0, 173.5),
+    ]
+    v_lines = [
+        (28.4, 149.12, 28.4, 173.88),
+        (80.0, 149.12, 80.0, 173.88),
+        (135.0, 149.12, 135.0, 173.88),
+    ]
+    bbox = BBox(28.0, 149.1, 135.4, 173.9)
+
+    cells = extractor._build_cells_for_region(bbox, h_lines, v_lines)
+
+    rows = {c.row_index for c in cells}
+    # 应当只有 2 行 (row 0, row 1)，不能在上下边缘切出 0.4pt 的假空行 (变 4 行)
+    assert len(rows) == 2
+    assert rows == {0, 1}
+    row0_cells = [c for c in cells if c.row_index == 0]
+    assert all(c.bbox.y1 - c.bbox.y0 > 5.0 for c in row0_cells)
+
+
+def test_merge_v_lines_does_not_connect_adjacent_tables_separated_by_gap():
+    extractor = WiredTableExtractor()
+    # 两个独立表格上下排列，左右外框对齐，垂直间隙 2.5pt
+    v_lines = [
+        (28.0, 10.0, 28.0, 50.0),
+        (28.0, 52.5, 28.0, 90.0),
+    ]
+
+    merged = extractor._merge_v_lines(v_lines)
+
+    # 不应合并为 1 条穿透的长竖线 (10.0 到 90.0)，应保留为 2 条独立线段
+    assert len(merged) == 2
+    assert merged[0] == (28.0, 10.0, 28.0, 50.0)
+    assert merged[1] == (28.0, 52.5, 28.0, 90.0)
+
+
+def test_trim_empty_edge_rows_removes_empty_leading_and_trailing_rows():
+    extractor = WiredTableExtractor()
+    # 模拟第 0 行全空，第 1 行为有效数据，第 2 行全空
+    cells = [
+        Cell("", 0, 0, BBox(28.4, 1.0, 80.0, 25.0)),
+        Cell("", 0, 1, BBox(80.0, 1.0, 135.0, 25.0)),
+        Cell("数据A", 1, 0, BBox(28.4, 25.0, 80.0, 50.0)),
+        Cell("数据B", 1, 1, BBox(80.0, 25.0, 135.0, 50.0)),
+        Cell("", 2, 0, BBox(28.4, 50.0, 80.0, 50.4)),
+        Cell("", 2, 1, BBox(80.0, 50.0, 135.0, 50.4)),
+    ]
+
+    trimmed = extractor._trim_empty_edge_rows(cells)
+
+    # 应该只保留第 1 行（重排为 row_index=0）
+    assert len(trimmed) == 2
+    assert all(c.row_index == 0 for c in trimmed)
+    assert [c.text for c in trimmed] == ["数据A", "数据B"]
+    assert trimmed[0].bbox.y0 >= 24.0
+
