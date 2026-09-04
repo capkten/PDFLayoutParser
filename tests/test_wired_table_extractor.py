@@ -830,3 +830,25 @@ def test_page_356_and_364_open_table_first_column():
     finally:
         doc.close()
 
+
+def test_page_900_open_table_right_column():
+    """验证 Page 900 半开放表格右侧列未丢失，完整提取'2012年度'及对应数值列。"""
+    import os
+    pdf_path = r"D:\codes\PDFLayoutParser\fix\zh_all_table_pages.pdf"
+    if not os.path.exists(pdf_path):
+        pytest.skip("PDF file not available")
+
+    doc = fitz.open(pdf_path)
+    try:
+        page_900 = doc[900]
+        extractor = WiredTableExtractor()
+        tables_900 = extractor.extract(page_900)
+        assert len(tables_900) >= 1
+        t900_0 = tables_900[0]
+        assert t900_0.cols == 3
+        assert any(c.col_index == 2 and "2012" in c.text for c in t900_0.cells)
+        assert any(c.col_index == 2 and "1,057,563.39" in c.text for c in t900_0.cells)
+    finally:
+        doc.close()
+
+

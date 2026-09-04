@@ -729,6 +729,32 @@ class WiredTableExtractor(BaseTableExtractor):
                     ]
                     break
 
+            right_v_x = max(existing_v_xs)
+            end_clusters: List[List[Tuple[float, float, float, float]]] = []
+            for line in sorted(h_lines, key=lambda l: l[2], reverse=True):
+                matched_cluster = None
+                for cluster in end_clusters:
+                    if abs(cluster[0][2] - line[2]) <= self.line_tolerance:
+                        matched_cluster = cluster
+                        break
+                if matched_cluster is not None:
+                    matched_cluster.append(line)
+                else:
+                    end_clusters.append([line])
+
+            for cluster in end_clusters:
+                avg_end_x = sum(l[2] for l in cluster) / len(cluster)
+                if (
+                    len(cluster) >= 2
+                    and avg_end_x < bbox.x1 - self.line_tolerance
+                    and avg_end_x > right_v_x + self.line_tolerance
+                ):
+                    v_lines = [
+                        *v_lines,
+                        (avg_end_x, bbox.y0, avg_end_x, bbox.y1),
+                    ]
+                    break
+
         tol = self.line_tolerance
         raw_h = [bbox.y0, bbox.y1, *(line[1] for line in h_lines)]
         raw_v = [bbox.x0, bbox.x1, *(line[0] for line in v_lines)]
