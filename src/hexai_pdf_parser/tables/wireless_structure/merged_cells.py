@@ -15,6 +15,7 @@ _NUMBERED_MARKER = re.compile(
 _NUMBERED_ITEM_START = re.compile(
     r"^(?:\d+[.)、]|[（(]\d+[）)]|[一二三四五六七八九十百]+[.)、])"
 )
+_HEADER_UNIT_MARKER = re.compile(r"^[（(]\s*%\s*[）)]$")
 _SINGLE_CJK = re.compile(r"^[\u3400-\u9fff\u2460-\u2473\uff00-\uffef\w()（）]$")
 _STRICT_SINGLE_CJK = re.compile(r"^[\u3400-\u9fff]$")
 
@@ -205,6 +206,85 @@ def _is_left_shifted_cjk_continuation(
     return False
 
 
+def _is_same_slot_native_continuation(
+    previous: dict[str, Any], candidate: dict[str, Any]
+) -> bool:
+    """Recognize a vertically wrapped native continuation in one exact slot."""
+    if not _same_slot(previous, candidate) or not _native_continuous(
+        previous, candidate
+    ):
+        return False
+    if not (
+        previous.get("source_position_known", False)
+        and candidate.get("source_position_known", False)
+        and previous.get("source_blocks") == candidate.get("source_blocks")
+        and len(previous.get("source_blocks", [])) == 1
+        and candidate.get("source_line_start")
+        == previous.get("source_line_end") + 1
+    ):
+        return False
+    if candidate["script"] != previous["script"] or candidate["script"] != "cjk":
+        return False
+    if candidate["bbox"][1] <= previous["bbox"][1]:
+        return False
+    font_size = min(previous["font_size"], candidate["font_size"])
+    vertical_gap = candidate["bbox"][1] - previous["bbox"][3]
+    if vertical_gap < 0.0 or vertical_gap > max(6.0, font_size):
+        return False
+    if (
+        _NUMBERED_ITEM_START.match(candidate["text"].strip()) is not None
+        or _LIST_CONTINUATION.match(candidate["text"].strip())
+        or _VALUE_ONLY.fullmatch(candidate["text"].strip())
+    ):
+        return False
+    previous_width = previous["bbox"][2] - previous["bbox"][0]
+    return (
+        previous_width >= font_size * 4.0
+        and candidate["bbox"][0] < previous["bbox"][0]
+        and candidate["bbox"][2]
+        <= previous["bbox"][0] + max(2.0, font_size * 0.5)
+    )
+
+
+def _is_header_unit_continuation(
+    previous: dict[str, Any],
+    candidate: dict[str, Any],
+    header_cutoff: float | None,
+) -> bool:
+    """Recognize a tight header unit marker following a wrapped text label."""
+    if header_cutoff is None or not _HEADER_UNIT_MARKER.fullmatch(
+        candidate["text"].strip()
+    ):
+        return False
+    if previous.get("script") not in {"cjk", "latin"}:
+        return False
+    if previous["bbox"][3] > header_cutoff or candidate["bbox"][3] > header_cutoff:
+        return False
+    vertical_gap = candidate["bbox"][1] - previous["bbox"][3]
+    if vertical_gap < 0.0 or vertical_gap > max(
+        2.0, min(previous["font_size"], candidate["font_size"]) * 0.5
+    ):
+        return False
+    return _horizontal_overlap(previous["bbox"], candidate["bbox"]) >= min(
+        candidate["bbox"][2] - candidate["bbox"][0],
+        previous["bbox"][2] - previous["bbox"][0],
+    ) * 0.45
+
+
+def _can_resolve_same_slot_continuation_group(
+    group: Sequence[dict[str, Any]],
+    all_slot_keys: Sequence[tuple[int, int, int, int]],
+) -> bool:
+    slot = _slot_key(group[0])
+    if any(key != slot and _slot_keys_overlap(slot, key) for key in all_slot_keys):
+        return False
+    ordered = sorted(group, key=lambda item: item["flow_start"])
+    return all(
+        _is_same_slot_native_continuation(previous, candidate)
+        for previous, candidate in zip(ordered, ordered[1:])
+    )
+
+
 def _merge_pair(left: dict[str, Any], right: dict[str, Any], joiner: str, kind: str) -> dict[str, Any]:
     merged = dict(left)
     merged["text"] = left["text"] + joiner + right["text"]
@@ -232,7 +312,7 @@ def _merge_pair(left: dict[str, Any], right: dict[str, Any], joiner: str, kind: 
 def resolve_exact_slot_conflicts(
     cells: Sequence[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Merge evidence-complete single-CJK chains that conflict in one exact slot."""
+    """Merge evidence-complete chains that conflict in one exact slot."""
     ordered = [
         dict(item) for item in sorted(cells, key=lambda item: item["flow_start"])
     ]
@@ -243,13 +323,19 @@ def resolve_exact_slot_conflicts(
     all_slot_keys = list(groups)
     resolved: dict[tuple[int, int, int, int], dict[str, Any]] = {}
     for slot, group in groups.items():
-        if len(group) < 2 or not _can_resolve_exact_slot_group(
-            group, all_slot_keys
-        ):
+        if len(group) < 2:
+            continue
+        if _can_resolve_exact_slot_group(group, all_slot_keys):
+            joiner = ""
+            merge_kind = "exact_slot_conflict"
+        elif _can_resolve_same_slot_continuation_group(group, all_slot_keys):
+            joiner = "\n"
+            merge_kind = "same_slot_native_continuation"
+        else:
             continue
         merged = group[0]
         for candidate in group[1:]:
-            merged = _merge_pair(merged, candidate, "", "exact_slot_conflict")
+            merged = _merge_pair(merged, candidate, joiner, merge_kind)
         resolved[slot] = merged
 
     result: list[dict[str, Any]] = []
@@ -306,6 +392,7 @@ def _can_merge_multiline(
     candidate: dict[str, Any],
     row_columns: dict[int, set[int]],
     output_mode: str,
+    header_cutoff: float | None,
 ) -> bool:
     if previous["col_start"] != candidate["col_start"] or previous["col_end"] != candidate["col_end"]:
         return False
@@ -332,7 +419,11 @@ def _can_merge_multiline(
     candidate_center_y = (candidate["bbox"][1] + candidate["bbox"][3]) / 2.0
     if candidate_center_y <= previous_center_y:
         return False
-    if previous["script"] != candidate["script"] and "numeric" not in {previous["script"], candidate["script"]}:
+    if (
+        previous["script"] != candidate["script"]
+        and "numeric" not in {previous["script"], candidate["script"]}
+        and not _is_header_unit_continuation(previous, candidate, header_cutoff)
+    ):
         return False
     if _VALUE_ONLY.fullmatch(previous["text"]) and _VALUE_ONLY.fullmatch(candidate["text"]):
         return False
@@ -343,9 +434,15 @@ def _can_merge_multiline(
         if bold["col_start"] == bold["col_end"] == 1 and row_columns.get(bold["row_start"], {1}) == {1}:
             return False
     minimum_width = min(previous["bbox"][2] - previous["bbox"][0], candidate["bbox"][2] - candidate["bbox"][0])
+    same_slot_native_continuation = _is_same_slot_native_continuation(
+        previous, candidate
+    )
     if (
         _horizontal_overlap(previous["bbox"], candidate["bbox"]) < minimum_width * 0.45
-        and not _is_left_shifted_cjk_continuation(previous, candidate, row_columns)
+        and not (
+            same_slot_native_continuation
+            or _is_left_shifted_cjk_continuation(previous, candidate, row_columns)
+        )
     ):
         return False
     gap = candidate["bbox"][1] - previous["bbox"][3]
@@ -359,7 +456,6 @@ def merge_multiline_cells(
     output_mode: str = "row_interleaved",
 ) -> list[dict[str, Any]]:
     """Merge only evidence-complete same-column Chinese continuation chains."""
-    del header_cutoff  # Header topology is handled by the dedicated topology layer.
     pending = [dict(item) for item in sorted(cells, key=lambda item: item["flow_start"])]
     row_columns: dict[int, set[int]] = {}
     for cell in pending:
@@ -371,7 +467,7 @@ def merge_multiline_cells(
         current = pending.pop(0)
         current["merged_from"] = list(current.get("merged_from", [current["candidate_label"]]))
         while pending and _can_merge_multiline(
-            current, pending[0], row_columns, output_mode
+            current, pending[0], row_columns, output_mode, header_cutoff
         ):
             candidate = pending.pop(0)
             current = _merge_pair(current, candidate, "\n", "multiline_cell")

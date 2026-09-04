@@ -223,6 +223,62 @@ def test_hybrid_wired_table_recovers_only_tall_body_cell(monkeypatch):
     ]
 
 
+def test_hybrid_wired_table_replaces_full_rowspan_body_before_shifting_footer(
+    monkeypatch,
+):
+    extractor = TableExtractor()
+    wired_cells = [
+        Cell(f"表头{column}", 0, column, BBox(column * 100, 0, (column + 1) * 100, 20))
+        for column in range(5)
+    ]
+    wired_cells.extend(
+        Cell(
+            f"旧明细{row}",
+            row,
+            0,
+            BBox(0, 20 + row * 20, 100, 40 + row * 20),
+        )
+        for row in range(1, 10)
+    )
+    wired_cells.append(
+        Cell("", 1, 4, BBox(400, 20, 500, 200), rowspan=9)
+    )
+    wired_cells.append(
+        Cell("小计", 10, 0, BBox(0, 200, 100, 220))
+    )
+    wired = Table(
+        bbox=BBox(0, 0, 500, 220),
+        rows=11,
+        cols=5,
+        cells=wired_cells,
+        source="line_projection",
+    )
+    recovered = [
+        Cell(
+            f"新明细{row}",
+            row,
+            0,
+            BBox(0, 25 + row * 30, 100, 35 + row * 30),
+        )
+        for row in range(5)
+    ]
+    recovered.append(Cell("", 0, 4, BBox(400, 25, 500, 175), rowspan=5))
+    monkeypatch.setattr(
+        "hexai_pdf_parser.tables.table_extractor.recover_hybrid_body_cells",
+        lambda page, region, column_edges: (5, 5, recovered),
+    )
+
+    result = extractor._recover_hybrid_wired_table(object(), wired, "zh")
+
+    assert result.source == "hybrid_line_span_recovery"
+    assert (result.rows, result.cols) == (7, 5)
+    assert [cell.text for cell in result.cells if cell.text.startswith("旧明细")] == []
+    subtotal = next(cell for cell in result.cells if cell.text == "小计")
+    assert subtotal.row_index == 6
+    note = next(cell for cell in result.cells if cell.col_index == 4 and not cell.text)
+    assert (note.row_index, note.rowspan) == (1, 5)
+
+
 def test_hybrid_wired_table_keeps_normal_height_grid(monkeypatch):
     extractor = TableExtractor()
     cells = [

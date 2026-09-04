@@ -142,6 +142,7 @@ def _can_join(
     candidate: dict[str, Any],
     normal_gap: float | None,
     row_spans: Sequence[dict[str, Any]] | None = None,
+    all_spans: Sequence[dict[str, Any]] | None = None,
 ) -> bool:
     previous = group[-1]
     if previous["text"] == "$" or candidate["text"] == "$":
@@ -213,6 +214,10 @@ def _can_join(
             except ValueError:
                 pass
         if not has_following_cjk:
+            has_following_cjk = _has_wrapped_cjk_suffix(
+                group, candidate, all_spans
+            )
+        if not has_following_cjk:
             return False
     normal_gap_join = native_line and -0.8 <= gap <= _join_gap_limit(previous, candidate, normal_gap)
     spaced_single_cjk = (
@@ -224,9 +229,176 @@ def _can_join(
     return superscript or normal_gap_join or spaced_single_cjk
 
 
+def _has_wrapped_cjk_suffix(
+    group: Sequence[dict[str, Any]],
+    candidate: dict[str, Any],
+    spans: Sequence[dict[str, Any]] | None,
+) -> bool:
+    """Recognize a field whose numeric line tail continues in CJK after a wrap."""
+    if not spans or not group or not _same_native_line(group[-1], candidate):
+        return False
+    candidate_position = candidate.get("source_position")
+    if not candidate_position or len(candidate_position) < 3:
+        return False
+    following = next(
+        (
+            item
+            for item in spans
+            if item.get("flow") == candidate.get("flow", 0) + 1
+        ),
+        None,
+    )
+    if following is None or _CJK.search(following.get("text", "")) is None:
+        return False
+    following_position = following.get("source_position")
+    if not following_position or len(following_position) < 3:
+        return False
+    if (
+        following_position[0] != candidate_position[0]
+        or following_position[1] != candidate_position[1] + 1
+        or following_position[2] != 0
+    ):
+        return False
+    vertical_gap = following["bbox"][1] - candidate["bbox"][3]
+    if not 0 <= vertical_gap <= max(
+        6.0, min(candidate["font_size"], following["font_size"])
+    ):
+        return False
+    group_bbox = _union(group)
+    minimum_width = min(
+        group_bbox[2] - group_bbox[0],
+        following["bbox"][2] - following["bbox"][0],
+    )
+    return (
+        following["bbox"][0] < candidate["bbox"][0]
+        and _horizontal_overlap(group_bbox, following["bbox"])
+        >= max(2.0, minimum_width * 0.45)
+    )
+
+
 def _join_text(group: Sequence[dict[str, Any]]) -> str:
     # 中文、数字和符号直接连接；中文财报中的空格由原生文本保留。
     return "".join(item["text"] for item in group)
+
+
+def _alignment_anchor(item: dict[str, Any], mode: str) -> float:
+    x0, _, x1, _ = item["bbox"]
+    if mode == "left":
+        return x0
+    if mode == "right":
+        return x1
+    return (x0 + x1) / 2.0
+
+
+def _alignment_tolerance(items: Sequence[dict[str, Any]]) -> float:
+    return max(1.0, min(item["font_size"] for item in items) * 0.12)
+
+
+def _alignment_modes(item: dict[str, Any]) -> Sequence[str]:
+    if _NUMERIC.fullmatch(str(item.get("text", "")).strip()):
+        return ("right",)
+    return ("left", "right", "center")
+
+
+def _opposite_edges_vary(
+    items: Sequence[dict[str, Any]], mode: str, tolerance: float
+) -> bool:
+    x0_values = [item["bbox"][0] for item in items]
+    x1_values = [item["bbox"][2] for item in items]
+    x0_spread = max(x0_values) - min(x0_values)
+    x1_spread = max(x1_values) - min(x1_values)
+    if mode == "left":
+        return x1_spread > tolerance
+    if mode == "right":
+        return x0_spread > tolerance
+    return x0_spread > tolerance and x1_spread > tolerance
+
+
+def _has_diverse_text_values(items: Sequence[dict[str, Any]]) -> bool:
+    values = {"".join(str(item.get("text", "")).split()) for item in items}
+    values.discard("")
+    return len(values) >= 3
+
+
+def _has_alignment_corridor_veto(
+    group: Sequence[dict[str, Any]],
+    candidate: dict[str, Any],
+    visual_rows: Sequence[Sequence[dict[str, Any]]],
+) -> bool:
+    left = {
+        "text": _join_text(group),
+        "bbox": _union(group),
+        "font_size": min(item["font_size"] for item in group),
+    }
+    base_tolerance = _alignment_tolerance([left, candidate])
+    if candidate["bbox"][0] - left["bbox"][2] <= base_tolerance:
+        return False
+
+    current_flows = {item["flow"] for item in group} | {candidate["flow"]}
+    for left_mode in _alignment_modes(left):
+        for right_mode in _alignment_modes(candidate):
+            if left_mode == right_mode == "center":
+                continue
+            support = [(left, candidate)]
+            for row in visual_rows:
+                if current_flows.intersection(item["flow"] for item in row):
+                    continue
+                matches = []
+                ordered = sorted(row, key=lambda item: item["bbox"][0])
+                for witness_left, witness_right in zip(ordered, ordered[1:]):
+                    if (
+                        witness_right["bbox"][0] - witness_left["bbox"][2]
+                        <= base_tolerance
+                    ):
+                        continue
+                    if (
+                        abs(
+                            _alignment_anchor(witness_left, left_mode)
+                            - _alignment_anchor(left, left_mode)
+                        )
+                        <= base_tolerance
+                        and abs(
+                            _alignment_anchor(witness_right, right_mode)
+                            - _alignment_anchor(candidate, right_mode)
+                        )
+                        <= base_tolerance
+                    ):
+                        matches.append((witness_left, witness_right))
+                if len(matches) == 1:
+                    support.append(matches[0])
+
+            if len(support) < 3:
+                continue
+            left_items = [item for item, _ in support]
+            right_items = [item for _, item in support]
+            support_tolerance = _alignment_tolerance(left_items + right_items)
+            left_varies = _opposite_edges_vary(
+                left_items, left_mode, support_tolerance
+            )
+            right_varies = _opposite_edges_vary(
+                right_items, right_mode, support_tolerance
+            )
+            if not (left_varies or right_varies):
+                continue
+            if not left_varies and not _has_diverse_text_values(left_items):
+                continue
+            if not right_varies and not _has_diverse_text_values(right_items):
+                continue
+            left_anchors = [
+                _alignment_anchor(item, left_mode) for item in left_items
+            ]
+            right_anchors = [
+                _alignment_anchor(item, right_mode) for item in right_items
+            ]
+            if max(left_anchors) - min(left_anchors) > support_tolerance:
+                continue
+            if max(right_anchors) - min(right_anchors) > support_tolerance:
+                continue
+            corridor_x0 = max(item["bbox"][2] for item in left_items)
+            corridor_x1 = min(item["bbox"][0] for item in right_items)
+            if corridor_x1 - corridor_x0 > support_tolerance:
+                return True
+    return False
 
 
 def _native_position(item: dict[str, Any]) -> Sequence[int]:
@@ -566,12 +738,34 @@ def build_text_runs(
         groups: list[list[dict[str, Any]]] = []
         sorted_row = sorted(row, key=lambda item: item["bbox"][0])
         for span in sorted_row:
-            if groups and _can_join(groups[-1], span, normal_gap, row_spans=sorted_row):
+            can_join = groups and _can_join(
+                groups[-1],
+                span,
+                normal_gap,
+                row_spans=sorted_row,
+                all_spans=spans,
+            )
+            if can_join and not _has_alignment_corridor_veto(
+                groups[-1], span, rows
+            ):
                 groups[-1].append(span)
             else:
                 groups.append([span])
         for group in groups:
             positions = [_native_position(item) for item in group]
+            cjk_spans = [item for item in group if _CJK.search(item.get("text", ""))]
+            if cjk_spans:
+                run_bold = max(cjk_spans, key=lambda item: len(item.get("text", ""))).get("bold", False)
+            else:
+                alnum_spans = [
+                    item
+                    for item in group
+                    if any(char.isalnum() for char in item.get("text", ""))
+                ]
+                if alnum_spans:
+                    run_bold = max(alnum_spans, key=lambda item: len(item.get("text", ""))).get("bold", False)
+                else:
+                    run_bold = group[0].get("bold", False)
             result.append(
                 {
                     "span_refs": [item["span_ref"] for item in group],
@@ -581,7 +775,7 @@ def build_text_runs(
                     "text": _join_text(group),
                     "font": group[0]["font"],
                     "font_size": group[0]["font_size"],
-                    "bold": group[0]["bold"],
+                    "bold": run_bold,
                     "script": script_kind(_join_text(group)),
                     "char_boxes": [char for item in group for char in item.get("char_boxes", [])],
                     "source_blocks": sorted({position[0] for position in positions}),
