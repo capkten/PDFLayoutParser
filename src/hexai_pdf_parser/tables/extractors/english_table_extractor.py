@@ -677,6 +677,7 @@ class EnglishTableExtractor(BaseTableExtractor):
             columns = self._prune_phantom_columns(columns, sub_words, sub_bbox)
             if not columns or len(columns) < 2:
                 continue
+            columns = self._adjust_columns_for_currency(columns, sub_words)
 
             # 检查表头下划线并在各层表头无内横线时聚合单层表头 (Rule 2.2 & Rule 2.3)
             sub_h = [
@@ -1010,15 +1011,10 @@ class EnglishTableExtractor(BaseTableExtractor):
                 if table_bbox.x0 - 5.0 <= (w[0] + w[2]) / 2.0 <= table_bbox.x1 + 5.0
             ]
 
-        data_rows = self._assign_words_to_zebra_rows(data_words, data_bgs)
-
-        data_rows = self._handle_dollar_signs(data_rows)
-
         all_words_for_cols = []
         for hr in header_rows:
             all_words_for_cols.extend(hr.words)
-        for dr in data_rows:
-            all_words_for_cols.extend(dr.words)
+        all_words_for_cols.extend(data_words)
 
         columns = self._detect_columns_from_header_underlines(
             page=page,
@@ -1027,9 +1023,16 @@ class EnglishTableExtractor(BaseTableExtractor):
             words=all_words_for_cols,
         )
         if not columns or len(columns) < 2:
-            columns = self._detect_columns(all_words_for_cols, data_rows, page, table_y0=table_y0, table_bbox=table_bbox)
+            columns = self._detect_columns(all_words_for_cols, None, page, table_y0=table_y0, table_bbox=table_bbox)
         if not columns or len(columns) < 2:
             return None
+        columns = self._prune_phantom_columns(columns, all_words_for_cols, table_bbox)
+        if not columns or len(columns) < 2:
+            return None
+        columns = self._adjust_columns_for_currency(columns, all_words_for_cols)
+
+        data_rows = self._assign_words_to_zebra_rows(data_words, data_bgs)
+        data_rows = self._handle_dollar_signs(data_rows)
 
         source = "ml_detection" if table_bbox else "english_color_based"
         return self._build_wireless_table(
@@ -2791,13 +2794,13 @@ class EnglishTableExtractor(BaseTableExtractor):
                     # 寻找紧贴在当前表头文本下方的物理下划线组（优先距离最近的第一道下划线，避免跨层匹配到下层横线）
                     matching_groups = [
                         (y_key, gx0, gx1) for y_key, gx0, gx1 in all_underline_groups
-                        if top.bbox.y1 - 1.5 <= y_key <= top.bbox.y1 + min(8.0, line_h * 0.4)
+                        if top.bbox.y1 - 3.5 <= y_key <= top.bbox.y1 + min(8.0, line_h * 0.4)
                         and min(top.bbox.x1, gx1) - max(top.bbox.x0, gx0) >= 2.0
                     ]
                     if not matching_groups:
                         matching_groups = [
                             (y_key, gx0, gx1) for y_key, gx0, gx1 in all_underline_groups
-                            if top.bbox.y1 - 1.5 <= y_key <= top.bbox.y1 + 10.0
+                            if top.bbox.y1 - 3.5 <= y_key <= top.bbox.y1 + 10.0
                             and min(top.bbox.x1, gx1) - max(top.bbox.x0, gx0) >= 2.0
                         ]
 
@@ -2813,7 +2816,7 @@ class EnglishTableExtractor(BaseTableExtractor):
                             overlapping_tops = [
                                 other for other in non_empty_tops
                                 if min(other.bbox.x1, gx1) - max(other.bbox.x0, gx0) >= 2.0
-                                and other.bbox.y1 - 1.5 <= y_key <= other.bbox.y1 + 10.0
+                                and other.bbox.y1 - 3.5 <= y_key <= other.bbox.y1 + 10.0
                             ]
                             # 若没有任一表头文本的左边界伸入第 0 列内，说明第 0 列为科目空列，从均分组中剔除
                             if cols_in_grp and cols_in_grp[0] == 0 and overlapping_tops:
@@ -3149,15 +3152,29 @@ class EnglishTableExtractor(BaseTableExtractor):
             # 物化该行未被占用的空槽位
             for ci in range(len(columns)):
                 if (new_r_idx, ci) not in occupied_2d:
+                    eff_empty_rowspan = 1
+                    for next_r in range(new_r_idx + 1, len(active_tier_indices)):
+                        if (next_r, ci) in occupied_2d:
+                            break
+                        has_line = any(
+                            row_y1 - 1.5 <= ly <= row_y1 + 1.5
+                            and max(columns[ci][0] + 2.0, lx0) < min(columns[ci][1] - 2.0, lx1)
+                            for ly, lx0, lx1 in h_lines
+                        )
+                        if has_line:
+                            break
+                        eff_empty_rowspan += 1
+
                     output_cells.append(Cell(
                         text="",
                         row_index=new_r_idx,
                         col_index=ci,
                         colspan=1,
-                        rowspan=1,
+                        rowspan=eff_empty_rowspan,
                         bbox=BBox(columns[ci][0], row_y0, columns[ci][1], row_y1),
                     ))
-                    occupied_2d.add((new_r_idx, ci))
+                    for r_occ in range(new_r_idx, new_r_idx + eff_empty_rowspan):
+                        occupied_2d.add((r_occ, ci))
 
         output_cells.sort(key=lambda c: (c.row_index, c.col_index))
         return output_cells, len(active_tier_indices)

@@ -2,6 +2,21 @@
 
 ## 2026-09-04
 
+- 修复英文无线/斑马纹表格多级表头中左上角首列被垂直割裂，以及 `Common Stock` 未拆成 Shares 与 Amount 双列导致数据粘连（`$75,968`、`77,09277` 等）的问题（针对 `en_all_table_pages_page_347.pdf`）。
+  - **根因与调用位置**：
+    1. 在 `src/hexai_pdf_parser/tables/extractors/english_table_extractor.py` 的斑马纹提取路径 `_process_zebra_group()` 中，原逻辑在列检测 `_detect_columns()` 之前过早调用了 `_handle_dollar_signs()`，将独立的 `$` 符号与紧随其后的数字合并为单一词元，不仅破坏了列投影直方图的独立字间隙，且导致后续货币分界线微调函数 `_adjust_columns_for_currency()` 遍历时因无法匹配 `w[4] == "$"` 而失效。同时，`_process_zebra_group()` 遗漏了与 `extract_general_wireless()` 一致的 `_prune_phantom_columns()` 和 `_adjust_columns_for_currency()` 调用链；
+    2. 在 `_detect_columns_from_header_underlines()` 中，`Common Stock` 股票数右端（255.64pt）与金额 `$` 左端（257.14pt）间隙仅 1.5pt，且表头词 `Common` 跨越至 266.85pt 充当了“桥梁”，将两列投影粘连。而下划线匹配容差 `top.bbox.y1 - 1.5` 因同行相邻词（如 `Accumulated` y1=119.37）最大字高过大，导致 `119.37 - 1.5 = 117.87 > 117.80`，错过了真实的下划线；
+    3. 在 `_normalize_headers()` 末尾物化空单元格时，左上角科目区域（Col 0）在多级表头各层均为空槽位，原代码仅将其物化为单独的 `1x1` 空单元格，导致第 0 行与第 1 行交界处出现横向割裂线，使表头视觉上被横切为两行。
+  - **修复判定与调用位置**：
+    1. **斑马纹列检测对齐**：在 `_process_zebra_group()` 中调整调用顺序，使用包含表头与数据行原始坐标的 `all_words_for_cols` 先执行 `_detect_columns()` -> `_prune_phantom_columns()` -> `_adjust_columns_for_currency()`；分界线确定后再对数据行执行 `_assign_words_to_zebra_rows()` 与 `_handle_dollar_signs()`；
+    2. **放宽下划线容差并激活微调**：在 `_normalize_headers()` 中将表头下划线接触面容差从 `- 1.5` 放宽到 `- 3.5`（`top.bbox.y1 - 3.5 <= y_key`），确保两段下划线稳定纳为双列；并在 `extract_general_wireless` 与 `_process_zebra_group` 中激活调用 `_adjust_columns_for_currency()`，精准将分界线自 268.60 重定位到 256.39pt（$75,968$ 与 $\$$ 之间）；
+    3. **表头空槽位自适应向下跨行物化**：在 `_normalize_headers()` 物化空槽位时，检查从当前行向下连续未被占用的槽位及层间物理横线阻断（`eff_empty_rowspan`），使左上角 Col 0 自动生成 `rowspan=2, colspan=1, text=""` 的完整大槽位，消除垂直与水平切割感。
+  - **结构约束**：只基于几何、拓扑与通用货币分界特征决策，不硬编码具体业务文字；保持每个逻辑槽位唯一占用与 0 槽位冲突。
+  - **测试与页面验证**：
+    - 新增测试 `tests/test_page_347_structure.py`，参数化覆盖 `extract_zebra`、`extract_general_wireless` 以及端到端 `extract` 三大入口，验证 Col 0 `rowspan=2`、Common Stock `colspan=2`、APIC `rowspan=2`、以及 `PHOT`、`June 30`、`September 30` 行数据列精准切分无粘连，3 项测试全部通过（`3 passed`）；
+    - 既有测试 `test_header_upward_merge.py` 与 `test_financial_header_normalizer.py` 全部通过；
+    - 页面级独立运行重跑至 `output/single_page_347_fix/`，核对 `output.json` 与 `en_all_table_pages_page_347_visualized.png`：表格结构由原先错乱的 10 列提升至规整的 11 列（14 行 × 11 列，147 个 Cell），置信度 0.97，视觉渲染网格完全闭合、表头及数据行对齐精准。
+
 - 修复英文多级表头中因局部下划线全局行切分导致无母节点单列表头被撕裂并残留大量空单元格的问题（针对 `en_all_table_pages_page_075.pdf` Table 1 与 Table 2）。
   - **根因与调用位置**：
     1. 在 `src/hexai_pdf_parser/tables/extractors/english_table_extractor.py` 的 `_detect_header_rows()` 中，物理下划线 `y = 144.53` 实际仅覆盖 Col 1~2（用于分隔 `Three Months Ended September 30,` 与 `2023/2024`），但算法将其无差别视作贯穿整表的全局分割线，将右侧原本连续的单列叶子表头（如 `Constant Currency Revenues`、`Less FX Effect`、`As Reported`）错误地横向切分为 Tier 2 与 Tier 3。
