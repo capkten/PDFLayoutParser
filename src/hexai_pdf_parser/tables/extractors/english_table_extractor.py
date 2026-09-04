@@ -3117,18 +3117,40 @@ class EnglishTableExtractor(BaseTableExtractor):
 
         tier_remap = {orig_t: new_t for new_t, orig_t in enumerate(active_tier_indices)}
 
+        tier_y_bounds = []
+        for orig_t in active_tier_indices:
+            cur_row_cells = rows_dict[sorted_row_indices[orig_t]]
+            ry0 = min((c.bbox.y0 for c in cur_row_cells), default=0.0)
+            ry1 = max((c.bbox.y1 for c in cur_row_cells), default=ry0 + 15.0)
+            tier_y_bounds.append((ry0, ry1))
+
+        # 预先计算所有非空文本单元格所占用的逻辑槽位
+        occupied_by_content = set()
+        for new_r_idx, orig_t in enumerate(active_tier_indices):
+            cur_row_cells = rows_dict[sorted_row_indices[orig_t]]
+            for c in cur_row_cells:
+                if (orig_t, c.col_index) in merged_down or not c.text.strip():
+                    continue
+                eff_rowspan = 1
+                for check_t in active_tier_indices[new_r_idx + 1:]:
+                    if any(grid[check_t][ci] is c for ci in range(c.col_index, c.col_index + c.colspan)):
+                        eff_rowspan += 1
+                    else:
+                        break
+                for r in range(new_r_idx, new_r_idx + eff_rowspan):
+                    for ci in range(c.col_index, c.col_index + c.colspan):
+                        occupied_by_content.add((r, ci))
+
         output_cells = []
         occupied_2d = set()
 
         for new_r_idx, orig_t in enumerate(active_tier_indices):
             cur_row_cells = rows_dict[sorted_row_indices[orig_t]]
-            row_y0 = min((c.bbox.y0 for c in cur_row_cells), default=0.0)
-            row_y1 = max((c.bbox.y1 for c in cur_row_cells), default=row_y0 + 15.0)
+            row_y0, row_y1 = tier_y_bounds[new_r_idx]
 
             for c in cur_row_cells:
                 if (orig_t, c.col_index) in merged_down or not c.text.strip():
                     continue
-                # 计算该单元格在压缩后的实际 rowspan
                 eff_rowspan = 1
                 for check_t in active_tier_indices[new_r_idx + 1:]:
                     if any(grid[check_t][ci] is c for ci in range(c.col_index, c.col_index + c.colspan)):
@@ -3151,19 +3173,22 @@ class EnglishTableExtractor(BaseTableExtractor):
 
             # 物化该行未被占用的空槽位
             for ci in range(len(columns)):
-                if (new_r_idx, ci) not in occupied_2d:
+                if (new_r_idx, ci) not in occupied_2d and (new_r_idx, ci) not in occupied_by_content:
                     eff_empty_rowspan = 1
+                    end_y1 = row_y1
                     for next_r in range(new_r_idx + 1, len(active_tier_indices)):
-                        if (next_r, ci) in occupied_2d:
+                        if (next_r, ci) in occupied_2d or (next_r, ci) in occupied_by_content:
                             break
+                        prev_y1 = tier_y_bounds[next_r - 1][1]
                         has_line = any(
-                            row_y1 - 1.5 <= ly <= row_y1 + 1.5
+                            prev_y1 - 1.5 <= ly <= prev_y1 + 1.5
                             and max(columns[ci][0] + 2.0, lx0) < min(columns[ci][1] - 2.0, lx1)
                             for ly, lx0, lx1 in h_lines
                         )
                         if has_line:
                             break
                         eff_empty_rowspan += 1
+                        end_y1 = tier_y_bounds[next_r][1]
 
                     output_cells.append(Cell(
                         text="",
@@ -3171,7 +3196,7 @@ class EnglishTableExtractor(BaseTableExtractor):
                         col_index=ci,
                         colspan=1,
                         rowspan=eff_empty_rowspan,
-                        bbox=BBox(columns[ci][0], row_y0, columns[ci][1], row_y1),
+                        bbox=BBox(columns[ci][0], row_y0, columns[ci][1], end_y1),
                     ))
                     for r_occ in range(new_r_idx, new_r_idx + eff_empty_rowspan):
                         occupied_2d.add((r_occ, ci))
