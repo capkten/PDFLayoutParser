@@ -109,6 +109,43 @@ def test_infer_header_cutoff_treats_repeated_latin_rows_after_header_as_body():
     assert 38 < cutoff < 50
 
 
+def test_infer_header_cutoff_identifies_single_numeric_body_row_with_multiple_fields():
+    # Multi-tier header followed by a single continuation row with multiple currency/numeric amounts (Page 469 pattern)
+    atoms = [
+        _atom("上年年末余额", 333.67, 102.15, 405.91, 114.15, 1),
+        _atom("项目", 90.5, 122.19, 114.62, 134.19, 1),
+        _atom("一年\n以内", 233.57, 122.91, 257.69, 150.51, 1),
+        _atom("一年至\n三年以内", 292.01, 122.91, 340.26, 150.51, 1),
+        _atom("三年至\n五年以内", 371.47, 122.91, 419.7, 150.51, 1),
+        _atom("五年\n以上", 449.26, 122.91, 473.38, 150.51, 1),
+        _atom("合计", 508.9, 130.71, 533.02, 142.71, 1),
+        _atom("金融负债和\n或有负债合计", 90.5, 158.07, 162.72, 185.67, 1),
+        _atom("17,927.57", 213.89, 163.39, 260.43, 177.14, 1),
+        _atom("612.04", 310.15, 163.39, 343.01, 177.14, 1),
+        _atom("194.48", 389.59, 163.39, 422.48, 177.14, 1),
+        _atom("2,500.00", 435.1, 163.39, 476.12, 177.14, 1),
+        _atom("21,234.09", 489.22, 163.39, 535.78, 177.14, 1),
+    ]
+
+    cutoff = infer_header_cutoff(atoms)
+
+    assert cutoff is not None
+    assert 142.71 < cutoff < 163.39
+
+
+def test_infer_header_cutoff_rejects_header_only_numeric_annotation_single_row():
+    # A single note/number in header level must not be treated as a body row
+    atoms = [
+        _atom("项目", 10, 10, 40, 20, 1),
+        _atom("附注(1)", 50, 10, 80, 20, 2),
+        _atom("说明", 10, 25, 40, 35, 3),
+        _atom("内容", 50, 25, 80, 35, 4),
+    ]
+
+    cutoff = infer_header_cutoff(atoms)
+    assert cutoff is None
+
+
 def test_refine_leaf_bands_stops_before_a_numeric_body_row_with_later_wraps():
     bands = [
         {"id": 1, "x0": 87.74, "x1": 147.74, "support": 5, "y_support": 5},
@@ -751,6 +788,135 @@ def test_rescue_header_only_leaf_band_rejects_a_nearby_field_fragment():
     assert len(rescued) == len(bands)
 
 
+def test_rescue_header_only_leaf_bands_accepts_rowspan_prefix_header():
+    bands = [
+        {"id": 1, "x0": 10, "x1": 30, "support": 8, "y_support": 8},
+        {"id": 2, "x0": 90, "x1": 110, "support": 8, "y_support": 8},
+        {"id": 3, "x0": 210, "x1": 230, "support": 8, "y_support": 8},
+    ]
+    atoms = [
+        _atom("项目", 10, 5, 30, 15, 1),
+        _atom("实收资本", 90, 25, 110, 35, 2),
+        _atom("其他权益工具", 125, 25, 150, 35, 3),
+        _atom("资本公积", 165, 25, 185, 35, 4),
+        _atom("所有者权益合计", 210, 25, 230, 35, 5),
+    ]
+
+    rescued = header_topology.rescue_header_only_leaf_bands(
+        atoms, bands, header_cutoff=40
+    )
+
+    header_only = [
+        band for band in rescued if band.get("kind") == "header_only_leaf"
+    ]
+    assert [(band["x0"], band["x1"]) for band in header_only] == [
+        (125, 150),
+        (165, 185),
+    ]
+
+
+def test_rescue_header_only_leaf_bands_rejects_rowspan_prefix_with_middle_gap():
+    bands = [
+        {"id": 1, "x0": 10, "x1": 30, "support": 8, "y_support": 8},
+        {"id": 2, "x0": 90, "x1": 110, "support": 8, "y_support": 8},
+        {"id": 3, "x0": 210, "x1": 230, "support": 8, "y_support": 8},
+    ]
+    atoms = [
+        _atom("项目", 10, 5, 30, 15, 1),
+        _atom("实收资本", 90, 25, 110, 35, 2),
+        _atom("候选叶子一", 125, 25, 150, 35, 3),
+        _atom("候选叶子二", 165, 25, 185, 35, 4),
+    ]
+
+    rescued = header_topology.rescue_header_only_leaf_bands(
+        atoms, bands, header_cutoff=40
+    )
+
+    assert len(rescued) == len(bands)
+
+
+def test_rescue_header_only_leaf_bands_rejects_unproven_rowspan_prefix():
+    bands = [
+        {"id": 1, "x0": 10, "x1": 30, "support": 8, "y_support": 8},
+        {"id": 2, "x0": 90, "x1": 110, "support": 8, "y_support": 8},
+        {"id": 3, "x0": 210, "x1": 230, "support": 8, "y_support": 8},
+    ]
+    atoms = [
+        _atom("跨列父标题", 10, 5, 100, 15, 1),
+        _atom("实收资本", 90, 25, 110, 35, 2),
+        _atom("候选叶子一", 125, 25, 150, 35, 3),
+        _atom("候选叶子二", 165, 25, 185, 35, 4),
+        _atom("所有者权益合计", 210, 25, 230, 35, 5),
+    ]
+
+    rescued = header_topology.rescue_header_only_leaf_bands(
+        atoms, bands, header_cutoff=40
+    )
+
+    assert len(rescued) == len(bands)
+
+
+def test_rescue_header_only_leaf_bands_rejects_overlapping_rowspan_candidates():
+    bands = [
+        {"id": 1, "x0": 10, "x1": 30, "support": 8, "y_support": 8},
+        {"id": 2, "x0": 90, "x1": 110, "support": 8, "y_support": 8},
+        {"id": 3, "x0": 210, "x1": 230, "support": 8, "y_support": 8},
+    ]
+    atoms = [
+        _atom("项目", 10, 5, 30, 15, 1),
+        _atom("实收资本", 90, 25, 110, 35, 2),
+        _atom("候选叶子一", 125, 25, 155, 35, 3),
+        _atom("候选叶子二", 145, 25, 180, 35, 4),
+        _atom("所有者权益合计", 210, 25, 230, 35, 5),
+    ]
+
+    rescued = header_topology.rescue_header_only_leaf_bands(
+        atoms, bands, header_cutoff=40
+    )
+
+    assert len(rescued) == len(bands)
+
+
+def test_rescue_header_only_leaf_bands_preserves_complete_level_incremental_filter():
+    bands = [
+        {"id": 1, "x0": 10, "x1": 30, "support": 8, "y_support": 8},
+        {"id": 2, "x0": 90, "x1": 110, "support": 8, "y_support": 8},
+    ]
+    atoms = [
+        _atom("左列", 10, 25, 30, 35, 1),
+        _atom("候选一", 43, 25, 75, 35, 2),
+        _atom("候选二", 65, 25, 77, 35, 3),
+        _atom("右列", 90, 25, 110, 35, 4),
+    ]
+
+    rescued = header_topology.rescue_header_only_leaf_bands(
+        atoms, bands, header_cutoff=40
+    )
+
+    header_only = [
+        band for band in rescued if band.get("kind") == "header_only_leaf"
+    ]
+    assert [(band["x0"], band["x1"]) for band in header_only] == [(43, 75)]
+
+
+def test_rescue_header_only_leaf_bands_preserves_complete_level_numeric_candidate():
+    bands = [
+        {"id": 1, "x0": 10, "x1": 30, "support": 8, "y_support": 8},
+        {"id": 2, "x0": 90, "x1": 110, "support": 8, "y_support": 8},
+    ]
+    atoms = [
+        _atom("左列", 10, 25, 30, 35, 1),
+        _atom("123", 48, 25, 68, 35, 2),
+        _atom("右列", 90, 25, 110, 35, 3),
+    ]
+
+    rescued = header_topology.rescue_header_only_leaf_bands(
+        atoms, bands, header_cutoff=40
+    )
+
+    assert len(rescued) == len(bands) + 1
+
+
 def test_rescue_header_only_note_band_rejects_parenthetical_annotation_text():
     bands = [
         {"id": 1, "x0": 10, "x1": 40, "support": 5, "y_support": 5},
@@ -956,3 +1122,77 @@ def test_rescue_sparse_body_bands_ignores_header_region_atoms():
     refined = rescue_sparse_body_bands(atoms, bands, header_cutoff=25)
 
     assert len(refined) == 2
+
+
+def test_rescue_header_only_leaf_bands_accepts_multilevel_leftmost_leaf_header():
+    # 模拟 Page 1002 结构:
+    # Stable bands: Band 1 (关联方 140-240), Band 2 (270-320), Band 3 (330-370)
+    # Level 0 (y=10): 父表头覆盖 Band 2 和 Band 3 (x=270-370)
+    # Level 1 (y=25): 候选“项目名称”(x=88-124), “关联方”(x=180-210, 覆盖 Band 1)
+    # Level 2 (y=40): 子表头覆盖 Band 2 (x=270-310), Band 3 (x=330-370)
+    bands = [
+        {"id": 1, "x0": 140.0, "x1": 240.0, "support": 10, "y_support": 10},
+        {"id": 2, "x0": 270.0, "x1": 320.0, "support": 10, "y_support": 10},
+        {"id": 3, "x0": 330.0, "x1": 370.0, "support": 10, "y_support": 10},
+    ]
+    atoms = [
+        _atom("余额汇总", 270.0, 5, 370.0, 15, 1),
+        _atom("项目名称", 88.0, 20, 124.0, 30, 2),
+        _atom("关联方", 180.0, 20, 210.0, 30, 3),
+        _atom("账面余额", 270.0, 35, 310.0, 45, 4),
+        _atom("坏账准备", 330.0, 35, 370.0, 45, 5),
+    ]
+
+    rescued = header_topology.rescue_header_only_leaf_bands(
+        atoms, bands, header_cutoff=50.0
+    )
+
+    header_only = [
+        band for band in rescued if band.get("kind") == "header_only_leaf"
+    ]
+    assert len(header_only) == 1
+    assert header_only[0]["x0"] == 88.0
+    assert header_only[0]["x1"] == 124.0
+    assert rescued[0]["id"] == 1
+    assert rescued[0]["x0"] == 88.0
+
+
+def test_rescue_header_only_leaf_bands_rejects_boundary_candidate_with_insufficient_gap():
+    bands = [
+        {"id": 1, "x0": 130.0, "x1": 240.0, "support": 10, "y_support": 10},
+        {"id": 2, "x0": 270.0, "x1": 320.0, "support": 10, "y_support": 10},
+    ]
+    atoms = [
+        _atom("余额汇总", 270.0, 5, 320.0, 15, 1),
+        _atom("项目名称", 125.0, 20, 128.0, 30, 2),  # 间距仅 2.0pt < minimum_gap
+        _atom("关联方", 180.0, 20, 210.0, 30, 3),
+    ]
+
+    rescued = header_topology.rescue_header_only_leaf_bands(
+        atoms, bands, header_cutoff=50.0
+    )
+    header_only = [
+        band for band in rescued if band.get("kind") == "header_only_leaf"
+    ]
+    assert len(header_only) == 0
+
+
+def test_rescue_header_only_leaf_bands_rejects_numeric_or_note_boundary_candidate():
+    bands = [
+        {"id": 1, "x0": 140.0, "x1": 240.0, "support": 10, "y_support": 10},
+        {"id": 2, "x0": 270.0, "x1": 320.0, "support": 10, "y_support": 10},
+    ]
+    atoms = [
+        _atom("余额汇总", 270.0, 5, 320.0, 15, 1),
+        _atom("123", 88.0, 20, 110.0, 30, 2),  # 纯数字
+        _atom("关联方", 180.0, 20, 210.0, 30, 3),
+    ]
+
+    rescued = header_topology.rescue_header_only_leaf_bands(
+        atoms, bands, header_cutoff=50.0
+    )
+    header_only = [
+        band for band in rescued if band.get("kind") == "header_only_leaf"
+    ]
+    assert len(header_only) == 0
+

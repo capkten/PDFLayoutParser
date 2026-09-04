@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import re
 from typing import Any, Sequence
 
 import fitz
@@ -184,6 +185,24 @@ def recover_hybrid_body_cells(
         return 0, 0, []
 
 
+_NUMERIC_ITEM_RE = re.compile(r"^(?:-?[\d,]+(?:\.\d+)?%?|[-—–/])$")
+
+
+def _is_numeric_item(text: str) -> bool:
+    cleaned = text.strip()
+    return bool(_NUMERIC_ITEM_RE.match(cleaned))
+
+
+def _is_narrative_paragraph(text: str) -> bool:
+    cleaned = text.strip()
+    if len(cleaned) >= 30:
+        return True
+    if any(p in cleaned for p in ("。", "；", ";", "：", ":")):
+        if len(cleaned) >= 15:
+            return True
+    return cleaned.count("\n") >= 2
+
+
 def _has_hybrid_structure_support(
     cells: Sequence[Cell], row_count: int, col_count: int
 ) -> bool:
@@ -214,6 +233,31 @@ def _has_hybrid_structure_support(
         for col_idx in range(col_count)
         if sum(1 for c in non_empty_cells if c.col_index == col_idx) >= 2
     )
+
+    has_numeric_column = any(
+        sum(1 for c in non_empty_cells if c.col_index == col_idx and _is_numeric_item(c.text)) >= 2
+        for col_idx in range(col_count)
+    )
+
+    if has_numeric_column:
+        if multi_support_rows >= 2:
+            return True
+        if multi_support_rows >= 1 and cols_with_multiple_rows >= 2:
+            return True
+        return False
+
+    # Non-numeric body: reject if any cell is a narrative paragraph
+    if any(_is_narrative_paragraph(c.text) for c in non_empty_cells):
+        return False
+
+    # Check for sparse columns (a single paragraph mapped with empty peer cells)
+    for col_idx in range(col_count):
+        col_cells = [c for c in non_empty_cells if c.col_index == col_idx]
+        if len(col_cells) / max(1, row_count) < 0.6:
+            return False
+
+    if multi_support_rows / max(1, row_count) < 0.6:
+        return False
 
     if multi_support_rows >= 2:
         return True

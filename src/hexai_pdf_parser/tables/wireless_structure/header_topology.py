@@ -42,6 +42,7 @@ _NOTE_REFERENCE = re.compile(
 _CHECKMARK = re.compile(r"^\s*[\u2713\u2714\u2611]\s*$")
 _NUMERIC = re.compile(r"^[+-]?(?:\d{1,3}(?:,\d{3})*|\d+)(?:\.\d+)?%?$")
 _PLACEHOLDER = re.compile(r"^(?:--+|——+|—+|-+|/|\*+|NA|N/A|\.)$", re.IGNORECASE)
+_HEADER_INDEX_OR_FORMULA = re.compile(r"^[()（）\d+=\—–*/\s\-]+$")
 
 
 def _is_placeholder(item: dict[str, Any]) -> bool:
@@ -130,17 +131,31 @@ def _header_cutoff(atoms: Sequence[dict[str, Any]]) -> float | None:
     # body note can create a later sparse level and a larger gap, so this must be
     # checked before the generic large-gap heuristic.
     numeric_body_levels = []
+    numeric_row_counts = {}
     for index, level in enumerate(levels[1:], 1):
         row = [item for item in atoms if abs(_center_y(item) - level) < 0.5]
-        if any(
-            _is_numeric_body_atom(item)
+        num_count = sum(
+            1
+            for item in row
+            if _is_numeric_body_atom(item)
             and not _is_structural_header_atom(item)
             and not _is_temporal_leaf_header(item)
-            for item in row
-        ):
+        )
+        if num_count > 0:
             numeric_body_levels.append(index)
-    if len(numeric_body_levels) >= 2:
+            numeric_row_counts[index] = num_count
+    if len(numeric_body_levels) >= 2 or (
+        len(numeric_body_levels) == 1 and numeric_row_counts[numeric_body_levels[0]] >= 2
+    ):
         first_body_index = numeric_body_levels[0]
+        if first_body_index >= 2:
+            prev_row = [
+                item for item in atoms
+                if abs(_center_y(item) - levels[first_body_index - 1]) < 0.5
+            ]
+            dash_count = sum(1 for item in prev_row if _is_placeholder(item))
+            if dash_count >= 2:
+                first_body_index -= 1
         return (levels[first_body_index - 1] + levels[first_body_index]) / 2.0
     # In a dense, multi-row header the first large gap is the body boundary.
     # Do not use the globally largest gap: bilingual body rows can create later
@@ -251,7 +266,11 @@ def _is_bare_year_parent_header(atom: dict[str, Any]) -> bool:
 def _is_structural_header_atom(atom: dict[str, Any]) -> bool:
     """Years and unit labels describe hierarchy, rather than a child column name."""
     text = str(atom.get("text", "")).strip()
-    return _is_bare_year_parent_header(atom) or bool(_HEADER_UNIT_TOKEN.search(text))
+    if _is_bare_year_parent_header(atom):
+        return True
+    if text.endswith("%") and text not in {"%", "(%)", "（%）"}:
+        return False
+    return bool(_HEADER_UNIT_TOKEN.search(text))
 
 
 def _is_note_reference_atom(atom: dict[str, Any]) -> bool:
@@ -259,9 +278,26 @@ def _is_note_reference_atom(atom: dict[str, Any]) -> bool:
     return bool(_NOTE_REFERENCE.match(str(atom.get("text", ""))))
 
 
+def _is_header_index_or_formula(text: str) -> bool:
+    s = text.strip()
+    if not s:
+        return False
+    if not _HEADER_INDEX_OR_FORMULA.fullmatch(s):
+        return False
+    if re.fullmatch(r"^[+-]?\d+(?:\.\d+)?%?$", s):
+        return False
+    # Must have parentheses (e.g. （1）) or formula equals sign (e.g. =)
+    return bool(re.search(r"[（()）=]", s))
+
+
 def _is_numeric_body_atom(item: dict[str, Any]) -> bool:
     """金额、百分比和年份等数值对象可作为叶子数值列的稳定锚点。"""
-    return any(char.isdigit() for char in item["text"])
+    text = str(item.get("text", "")).strip()
+    if _is_header_index_or_formula(text):
+        return False
+    if any(0x4E00 <= ord(c) <= 0x9FFF for c in text) and re.search(r"[（(]\d+[)）]$", text):
+        return False
+    return any(char.isdigit() for char in text)
 
 
 def _is_latin_body_atom(item: dict[str, Any]) -> bool:
@@ -762,10 +798,12 @@ def rescue_header_only_leaf_bands(
     header_atoms = [
         atom for atom in atoms if _center_y(atom) <= header_cutoff
     ]
+    levels = _levels(header_atoms)
     eligible_levels: list[
-        tuple[float, list[dict[str, Any]], list[dict[str, Any]]]
+        tuple[float, list[dict[str, Any]], list[dict[str, Any]], bool]
     ] = []
-    for level in _levels(header_atoms):
+    stable_id_order = [int(band["id"]) for band in stable]
+    for level_index, level in enumerate(levels):
         row = [
             atom
             for atom in header_atoms
@@ -786,31 +824,121 @@ def rescue_header_only_leaf_bands(
                 has_parent = True
             else:
                 candidates.append(atom)
-        if has_parent or covered_ids != stable_ids:
+        if has_parent:
             continue
-        if candidates:
-            eligible_levels.append((level, row, candidates))
+        if covered_ids == stable_ids and candidates:
+            eligible_levels.append((level, row, candidates, False))
+            continue
+
+        min_stable_x0 = min(b["x0"] for b in stable)
+        max_stable_x1 = max(b["x1"] for b in stable)
+        min_stable_id = min(stable_id_order)
+        max_stable_id = max(stable_id_order)
+        boundary_candidates = [
+            c
+            for c in candidates
+            if (c["bbox"][2] <= min_stable_x0 and min_stable_id in covered_ids)
+            or (c["bbox"][0] >= max_stable_x1 and max_stable_id in covered_ids)
+        ]
+        if boundary_candidates:
+            all_header_covered_ids = {
+                int(b["id"])
+                for a in header_atoms
+                for b in stable
+                if _meaningful_header_band_overlap(a, b)
+            }
+            if all_header_covered_ids == stable_ids:
+                non_conflicting = []
+                for bc in boundary_candidates:
+                    other_level_atoms = [
+                        a
+                        for a in header_atoms
+                        if abs(_center_y(a) - level) > 2.4
+                        and min(a["bbox"][2], bc["bbox"][2])
+                        - max(a["bbox"][0], bc["bbox"][0])
+                        > 0
+                    ]
+                    if not other_level_atoms:
+                        non_conflicting.append(bc)
+                if non_conflicting:
+                    eligible_levels.append((level, row, non_conflicting, True))
+                    continue
+
+        if len(candidates) < 2 or len(covered_ids) < 2 or level_index == 0:
+            continue
+
+        covered_order = [
+            band_id for band_id in stable_id_order if band_id in covered_ids
+        ]
+        suffix_start = len(stable_id_order) - len(covered_order)
+        if covered_order != stable_id_order[suffix_start:] or suffix_start == 0:
+            continue
+
+        missing_prefix = stable[:suffix_start]
+        previous_level = levels[level_index - 1]
+        previous_row = [
+            atom
+            for atom in header_atoms
+            if abs(_center_y(atom) - previous_level) <= 2.4
+        ]
+        prefix_is_proven = all(
+            any(
+                [
+                    int(overlap["id"])
+                    for overlap in stable
+                    if _meaningful_header_band_overlap(atom, overlap)
+                ]
+                == [int(band["id"])]
+                for atom in previous_row
+            )
+            for band in missing_prefix
+        )
+        first_covered = stable[suffix_start]
+        last_covered = stable[-1]
+        candidates_are_bounded = all(
+            first_covered["x0"] <= atom["bbox"][0]
+            and atom["bbox"][2] <= last_covered["x1"]
+            for atom in candidates
+        )
+        if prefix_is_proven and candidates_are_bounded:
+            eligible_levels.append((level, row, candidates, True))
 
     if not eligible_levels:
         return rescued
-    _, row, candidates = max(eligible_levels, key=lambda item: item[0])
+    _, row, candidates, require_complete_group = max(
+        eligible_levels, key=lambda item: item[0]
+    )
+    additions: list[dict[str, Any]] = []
     for atom in candidates:
+        text = str(atom.get("text", "")).strip()
         if _is_structural_header_atom(atom):
+            if require_complete_group:
+                return rescued
             continue
+        if require_complete_group and (
+            _is_note_reference_atom(atom)
+            or _NUMERIC.fullmatch(text)
+            or _is_placeholder(atom)
+        ):
+            return rescued
         if any(
             horizontal_overlap(
                 atom,
                 {"bbox": [band["x0"], 0.0, band["x1"], 1.0]},
             )
             > 0
-            for band in rescued
+            for band in [*rescued, *additions]
         ):
+            if require_complete_group:
+                return rescued
             continue
 
         x0, x1 = atom["bbox"][0], atom["bbox"][2]
         left = [item for item in row if item is not atom and item["bbox"][2] <= x0]
         right = [item for item in row if item is not atom and item["bbox"][0] >= x1]
         if not left and not right:
+            if require_complete_group:
+                return rescued
             continue
         neighbors = [
             item
@@ -834,11 +962,26 @@ def rescue_header_only_leaf_bands(
         )
         minimum_gap = max(8.0, line_height * 1.25)
         if left and x0 - max(item["bbox"][2] for item in left) < minimum_gap:
+            if require_complete_group:
+                return rescued
             continue
         if right and min(item["bbox"][0] for item in right) - x1 < minimum_gap:
+            if require_complete_group:
+                return rescued
             continue
 
-        rescued.append(
+        bands_to_right = [b for b in rescued if b["x0"] >= x1]
+        if bands_to_right and min(b["x0"] for b in bands_to_right) - x1 < minimum_gap:
+            if require_complete_group:
+                return rescued
+            continue
+        bands_to_left = [b for b in rescued if b["x1"] <= x0]
+        if bands_to_left and x0 - max(b["x1"] for b in bands_to_left) < minimum_gap:
+            if require_complete_group:
+                return rescued
+            continue
+
+        additions.append(
             {
                 "x0": x0,
                 "x1": x1,
@@ -847,6 +990,8 @@ def rescue_header_only_leaf_bands(
                 "kind": "header_only_leaf",
             }
         )
+
+    rescued.extend(additions)
 
     rescued.sort(key=lambda band: band["x0"])
     for index, band in enumerate(rescued, 1):
@@ -912,6 +1057,8 @@ def _infer_centered_parent_span(
             width = last["x1"] - first["x0"]
             centre = (first["x0"] + last["x1"]) / 2.0
             if width < atom_width * 1.55 or width > atom_width * 3.05:
+                continue
+            if atom["bbox"][0] > first["x1"] or atom["bbox"][2] < last["x0"]:
                 continue
             if abs(centre - atom_center) <= max(4.0, width * 0.08):
                 viable.append((abs(centre - atom_center), span))

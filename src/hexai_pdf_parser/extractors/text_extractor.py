@@ -9,6 +9,7 @@ from typing import Dict, List, Tuple
 import fitz
 
 from hexai_pdf_parser.core.models import Block, BBox, Char, Line, Table, Word
+from hexai_pdf_parser.extractors.reading_order import sort_by_reading_order
 
 
 class TextExtractor:
@@ -126,6 +127,7 @@ class TextExtractor:
             if block_dict.get("type") != 0:
                 continue
 
+            block_lines: List[Block] = []
             for line_dict in block_dict.get("lines", []):
                 words = self._words_from_spans(line_dict.get("spans", []))
                 if not words:
@@ -135,23 +137,49 @@ class TextExtractor:
                 for word in words:
                     if self._word_inside_any_table(word, tables):
                         if outside_words:
-                            blocks.append(self._block_from_words(outside_words))
+                            block_lines.append(self._block_from_words(outside_words))
                             outside_words = []
                         continue
                     outside_words.append(word)
 
                 if outside_words:
-                    blocks.append(self._block_from_words(outside_words))
+                    block_lines.append(self._block_from_words(outside_words))
 
-        return sorted(
-            blocks,
-            key=lambda block: (
-                block.bbox.y0,
-                block.bbox.x0,
-                block.bbox.y1,
-                block.bbox.x1,
-            ),
-        )
+            merged_block_lines = self._merge_same_visual_lines(block_lines)
+            blocks.extend(merged_block_lines)
+
+        return sort_by_reading_order(blocks)
+
+    def _merge_same_visual_lines(self, line_blocks: List[Block]) -> List[Block]:
+        """Merge line blocks that visually belong to the same line (e.g. justified words separated by PyMuPDF)."""
+        if len(line_blocks) <= 1:
+            return line_blocks
+
+        sorted_lines = sorted(line_blocks, key=lambda b: (b.bbox.y0, b.bbox.x0))
+        merged: List[Block] = []
+
+        for curr in sorted_lines:
+            if not merged:
+                merged.append(curr)
+                continue
+
+            prev = merged[-1]
+            gap_x = curr.bbox.x0 - prev.bbox.x1
+            overlap_y = min(prev.bbox.y1, curr.bbox.y1) - max(prev.bbox.y0, curr.bbox.y0)
+            min_h = min(prev.bbox.y1 - prev.bbox.y0, curr.bbox.y1 - curr.bbox.y0)
+
+            # Check if prev and curr visually align on the same horizontal line
+            if min_h > 0 and (overlap_y / min_h) >= 0.5 and -2.0 <= gap_x <= 40.0:
+                all_words: List[Word] = []
+                for line in prev.lines:
+                    all_words.extend(line.words)
+                for line in curr.lines:
+                    all_words.extend(line.words)
+                merged[-1] = self._block_from_words(all_words)
+            else:
+                merged.append(curr)
+
+        return merged
 
     def _words_from_spans(self, spans: List[dict]) -> List[Word]:
         words: List[Word] = []

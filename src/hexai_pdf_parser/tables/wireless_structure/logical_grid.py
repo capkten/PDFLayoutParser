@@ -18,40 +18,150 @@ def _wrapped_leaf_header_span(
     if (
         candidate.get("merge_kind") != "multiline_cell"
         or "\n" not in str(candidate.get("text", ""))
-        or int(candidate.get("row_end", 0)) != int(candidate.get("row_start", 0)) + 1
+        or int(candidate.get("row_end", 0)) <= int(candidate.get("row_start", 0))
         or int(candidate.get("col_start", 0)) != int(candidate.get("col_end", 0))
         or int(candidate.get("colspan", 1)) != 1
         or not candidate.get("bbox")
     ):
         return None
     center_y = (candidate["bbox"][1] + candidate["bbox"][3]) / 2.0
-    if center_y > header_cutoff:
+    if center_y > header_cutoff or candidate["bbox"][3] > header_cutoff:
         return None
 
     start = int(candidate["row_start"])
-    end = int(candidate["row_end"])
     started = [
         cell
         for cell in cells
         if int(cell["row_start"]) == start and str(cell.get("text", "")).strip()
     ]
-    if len(started) != 1 or started[0] is not candidate:
+    if not started or candidate not in started:
+        return None
+    # 首行启动的所有非空单元格必须全部是单列多行叶表头，不得包含单行独立表头或跨列父表头
+    for item in started:
+        if (
+            item.get("merge_kind") != "multiline_cell"
+            or "\n" not in str(item.get("text", ""))
+            or int(item.get("row_end", 0)) <= start
+            or int(item.get("col_start", 0)) != int(item.get("col_end", 0))
+            or int(item.get("colspan", 1)) != 1
+            or not item.get("bbox")
+            or (item["bbox"][1] + item["bbox"][3]) / 2.0 > header_cutoff
+            or item["bbox"][3] > header_cutoff
+        ):
+            return None
+
+    end = max(int(item["row_end"]) for item in started)
+    started_columns = {int(item["col_start"]) for item in started}
+
+    candidate_column = int(candidate["col_start"])
+    for cell in cells:
+        if cell is candidate or not cell.get("bbox"):
+            continue
+        rows_overlap = not (
+            int(cell["row_end"]) < start or int(cell["row_start"]) > end
+        )
+        columns_overlap = int(cell["col_start"]) <= candidate_column <= int(
+            cell["col_end"]
+        )
+        if rows_overlap and columns_overlap:
+            return None
+
+    sibling_columns_by_row: dict[int, set[int]] = {}
+    for cell in cells:
+        if (
+            cell in started
+            or int(cell["row_start"]) < start
+            or int(cell["row_end"]) > end
+            or int(cell["row_start"]) != int(cell["row_end"])
+            or int(cell["col_start"]) in started_columns
+            or int(cell.get("colspan", 1)) != 1
+            or not cell.get("bbox")
+            or (cell["bbox"][1] + cell["bbox"][3]) / 2.0 > header_cutoff
+            or not str(cell.get("text", "")).strip()
+        ):
+            continue
+        sibling_columns_by_row.setdefault(int(cell["row_start"]), set()).add(
+            int(cell["col_start"])
+        )
+    if not any(len(columns) >= 2 for columns in sibling_columns_by_row.values()):
+        return None
+    return start, end
+
+
+def _grouped_mixed_leaf_header_span(
+    cells: Sequence[dict[str, Any]],
+    candidate: dict[str, Any],
+    header_cutoff: float | None,
+) -> tuple[int, int] | None:
+    """Find mixed single/wrapped leaves proven by one two-column parent."""
+    if header_cutoff is None or (
+        candidate.get("merge_kind") != "multiline_cell"
+        or "\n" not in str(candidate.get("text", ""))
+        or int(candidate.get("row_end", 0)) <= int(candidate.get("row_start", 0))
+        or int(candidate.get("col_start", 0)) != int(candidate.get("col_end", 0))
+        or int(candidate.get("colspan", 1)) != 1
+        or not candidate.get("bbox")
+        or candidate["bbox"][3] > header_cutoff
+    ):
         return None
 
-    sibling_columns = {
-        int(cell["col_start"])
+    start = int(candidate["row_start"])
+    end = int(candidate["row_end"])
+    candidate_column = int(candidate["col_start"])
+    header = [
+        cell
         for cell in cells
-        if cell is not candidate
-        and int(cell["row_start"]) == end
-        and int(cell["row_end"]) == end
-        and int(cell["col_start"]) != int(candidate["col_start"])
-        and int(cell.get("colspan", 1)) == 1
+        if str(cell.get("text", "")).strip()
         and cell.get("bbox")
-        and (cell["bbox"][1] + cell["bbox"][3]) / 2.0 <= header_cutoff
-        and str(cell.get("text", "")).strip()
-    }
-    if len(sibling_columns) < 2:
+        and cell["bbox"][3] <= header_cutoff
+    ]
+    parents = [
+        cell
+        for cell in header
+        if int(cell["row_end"]) < start
+        and int(cell["col_end"]) == int(cell["col_start"]) + 1
+        and int(cell.get("colspan", 1)) == 2
+        and int(cell["col_start"]) <= candidate_column <= int(cell["col_end"])
+    ]
+    if len(parents) != 1:
         return None
+
+    parent = parents[0]
+    parent_columns = set(range(int(parent["col_start"]), int(parent["col_end"]) + 1))
+    overlapping = [
+        cell
+        for cell in header
+        if cell is not parent
+        and not (int(cell["row_end"]) < start or int(cell["row_start"]) > end)
+    ]
+    children = [
+        cell
+        for cell in overlapping
+        if int(cell["col_start"]) in parent_columns
+        or int(cell["col_end"]) in parent_columns
+    ]
+    if (
+        len(children) != 2
+        or candidate not in children
+        or any(
+            int(cell["col_start"]) != int(cell["col_end"])
+            or not start <= int(cell["row_start"]) <= int(cell["row_end"]) <= end
+            for cell in children
+        )
+        or {int(cell["col_start"]) for cell in children} != parent_columns
+    ):
+        return None
+
+    outside_columns: set[int] = set()
+    for cell in overlapping:
+        if cell in children:
+            continue
+        if int(cell["col_start"]) != int(cell["col_end"]):
+            return None
+        column = int(cell["col_start"])
+        if column in outside_columns:
+            return None
+        outside_columns.add(column)
     return start, end
 
 
@@ -98,8 +208,16 @@ def _row_components(
         for span in [_wrapped_leaf_header_span(cells, cell, header_cutoff)]
         if span is not None
     ]
+    grouped_mixed_header_spans = [
+        span
+        for cell in cells
+        for span in [_grouped_mixed_leaf_header_span(cells, cell, header_cutoff)]
+        if span is not None
+    ]
 
-    for start, end in sorted(body_prefix_spans + wrapped_header_spans):
+    for start, end in sorted(
+        body_prefix_spans + wrapped_header_spans + grouped_mixed_header_spans
+    ):
         matching = [
             index
             for index, group in enumerate(groups)

@@ -91,4 +91,7 @@ In repositories indexed by CodeGraph (a `.codegraph/` directory exists at the re
 - **Shell** (always works): `codegraph explore "<symbol names or question>"` prints the same output.
 
 If there is no `.codegraph/` directory, skip CodeGraph entirely — indexing is the user's decision.
+
+## fix
+修复任务的时候，需要新建分支实现，验证通过了再合并，使用worktree，因为同时有多个agent在修复不同问题
 <!-- CODEGRAPH_END -->
