@@ -3021,6 +3021,43 @@ class EnglishTableExtractor(BaseTableExtractor):
                             grid[t + 1][span_ci] = c_top
                             merged_down.add((t + 1, span_ci))
 
+        # 自底向上：处理在上一层无母节点的单列叶子表头，若上方为空且无横线阻隔，则向上合并空槽位并扩展 rowspan
+        for t in range(num_tiers - 2, -1, -1):
+            tier_top_cells = [c for c in rows_dict[sorted_row_indices[t]] if c.text.strip()]
+            if not tier_top_cells:
+                continue
+            t_y0 = min(c.bbox.y0 for c in tier_top_cells)
+            has_other_top = any(
+                grid[t][other_ci] is not None and grid[t][other_ci].text.strip()
+                for other_ci in range(len(columns))
+            )
+            if not has_other_top:
+                continue
+
+            for ci, (cx0, cx1) in enumerate(columns):
+                c_top = grid[t][ci]
+                c_bot = grid[t + 1][ci]
+                if c_top is None and c_bot is not None and (t + 1, ci) not in merged_down:
+                    if c_bot.colspan == 1 and c_bot.text.strip():
+                        # 检查在当前列上，两层交界处（下一层顶部附近）是否存在物理水平线阻断
+                        has_col_line = any(
+                            c_bot.bbox.y0 - 3.5 <= ly <= c_bot.bbox.y0 + 2.0
+                            and max(cx0 + 5.0, lx0) < min(cx1 - 5.0, lx1)
+                            for ly, lx0, lx1 in h_lines
+                        )
+                        if not has_col_line:
+                            orig_r = sorted_row_indices[t + 1]
+                            target_r = sorted_row_indices[t]
+                            rows_dict[orig_r] = [c for c in rows_dict[orig_r] if c is not c_bot]
+                            rows_dict[target_r].append(c_bot)
+                            c_bot.row_index = target_r
+                            grid[t][ci] = c_bot
+                            grid[t + 1][ci] = c_bot
+                            merged_down.add((t + 1, ci))
+
+
+
+
         # 处理在所有上层均无父表头覆盖的单列单元格（如 Col 0, 1, 2 行标签或单列指标，提升并设置 rowspan 跨越表头）
         if len(hier_tiers) >= 2:
             top_r = sorted_row_indices[0]
