@@ -1,6 +1,24 @@
 # Changes
 
+## 2026-09-04
+
+- 修复英文多级表头中因局部下划线全局行切分导致无母节点单列表头被撕裂并残留大量空单元格的问题（针对 `en_all_table_pages_page_075.pdf` Table 1 与 Table 2）。
+  - **根因与调用位置**：
+    1. 在 `src/hexai_pdf_parser/tables/extractors/english_table_extractor.py` 的 `_detect_header_rows()` 中，物理下划线 `y = 144.53` 实际仅覆盖 Col 1~2（用于分隔 `Three Months Ended September 30,` 与 `2023/2024`），但算法将其无差别视作贯穿整表的全局分割线，将右侧原本连续的单列叶子表头（如 `Constant Currency Revenues`、`Less FX Effect`、`As Reported`）错误地横向切分为 Tier 2 与 Tier 3。
+    2. 在 `_normalize_headers()` 中，原先仅支持上下两层均有内容的垂直折行拼接（`is_compact_wrapping`），或者从首层至底层全空的提升（`all_upper_empty`）。当上层（Row 0 或 Row 1）存在大表头、且某列在中间行无母节点（`grid[t][ci] is None`）时，算法缺少自底向上的跨行填充逻辑，导致 Col 3、5、6、7 滞留在底层，而在 Row 2 留下大片未合并的空白槽位。
+  - **修复判定与调用位置**：
+    在 `_normalize_headers()` 的折行规整后引入自底向上（Bottom-Up）的无母节点单列表头向上合并机制：
+    1. **判定条件**：当单列叶子表头单元格满足 `c_bot.colspan == 1 and c_bot.text.strip()`，其正上方槽位为空（`grid[t][ci] is None`），且上方所在层存在其他非空兄弟表头（确保属于有效表头行），并且在该列的宽度区间内两层交界面处无物理水平线阻断（`not has_col_line`）时，确认为无母节点的连续单列表头；
+    2. **两层交界判定保护**：水平线阻断判定严格限定在两层接触面范围（`c_bot.bbox.y0 - 3.5 <= ly <= c_bot.bbox.y0 + 2.0`），防止上一层的大标题底线或下层的数据底线误判为层间阻隔；
+    3. **向上扩展合并**：将该单元格提升至第 $t$ 层，并在网格中自适应累加计算 `rowspan`（Table 1/Table 2 中 Col 3/4 向上贯通跨 3 行，Col 5/6/7/8 跨 2 行），完美消除所有空槽位。
+  - **结构约束**：只基于几何与网格拓扑决策，不硬编码任何具体业务文字，保持每个逻辑槽位唯一占用与无冲突。
+  - **测试与页面验证**：
+    - 新增针对性测试套件 `tests/test_header_upward_merge.py`（包含三层大标题正例、带横线阻断拒绝合并反例、以及真实 Page 075 集成测试），3 项测试全部通过（`3 passed`）；
+    - 全量既有模型及无线表格测试 71 项全部通过；
+    - 单页独立验证输出目录：`C:\Users\92410\Desktop\git\hexai_pdf_parser\src\hexai_pdf_parser\data\en_all_pages\`，已重新导出并核对 `en_all_table_pages_page_075.md`、`en_all_table_pages_page_075.json` 以及可视化图片 `en_all_table_pages_page_075_visualized.png`，Table 1 与 Table 2 蓝线网格完全对齐贴合，无多余空单元格，结构规整严密。
+
 ## 2026-09-03
+
 
 - Page 979 最终验证产物已归档至 `D:\\codes\\PDFLayoutParser\\output\\page_979_fixed_width_alignment_corridor_20260903_final_verify\\`。
 
