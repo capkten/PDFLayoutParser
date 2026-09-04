@@ -687,9 +687,35 @@ def test_merge_v_lines_does_not_connect_adjacent_tables_separated_by_gap():
     assert merged[1] == (28.0, 52.5, 28.0, 90.0)
 
 
-def test_trim_empty_edge_rows_removes_empty_leading_and_trailing_rows():
+def test_trim_ghost_edge_rows_preserves_physically_closed_empty_rows():
     extractor = WiredTableExtractor()
-    # 模拟第 0 行全空，第 1 行为有效数据，第 2 行全空
+    # 模拟真实物理空行：第 0 行有文字，第 1 行无文字但有真实的底物理横线 y=50.0 支持，且行高 25.0pt
+    h_lines = [
+        (28.4, 1.0, 135.0, 1.0),
+        (28.4, 25.0, 135.0, 25.0),
+        (28.4, 50.0, 135.0, 50.0),
+    ]
+    cells = [
+        Cell("数据A", 0, 0, BBox(28.4, 1.0, 80.0, 25.0)),
+        Cell("数据B", 0, 1, BBox(80.0, 1.0, 135.0, 25.0)),
+        Cell("", 1, 0, BBox(28.4, 25.0, 80.0, 50.0)),
+        Cell("", 1, 1, BBox(80.0, 25.0, 135.0, 50.0)),
+    ]
+
+    # 有真实物理横线支持的合法空行必须保留
+    trimmed = extractor._trim_ghost_edge_rows(cells, h_lines)
+    assert len(trimmed) == 4
+    assert {c.row_index for c in trimmed} == {0, 1}
+
+
+def test_trim_ghost_edge_rows_removes_virtual_or_thin_edge_rows():
+    extractor = WiredTableExtractor()
+    # 模拟第 0 行在 y=1.0 处并没有真实物理横线（真实顶线在 y=25.0）
+    # 第 2 行是 0.4pt 的超薄缝隙行（y 从 50.0 到 50.4）
+    h_lines = [
+        (28.4, 25.0, 135.0, 25.0),
+        (28.4, 50.0, 135.0, 50.0),
+    ]
     cells = [
         Cell("", 0, 0, BBox(28.4, 1.0, 80.0, 25.0)),
         Cell("", 0, 1, BBox(80.0, 1.0, 135.0, 25.0)),
@@ -699,11 +725,51 @@ def test_trim_empty_edge_rows_removes_empty_leading_and_trailing_rows():
         Cell("", 2, 1, BBox(80.0, 50.0, 135.0, 50.4)),
     ]
 
-    trimmed = extractor._trim_empty_edge_rows(cells)
+    trimmed = extractor._trim_ghost_edge_rows(cells, h_lines)
 
-    # 应该只保留第 1 行（重排为 row_index=0）
+    # 虚假顶行和超薄缝隙底行被剔除，只保留第 1 行
     assert len(trimmed) == 2
     assert all(c.row_index == 0 for c in trimmed)
     assert [c.text for c in trimmed] == ["数据A", "数据B"]
-    assert trimmed[0].bbox.y0 >= 24.0
 
+
+def test_page_291_bottom_physical_empty_row_is_preserved():
+    # 测试 Page 291 底部物理空白行保留
+    import os
+    pdf_path = r"D:\codes\PDFLayoutParser\fix\zh_all_table_pages.pdf"
+    if not os.path.exists(pdf_path):
+        pytest.skip("PDF file not available")
+
+    doc = fitz.open(pdf_path)
+    try:
+        page = doc[291]
+        extractor = WiredTableExtractor()
+        tables = extractor.extract(page)
+        assert len(tables) >= 1
+        t0 = tables[0]
+        # 必须包含 3 行（底部真实物理空行保留，12 个 cells）
+        assert t0.rows == 3
+        assert len(t0.cells) == 12
+        assert t0.bbox.y1 >= 213.0
+    finally:
+        doc.close()
+
+
+def test_page_351_table_horizontal_bbox_is_preserved():
+    # 测试 Page 351 表格水平跨度不被细胞截断
+    import os
+    pdf_path = r"D:\codes\PDFLayoutParser\fix\zh_all_table_pages.pdf"
+    if not os.path.exists(pdf_path):
+        pytest.skip("PDF file not available")
+
+    doc = fitz.open(pdf_path)
+    try:
+        page = doc[351]
+        extractor = WiredTableExtractor()
+        tables = extractor.extract(page)
+        assert len(tables) >= 1
+        t0 = tables[0]
+        # 水平起点必须保持覆盖左侧横线（<= 90.0），不能收缩到 245.7
+        assert t0.bbox.x0 <= 90.0
+    finally:
+        doc.close()

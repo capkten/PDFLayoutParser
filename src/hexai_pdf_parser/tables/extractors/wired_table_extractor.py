@@ -55,7 +55,7 @@ class WiredTableExtractor(BaseTableExtractor):
 
             cells = self._assign_text_to_line_cells(cells, page)
             cells = self._merge_oversegmented_line_columns(cells)
-            cells = self._trim_empty_edge_rows(cells)
+            cells = self._trim_ghost_edge_rows(cells, region_h_lines, tol=self.line_tolerance)
             if not cells:
                 continue
 
@@ -75,20 +75,18 @@ class WiredTableExtractor(BaseTableExtractor):
 
             if row_count >= 1 and col_count >= 1 and cells:
                 has_text = any(c.text.strip() for c in cells)
-                actual_bbox = BBox(
-                    min(c.bbox.x0 for c in cells),
-                    min(c.bbox.y0 for c in cells),
-                    max(c.bbox.x1 for c in cells),
-                    max(c.bbox.y1 for c in cells),
-                )
-                table_height = actual_bbox.y1 - actual_bbox.y0
+                actual_y0 = min(c.bbox.y0 for c in cells)
+                actual_y1 = max(c.bbox.y1 for c in cells)
+                # 保持水平方向为完整 region_bbox 宽度，避免截断无竖线开放列 (如三线表)
+                table_bbox = BBox(region_bbox.x0, actual_y0, region_bbox.x1, actual_y1)
+                table_height = actual_y1 - actual_y0
                 if not has_text and (table_height < 6.0 or row_count * col_count <= 1):
                     continue
 
                 conf_score = round(confidence, 4) if confidence is not None else 0.90
                 tables.append(
                     Table(
-                        bbox=actual_bbox,
+                        bbox=table_bbox,
                         rows=row_count,
                         cols=col_count,
                         cells=cells,
@@ -624,8 +622,16 @@ class WiredTableExtractor(BaseTableExtractor):
         return merged
 
     @staticmethod
-    def _trim_empty_edge_rows(cells: List[Cell]) -> List[Cell]:
-        """Trim completely empty leading and trailing rows from wired tables."""
+    def _trim_ghost_edge_rows(
+        cells: List[Cell],
+        h_lines: List[Tuple[float, float, float, float]],
+        tol: float = 2.0,
+    ) -> List[Cell]:
+        """Only trim ghost edge rows that are ultra-thin seams or lack physical line support.
+
+        Legitimate empty rows that have real physical horizontal line boundaries
+        and normal row height (e.g. Page 291) are strictly preserved.
+        """
         if not cells:
             return cells
 
@@ -638,14 +644,40 @@ class WiredTableExtractor(BaseTableExtractor):
 
         while min_row <= max_row:
             row_cells = [c for c in cells if c.row_index == min_row]
-            if row_cells and all(c.text.strip() == "" for c in row_cells):
+            if not row_cells:
+                min_row += 1
+                continue
+            has_text = any(c.text.strip() != "" for c in row_cells)
+            if has_text:
+                break
+
+            top_y = min(c.bbox.y0 for c in row_cells)
+            bot_y = max(c.bbox.y1 for c in row_cells)
+            height = bot_y - top_y
+            has_real_top_line = any(abs(line[1] - top_y) <= tol for line in h_lines)
+
+            # 仅在是超薄缝隙行 (<= tol) 或者顶边没有真实物理横线支撑时才修剪
+            if height <= tol or not has_real_top_line:
                 min_row += 1
             else:
                 break
 
         while max_row >= min_row:
             row_cells = [c for c in cells if c.row_index == max_row]
-            if row_cells and all(c.text.strip() == "" for c in row_cells):
+            if not row_cells:
+                max_row -= 1
+                continue
+            has_text = any(c.text.strip() != "" for c in row_cells)
+            if has_text:
+                break
+
+            top_y = min(c.bbox.y0 for c in row_cells)
+            bot_y = max(c.bbox.y1 for c in row_cells)
+            height = bot_y - top_y
+            has_real_bot_line = any(abs(line[1] - bot_y) <= tol for line in h_lines)
+
+            # 仅在是超薄缝隙行 (<= tol) 或者底边没有真实物理横线支撑时才修剪
+            if height <= tol or not has_real_bot_line:
                 max_row -= 1
             else:
                 break
