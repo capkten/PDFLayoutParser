@@ -35,9 +35,7 @@ class TestTextExtractor:
             blocks = TextExtractor().extract_layout_blocks(doc[0], [table])
 
         texts = [block.text for block in blocks]
-        assert texts.index("1.") < texts.index("First body line")
-        assert texts.index("First body line") < texts.index("2.")
-        assert texts.index("2.") < texts.index("Second body line")
+        assert texts == ["1. First body line", "2. Second body line"]
         assert "TABLE TEXT" not in texts
 
     def test_extract_blocks_and_lines(self, tmp_dir):
