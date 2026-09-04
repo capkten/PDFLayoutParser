@@ -1,4 +1,4 @@
-"""English wireless table extraction strategies."""
+"""英文无线表格提取策略模块。"""
 
 from __future__ import annotations
 
@@ -18,14 +18,14 @@ from hexai_pdf_parser.tables.wireless_table_recovery import recover_wireless_tab
 from hexai_pdf_parser.tables.wireless_structure import continuations
 
 
-# Color constants for English zebra row backgrounds
+# 英文斑马底色行背景的颜色常量
 LIGHT_BLUE = (0.8, 0.933, 1.0)
 WHITE = (1.0, 1.0, 1.0)
 
 
 @dataclass
 class _RowData:
-    """Internal representation of a table row in zebra background tables."""
+    """斑马线背景表格中表格行的内部表示数据结构。"""
     words: List[Tuple[float, float, float, float, str]]
     y0: float
     y1: float
@@ -67,7 +67,7 @@ class EnglishTableExtractor(BaseTableExtractor):
 
     @staticmethod
     def _merge_standalone_currency_columns(columns: List[Tuple[float, float]], words: List[Tuple]) -> List[Tuple[float, float]]:
-        """Merge OCR-only ``$`` columns with the immediately following amount column."""
+        """将仅含货币符号 '$' 的独立列与紧随其后的金额数值列进行合并。"""
         cols = list(columns)
         i = 0
         while i < len(cols):
@@ -146,7 +146,7 @@ class EnglishTableExtractor(BaseTableExtractor):
 
     @staticmethod
     def _promote_grouped_header_cells(cells: List[Cell], columns: List[Tuple[float, float]], header_rows: int) -> None:
-        """Apply one topology-based colspan rule to all English wireless paths."""
+        """将基于拓扑的跨列规则统一应用于所有英文无线表格提取路径。"""
         if header_rows < 2 or not cells:
             return
         for row_index in range(header_rows - 1):
@@ -195,7 +195,7 @@ class EnglishTableExtractor(BaseTableExtractor):
         start_col: int,
         end_col: int,
     ) -> bool:
-        """Detect a filled source rectangle spanning adjacent columns in one row."""
+        """检测某行中是否存在跨越相邻列的物理填充源矩形。"""
         if page is None or start_col < 0 or end_col >= len(columns) or start_col >= end_col:
             return False
 
@@ -223,7 +223,7 @@ class EnglishTableExtractor(BaseTableExtractor):
                     return True
         return False
 
-    """Extracts wireless tables: zebra colored background bands, 3-line tables, and borderless text-alignment."""
+    """提取无线表格：包含斑马底色背景带表格、三线表及无框文本对齐表格。"""
 
 
     def __init__(
@@ -247,7 +247,7 @@ class EnglishTableExtractor(BaseTableExtractor):
         confidence: Optional[float] = None,
         page_language: Optional[str] = None,
     ) -> List[Table]:
-        """Extract an English wireless table from a candidate region or page."""
+        """从候选区域或整个页面中提取英文无线表格。"""
         if page_language is None:
             page_language = detect_page_language(page)
 
@@ -290,11 +290,10 @@ class EnglishTableExtractor(BaseTableExtractor):
         allowed_regions: Optional[List[BBox]] = None,
         use_legacy_fallback: bool = True,
     ) -> List[Table]:
-        """Return native-span candidates for an English page.
+        """返回英文页面的 native-span 候选表格。
 
-        The legacy words path remains an optional callback so the page-level
-        orchestrator can keep its historical reconstruction without coupling
-        this module to :class:`TableExtractor`.
+        旧版 words 路径仅作为可选回调兜底保留，以便页面级协调器可以保持其历史重构行为，
+        而无需将此模块与 TableExtractor 强耦合。
         """
         if allowed_regions == []:
             self._last_wireless_recovery = {"regions": [], "disabled": True}
@@ -354,9 +353,9 @@ class EnglishTableExtractor(BaseTableExtractor):
         table_bbox: Optional[BBox] = None,
         confidence: Optional[float] = None,
     ) -> List[Table]:
-        """Extract general English wireless tables strictly using geometric distance:
-        1. Rows are determined along the Y-axis.
-        2. Columns are determined along the X-axis (overlapping intervals form a column, including underlines `————`).
+        """严格基于几何距离提取通用英文无线表格：
+        1. 基于 Y 轴判定物理行。
+        2. 基于 X 轴判定列结构（重叠区间聚类为列，包含下划线 `————`）。
         """
         if table_bbox is not None:
             try:
@@ -678,6 +677,7 @@ class EnglishTableExtractor(BaseTableExtractor):
             columns = self._prune_phantom_columns(columns, sub_words, sub_bbox)
             if not columns or len(columns) < 2:
                 continue
+            columns = self._adjust_columns_for_currency(columns, sub_words)
 
             # 检查表头下划线并在各层表头无内横线时聚合单层表头 (Rule 2.2 & Rule 2.3)
             sub_h = [
@@ -806,8 +806,8 @@ class EnglishTableExtractor(BaseTableExtractor):
         table_bbox: Optional[BBox] = None,
         confidence: Optional[float] = None,
     ) -> List[Table]:
-        """Extract wireless tables using color-alternating row backgrounds."""
-        # Rule 4: Strict geometric intersection expansion
+        """基于交替交错的斑马底色背景行提取无线表格。"""
+        # 规则 4：严格的几何相交扩充
         if table_bbox is not None:
             try:
                 page_words = page.get_text("words")
@@ -927,7 +927,7 @@ class EnglishTableExtractor(BaseTableExtractor):
                             filled_bgs.append((prev_y1, cur_y0, "white"))
                 filled_bgs.append(bg)
 
-            # Check if there's a bottom white zebra row after last filled band
+            # 检查最后一个填充色块后是否存在底部白色斑马底色行
             last_filled_y1 = filled_bgs[-1][1] if filled_bgs else last_colored_y
             if table_bbox and table_bbox.y1 > last_filled_y1 + 4.0:
                 words = page.get_text("words")
@@ -1011,15 +1011,10 @@ class EnglishTableExtractor(BaseTableExtractor):
                 if table_bbox.x0 - 5.0 <= (w[0] + w[2]) / 2.0 <= table_bbox.x1 + 5.0
             ]
 
-        data_rows = self._assign_words_to_zebra_rows(data_words, data_bgs)
-
-        data_rows = self._handle_dollar_signs(data_rows)
-
         all_words_for_cols = []
         for hr in header_rows:
             all_words_for_cols.extend(hr.words)
-        for dr in data_rows:
-            all_words_for_cols.extend(dr.words)
+        all_words_for_cols.extend(data_words)
 
         columns = self._detect_columns_from_header_underlines(
             page=page,
@@ -1028,9 +1023,16 @@ class EnglishTableExtractor(BaseTableExtractor):
             words=all_words_for_cols,
         )
         if not columns or len(columns) < 2:
-            columns = self._detect_columns(all_words_for_cols, data_rows, page, table_y0=table_y0, table_bbox=table_bbox)
+            columns = self._detect_columns(all_words_for_cols, None, page, table_y0=table_y0, table_bbox=table_bbox)
         if not columns or len(columns) < 2:
             return None
+        columns = self._prune_phantom_columns(columns, all_words_for_cols, table_bbox)
+        if not columns or len(columns) < 2:
+            return None
+        columns = self._adjust_columns_for_currency(columns, all_words_for_cols)
+
+        data_rows = self._assign_words_to_zebra_rows(data_words, data_bgs)
+        data_rows = self._handle_dollar_signs(data_rows)
 
         source = "ml_detection" if table_bbox else "english_color_based"
         return self._build_wireless_table(
@@ -1198,7 +1200,7 @@ class EnglishTableExtractor(BaseTableExtractor):
         if not colored_rects and not white_rects:
             return []
 
-        # Merge vertically overlapping/adjacent colored rects into unified row intervals
+        # 将垂直方向重叠或相邻的背景色块合并为统一的行区间
         colored_rects.sort(key=lambda x: x[0])
         merged_colored: List[List[Any]] = []
         for r in colored_rects:
@@ -1280,7 +1282,7 @@ class EnglishTableExtractor(BaseTableExtractor):
             except Exception:
                 pass
 
-        # Merge collinear line segments
+        # 合并共线的水平线段
         lines_by_y: Dict[float, List[Tuple[float, float]]] = defaultdict(list)
         for y, x0, x1 in raw_h_lines:
             matched_y = next((ey for ey in lines_by_y if abs(y - ey) <= 1.0), None)
@@ -1560,9 +1562,8 @@ class EnglishTableExtractor(BaseTableExtractor):
         # 1. 优先使用表头/表尾物理下划线确定的列划分 (Rule 2.1 - 2.3)
         header_cols = self._detect_columns_from_header_underlines(page, table_y0, table_bbox=table_bbox, words=words)
         if header_cols and len(header_cols) >= 2:
-            # A currency marker normally starts an amount column. When it is
-            # preceded by a percentage token in the same physical header
-            # interval, it instead starts the following amount column.
+            # 货币符号通常作为金额列的起始标记。当在同一个物理表头区间内
+            # 其前置有百分比标记时，它改为作为后续金额列的起始标记。
             body_words = [
                 word for word in (words or [])
                 if (
@@ -1596,7 +1597,7 @@ class EnglishTableExtractor(BaseTableExtractor):
                     header_cols[ci] = (x0, original_cols[ci][1])
             return header_cols
 
-        # Universal column detection via horizontal overlap
+        # 基于水平重叠度的通用列检测
         rows_by_y: Dict[float, List[Tuple]] = defaultdict(list)
         for w in words:
             mid_y = (w[1] + w[3]) / 2.0
@@ -1725,10 +1726,8 @@ class EnglishTableExtractor(BaseTableExtractor):
                     pruned_cols[-1] = (pruned_cols[-1][0], table_bbox.x1)
                 columns = pruned_cols
 
-        # Currency is a hard cell anchor: an amount cell containing ``$`` must
-        # include the symbol and its number.  Move the left boundary of that
-        # numeric column to the symbol's left edge so a column cut can never
-        # occur between ``$`` and the amount.
+        # 货币符号是强单元格锚点：包含 '$' 的金额单元格必须同时包含该符号及其数值。
+        # 将该数值列的左边界移动到符号左边缘，确保列分割线绝不会落在 '$' 与金额数值之间。
         body_words = [
             word for row in (data_rows or [])
             if not getattr(row, "is_header", False)
@@ -1776,7 +1775,7 @@ class EnglishTableExtractor(BaseTableExtractor):
                 n_has_pure_data = any(
                     self._is_pure_amount_dollar(w, [x for x in (words or []) if abs((x[1] + x[3]) / 2.0 - (w[1] + w[3]) / 2.0) <= 3.5])
                     or bool(re.search(r'\d|%|\$|^(?:[A-D][+-]?|N/A|None|Yes|No|\*|—|-)$', w[4].strip()))
-                    or bool(re.search(r'\b\d{2,}-\d+\b|\b\d{5}\b', w[4].strip()))  # IRS Employer No / Zip Code
+                    or bool(re.search(r'\b\d{2,}-\d+\b|\b\d{5}\b', w[4].strip()))  # 雇主识别号 (IRS Employer No) / 邮政编码 (Zip Code) 等特征处理
                     for w in n_words
                 )
                 if not n_has_pure_data and co_occurring_rows < 2 and ci < len(columns) - 1:
@@ -1901,14 +1900,14 @@ class EnglishTableExtractor(BaseTableExtractor):
 
     @staticmethod
     def _is_pure_amount_dollar(w: Tuple, row_words: List[Tuple]) -> bool:
-        """Check if a word containing '$' belongs to a pure numeric amount item, not an inline prose sentence."""
+        """检查包含 '$' 的词是否属于纯数值金额项，而非嵌入在自然语言句子中的内联面值。"""
         if not w or not row_words:
             return False
         w_text = str(w[4]).strip()
         if "$" not in w_text:
             return False
         
-        # Cluster row words into contiguous horizontal phrases (gap <= 5.0pt)
+        # 将行内词聚类为连续的水平短语（间距 gap <= 5.0pt）
         sorted_rw = sorted(row_words, key=lambda x: x[0])
         phrases: List[List[Tuple]] = []
         cur: List[Tuple] = []
@@ -1928,7 +1927,7 @@ class EnglishTableExtractor(BaseTableExtractor):
         if not w_phrase:
             return False
         
-        # Standard currency and numeric unit/symbol tokens
+        # 标准货币与数值单位/符号标记
         valid_units = {
             '$', '\u2009$', 'usd', 'eur', 'rmb', 'gbp', 'aud', 'cad', 'chf', 'hkd', 'sgd',
             'm', 'b', 'k', 'mn', 'bn', 'in', 'million', 'millions', 'thousand', 'thousands', 'billion', 'billions',
@@ -1945,7 +1944,7 @@ class EnglishTableExtractor(BaseTableExtractor):
         if prose_tokens:
             return False
         
-        # Must contain at least one digit or standard nil token
+        # 必须包含至少一个数字或标准空白占位标记
         has_amount = any(any(ch.isdigit() for ch in pw[4]) or pw[4].strip() in ('—', '-', '--', 'nil', 'none') for pw in w_phrase)
         if not has_amount:
             w_idx = sorted_rw.index(w)
@@ -2207,7 +2206,7 @@ class EnglishTableExtractor(BaseTableExtractor):
         all_col_spans = refined_col_spans
         all_col_spans.sort(key=lambda s: s[0])
 
-        # Check wide gaps between consecutive underline spans where an un-underlined column exists (e.g. Description column)
+        # 检查连续下划线线段之间的宽间隙，定位无下划线的列（例如无下划线的描述说明列）
         gap_filled_spans = []
         for i in range(len(all_col_spans)):
             gap_filled_spans.append(all_col_spans[i])
@@ -2235,8 +2234,8 @@ class EnglishTableExtractor(BaseTableExtractor):
         all_col_spans = gap_filled_spans
         all_col_spans.sort(key=lambda s: s[0])
 
-        # Footer/header rules may expose only the trailing numeric columns.
-        # Preserve repeated text-aligned columns that precede that rule grid.
+        # 页脚/页眉横线可能仅显式覆盖尾部的数值列。
+        # 保留在该规则网格之前重复出现的文本对齐列。
         underlined_first_x0 = all_col_spans[0][0]
         leading_spans = self._infer_repeated_leading_text_spans(
             t_words,
@@ -2246,7 +2245,7 @@ class EnglishTableExtractor(BaseTableExtractor):
         if len(leading_spans) >= 2:
             all_col_spans = leading_spans + all_col_spans
 
-        # Exclude multi-column spanning header titles when determining single-column text extents
+        # 在确定单列文本范围时排除跨多列的表头标题
         data_words = [w for w in t_words if (w[1] + w[3]) / 2.0 >= table_y0 - 15.0]
 
         first_col_x0 = all_col_spans[0][0]
@@ -2402,7 +2401,7 @@ class EnglishTableExtractor(BaseTableExtractor):
         first_col_x0: float,
         table_y0: float,
     ) -> List[List[float]]:
-        """Find repeated text intervals before the first explicit rule column."""
+        """在首个显式规则列之前寻找重复出现的文本对齐区间。"""
         leading_words = [
             word
             for word in words
@@ -2470,7 +2469,7 @@ class EnglishTableExtractor(BaseTableExtractor):
         if len(cooccurring) < 2:
             return []
 
-        # Validate that candidate boundaries between cooccurring clusters do not cut through continuous text in ANY row
+        # 验证共现聚类之间的候选分界线不会切断连续的文本块 in ANY row
         merged_spans: List[List[float]] = []
         curr_span = [float(cooccurring[0]["x0"]), float(cooccurring[0]["x1"])]
         for next_cluster in cooccurring[1:]:
@@ -2478,7 +2477,7 @@ class EnglishTableExtractor(BaseTableExtractor):
             next_x1 = float(next_cluster["x1"])
             mid_cut = (curr_span[1] + next_x0) / 2.0
             
-            # Check if any row has continuous text crossing mid_cut
+            # 检查是否有任何行存在跨越 mid_cut 切分线的连续文本
             is_cut = False
             for r in rows:
                 for idx in range(len(r) - 1):
@@ -2632,7 +2631,7 @@ class EnglishTableExtractor(BaseTableExtractor):
         # 兼容历史别名
         # _normalize_zebra_headers 在类末尾统一绑定
 
-        # Multi-tier header: preserve each distinct row_index (tier) as its own header row
+        # 多层表头：将每个不同的 row_index（层级）保留为其自身的表头行
         rows_dict = defaultdict(list)
         for c in header_cells:
             rows_dict[c.row_index].append(c)
@@ -2743,7 +2742,7 @@ class EnglishTableExtractor(BaseTableExtractor):
             for ci in supported_cols:
                 if not any(s[0] <= ci <= s[1] for s in lower_spans):
                     lower_spans.append((ci, ci))
-            lower_spans = sorted(list(set(lower_spans)), key=lambda s: (s[0], s[1]))
+            lower_spans = sorted(list(set(lower_spans)), key=lambda s: (s[0], -(s[1] - s[0])))
             atomic_spans = []
             covered_indices = set()
             for s in lower_spans:
@@ -2789,19 +2788,22 @@ class EnglishTableExtractor(BaseTableExtractor):
                     if curr_chain:
                         all_underline_groups.append((y_key, min(x[0] for x in curr_chain), max(x[1] for x in curr_chain)))
 
+                non_empty_next = [c for c in next_tier_cells if c.text.strip()]
+                max_tier_y_limit = (min(c.bbox.y0 for c in non_empty_next) + 2.5) if non_empty_next else float("inf")
+
                 for top in sorted(non_empty_tops, key=lambda c: -(c.bbox.x1 - c.bbox.x0)):
                     line_h = max(8.0, top.bbox.y1 - top.bbox.y0)
                     best_covered_cols = []
                     # 寻找紧贴在当前表头文本下方的物理下划线组（优先距离最近的第一道下划线，避免跨层匹配到下层横线）
                     matching_groups = [
                         (y_key, gx0, gx1) for y_key, gx0, gx1 in all_underline_groups
-                        if top.bbox.y1 - 1.5 <= y_key <= top.bbox.y1 + min(8.0, line_h * 0.4)
+                        if top.bbox.y1 - 3.5 <= y_key <= min(top.bbox.y1 + min(8.0, line_h * 0.4), max_tier_y_limit)
                         and min(top.bbox.x1, gx1) - max(top.bbox.x0, gx0) >= 2.0
                     ]
                     if not matching_groups:
                         matching_groups = [
                             (y_key, gx0, gx1) for y_key, gx0, gx1 in all_underline_groups
-                            if top.bbox.y1 - 1.5 <= y_key <= top.bbox.y1 + 10.0
+                            if top.bbox.y1 - 3.5 <= y_key <= min(top.bbox.y1 + 10.0, max_tier_y_limit)
                             and min(top.bbox.x1, gx1) - max(top.bbox.x0, gx0) >= 2.0
                         ]
 
@@ -2817,7 +2819,7 @@ class EnglishTableExtractor(BaseTableExtractor):
                             overlapping_tops = [
                                 other for other in non_empty_tops
                                 if min(other.bbox.x1, gx1) - max(other.bbox.x0, gx0) >= 2.0
-                                and other.bbox.y1 - 1.5 <= y_key <= other.bbox.y1 + 10.0
+                                and other.bbox.y1 - 3.5 <= y_key <= min(other.bbox.y1 + 10.0, max_tier_y_limit)
                             ]
                             # 若没有任一表头文本的左边界伸入第 0 列内，说明第 0 列为科目空列，从均分组中剔除
                             if cols_in_grp and cols_in_grp[0] == 0 and overlapping_tops:
@@ -2834,17 +2836,27 @@ class EnglishTableExtractor(BaseTableExtractor):
                                     span_size = len(cols_in_grp) // num_ov
                                     my_cols = cols_in_grp[top_idx * span_size : (top_idx + 1) * span_size]
                                 else:
-                                    top_mid = (top.bbox.x0 + top.bbox.x1) / 2.0
-                                    left_mid = (sorted_ov[top_idx - 1].bbox.x0 + sorted_ov[top_idx - 1].bbox.x1) / 2.0 if top_idx > 0 else -float("inf")
-                                    right_mid = (sorted_ov[top_idx + 1].bbox.x0 + sorted_ov[top_idx + 1].bbox.x1) / 2.0 if top_idx < len(sorted_ov) - 1 else float("inf")
+                                    # 若下层存在原子跨度（atomic spans），优先按原子块中心距离进行连续打包分配，防止切碎原子单元格
+                                    covered_atoms = [s for s in atomic_spans if all(ci in cols_in_grp for ci in range(s[0], s[1] + 1))]
+                                    if covered_atoms and sum(s[1] - s[0] + 1 for s in covered_atoms) == len(cols_in_grp):
+                                        assigned_atoms = {i: [] for i in range(num_ov)}
+                                        for s in covered_atoms:
+                                            s_mid = (columns[s[0]][0] + columns[s[1]][1]) / 2.0
+                                            best_i = min(range(num_ov), key=lambda i: abs(s_mid - (sorted_ov[i].bbox.x0 + sorted_ov[i].bbox.x1) / 2.0))
+                                            assigned_atoms[best_i].append(s)
+                                        my_cols = [ci for s in assigned_atoms[top_idx] for ci in range(s[0], s[1] + 1)]
+                                    else:
+                                        top_mid = (top.bbox.x0 + top.bbox.x1) / 2.0
+                                        left_mid = (sorted_ov[top_idx - 1].bbox.x0 + sorted_ov[top_idx - 1].bbox.x1) / 2.0 if top_idx > 0 else -float("inf")
+                                        right_mid = (sorted_ov[top_idx + 1].bbox.x0 + sorted_ov[top_idx + 1].bbox.x1) / 2.0 if top_idx < len(sorted_ov) - 1 else float("inf")
 
-                                    x_left = (left_mid + top_mid) / 2.0 if left_mid != -float("inf") else gx0 - 5.0
-                                    x_right = (top_mid + right_mid) / 2.0 if right_mid != float("inf") else gx1 + 5.0
+                                        x_left = (left_mid + top_mid) / 2.0 if left_mid != -float("inf") else gx0 - 5.0
+                                        x_right = (top_mid + right_mid) / 2.0 if right_mid != float("inf") else gx1 + 5.0
 
-                                    my_cols = [
-                                        ci for ci in cols_in_grp
-                                        if x_left <= (columns[ci][0] + columns[ci][1]) / 2.0 <= x_right
-                                    ]
+                                        my_cols = [
+                                            ci for ci in cols_in_grp
+                                            if x_left <= (columns[ci][0] + columns[ci][1]) / 2.0 <= x_right
+                                        ]
                                 if len(my_cols) > len(best_covered_cols):
                                     best_covered_cols = my_cols
 
@@ -3025,6 +3037,43 @@ class EnglishTableExtractor(BaseTableExtractor):
                             grid[t + 1][span_ci] = c_top
                             merged_down.add((t + 1, span_ci))
 
+        # 自底向上：处理在上一层无母节点的单列叶子表头，若上方为空且无横线阻隔，则向上合并空槽位并扩展 rowspan
+        for t in range(num_tiers - 2, -1, -1):
+            tier_top_cells = [c for c in rows_dict[sorted_row_indices[t]] if c.text.strip()]
+            if not tier_top_cells:
+                continue
+            t_y0 = min(c.bbox.y0 for c in tier_top_cells)
+            has_other_top = any(
+                grid[t][other_ci] is not None and grid[t][other_ci].text.strip()
+                for other_ci in range(len(columns))
+            )
+            if not has_other_top:
+                continue
+
+            for ci, (cx0, cx1) in enumerate(columns):
+                c_top = grid[t][ci]
+                c_bot = grid[t + 1][ci]
+                if c_top is None and c_bot is not None and (t + 1, ci) not in merged_down:
+                    if c_bot.colspan == 1 and c_bot.text.strip():
+                        # 检查在当前列上，两层交界处（下一层顶部附近）是否存在物理水平线阻断
+                        has_col_line = any(
+                            c_bot.bbox.y0 - 3.5 <= ly <= c_bot.bbox.y0 + 2.0
+                            and max(cx0 + 5.0, lx0) < min(cx1 - 5.0, lx1)
+                            for ly, lx0, lx1 in h_lines
+                        )
+                        if not has_col_line:
+                            orig_r = sorted_row_indices[t + 1]
+                            target_r = sorted_row_indices[t]
+                            rows_dict[orig_r] = [c for c in rows_dict[orig_r] if c is not c_bot]
+                            rows_dict[target_r].append(c_bot)
+                            c_bot.row_index = target_r
+                            grid[t][ci] = c_bot
+                            grid[t + 1][ci] = c_bot
+                            merged_down.add((t + 1, ci))
+
+
+
+
         # 处理在所有上层均无父表头覆盖的单列单元格（如 Col 0, 1, 2 行标签或单列指标，提升并设置 rowspan 跨越表头）
         if len(hier_tiers) >= 2:
             top_r = sorted_row_indices[0]
@@ -3081,18 +3130,40 @@ class EnglishTableExtractor(BaseTableExtractor):
 
         tier_remap = {orig_t: new_t for new_t, orig_t in enumerate(active_tier_indices)}
 
+        tier_y_bounds = []
+        for orig_t in active_tier_indices:
+            cur_row_cells = rows_dict[sorted_row_indices[orig_t]]
+            ry0 = min((c.bbox.y0 for c in cur_row_cells), default=0.0)
+            ry1 = max((c.bbox.y1 for c in cur_row_cells), default=ry0 + 15.0)
+            tier_y_bounds.append((ry0, ry1))
+
+        # 预先计算所有非空文本单元格所占用的逻辑槽位
+        occupied_by_content = set()
+        for new_r_idx, orig_t in enumerate(active_tier_indices):
+            cur_row_cells = rows_dict[sorted_row_indices[orig_t]]
+            for c in cur_row_cells:
+                if (orig_t, c.col_index) in merged_down or not c.text.strip():
+                    continue
+                eff_rowspan = 1
+                for check_t in active_tier_indices[new_r_idx + 1:]:
+                    if any(grid[check_t][ci] is c for ci in range(c.col_index, c.col_index + c.colspan)):
+                        eff_rowspan += 1
+                    else:
+                        break
+                for r in range(new_r_idx, new_r_idx + eff_rowspan):
+                    for ci in range(c.col_index, c.col_index + c.colspan):
+                        occupied_by_content.add((r, ci))
+
         output_cells = []
         occupied_2d = set()
 
         for new_r_idx, orig_t in enumerate(active_tier_indices):
             cur_row_cells = rows_dict[sorted_row_indices[orig_t]]
-            row_y0 = min((c.bbox.y0 for c in cur_row_cells), default=0.0)
-            row_y1 = max((c.bbox.y1 for c in cur_row_cells), default=row_y0 + 15.0)
+            row_y0, row_y1 = tier_y_bounds[new_r_idx]
 
             for c in cur_row_cells:
                 if (orig_t, c.col_index) in merged_down or not c.text.strip():
                     continue
-                # 计算该单元格在压缩后的实际 rowspan
                 eff_rowspan = 1
                 for check_t in active_tier_indices[new_r_idx + 1:]:
                     if any(grid[check_t][ci] is c for ci in range(c.col_index, c.col_index + c.colspan)):
@@ -3115,16 +3186,33 @@ class EnglishTableExtractor(BaseTableExtractor):
 
             # 物化该行未被占用的空槽位
             for ci in range(len(columns)):
-                if (new_r_idx, ci) not in occupied_2d:
+                if (new_r_idx, ci) not in occupied_2d and (new_r_idx, ci) not in occupied_by_content:
+                    eff_empty_rowspan = 1
+                    end_y1 = row_y1
+                    for next_r in range(new_r_idx + 1, len(active_tier_indices)):
+                        if (next_r, ci) in occupied_2d or (next_r, ci) in occupied_by_content:
+                            break
+                        prev_y1 = tier_y_bounds[next_r - 1][1]
+                        has_line = any(
+                            prev_y1 - 1.5 <= ly <= prev_y1 + 1.5
+                            and max(columns[ci][0] + 2.0, lx0) < min(columns[ci][1] - 2.0, lx1)
+                            for ly, lx0, lx1 in h_lines
+                        )
+                        if has_line:
+                            break
+                        eff_empty_rowspan += 1
+                        end_y1 = tier_y_bounds[next_r][1]
+
                     output_cells.append(Cell(
                         text="",
                         row_index=new_r_idx,
                         col_index=ci,
                         colspan=1,
-                        rowspan=1,
-                        bbox=BBox(columns[ci][0], row_y0, columns[ci][1], row_y1),
+                        rowspan=eff_empty_rowspan,
+                        bbox=BBox(columns[ci][0], row_y0, columns[ci][1], end_y1),
                     ))
-                    occupied_2d.add((new_r_idx, ci))
+                    for r_occ in range(new_r_idx, new_r_idx + eff_empty_rowspan):
+                        occupied_2d.add((r_occ, ci))
 
         output_cells.sort(key=lambda c: (c.row_index, c.col_index))
         return output_cells, len(active_tier_indices)
@@ -3810,7 +3898,7 @@ class EnglishTableExtractor(BaseTableExtractor):
     def extract_cells_from_region(
         self, page: fitz.Page, region_bbox: BBox
     ) -> Tuple[int, int, List[Cell]]:
-        """Recover a table grid from text inside a trusted table region."""
+        """从可信表格区域内的文本中恢复表格网格。"""
         try:
             words = page.get_text(
                 "words",
@@ -3857,7 +3945,7 @@ class EnglishTableExtractor(BaseTableExtractor):
         except Exception:
             pass
 
-        # Find whitespace gutters between column phrase boundaries
+        # 寻找各列短语边界之间的垂直空白通道（Gutter）
         all_phrases = []
         for r in rows:
             tokens = sorted(r["tokens"], key=lambda t: t["x0"])
@@ -3992,7 +4080,7 @@ class EnglishTableExtractor(BaseTableExtractor):
         cells = self._infer_sparse_rowspans(cells, rows, page=page)
         cells, num_cols = self._prune_empty_columns(cells, num_cols)
 
-        # Multi-line header merging (e.g. Page 850 Exhibit Number)
+        # 多行表头合并（例如第 850 页的 Exhibit Number 附件编号）
         row_cells_map = defaultdict(list)
         for c in cells:
             row_cells_map[c.row_index].append(c)
@@ -4074,7 +4162,7 @@ class EnglishTableExtractor(BaseTableExtractor):
         if len(rows) <= 1:
             return rows
 
-        # Pass 1: Single token continuations
+        # 第 1 轮：单个词标记的跨行延续
         merged: List[Dict] = [rows[0]]
         for r in rows[1:]:
             prev = merged[-1]
@@ -4088,7 +4176,7 @@ class EnglishTableExtractor(BaseTableExtractor):
             else:
                 merged.append(r)
 
-        # Pass 2: Multi-line description rows for index-headed items (e.g. Exhibit 101, 104, 31.1)
+        # 第 2 轮：索引前缀项的多行描述行（例如 Exhibit 101、104、31.1）
         if len(merged) <= 1:
             return merged
 
@@ -4153,7 +4241,7 @@ class EnglishTableExtractor(BaseTableExtractor):
         return []
 
     def _build_region_guides(self, rows: List[Dict], region_bbox: BBox) -> List[float]:
-        # Group words into phrases per row
+        # 按行将单词分组聚类为短语
         row_phrases = []
         for r in rows:
             tokens = sorted(r["tokens"], key=lambda t: t["x0"])
@@ -4216,7 +4304,7 @@ class EnglishTableExtractor(BaseTableExtractor):
                 tokens = col_tokens.get(ci, [])
                 if not tokens:
                     continue
-                # Sort vertically first (with 3.0pt line quantization), then horizontally
+                # 优先垂直排序（带有 3.0pt 行高量化对齐），其次水平排序
                 tokens.sort(key=lambda t: (round(t["y0"] / 3.0), t["x0"]))
                 text = " ".join(t["text"].strip() for t in tokens if t["text"].strip()).strip()
                 if text:

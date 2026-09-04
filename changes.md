@@ -1,6 +1,57 @@
 # Changes
 
+## 2026-09-04
+
+- 修复英文多级表头中垂直折行单元格（如 `Accumulated Deficit`、`Nine Months Ended September 30,`）因横线跨层越界误匹配及非整除共享横线下切碎原子列带导致跨行被拆分的问题（针对 `en_all_table_pages_page_347.pdf` 和 `en_all_table_pages_page_169.pdf`）。
+  - **根因与调用位置**：
+    1. **横线跨层越界误匹配**：在 `src/hexai_pdf_parser/tables/extractors/english_table_extractor.py` 的 `_normalize_headers()` 中，为第 $t$ 层表头匹配下划线时，原容差 `top.bbox.y1 - 3.5 <= y_key <= top.bbox.y1 + 10.0` 未考虑下一层文本的位置。在 Page 347 中，Tier 0 的单列短表头 `Accumulated`（$y_1 \approx 119.37$）搜索下划线时直接穿透并匹配到了 Tier 1 文本底部的整表全局分割线（$y = 125.40$），将其错误升级为 `colspan=2`（覆盖 Col 6..7）；而下一层对应的 `Deficit` 仍为 `colspan=1`。由于两层 `colspan` 不一致，直接破坏了 `is_compact_wrapping` 的前提条件，导致原本应垂直融合成单一单元格的 `Accumulated Deficit` 被横向切分为两行；
+    2. **原子跨度排序冲刷破坏**：在构建 `atomic_spans` 时，`lower_spans` 原排序为 `key=lambda s: (s[0], s[1])`。当同一起始列既存在下层的多列原子跨度（如 Col 9..10 的双列），又存在更下层的单列碎片（如 Col 9..9）时，单列排在前面先占满 `covered_indices`，导致原本规整的多列原子跨度被冲刷丢失；
+    3. **多表头共享长横线非整除时切碎原子列带**：在 Page 169 中，Tier 1 的三个表头（`Three Months Ended...`、`Nine Months Ended...`、`One Year...`）共享覆盖 Col 1..16（共 16 列）的单条长物理下划线。由于 16 不能被 3 整除，原代码在 `else` 分支直接按表头几何中点做坐标二等分，硬性将 Col 9 切给左侧的 `Months Ended`（使其变成 Col 5..9 共 5 列），破坏了与上一层 `Nine`（Col 5..8 共 4 列）的列对齐，同样破坏了 `is_compact_wrapping`，导致 `Nine` 与 `Months Ended` 被拆成两行。
+  - **修复判定与调用位置**：
+    1. **下划线层间顶界阻断（Layer-bounded underline matching）**：在 `_normalize_headers()` 中计算下一层非空表头的最小顶部坐标 `max_tier_y_limit = (min(c.bbox.y0 for c in non_empty_next) + 2.5) if non_empty_next else float("inf")`，下划线搜索上界严格约束为 `min(top.bbox.y1 + 10.0, max_tier_y_limit)`，坚决杜绝第 $t$ 层表头跨越到第 $t+1$ 层非空文本下方误认底层横线；
+    2. **原子跨度宽区间优先排序**：将 `lower_spans` 排序改为 `key=lambda s: (s[0], -(s[1] - s[0]))`，确保同一起始列优先保留最宽的原子块，保护多列原子单元格不被细碎单列冲散；
+    3. **原子块保整几何分配（Atomic-span preserved assignment）**：当多个表头共享同一长横线且列数不可整除时，优先识别下层完全包含在长横线内的 `covered_atoms`；若能完整拼成列区间，则以各原子块的几何中心为不可分割单位，按与表头中心的最小距离整块分配给对应表头（Page 169 中 Col 1..4、Col 5..8、Col 9..16 完美对齐），杜绝切碎原子单元格。
+  - **结构约束**：只基于几何、拓扑与通用原子块连续性决策，严禁硬编码 "Accumulated"、"Deficit"、"Nine" 或 "Months Ended" 等业务文字；保持每个逻辑槽位唯一占用与 0 槽位冲突。
+  - **测试与页面验证**：
+    - 新增独立测试文件 `tests/test_header_wrapping_page_347_169.py`，包含 Page 347 `Accumulated Deficit` 跨2行融合验证与 Page 169 `Nine Months Ended September 30,` 跨4列2行融合验证（2 项全部通过 `2 passed`）；
+    - 运行全量关联测试 `test_page_347_structure.py`、`test_header_upward_merge.py`、`test_financial_header_normalizer.py` 共 9 项全部通过；
+    - 页面级独立重跑验证：
+      - `output/verify_page_347/`：14 行 × 11 列，`Accumulated Deficit` 融合为 `rowspan=2, colspan=1` 的单一单元格，0 槽位冲突；
+      - `output/verify_page_169/`：5 行 × 17 列，`Nine Months Ended September 30,` 融合为 `rowspan=2, colspan=4` 的单一单元格，0 槽位冲突，可视化网格线完全贴合。
+
+
+- 修复英文无线/斑马纹表格多级表头中左上角首列被垂直割裂，以及 `Common Stock` 未拆成 Shares 与 Amount 双列导致数据粘连（`$75,968`、`77,09277` 等）的问题（针对 `en_all_table_pages_page_347.pdf`）。
+  - **根因与调用位置**：
+    1. 在 `src/hexai_pdf_parser/tables/extractors/english_table_extractor.py` 的斑马纹提取路径 `_process_zebra_group()` 中，原逻辑在列检测 `_detect_columns()` 之前过早调用了 `_handle_dollar_signs()`，将独立的 `$` 符号与紧随其后的数字合并为单一词元，不仅破坏了列投影直方图的独立字间隙，且导致后续货币分界线微调函数 `_adjust_columns_for_currency()` 遍历时因无法匹配 `w[4] == "$"` 而失效。同时，`_process_zebra_group()` 遗漏了与 `extract_general_wireless()` 一致的 `_prune_phantom_columns()` 和 `_adjust_columns_for_currency()` 调用链；
+    2. 在 `_detect_columns_from_header_underlines()` 中，`Common Stock` 股票数右端（255.64pt）与金额 `$` 左端（257.14pt）间隙仅 1.5pt，且表头词 `Common` 跨越至 266.85pt 充当了“桥梁”，将两列投影粘连。而下划线匹配容差 `top.bbox.y1 - 1.5` 因同行相邻词（如 `Accumulated` y1=119.37）最大字高过大，导致 `119.37 - 1.5 = 117.87 > 117.80`，错过了真实的下划线；
+    3. 在 `_normalize_headers()` 末尾物化空单元格时，左上角科目区域（Col 0）在多级表头各层均为空槽位，原代码仅将其物化为单独的 `1x1` 空单元格，导致第 0 行与第 1 行交界处出现横向割裂线，使表头视觉上被横切为两行。
+  - **修复判定与调用位置**：
+    1. **斑马纹列检测对齐**：在 `_process_zebra_group()` 中调整调用顺序，使用包含表头与数据行原始坐标的 `all_words_for_cols` 先执行 `_detect_columns()` -> `_prune_phantom_columns()` -> `_adjust_columns_for_currency()`；分界线确定后再对数据行执行 `_assign_words_to_zebra_rows()` 与 `_handle_dollar_signs()`；
+    2. **放宽下划线容差并激活微调**：在 `_normalize_headers()` 中将表头下划线接触面容差从 `- 1.5` 放宽到 `- 3.5`（`top.bbox.y1 - 3.5 <= y_key`），确保两段下划线稳定纳为双列；并在 `extract_general_wireless` 与 `_process_zebra_group` 中激活调用 `_adjust_columns_for_currency()`，精准将分界线自 268.60 重定位到 256.39pt（$75,968$ 与 $\$$ 之间）；
+    3. **表头空槽位自适应向下跨行物化**：在 `_normalize_headers()` 物化空槽位时，检查从当前行向下连续未被占用的槽位及层间物理横线阻断（`eff_empty_rowspan`），使左上角 Col 0 自动生成 `rowspan=2, colspan=1, text=""` 的完整大槽位，消除垂直与水平切割感。
+  - **结构约束**：只基于几何、拓扑与通用货币分界特征决策，不硬编码具体业务文字；保持每个逻辑槽位唯一占用与 0 槽位冲突。
+  - **测试与页面验证**：
+    - 新增测试 `tests/test_page_347_structure.py`，参数化覆盖 `extract_zebra`、`extract_general_wireless` 以及端到端 `extract` 三大入口，验证 Col 0 `rowspan=2`、Common Stock `colspan=2`、APIC `rowspan=2`、以及 `PHOT`、`June 30`、`September 30` 行数据列精准切分无粘连，3 项测试全部通过（`3 passed`）；
+    - 既有测试 `test_header_upward_merge.py` 与 `test_financial_header_normalizer.py` 全部通过；
+    - 页面级独立运行重跑至 `output/single_page_347_fix/`，核对 `output.json` 与 `en_all_table_pages_page_347_visualized.png`：表格结构由原先错乱的 10 列提升至规整的 11 列（14 行 × 11 列，147 个 Cell），置信度 0.97，视觉渲染网格完全闭合、表头及数据行对齐精准。
+
+- 修复英文多级表头中因局部下划线全局行切分导致无母节点单列表头被撕裂并残留大量空单元格的问题（针对 `en_all_table_pages_page_075.pdf` Table 1 与 Table 2）。
+  - **根因与调用位置**：
+    1. 在 `src/hexai_pdf_parser/tables/extractors/english_table_extractor.py` 的 `_detect_header_rows()` 中，物理下划线 `y = 144.53` 实际仅覆盖 Col 1~2（用于分隔 `Three Months Ended September 30,` 与 `2023/2024`），但算法将其无差别视作贯穿整表的全局分割线，将右侧原本连续的单列叶子表头（如 `Constant Currency Revenues`、`Less FX Effect`、`As Reported`）错误地横向切分为 Tier 2 与 Tier 3。
+    2. 在 `_normalize_headers()` 中，原先仅支持上下两层均有内容的垂直折行拼接（`is_compact_wrapping`），或者从首层至底层全空的提升（`all_upper_empty`）。当上层（Row 0 或 Row 1）存在大表头、且某列在中间行无母节点（`grid[t][ci] is None`）时，算法缺少自底向上的跨行填充逻辑，导致 Col 3、5、6、7 滞留在底层，而在 Row 2 留下大片未合并的空白槽位。
+  - **修复判定与调用位置**：
+    在 `_normalize_headers()` 的折行规整后引入自底向上（Bottom-Up）的无母节点单列表头向上合并机制：
+    1. **判定条件**：当单列叶子表头单元格满足 `c_bot.colspan == 1 and c_bot.text.strip()`，其正上方槽位为空（`grid[t][ci] is None`），且上方所在层存在其他非空兄弟表头（确保属于有效表头行），并且在该列的宽度区间内两层交界面处无物理水平线阻断（`not has_col_line`）时，确认为无母节点的连续单列表头；
+    2. **两层交界判定保护**：水平线阻断判定严格限定在两层接触面范围（`c_bot.bbox.y0 - 3.5 <= ly <= c_bot.bbox.y0 + 2.0`），防止上一层的大标题底线或下层的数据底线误判为层间阻隔；
+    3. **向上扩展合并**：将该单元格提升至第 $t$ 层，并在网格中自适应累加计算 `rowspan`（Table 1/Table 2 中 Col 3/4 向上贯通跨 3 行，Col 5/6/7/8 跨 2 行），完美消除所有空槽位。
+  - **结构约束**：只基于几何与网格拓扑决策，不硬编码任何具体业务文字，保持每个逻辑槽位唯一占用与无冲突。
+  - **测试与页面验证**：
+    - 新增针对性测试套件 `tests/test_header_upward_merge.py`（包含三层大标题正例、带横线阻断拒绝合并反例、以及真实 Page 075 集成测试），3 项测试全部通过（`3 passed`）；
+    - 全量既有模型及无线表格测试 71 项全部通过；
+    - 单页独立验证输出目录：`C:\Users\92410\Desktop\git\hexai_pdf_parser\src\hexai_pdf_parser\data\en_all_pages\`，已重新导出并核对 `en_all_table_pages_page_075.md`、`en_all_table_pages_page_075.json` 以及可视化图片 `en_all_table_pages_page_075_visualized.png`，Table 1 与 Table 2 蓝线网格完全对齐贴合，无多余空单元格，结构规整严密。
+
 ## 2026-09-03
+
 
 - Page 979 最终验证产物已归档至 `D:\\codes\\PDFLayoutParser\\output\\page_979_fixed_width_alignment_corridor_20260903_final_verify\\`。
 
