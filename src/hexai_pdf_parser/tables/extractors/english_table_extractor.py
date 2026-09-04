@@ -1860,6 +1860,8 @@ class EnglishTableExtractor(BaseTableExtractor):
                 s for s in merged
                 if (s[1] - s[0] >= 10.0) and not (s[0] <= table_x0 + 5.0 and s[1] >= table_x1 - 5.0)
             ]
+            if not col_segs:
+                continue
             
             # 过滤表体内部紧贴文字底部的文本超链接划线
             is_full_width = any((s[1] - s[0]) >= table_w * 0.70 for s in col_segs)
