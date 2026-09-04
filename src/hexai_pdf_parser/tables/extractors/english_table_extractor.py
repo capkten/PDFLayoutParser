@@ -2742,7 +2742,7 @@ class EnglishTableExtractor(BaseTableExtractor):
             for ci in supported_cols:
                 if not any(s[0] <= ci <= s[1] for s in lower_spans):
                     lower_spans.append((ci, ci))
-            lower_spans = sorted(list(set(lower_spans)), key=lambda s: (s[0], s[1]))
+            lower_spans = sorted(list(set(lower_spans)), key=lambda s: (s[0], -(s[1] - s[0])))
             atomic_spans = []
             covered_indices = set()
             for s in lower_spans:
@@ -2788,19 +2788,22 @@ class EnglishTableExtractor(BaseTableExtractor):
                     if curr_chain:
                         all_underline_groups.append((y_key, min(x[0] for x in curr_chain), max(x[1] for x in curr_chain)))
 
+                non_empty_next = [c for c in next_tier_cells if c.text.strip()]
+                max_tier_y_limit = (min(c.bbox.y0 for c in non_empty_next) + 2.5) if non_empty_next else float("inf")
+
                 for top in sorted(non_empty_tops, key=lambda c: -(c.bbox.x1 - c.bbox.x0)):
                     line_h = max(8.0, top.bbox.y1 - top.bbox.y0)
                     best_covered_cols = []
                     # 寻找紧贴在当前表头文本下方的物理下划线组（优先距离最近的第一道下划线，避免跨层匹配到下层横线）
                     matching_groups = [
                         (y_key, gx0, gx1) for y_key, gx0, gx1 in all_underline_groups
-                        if top.bbox.y1 - 3.5 <= y_key <= top.bbox.y1 + min(8.0, line_h * 0.4)
+                        if top.bbox.y1 - 3.5 <= y_key <= min(top.bbox.y1 + min(8.0, line_h * 0.4), max_tier_y_limit)
                         and min(top.bbox.x1, gx1) - max(top.bbox.x0, gx0) >= 2.0
                     ]
                     if not matching_groups:
                         matching_groups = [
                             (y_key, gx0, gx1) for y_key, gx0, gx1 in all_underline_groups
-                            if top.bbox.y1 - 3.5 <= y_key <= top.bbox.y1 + 10.0
+                            if top.bbox.y1 - 3.5 <= y_key <= min(top.bbox.y1 + 10.0, max_tier_y_limit)
                             and min(top.bbox.x1, gx1) - max(top.bbox.x0, gx0) >= 2.0
                         ]
 
@@ -2816,7 +2819,7 @@ class EnglishTableExtractor(BaseTableExtractor):
                             overlapping_tops = [
                                 other for other in non_empty_tops
                                 if min(other.bbox.x1, gx1) - max(other.bbox.x0, gx0) >= 2.0
-                                and other.bbox.y1 - 3.5 <= y_key <= other.bbox.y1 + 10.0
+                                and other.bbox.y1 - 3.5 <= y_key <= min(other.bbox.y1 + 10.0, max_tier_y_limit)
                             ]
                             # 若没有任一表头文本的左边界伸入第 0 列内，说明第 0 列为科目空列，从均分组中剔除
                             if cols_in_grp and cols_in_grp[0] == 0 and overlapping_tops:
@@ -2833,17 +2836,27 @@ class EnglishTableExtractor(BaseTableExtractor):
                                     span_size = len(cols_in_grp) // num_ov
                                     my_cols = cols_in_grp[top_idx * span_size : (top_idx + 1) * span_size]
                                 else:
-                                    top_mid = (top.bbox.x0 + top.bbox.x1) / 2.0
-                                    left_mid = (sorted_ov[top_idx - 1].bbox.x0 + sorted_ov[top_idx - 1].bbox.x1) / 2.0 if top_idx > 0 else -float("inf")
-                                    right_mid = (sorted_ov[top_idx + 1].bbox.x0 + sorted_ov[top_idx + 1].bbox.x1) / 2.0 if top_idx < len(sorted_ov) - 1 else float("inf")
+                                    # 若下层存在原子跨度（atomic spans），优先按原子块中心距离进行连续打包分配，防止切碎原子单元格
+                                    covered_atoms = [s for s in atomic_spans if all(ci in cols_in_grp for ci in range(s[0], s[1] + 1))]
+                                    if covered_atoms and sum(s[1] - s[0] + 1 for s in covered_atoms) == len(cols_in_grp):
+                                        assigned_atoms = {i: [] for i in range(num_ov)}
+                                        for s in covered_atoms:
+                                            s_mid = (columns[s[0]][0] + columns[s[1]][1]) / 2.0
+                                            best_i = min(range(num_ov), key=lambda i: abs(s_mid - (sorted_ov[i].bbox.x0 + sorted_ov[i].bbox.x1) / 2.0))
+                                            assigned_atoms[best_i].append(s)
+                                        my_cols = [ci for s in assigned_atoms[top_idx] for ci in range(s[0], s[1] + 1)]
+                                    else:
+                                        top_mid = (top.bbox.x0 + top.bbox.x1) / 2.0
+                                        left_mid = (sorted_ov[top_idx - 1].bbox.x0 + sorted_ov[top_idx - 1].bbox.x1) / 2.0 if top_idx > 0 else -float("inf")
+                                        right_mid = (sorted_ov[top_idx + 1].bbox.x0 + sorted_ov[top_idx + 1].bbox.x1) / 2.0 if top_idx < len(sorted_ov) - 1 else float("inf")
 
-                                    x_left = (left_mid + top_mid) / 2.0 if left_mid != -float("inf") else gx0 - 5.0
-                                    x_right = (top_mid + right_mid) / 2.0 if right_mid != float("inf") else gx1 + 5.0
+                                        x_left = (left_mid + top_mid) / 2.0 if left_mid != -float("inf") else gx0 - 5.0
+                                        x_right = (top_mid + right_mid) / 2.0 if right_mid != float("inf") else gx1 + 5.0
 
-                                    my_cols = [
-                                        ci for ci in cols_in_grp
-                                        if x_left <= (columns[ci][0] + columns[ci][1]) / 2.0 <= x_right
-                                    ]
+                                        my_cols = [
+                                            ci for ci in cols_in_grp
+                                            if x_left <= (columns[ci][0] + columns[ci][1]) / 2.0 <= x_right
+                                        ]
                                 if len(my_cols) > len(best_covered_cols):
                                     best_covered_cols = my_cols
 

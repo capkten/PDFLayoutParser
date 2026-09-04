@@ -2,6 +2,24 @@
 
 ## 2026-09-04
 
+- 修复英文多级表头中垂直折行单元格（如 `Accumulated Deficit`、`Nine Months Ended September 30,`）因横线跨层越界误匹配及非整除共享横线下切碎原子列带导致跨行被拆分的问题（针对 `en_all_table_pages_page_347.pdf` 和 `en_all_table_pages_page_169.pdf`）。
+  - **根因与调用位置**：
+    1. **横线跨层越界误匹配**：在 `src/hexai_pdf_parser/tables/extractors/english_table_extractor.py` 的 `_normalize_headers()` 中，为第 $t$ 层表头匹配下划线时，原容差 `top.bbox.y1 - 3.5 <= y_key <= top.bbox.y1 + 10.0` 未考虑下一层文本的位置。在 Page 347 中，Tier 0 的单列短表头 `Accumulated`（$y_1 \approx 119.37$）搜索下划线时直接穿透并匹配到了 Tier 1 文本底部的整表全局分割线（$y = 125.40$），将其错误升级为 `colspan=2`（覆盖 Col 6..7）；而下一层对应的 `Deficit` 仍为 `colspan=1`。由于两层 `colspan` 不一致，直接破坏了 `is_compact_wrapping` 的前提条件，导致原本应垂直融合成单一单元格的 `Accumulated Deficit` 被横向切分为两行；
+    2. **原子跨度排序冲刷破坏**：在构建 `atomic_spans` 时，`lower_spans` 原排序为 `key=lambda s: (s[0], s[1])`。当同一起始列既存在下层的多列原子跨度（如 Col 9..10 的双列），又存在更下层的单列碎片（如 Col 9..9）时，单列排在前面先占满 `covered_indices`，导致原本规整的多列原子跨度被冲刷丢失；
+    3. **多表头共享长横线非整除时切碎原子列带**：在 Page 169 中，Tier 1 的三个表头（`Three Months Ended...`、`Nine Months Ended...`、`One Year...`）共享覆盖 Col 1..16（共 16 列）的单条长物理下划线。由于 16 不能被 3 整除，原代码在 `else` 分支直接按表头几何中点做坐标二等分，硬性将 Col 9 切给左侧的 `Months Ended`（使其变成 Col 5..9 共 5 列），破坏了与上一层 `Nine`（Col 5..8 共 4 列）的列对齐，同样破坏了 `is_compact_wrapping`，导致 `Nine` 与 `Months Ended` 被拆成两行。
+  - **修复判定与调用位置**：
+    1. **下划线层间顶界阻断（Layer-bounded underline matching）**：在 `_normalize_headers()` 中计算下一层非空表头的最小顶部坐标 `max_tier_y_limit = (min(c.bbox.y0 for c in non_empty_next) + 2.5) if non_empty_next else float("inf")`，下划线搜索上界严格约束为 `min(top.bbox.y1 + 10.0, max_tier_y_limit)`，坚决杜绝第 $t$ 层表头跨越到第 $t+1$ 层非空文本下方误认底层横线；
+    2. **原子跨度宽区间优先排序**：将 `lower_spans` 排序改为 `key=lambda s: (s[0], -(s[1] - s[0]))`，确保同一起始列优先保留最宽的原子块，保护多列原子单元格不被细碎单列冲散；
+    3. **原子块保整几何分配（Atomic-span preserved assignment）**：当多个表头共享同一长横线且列数不可整除时，优先识别下层完全包含在长横线内的 `covered_atoms`；若能完整拼成列区间，则以各原子块的几何中心为不可分割单位，按与表头中心的最小距离整块分配给对应表头（Page 169 中 Col 1..4、Col 5..8、Col 9..16 完美对齐），杜绝切碎原子单元格。
+  - **结构约束**：只基于几何、拓扑与通用原子块连续性决策，严禁硬编码 "Accumulated"、"Deficit"、"Nine" 或 "Months Ended" 等业务文字；保持每个逻辑槽位唯一占用与 0 槽位冲突。
+  - **测试与页面验证**：
+    - 新增独立测试文件 `tests/test_header_wrapping_page_347_169.py`，包含 Page 347 `Accumulated Deficit` 跨2行融合验证与 Page 169 `Nine Months Ended September 30,` 跨4列2行融合验证（2 项全部通过 `2 passed`）；
+    - 运行全量关联测试 `test_page_347_structure.py`、`test_header_upward_merge.py`、`test_financial_header_normalizer.py` 共 9 项全部通过；
+    - 页面级独立重跑验证：
+      - `output/verify_page_347/`：14 行 × 11 列，`Accumulated Deficit` 融合为 `rowspan=2, colspan=1` 的单一单元格，0 槽位冲突；
+      - `output/verify_page_169/`：5 行 × 17 列，`Nine Months Ended September 30,` 融合为 `rowspan=2, colspan=4` 的单一单元格，0 槽位冲突，可视化网格线完全贴合。
+
+
 - 修复英文无线/斑马纹表格多级表头中左上角首列被垂直割裂，以及 `Common Stock` 未拆成 Shares 与 Amount 双列导致数据粘连（`$75,968`、`77,09277` 等）的问题（针对 `en_all_table_pages_page_347.pdf`）。
   - **根因与调用位置**：
     1. 在 `src/hexai_pdf_parser/tables/extractors/english_table_extractor.py` 的斑马纹提取路径 `_process_zebra_group()` 中，原逻辑在列检测 `_detect_columns()` 之前过早调用了 `_handle_dollar_signs()`，将独立的 `$` 符号与紧随其后的数字合并为单一词元，不仅破坏了列投影直方图的独立字间隙，且导致后续货币分界线微调函数 `_adjust_columns_for_currency()` 遍历时因无法匹配 `w[4] == "$"` 而失效。同时，`_process_zebra_group()` 遗漏了与 `extract_general_wireless()` 一致的 `_prune_phantom_columns()` 和 `_adjust_columns_for_currency()` 调用链；
