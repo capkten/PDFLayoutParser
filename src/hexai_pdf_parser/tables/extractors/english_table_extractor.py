@@ -1,4 +1,4 @@
-"""English wireless table extraction strategies."""
+"""英文无线表格提取策略模块。"""
 
 from __future__ import annotations
 
@@ -18,14 +18,14 @@ from hexai_pdf_parser.tables.wireless_table_recovery import recover_wireless_tab
 from hexai_pdf_parser.tables.wireless_structure import continuations
 
 
-# Color constants for English zebra row backgrounds
+# 英文斑马底色行背景的颜色常量
 LIGHT_BLUE = (0.8, 0.933, 1.0)
 WHITE = (1.0, 1.0, 1.0)
 
 
 @dataclass
 class _RowData:
-    """Internal representation of a table row in zebra background tables."""
+    """斑马线背景表格中表格行的内部表示数据结构。"""
     words: List[Tuple[float, float, float, float, str]]
     y0: float
     y1: float
@@ -67,7 +67,7 @@ class EnglishTableExtractor(BaseTableExtractor):
 
     @staticmethod
     def _merge_standalone_currency_columns(columns: List[Tuple[float, float]], words: List[Tuple]) -> List[Tuple[float, float]]:
-        """Merge OCR-only ``$`` columns with the immediately following amount column."""
+        """将仅含货币符号 '$' 的独立列与紧随其后的金额数值列进行合并。"""
         cols = list(columns)
         i = 0
         while i < len(cols):
@@ -146,7 +146,7 @@ class EnglishTableExtractor(BaseTableExtractor):
 
     @staticmethod
     def _promote_grouped_header_cells(cells: List[Cell], columns: List[Tuple[float, float]], header_rows: int) -> None:
-        """Apply one topology-based colspan rule to all English wireless paths."""
+        """将基于拓扑的跨列规则统一应用于所有英文无线表格提取路径。"""
         if header_rows < 2 or not cells:
             return
         for row_index in range(header_rows - 1):
@@ -195,7 +195,7 @@ class EnglishTableExtractor(BaseTableExtractor):
         start_col: int,
         end_col: int,
     ) -> bool:
-        """Detect a filled source rectangle spanning adjacent columns in one row."""
+        """检测某行中是否存在跨越相邻列的物理填充源矩形。"""
         if page is None or start_col < 0 or end_col >= len(columns) or start_col >= end_col:
             return False
 
@@ -223,7 +223,7 @@ class EnglishTableExtractor(BaseTableExtractor):
                     return True
         return False
 
-    """Extracts wireless tables: zebra colored background bands, 3-line tables, and borderless text-alignment."""
+    """提取无线表格：包含斑马底色背景带表格、三线表及无框文本对齐表格。"""
 
 
     def __init__(
@@ -247,7 +247,7 @@ class EnglishTableExtractor(BaseTableExtractor):
         confidence: Optional[float] = None,
         page_language: Optional[str] = None,
     ) -> List[Table]:
-        """Extract an English wireless table from a candidate region or page."""
+        """从候选区域或整个页面中提取英文无线表格。"""
         if page_language is None:
             page_language = detect_page_language(page)
 
@@ -290,11 +290,10 @@ class EnglishTableExtractor(BaseTableExtractor):
         allowed_regions: Optional[List[BBox]] = None,
         use_legacy_fallback: bool = True,
     ) -> List[Table]:
-        """Return native-span candidates for an English page.
+        """返回英文页面的 native-span 候选表格。
 
-        The legacy words path remains an optional callback so the page-level
-        orchestrator can keep its historical reconstruction without coupling
-        this module to :class:`TableExtractor`.
+        旧版 words 路径仅作为可选回调兜底保留，以便页面级协调器可以保持其历史重构行为，
+        而无需将此模块与 TableExtractor 强耦合。
         """
         if allowed_regions == []:
             self._last_wireless_recovery = {"regions": [], "disabled": True}
@@ -354,9 +353,9 @@ class EnglishTableExtractor(BaseTableExtractor):
         table_bbox: Optional[BBox] = None,
         confidence: Optional[float] = None,
     ) -> List[Table]:
-        """Extract general English wireless tables strictly using geometric distance:
-        1. Rows are determined along the Y-axis.
-        2. Columns are determined along the X-axis (overlapping intervals form a column, including underlines `————`).
+        """严格基于几何距离提取通用英文无线表格：
+        1. 基于 Y 轴判定物理行。
+        2. 基于 X 轴判定列结构（重叠区间聚类为列，包含下划线 `————`）。
         """
         if table_bbox is not None:
             try:
@@ -806,8 +805,8 @@ class EnglishTableExtractor(BaseTableExtractor):
         table_bbox: Optional[BBox] = None,
         confidence: Optional[float] = None,
     ) -> List[Table]:
-        """Extract wireless tables using color-alternating row backgrounds."""
-        # Rule 4: Strict geometric intersection expansion
+        """基于交替交错的斑马底色背景行提取无线表格。"""
+        # 规则 4：严格的几何相交扩充
         if table_bbox is not None:
             try:
                 page_words = page.get_text("words")
@@ -927,7 +926,7 @@ class EnglishTableExtractor(BaseTableExtractor):
                             filled_bgs.append((prev_y1, cur_y0, "white"))
                 filled_bgs.append(bg)
 
-            # Check if there's a bottom white zebra row after last filled band
+            # 检查最后一个填充色块后是否存在底部白色斑马底色行
             last_filled_y1 = filled_bgs[-1][1] if filled_bgs else last_colored_y
             if table_bbox and table_bbox.y1 > last_filled_y1 + 4.0:
                 words = page.get_text("words")
@@ -1198,7 +1197,7 @@ class EnglishTableExtractor(BaseTableExtractor):
         if not colored_rects and not white_rects:
             return []
 
-        # Merge vertically overlapping/adjacent colored rects into unified row intervals
+        # 将垂直方向重叠或相邻的背景色块合并为统一的行区间
         colored_rects.sort(key=lambda x: x[0])
         merged_colored: List[List[Any]] = []
         for r in colored_rects:
@@ -1280,7 +1279,7 @@ class EnglishTableExtractor(BaseTableExtractor):
             except Exception:
                 pass
 
-        # Merge collinear line segments
+        # 合并共线的水平线段
         lines_by_y: Dict[float, List[Tuple[float, float]]] = defaultdict(list)
         for y, x0, x1 in raw_h_lines:
             matched_y = next((ey for ey in lines_by_y if abs(y - ey) <= 1.0), None)
@@ -1560,9 +1559,8 @@ class EnglishTableExtractor(BaseTableExtractor):
         # 1. 优先使用表头/表尾物理下划线确定的列划分 (Rule 2.1 - 2.3)
         header_cols = self._detect_columns_from_header_underlines(page, table_y0, table_bbox=table_bbox, words=words)
         if header_cols and len(header_cols) >= 2:
-            # A currency marker normally starts an amount column. When it is
-            # preceded by a percentage token in the same physical header
-            # interval, it instead starts the following amount column.
+            # 货币符号通常作为金额列的起始标记。当在同一个物理表头区间内
+            # 其前置有百分比标记时，它改为作为后续金额列的起始标记。
             body_words = [
                 word for word in (words or [])
                 if (
@@ -1596,7 +1594,7 @@ class EnglishTableExtractor(BaseTableExtractor):
                     header_cols[ci] = (x0, original_cols[ci][1])
             return header_cols
 
-        # Universal column detection via horizontal overlap
+        # 基于水平重叠度的通用列检测
         rows_by_y: Dict[float, List[Tuple]] = defaultdict(list)
         for w in words:
             mid_y = (w[1] + w[3]) / 2.0
@@ -1725,10 +1723,8 @@ class EnglishTableExtractor(BaseTableExtractor):
                     pruned_cols[-1] = (pruned_cols[-1][0], table_bbox.x1)
                 columns = pruned_cols
 
-        # Currency is a hard cell anchor: an amount cell containing ``$`` must
-        # include the symbol and its number.  Move the left boundary of that
-        # numeric column to the symbol's left edge so a column cut can never
-        # occur between ``$`` and the amount.
+        # 货币符号是强单元格锚点：包含 '$' 的金额单元格必须同时包含该符号及其数值。
+        # 将该数值列的左边界移动到符号左边缘，确保列分割线绝不会落在 '$' 与金额数值之间。
         body_words = [
             word for row in (data_rows or [])
             if not getattr(row, "is_header", False)
@@ -1776,7 +1772,7 @@ class EnglishTableExtractor(BaseTableExtractor):
                 n_has_pure_data = any(
                     self._is_pure_amount_dollar(w, [x for x in (words or []) if abs((x[1] + x[3]) / 2.0 - (w[1] + w[3]) / 2.0) <= 3.5])
                     or bool(re.search(r'\d|%|\$|^(?:[A-D][+-]?|N/A|None|Yes|No|\*|—|-)$', w[4].strip()))
-                    or bool(re.search(r'\b\d{2,}-\d+\b|\b\d{5}\b', w[4].strip()))  # IRS Employer No / Zip Code
+                    or bool(re.search(r'\b\d{2,}-\d+\b|\b\d{5}\b', w[4].strip()))  # 雇主识别号 (IRS Employer No) / 邮政编码 (Zip Code) 等特征处理
                     for w in n_words
                 )
                 if not n_has_pure_data and co_occurring_rows < 2 and ci < len(columns) - 1:
@@ -1901,14 +1897,14 @@ class EnglishTableExtractor(BaseTableExtractor):
 
     @staticmethod
     def _is_pure_amount_dollar(w: Tuple, row_words: List[Tuple]) -> bool:
-        """Check if a word containing '$' belongs to a pure numeric amount item, not an inline prose sentence."""
+        """检查包含 '$' 的词是否属于纯数值金额项，而非嵌入在自然语言句子中的内联面值。"""
         if not w or not row_words:
             return False
         w_text = str(w[4]).strip()
         if "$" not in w_text:
             return False
         
-        # Cluster row words into contiguous horizontal phrases (gap <= 5.0pt)
+        # 将行内词聚类为连续的水平短语（间距 gap <= 5.0pt）
         sorted_rw = sorted(row_words, key=lambda x: x[0])
         phrases: List[List[Tuple]] = []
         cur: List[Tuple] = []
@@ -1928,7 +1924,7 @@ class EnglishTableExtractor(BaseTableExtractor):
         if not w_phrase:
             return False
         
-        # Standard currency and numeric unit/symbol tokens
+        # 标准货币与数值单位/符号标记
         valid_units = {
             '$', '\u2009$', 'usd', 'eur', 'rmb', 'gbp', 'aud', 'cad', 'chf', 'hkd', 'sgd',
             'm', 'b', 'k', 'mn', 'bn', 'in', 'million', 'millions', 'thousand', 'thousands', 'billion', 'billions',
@@ -1945,7 +1941,7 @@ class EnglishTableExtractor(BaseTableExtractor):
         if prose_tokens:
             return False
         
-        # Must contain at least one digit or standard nil token
+        # 必须包含至少一个数字或标准空白占位标记
         has_amount = any(any(ch.isdigit() for ch in pw[4]) or pw[4].strip() in ('—', '-', '--', 'nil', 'none') for pw in w_phrase)
         if not has_amount:
             w_idx = sorted_rw.index(w)
@@ -2207,7 +2203,7 @@ class EnglishTableExtractor(BaseTableExtractor):
         all_col_spans = refined_col_spans
         all_col_spans.sort(key=lambda s: s[0])
 
-        # Check wide gaps between consecutive underline spans where an un-underlined column exists (e.g. Description column)
+        # 检查连续下划线线段之间的宽间隙，定位无下划线的列（例如无下划线的描述说明列）
         gap_filled_spans = []
         for i in range(len(all_col_spans)):
             gap_filled_spans.append(all_col_spans[i])
@@ -2235,8 +2231,8 @@ class EnglishTableExtractor(BaseTableExtractor):
         all_col_spans = gap_filled_spans
         all_col_spans.sort(key=lambda s: s[0])
 
-        # Footer/header rules may expose only the trailing numeric columns.
-        # Preserve repeated text-aligned columns that precede that rule grid.
+        # 页脚/页眉横线可能仅显式覆盖尾部的数值列。
+        # 保留在该规则网格之前重复出现的文本对齐列。
         underlined_first_x0 = all_col_spans[0][0]
         leading_spans = self._infer_repeated_leading_text_spans(
             t_words,
@@ -2246,7 +2242,7 @@ class EnglishTableExtractor(BaseTableExtractor):
         if len(leading_spans) >= 2:
             all_col_spans = leading_spans + all_col_spans
 
-        # Exclude multi-column spanning header titles when determining single-column text extents
+        # 在确定单列文本范围时排除跨多列的表头标题
         data_words = [w for w in t_words if (w[1] + w[3]) / 2.0 >= table_y0 - 15.0]
 
         first_col_x0 = all_col_spans[0][0]
@@ -2402,7 +2398,7 @@ class EnglishTableExtractor(BaseTableExtractor):
         first_col_x0: float,
         table_y0: float,
     ) -> List[List[float]]:
-        """Find repeated text intervals before the first explicit rule column."""
+        """在首个显式规则列之前寻找重复出现的文本对齐区间。"""
         leading_words = [
             word
             for word in words
@@ -2470,7 +2466,7 @@ class EnglishTableExtractor(BaseTableExtractor):
         if len(cooccurring) < 2:
             return []
 
-        # Validate that candidate boundaries between cooccurring clusters do not cut through continuous text in ANY row
+        # 验证共现聚类之间的候选分界线不会切断连续的文本块 in ANY row
         merged_spans: List[List[float]] = []
         curr_span = [float(cooccurring[0]["x0"]), float(cooccurring[0]["x1"])]
         for next_cluster in cooccurring[1:]:
@@ -2478,7 +2474,7 @@ class EnglishTableExtractor(BaseTableExtractor):
             next_x1 = float(next_cluster["x1"])
             mid_cut = (curr_span[1] + next_x0) / 2.0
             
-            # Check if any row has continuous text crossing mid_cut
+            # 检查是否有任何行存在跨越 mid_cut 切分线的连续文本
             is_cut = False
             for r in rows:
                 for idx in range(len(r) - 1):
@@ -2632,7 +2628,7 @@ class EnglishTableExtractor(BaseTableExtractor):
         # 兼容历史别名
         # _normalize_zebra_headers 在类末尾统一绑定
 
-        # Multi-tier header: preserve each distinct row_index (tier) as its own header row
+        # 多层表头：将每个不同的 row_index（层级）保留为其自身的表头行
         rows_dict = defaultdict(list)
         for c in header_cells:
             rows_dict[c.row_index].append(c)
@@ -3810,7 +3806,7 @@ class EnglishTableExtractor(BaseTableExtractor):
     def extract_cells_from_region(
         self, page: fitz.Page, region_bbox: BBox
     ) -> Tuple[int, int, List[Cell]]:
-        """Recover a table grid from text inside a trusted table region."""
+        """从可信表格区域内的文本中恢复表格网格。"""
         try:
             words = page.get_text(
                 "words",
@@ -3857,7 +3853,7 @@ class EnglishTableExtractor(BaseTableExtractor):
         except Exception:
             pass
 
-        # Find whitespace gutters between column phrase boundaries
+        # 寻找各列短语边界之间的垂直空白通道（Gutter）
         all_phrases = []
         for r in rows:
             tokens = sorted(r["tokens"], key=lambda t: t["x0"])
@@ -3992,7 +3988,7 @@ class EnglishTableExtractor(BaseTableExtractor):
         cells = self._infer_sparse_rowspans(cells, rows, page=page)
         cells, num_cols = self._prune_empty_columns(cells, num_cols)
 
-        # Multi-line header merging (e.g. Page 850 Exhibit Number)
+        # 多行表头合并（例如第 850 页的 Exhibit Number 附件编号）
         row_cells_map = defaultdict(list)
         for c in cells:
             row_cells_map[c.row_index].append(c)
@@ -4074,7 +4070,7 @@ class EnglishTableExtractor(BaseTableExtractor):
         if len(rows) <= 1:
             return rows
 
-        # Pass 1: Single token continuations
+        # 第 1 轮：单个词标记的跨行延续
         merged: List[Dict] = [rows[0]]
         for r in rows[1:]:
             prev = merged[-1]
@@ -4088,7 +4084,7 @@ class EnglishTableExtractor(BaseTableExtractor):
             else:
                 merged.append(r)
 
-        # Pass 2: Multi-line description rows for index-headed items (e.g. Exhibit 101, 104, 31.1)
+        # 第 2 轮：索引前缀项的多行描述行（例如 Exhibit 101、104、31.1）
         if len(merged) <= 1:
             return merged
 
@@ -4153,7 +4149,7 @@ class EnglishTableExtractor(BaseTableExtractor):
         return []
 
     def _build_region_guides(self, rows: List[Dict], region_bbox: BBox) -> List[float]:
-        # Group words into phrases per row
+        # 按行将单词分组聚类为短语
         row_phrases = []
         for r in rows:
             tokens = sorted(r["tokens"], key=lambda t: t["x0"])
@@ -4216,7 +4212,7 @@ class EnglishTableExtractor(BaseTableExtractor):
                 tokens = col_tokens.get(ci, [])
                 if not tokens:
                     continue
-                # Sort vertically first (with 3.0pt line quantization), then horizontally
+                # 优先垂直排序（带有 3.0pt 行高量化对齐），其次水平排序
                 tokens.sort(key=lambda t: (round(t["y0"] / 3.0), t["x0"]))
                 text = " ".join(t["text"].strip() for t in tokens if t["text"].strip()).strip()
                 if text:
