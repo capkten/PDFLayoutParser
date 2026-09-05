@@ -84,6 +84,30 @@ def test_wireless_extractor_keeps_zebra_for_english_page(monkeypatch):
     assert tables == [zebra_table]
 
 
+def test_english_header_underlines_ignore_short_segments_without_columns():
+    from hexai_pdf_parser.tables.extractors.english_table_extractor import (
+        EnglishTableExtractor,
+    )
+
+    extractor = EnglishTableExtractor()
+    point = lambda x, y: SimpleNamespace(x=x, y=y)
+    page = SimpleNamespace(
+        get_drawings=lambda: [
+            {"items": [("l", point(20.0, 30.0), point(25.0, 30.0))]}
+        ]
+    )
+
+    assert (
+        extractor._detect_columns_from_header_underlines(
+            page,
+            table_y0=0.0,
+            table_bbox=BBox(0.0, 0.0, 100.0, 100.0),
+            words=[(20.0, 20.0, 30.0, 35.0, "x")],
+        )
+        == []
+    )
+
+
 def test_english_wireless_does_not_split_alternately_indented_description_column():
     from hexai_pdf_parser.tables.extractors.wireless_table_extractor import (
         WirelessTableExtractor as NativeWirelessTableExtractor,

@@ -1856,7 +1856,7 @@ class EnglishTableExtractor(BaseTableExtractor):
             
             # 过滤表体内部紧贴文字底部的文本超链接划线
             is_full_width = any((s[1] - s[0]) >= table_w * 0.70 for s in col_segs)
-            if len(col_segs) < 2 and y > table_y0 + 20.0 and not is_full_width:
+            if 0 < len(col_segs) < 2 and y > table_y0 + 20.0 and not is_full_width:
                 tight_words = [
                     w for w in (words or [])
                     if abs((w[1] + w[3]) / 2.0 - y) <= 6.0
