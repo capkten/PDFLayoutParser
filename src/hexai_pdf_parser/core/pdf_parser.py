@@ -489,7 +489,6 @@ class PDFParser:
         """
         def _do():
             import fitz as _fitz
-            from hexai_pdf_parser.core.loader import Loader
             from hexai_pdf_parser.tables.table_extractor import TableExtractor
 
             is_single = isinstance(region, dict)
@@ -499,7 +498,6 @@ class PDFParser:
             pdf_path = self._pdf_path
             if pdf_path is None:
                 raise ValueError("extract_table_in_region requires a PDF file path")
-            document = Loader(pdf_path).load()
             pdf_doc = _fitz.open(pdf_path)
             try:
                 extractor = TableExtractor(

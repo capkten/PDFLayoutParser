@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import copy
-import os
 import re
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import fitz
 
@@ -15,7 +13,6 @@ from hexai_pdf_parser.core.models import BBox, Cell, Table
 from hexai_pdf_parser.tables.base_table_extractor import BaseTableExtractor
 from hexai_pdf_parser.extractors.language_detector import detect_page_language
 from hexai_pdf_parser.tables.wireless_table_recovery import recover_wireless_tables
-from hexai_pdf_parser.tables.wireless_structure import continuations
 
 
 # Color constants for English zebra row backgrounds
@@ -1321,8 +1318,6 @@ class EnglishTableExtractor(BaseTableExtractor):
             return []
 
         min_word_y = min(w[1] for w in header_words)
-        max_word_y = max(w[3] for w in header_words)
-
         dividing_lines = sorted(list(set(
             y for y in unique_h_lines
             if min_word_y + 3.0 < y < table_y0 - 3.0
@@ -1555,7 +1550,6 @@ class EnglishTableExtractor(BaseTableExtractor):
             rows_by_y[matched_y].append(w)
 
         all_row_segs: List[Tuple[float, List[Tuple[float, float]]]] = []
-        total_tbl_w = (table_bbox.x1 - table_bbox.x0) if table_bbox else ((max(w[2] for w in words) - min(w[0] for w in words)) if words else 500.0)
         for ry, rwords in rows_by_y.items():
             rwords.sort(key=lambda w: w[0])
             cur: List[Tuple] = []
@@ -1699,7 +1693,6 @@ class EnglishTableExtractor(BaseTableExtractor):
             while ci < len(columns) - 1:
                 cx0, cx1 = columns[ci]
                 nx0, nx1 = columns[ci + 1]
-                c_words = [w for w in (words or []) if cx0 - 2.0 <= (w[0] + w[2]) / 2.0 <= cx1 + 2.0]
                 n_words = [w for w in (words or []) if nx0 - 2.0 <= (w[0] + w[2]) / 2.0 <= nx1 + 2.0]
                 
                 n_has_pure_data = any(
@@ -2488,7 +2481,6 @@ class EnglishTableExtractor(BaseTableExtractor):
         # 2. 自底向上推断父表头跨列合并（叶子行保持单列，只推断父层表头；优先级 1：物理下划线；优先级 2：中心对称扩充）
         for t in range(num_tiers - 2, -1, -1):
             cur_tier_cells = [c for c in rows_dict[sorted_row_indices[t]] if c.text.strip()]
-            next_tier_cells = rows_dict[sorted_row_indices[t + 1]] if t + 1 < num_tiers else []
             # 支撑列为所有下层表头中有效列的并集
             supported_cols = {
                 ci for nt in range(t + 1, num_tiers)
@@ -2829,8 +2821,6 @@ class EnglishTableExtractor(BaseTableExtractor):
 
         if not active_tier_indices:
             active_tier_indices = list(range(num_tiers))
-
-        tier_remap = {orig_t: new_t for new_t, orig_t in enumerate(active_tier_indices)}
 
         output_cells = []
         occupied_2d = set()

@@ -7,7 +7,7 @@ common LayoutElement model.
 
 from typing import List
 
-from hexai_pdf_parser.core.models import Block, Char, LayoutElement, Line, Word
+from hexai_pdf_parser.core.models import Block, Char, LayoutElement, Word
 
 
 class LayoutMapper:

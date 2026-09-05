@@ -2,7 +2,6 @@
 
 import importlib
 import sys
-from importlib.abc import MetaPathFinder
 
 # Ensure PyMuPDF (fitz) compatibility across packaging variants
 try:
@@ -59,26 +58,6 @@ _LEGACY_MODULE_MAP = {
     "table_templates": "hexai_pdf_parser.tables.table_templates",
 }
 
-
-import importlib.util
-
-class _LegacySubmoduleRedirector(MetaPathFinder):
-    """Dynamic finder that aliases hexai_pdf_parser.<old_module> to the appropriate subpackage."""
-
-    def find_spec(self, fullname, path=None, target=None):
-        prefix = "hexai_pdf_parser."
-        if fullname.startswith(prefix):
-            subname = fullname[len(prefix):]
-            if subname in _LEGACY_MODULE_MAP:
-                target_module_name = _LEGACY_MODULE_MAP[subname]
-                spec = importlib.util.find_spec(target_module_name)
-                if spec is not None:
-                    return spec
-        return None
-
-
-if not any(isinstance(f, _LegacySubmoduleRedirector) for f in sys.meta_path):
-    sys.meta_path.insert(0, _LegacySubmoduleRedirector())
 
 # Pre-populate sys.modules aliases so that identical module objects are shared
 for _subname, _target_module_name in _LEGACY_MODULE_MAP.items():

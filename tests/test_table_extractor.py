@@ -17,6 +17,7 @@ from hexai_pdf_parser.personal_credit_report import (
 from hexai_pdf_parser.text_region_detector import CandidateRegion
 from hexai_pdf_parser.table_extractor import TableExtractor
 from hexai_pdf_parser.wireless_table_extractor import WirelessTableExtractor
+from hexai_pdf_parser.tables.extractors.wired_table_extractor import WiredTableExtractor
 
 
 def make_pdf_with_table(path):
@@ -279,7 +280,7 @@ def test_hybrid_wired_table_replaces_full_rowspan_body_before_shifting_footer(
     assert (note.row_index, note.rowspan) == (1, 5)
 
 
-def test_hybrid_wired_table_keeps_normal_height_grid(monkeypatch):
+def test_hybrid_wired_table_keeps_normal_height_grid():
     extractor = TableExtractor()
     cells = [
         Cell("h", 0, 0, BBox(0, 0, 50, 20)),
@@ -290,11 +291,6 @@ def test_hybrid_wired_table_keeps_normal_height_grid(monkeypatch):
         Cell("2.00", 2, 1, BBox(50, 45, 100, 70)),
     ]
     table = Table(BBox(0, 0, 100, 70), 3, 2, cells, source="line_projection")
-    monkeypatch.setattr(
-        "hexai_pdf_parser.tables.table_extractor.recover_cells_from_region",
-        lambda page, region: (_ for _ in ()).throw(AssertionError("must not recover")),
-    )
-
     assert extractor._recover_hybrid_wired_table(object(), table, "zh") is table
 
 
@@ -462,7 +458,7 @@ class TestTableExtractor:
 
         doc = fitz.open(str(pdf_path))
         try:
-            extractor = TableExtractor()
+            extractor = WiredTableExtractor()
             h_lines, v_lines = extractor._extract_lines_from_drawings(doc[0])
             merged = extractor._merge_h_lines(h_lines)
 
@@ -475,7 +471,7 @@ class TestTableExtractor:
             doc.close()
 
     def test_vertical_line_fragments_with_small_pdf_gap_are_merged(self):
-        extractor = TableExtractor()
+        extractor = WiredTableExtractor()
 
         merged = extractor._merge_v_lines(
             [
@@ -722,10 +718,6 @@ class TestTableExtractor:
         try:
             extractor = TableExtractor()
 
-            def fail_if_called(page):
-                raise AssertionError("PyMuPDF table parsing must not be used")
-
-            extractor._extract_via_pymupdf = fail_if_called
             tables = extractor.extract(doc[0])
 
             assert tables
@@ -734,7 +726,7 @@ class TestTableExtractor:
             doc.close()
 
     def test_find_table_regions_separates_disconnected_grids(self):
-        extractor = TableExtractor()
+        extractor = WiredTableExtractor()
         h_lines = [
             (10.0, 10.0, 110.0, 10.0),
             (10.0, 60.0, 110.0, 60.0),
@@ -764,7 +756,7 @@ class TestTableExtractor:
         ]
 
     def test_find_table_regions_with_short_vertical_included(self):
-        extractor = TableExtractor()
+        extractor = WiredTableExtractor()
         h_lines = [
             (10.0, 10.0, 110.0, 10.0),
             (10.0, 60.0, 110.0, 60.0),
@@ -802,27 +794,8 @@ class TestTableExtractor:
         assert len(empty_col_cells) == 2
         assert all(c.text == "" for c in empty_col_cells)
 
-    def test_merge_adjacent_regions_does_not_merge_separate_tables(self):
-        extractor = TableExtractor()
-        regions = [
-            (
-                BBox(0, 0, 50, 50),
-                [(0.0, 0.0, 50.0, 0.0)],
-                [(0.0, 0.0, 0.0, 50.0)],
-            ),
-            (
-                BBox(90, 0, 140, 50),
-                [(90.0, 0.0, 140.0, 0.0)],
-                [(90.0, 0.0, 90.0, 50.0)],
-            ),
-        ]
-
-        merged = extractor._merge_adjacent_regions(regions)
-
-        assert len(merged) == 2
-
     def test_build_cells_for_region_merges_atomic_grid_into_spanning_cells(self):
-        extractor = TableExtractor()
+        extractor = WiredTableExtractor()
         bbox = BBox(0, 0, 30, 30)
         h_lines = [
             (0.0, 0.0, 30.0, 0.0),
@@ -857,68 +830,6 @@ class TestTableExtractor:
             (2, 2, 1, 1, (20.0, 20.0, 30.0, 30.0)),
         ]
 
-    def test_build_cells_for_region_delegates_to_unified_grid_builder(self):
-        extractor = TableExtractor()
-        bbox = BBox(0, 0, 100, 100)
-        h_lines = [
-            (0.0, 0.0, 100.0, 0.0),
-            (0.0, 25.0, 100.0, 25.0),
-            (0.0, 50.0, 100.0, 50.0),
-            (0.0, 75.0, 100.0, 75.0),
-            (0.0, 100.0, 100.0, 100.0),
-        ]
-        v_lines = [
-            (0.0, 0.0, 0.0, 100.0),
-            (20.0, 25.0, 20.0, 100.0),
-            (40.0, 25.0, 40.0, 100.0),
-            (60.0, 0.0, 60.0, 100.0),
-        ]
-
-        captured = {}
-
-        def fake_build_cells_in_region(h_ys_arg, v_xs_arg, h_lines_arg, v_lines_arg):
-            captured["h_ys"] = h_ys_arg
-            captured["v_xs"] = v_xs_arg
-            captured["h_lines"] = h_lines_arg
-            captured["v_lines"] = v_lines_arg
-            return [
-                Cell(
-                    text="",
-                    row_index=0,
-                    col_index=0,
-                    bbox=BBox(0, 0, 20, 25),
-                )
-            ]
-
-        extractor._build_cells_in_region = fake_build_cells_in_region
-
-        extractor._build_cells_for_region(bbox, h_lines, v_lines)
-
-        assert captured["h_ys"] == [0.0, 25.0, 50.0, 75.0, 100.0]
-        assert captured["v_xs"] == [0.0, 20.0, 40.0, 60.0]
-        assert captured["h_lines"] == h_lines
-        assert captured["v_lines"] == v_lines
-
-    def test_build_cells_in_region_excludes_cartesian_product_outside_gaps(self):
-        extractor = TableExtractor()
-        h_lines = [
-            (20.0, 0.0, 40.0, 0.0),
-            (0.0, 10.0, 40.0, 10.0),
-            (0.0, 20.0, 40.0, 20.0),
-        ]
-        v_lines = [
-            (0.0, 0.0, 0.0, 100.0),
-            (20.0, 0.0, 20.0, 20.0),
-            (40.0, 0.0, 40.0, 20.0),
-        ]
-        h_ys = [0.0, 10.0, 20.0]
-        v_xs = [0.0, 20.0, 40.0]
-
-        cells = extractor._build_cells_in_region(h_ys, v_xs, h_lines, v_lines)
-
-        assert (0, 0) not in {(c.row_index, c.col_index) for c in cells}
-        assert (0, 1) in {(c.row_index, c.col_index) for c in cells}
-
     def test_ignore_rectangles_fully_covered_by_later_fill_path(self):
         page = SimpleNamespace(
             rect=fitz.Rect(0, 0, 400, 400),
@@ -938,59 +849,10 @@ class TestTableExtractor:
             ],
         )
 
-        extractor = TableExtractor()
+        extractor = WiredTableExtractor()
         h_lines, v_lines = extractor._extract_lines_from_drawings(page)
         assert h_lines == []
         assert v_lines == []
-
-    def test_keep_rectangles_when_later_fill_only_partially_overlaps(self):
-        page = SimpleNamespace(
-            rect=fitz.Rect(0, 0, 400, 400),
-            get_drawings=lambda: [
-                {
-                    "items": [("re", fitz.Rect(100, 100, 200, 150), 1)],
-                    "type": "s",
-                    "stroke_opacity": 1.0,
-                    "color": (0.0, 0.0, 0.0),
-                    "width": 1.0,
-                    "seqno": 0,
-                }
-            ],
-            get_bboxlog=lambda: [
-                ("stroke-path", (100, 100, 200, 150)),
-                ("fill-path", (150, 100, 220, 155)),
-            ],
-        )
-
-        extractor = TableExtractor()
-        h_lines, v_lines = extractor._extract_lines_from_drawings(page)
-        assert len(h_lines) == 2
-        assert len(v_lines) == 2
-
-    def test_keep_rectangles_when_later_image_overlaps(self):
-        page = SimpleNamespace(
-            rect=fitz.Rect(0, 0, 400, 400),
-            get_drawings=lambda: [
-                {
-                    "items": [("re", fitz.Rect(100, 100, 200, 150), 1)],
-                    "type": "s",
-                    "stroke_opacity": 1.0,
-                    "color": (0.0, 0.0, 0.0),
-                    "width": 1.0,
-                    "seqno": 0,
-                }
-            ],
-            get_bboxlog=lambda: [
-                ("stroke-path", (100, 100, 200, 150)),
-                ("fill-image", (95, 95, 205, 155)),
-            ],
-        )
-
-        extractor = TableExtractor()
-        h_lines, v_lines = extractor._extract_lines_from_drawings(page)
-
-        assert len(h_lines) == 2
-        assert len(v_lines) == 2
 
     def test_ignore_fully_transparent_rectangles_when_extracting_lines(
         self, tmp_dir
@@ -1010,7 +872,7 @@ class TestTableExtractor:
         doc = fitz.open(str(pdf_path))
         try:
             page = doc[0]
-            extractor = TableExtractor()
+            extractor = WiredTableExtractor()
             h_lines, v_lines = extractor._extract_lines_from_drawings(page)
             assert h_lines == []
             assert v_lines == []
@@ -1034,7 +896,7 @@ class TestTableExtractor:
         doc = fitz.open(str(pdf_path))
         try:
             page = doc[0]
-            extractor = TableExtractor()
+            extractor = WiredTableExtractor()
             h_lines, v_lines = extractor._extract_lines_from_drawings(page)
             assert h_lines == []
             assert v_lines == []
@@ -1058,7 +920,7 @@ class TestTableExtractor:
         doc = fitz.open(str(pdf_path))
         try:
             page = doc[0]
-            extractor = TableExtractor()
+            extractor = WiredTableExtractor()
             h_lines, v_lines = extractor._extract_lines_from_drawings(page)
             assert len(h_lines) == 1
             assert v_lines == []

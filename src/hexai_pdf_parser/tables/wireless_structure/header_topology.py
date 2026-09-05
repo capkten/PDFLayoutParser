@@ -1153,7 +1153,6 @@ def _infer_complete_physical_leaf_span(
                     if not all(column in band_by_id for column in sub_run):
                         continue
                     first, last = band_by_id[sub_run[0]], band_by_id[sub_run[-1]]
-                    group_width = last["x1"] - first["x0"]
                     group_center = (first["x0"] + last["x1"]) / 2.0
                     parent_center = (atom["bbox"][0] + atom["bbox"][2]) / 2.0
                     error = abs(group_center - parent_center)

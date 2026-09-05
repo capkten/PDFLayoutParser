@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import inspect
 from typing import List, Optional
 
 import fitz
@@ -72,23 +71,21 @@ class WirelessTableExtractor(EnglishTableExtractor):
             page_language = detect_page_language(page)
 
         if page_language == "en":
-            tables = self._invoke_strategy_extract(
-                self._english_extractor,
+            tables = self._english_extractor.extract(
                 page,
-                table_bbox,
-                confidence,
-                page_language,
+                table_bbox=table_bbox,
+                confidence=confidence,
+                page_language=page_language,
             )
             self._sync_strategy_state(self._english_extractor)
             return tables
 
         if page_language in {"zh", "mixed"}:
-            tables = self._invoke_strategy_extract(
-                self._chinese_extractor,
+            tables = self._chinese_extractor.extract(
                 page,
-                table_bbox,
-                confidence,
-                page_language,
+                table_bbox=table_bbox,
+                confidence=confidence,
+                page_language=page_language,
             )
             self._sync_strategy_state(self._chinese_extractor)
             return tables
@@ -116,12 +113,11 @@ class WirelessTableExtractor(EnglishTableExtractor):
             if page_language in {"zh", "mixed"}
             else self._english_extractor
         )
-        tables = self._invoke_strategy_text_alignment(
-            strategy,
+        tables = strategy.extract_text_alignment_candidates(
             page,
             excluded_regions,
             allowed_regions,
-            use_legacy_fallback,
+            use_legacy_fallback=use_legacy_fallback,
         )
         self._sync_strategy_state(strategy)
         return tables
@@ -145,45 +141,5 @@ class WirelessTableExtractor(EnglishTableExtractor):
             excluded_regions=excluded_regions,
             allowed_regions=allowed_regions,
         )
-
-    @staticmethod
-    def _invoke_strategy_extract(
-        strategy: object,
-        page: fitz.Page,
-        table_bbox: Optional[BBox],
-        confidence: Optional[float],
-        page_language: str,
-    ) -> List[Table]:
-        extract = getattr(strategy, "extract")
-        parameters = inspect.signature(extract).parameters
-        kwargs = {"table_bbox": table_bbox, "confidence": confidence}
-        if "page_language" in parameters or any(
-            parameter.kind == inspect.Parameter.VAR_KEYWORD
-            for parameter in parameters.values()
-        ):
-            kwargs["page_language"] = page_language
-        return extract(page, **kwargs)
-
-    @staticmethod
-    def _invoke_strategy_text_alignment(
-        strategy: object,
-        page: fitz.Page,
-        excluded_regions: Optional[List[BBox]],
-        allowed_regions: Optional[List[BBox]],
-        use_legacy_fallback: bool,
-    ) -> List[Table]:
-        extract = getattr(strategy, "extract_text_alignment_candidates")
-        parameters = inspect.signature(extract).parameters
-        kwargs = {
-            "excluded_regions": excluded_regions,
-            "allowed_regions": allowed_regions,
-        }
-        if "use_legacy_fallback" in parameters or any(
-            parameter.kind == inspect.Parameter.VAR_KEYWORD
-            for parameter in parameters.values()
-        ):
-            kwargs["use_legacy_fallback"] = use_legacy_fallback
-        return extract(page, **kwargs)
-
 
 __all__ = ["WirelessTableExtractor", "_RowData", "recover_cells_from_region"]

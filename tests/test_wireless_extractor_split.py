@@ -54,7 +54,7 @@ def test_wireless_facade_routes_en_and_zh_to_different_strategies(monkeypatch):
     monkeypatch.setattr(
         extractor._english_extractor,
         "extract",
-        lambda page, table_bbox=None, confidence=None: [english],
+        lambda page, table_bbox=None, confidence=None, page_language=None: [english],
     )
     monkeypatch.setattr(
         extractor._chinese_extractor,
@@ -108,7 +108,7 @@ def test_table_extractor_routes_text_alignment_to_language_strategy(monkeypatch)
         lambda page: "zh",
     )
 
-    def recover(page, excluded_regions=None, allowed_regions=None):
+    def recover(page, excluded_regions=None, allowed_regions=None, use_legacy_fallback=True):
         calls.append((page, excluded_regions, allowed_regions))
         return [expected]
 
