@@ -1,5 +1,10 @@
 # Changes
 
+## 2026-09-05
+
+- 修复英文无线表格列检测在 `col_segs=[]` 时仍访问 `col_segs[0]` / `col_segs[-1]`，导致全量 PDF 解析在页面级抛出 `IndexError` 中断的问题。修复位置为 `src/hexai_pdf_parser/tables/extractors/english_table_extractor.py::_detect_columns_from_header_underlines()`：只有存在恰好一个有效列段时才执行紧贴文字过滤；没有列段时直接跳过该分支并继续返回空列结果。新增回归测试 `tests/test_table_extractor.py::test_english_header_underlines_ignore_short_segments_without_columns`。
+- 使用 Conda 环境 `langchain_chat`、顺序后端和 150 DPI 全量重跑 `fix/zh_all_table_pages.pdf`：1,023/1,023 页完成，输出至 `out_fix_feature_dev_20260905_final/`；共恢复 2,199 张表格，其中 `line_projection` 1,711、`wireless_span_recovery` 445、`english_general_wireless` 32、`hybrid_line_span_recovery` 10、`text_alignment` 1。结构审计发现 31 张既有表存在未物化空槽位，未发现重复占用或越界；重点页面 1002 保持 `25x6` 与 `7x4` 两张无线表格。
+
 ## 2026-09-03
 
 - Page 979 最终验证产物已归档至 `D:\\codes\\PDFLayoutParser\\output\\page_979_fixed_width_alignment_corridor_20260903_final_verify\\`。
