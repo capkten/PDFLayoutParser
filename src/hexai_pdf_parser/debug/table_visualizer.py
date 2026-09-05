@@ -7,14 +7,14 @@ directly onto PDF page rasterizations (PNG).
 from __future__ import annotations
 
 import os
-from typing import List, Optional, Sequence, Union
+from typing import Any, Optional, Sequence, Union
 
 try:
     import pymupdf as fitz
 except ImportError:
     import fitz
 
-from hexai_pdf_parser.core.models import Table
+from hexai_pdf_parser.core.models import Cell, Table
 from hexai_pdf_parser.page_normalizer import normalize_page_rotation
 from hexai_pdf_parser.page_type_label import draw_page_type_label
 
@@ -457,7 +457,6 @@ def batch_visualize_directory(
         List of generated output parent directory paths.
     """
     from pathlib import Path
-    import json
     from hexai_pdf_parser.core.pdf_parser import PDFParser
     from hexai_pdf_parser.writers.json_writer import JSONWriter
     from hexai_pdf_parser.writers.markdown_writer import MarkdownWriter
@@ -556,7 +555,7 @@ def batch_visualize_directory(
                 finally:
                     doc_handle.close()
 
-                print(f"[table_visualizer] Success! Visualizations written to:")
+                print("[table_visualizer] Success! Visualizations written to:")
                 print(f"  - Tables: {tables_dir} ({pdf_stem}_page_*.png)")
                 print(f"  - Pages:  {pages_dir} ({pdf_stem}_page_*.png/.json/.md/.pdf)")
                 generated_dirs.append(pdf_parent_dir)

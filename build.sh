@@ -31,7 +31,7 @@ RELEASE_FILE="${SRV_NAME}-${VER}-py3-none-any.whl"
 echo $RELEASE_FILE
 
 mkdir -p dist
-VER=${VER} python setup.py sdist bdist_wheel
+python -m pip wheel . --no-deps --wheel-dir dist
 cd dist
 ls -lh
 cd ..

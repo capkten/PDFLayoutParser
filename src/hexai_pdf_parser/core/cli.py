@@ -1,7 +1,6 @@
 """Command-line interface for PDFLayoutParser."""
 
 import argparse
-import json
 import sys
 
 try:

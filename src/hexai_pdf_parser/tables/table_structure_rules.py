@@ -10,9 +10,9 @@ table regions.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
-from hexai_pdf_parser.core.models import BBox, Cell, Table
+from hexai_pdf_parser.core.models import Cell, Table
 from hexai_pdf_parser.tables.table_config import StructureRuleSet
 
 

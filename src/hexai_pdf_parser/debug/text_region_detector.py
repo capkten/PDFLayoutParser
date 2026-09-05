@@ -129,8 +129,6 @@ def _merge_runs_across_separators(
 
         nxt = runs[i + 1]
         current_start = row_index[id(current[0])]
-        current_end = row_index[id(current[-1])]
-        next_start = row_index[id(nxt[0])]
         next_end = row_index[id(nxt[-1])]
 
         separator = _find_separator_between_runs(current, nxt, horizontal_separators)

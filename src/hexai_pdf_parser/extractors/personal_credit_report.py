@@ -7,7 +7,8 @@ from typing import List, Optional
 
 import fitz
 
-from hexai_pdf_parser.core.models import BBox, Cell, Document, Table
+from hexai_pdf_parser.core.models import BBox, Cell, Document, Table, Word
+from hexai_pdf_parser.extractors.text_extractor import TextExtractor
 from hexai_pdf_parser.writers.markdown_writer import MarkdownWriter
 from hexai_pdf_parser.core.pipeline import Pipeline
 from hexai_pdf_parser.tables.table_extractor import TableExtractor

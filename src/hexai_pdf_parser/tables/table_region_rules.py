@@ -66,7 +66,6 @@ def _expand_downward(
     if not candidate.rows or not all_rows:
         return candidate
 
-    start_y = candidate.bbox.y1
     expanded_rows = list(candidate.rows)
 
     # Find the index of the last row in the candidate
