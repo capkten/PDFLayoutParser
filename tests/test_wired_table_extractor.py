@@ -643,3 +643,212 @@ def test_assign_text_to_line_cells_splits_word_at_physical_column_boundary():
     result = extractor._assign_text_to_line_cells(cells, page)
 
     assert [cell.text for cell in result] == ["减：", "专项"]
+
+
+def test_build_cells_does_not_create_thin_empty_edge_rows_from_line_width_difference():
+    extractor = WiredTableExtractor()
+    # 模拟真实 PDF 中线宽造成的 0.4pt 偏差：
+    # 竖线从 149.1 到 173.9；横线中心在 149.5 和 173.5
+    h_lines = [
+        (28.4, 149.5, 135.0, 149.5),
+        (28.4, 161.5, 135.0, 161.5),
+        (28.4, 173.5, 135.0, 173.5),
+    ]
+    v_lines = [
+        (28.4, 149.12, 28.4, 173.88),
+        (80.0, 149.12, 80.0, 173.88),
+        (135.0, 149.12, 135.0, 173.88),
+    ]
+    bbox = BBox(28.0, 149.1, 135.4, 173.9)
+
+    cells = extractor._build_cells_for_region(bbox, h_lines, v_lines)
+
+    rows = {c.row_index for c in cells}
+    # 应当只有 2 行 (row 0, row 1)，不能在上下边缘切出 0.4pt 的假空行 (变 4 行)
+    assert len(rows) == 2
+    assert rows == {0, 1}
+    row0_cells = [c for c in cells if c.row_index == 0]
+    assert all(c.bbox.y1 - c.bbox.y0 > 5.0 for c in row0_cells)
+
+
+def test_merge_v_lines_does_not_connect_adjacent_tables_separated_by_gap():
+    extractor = WiredTableExtractor()
+    # 两个独立表格上下排列，左右外框对齐，垂直间隙 2.5pt
+    v_lines = [
+        (28.0, 10.0, 28.0, 50.0),
+        (28.0, 52.5, 28.0, 90.0),
+    ]
+
+    merged = extractor._merge_v_lines(v_lines)
+
+    # 不应合并为 1 条穿透的长竖线 (10.0 到 90.0)，应保留为 2 条独立线段
+    assert len(merged) == 2
+    assert merged[0] == (28.0, 10.0, 28.0, 50.0)
+    assert merged[1] == (28.0, 52.5, 28.0, 90.0)
+
+
+def test_trim_ghost_edge_rows_preserves_physically_closed_empty_rows():
+    extractor = WiredTableExtractor()
+    # 模拟真实物理空行：第 0 行有文字，第 1 行无文字但有真实的底物理横线 y=50.0 支持，且行高 25.0pt
+    h_lines = [
+        (28.4, 1.0, 135.0, 1.0),
+        (28.4, 25.0, 135.0, 25.0),
+        (28.4, 50.0, 135.0, 50.0),
+    ]
+    cells = [
+        Cell("数据A", 0, 0, BBox(28.4, 1.0, 80.0, 25.0)),
+        Cell("数据B", 0, 1, BBox(80.0, 1.0, 135.0, 25.0)),
+        Cell("", 1, 0, BBox(28.4, 25.0, 80.0, 50.0)),
+        Cell("", 1, 1, BBox(80.0, 25.0, 135.0, 50.0)),
+    ]
+
+    # 有真实物理横线支持的合法空行必须保留
+    trimmed = extractor._trim_ghost_edge_rows(cells, h_lines)
+    assert len(trimmed) == 4
+    assert {c.row_index for c in trimmed} == {0, 1}
+
+
+def test_trim_ghost_edge_rows_removes_virtual_or_thin_edge_rows():
+    extractor = WiredTableExtractor()
+    # 模拟第 0 行在 y=1.0 处并没有真实物理横线（真实顶线在 y=25.0）
+    # 第 2 行是 0.4pt 的超薄缝隙行（y 从 50.0 到 50.4）
+    h_lines = [
+        (28.4, 25.0, 135.0, 25.0),
+        (28.4, 50.0, 135.0, 50.0),
+    ]
+    cells = [
+        Cell("", 0, 0, BBox(28.4, 1.0, 80.0, 25.0)),
+        Cell("", 0, 1, BBox(80.0, 1.0, 135.0, 25.0)),
+        Cell("数据A", 1, 0, BBox(28.4, 25.0, 80.0, 50.0)),
+        Cell("数据B", 1, 1, BBox(80.0, 25.0, 135.0, 50.0)),
+        Cell("", 2, 0, BBox(28.4, 50.0, 80.0, 50.4)),
+        Cell("", 2, 1, BBox(80.0, 50.0, 135.0, 50.4)),
+    ]
+
+    trimmed = extractor._trim_ghost_edge_rows(cells, h_lines)
+
+    # 虚假顶行和超薄缝隙底行被剔除，只保留第 1 行
+    assert len(trimmed) == 2
+    assert all(c.row_index == 0 for c in trimmed)
+    assert [c.text for c in trimmed] == ["数据A", "数据B"]
+
+
+def test_page_291_bottom_physical_empty_row_is_preserved():
+    # 测试 Page 291 底部物理空白行保留
+    import os
+    pdf_path = r"D:\codes\PDFLayoutParser\fix\zh_all_table_pages.pdf"
+    if not os.path.exists(pdf_path):
+        pytest.skip("PDF file not available")
+
+    doc = fitz.open(pdf_path)
+    try:
+        page = doc[291]
+        extractor = WiredTableExtractor()
+        tables = extractor.extract(page)
+        assert len(tables) >= 1
+        t0 = tables[0]
+        # 必须包含 3 行（底部真实物理空行保留，12 个 cells）
+        assert t0.rows == 3
+        assert len(t0.cells) == 12
+        assert t0.bbox.y1 >= 213.0
+    finally:
+        doc.close()
+
+
+def test_page_351_table_horizontal_bbox_is_preserved():
+    # 测试 Page 351 表格水平跨度不被细胞截断
+    import os
+    pdf_path = r"D:\codes\PDFLayoutParser\fix\zh_all_table_pages.pdf"
+    if not os.path.exists(pdf_path):
+        pytest.skip("PDF file not available")
+
+    doc = fitz.open(pdf_path)
+    try:
+        page = doc[351]
+        extractor = WiredTableExtractor()
+        tables = extractor.extract(page)
+        assert len(tables) >= 1
+        t0 = tables[0]
+        # 水平起点必须保持覆盖左侧横线（<= 90.0），不能收缩到 245.7
+        assert t0.bbox.x0 <= 90.0
+    finally:
+        doc.close()
+
+
+def test_page_606_composite_header_not_cut():
+    """验证 Page 606 复合表头首行未被切伤，'本期转入'和'固定资产'在同一表格内。"""
+    import os
+    pdf_path = r"D:\codes\PDFLayoutParser\fix\zh_all_table_pages.pdf"
+    if not os.path.exists(pdf_path):
+        pytest.skip("PDF file not available")
+
+    doc = fitz.open(pdf_path)
+    try:
+        page = doc[606]
+        extractor = WiredTableExtractor()
+        tables = extractor.extract(page)
+        assert len(tables) >= 5
+        # Table 3: "2. 重要在建工程项目本期变动情况"
+        t3 = tables[2]
+        assert t3.bbox.y0 <= 300.0  # 顶边界必须包含 y=297.9 的顶横线，不能被切到 315.8
+        r0_texts = [c.text.strip() for c in t3.cells if c.row_index == 0]
+        # 必须包含复合表头文字
+        assert any("工程项目名称" in t for t in r0_texts)
+        assert any("本期转入" in t or "固定资产" in t for t in r0_texts)
+        assert any("2014" in t for t in r0_texts)
+    finally:
+        doc.close()
+
+
+def test_page_356_and_364_open_table_first_column():
+    """验证 Page 356 和 Page 364 半开放表格首列未丢失，框选出'出票单位'与'项目'。"""
+    import os
+    pdf_path = r"D:\codes\PDFLayoutParser\fix\zh_all_table_pages.pdf"
+    if not os.path.exists(pdf_path):
+        pytest.skip("PDF file not available")
+
+    doc = fitz.open(pdf_path)
+    try:
+        # Page 356
+        page_356 = doc[356]
+        extractor = WiredTableExtractor()
+        tables_356 = extractor.extract(page_356)
+        assert len(tables_356) >= 1
+        t356_0 = tables_356[0]
+        assert t356_0.cols == 5
+        assert any(c.col_index == 0 and "出票单位" in c.text for c in t356_0.cells)
+        assert any(c.col_index == 0 and "河南世纪阳光" in c.text for c in t356_0.cells)
+
+        # Page 364
+        page_364 = doc[364]
+        tables_364 = extractor.extract(page_364)
+        assert len(tables_364) >= 1
+        t364_0 = tables_364[0]
+        assert t364_0.cols == 5
+        assert any(c.col_index == 0 and "项目" in c.text.replace(" ", "") for c in t364_0.cells)
+        assert any(c.col_index == 0 and "产品质量保证" in c.text.replace(" ", "") for c in t364_0.cells)
+    finally:
+        doc.close()
+
+
+def test_page_900_open_table_right_column():
+    """验证 Page 900 半开放表格右侧列未丢失，完整提取'2012年度'及对应数值列。"""
+    import os
+    pdf_path = r"D:\codes\PDFLayoutParser\fix\zh_all_table_pages.pdf"
+    if not os.path.exists(pdf_path):
+        pytest.skip("PDF file not available")
+
+    doc = fitz.open(pdf_path)
+    try:
+        page_900 = doc[900]
+        extractor = WiredTableExtractor()
+        tables_900 = extractor.extract(page_900)
+        assert len(tables_900) >= 1
+        t900_0 = tables_900[0]
+        assert t900_0.cols == 3
+        assert any(c.col_index == 2 and "2012" in c.text for c in t900_0.cells)
+        assert any(c.col_index == 2 and "1,057,563.39" in c.text for c in t900_0.cells)
+    finally:
+        doc.close()
+
+
