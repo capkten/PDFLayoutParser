@@ -527,8 +527,12 @@ def _right_witnesses(
     chain: Sequence[dict[str, Any]],
     candidate: dict[str, Any],
     runs: Sequence[dict[str, Any]],
+    *,
+    require_flow_after: bool = True,
+    minimum_horizontal_gap: float = 8.0,
+    vertical_margin: float = 2.0,
 ) -> list[dict[str, Any]]:
-    y0 = min(chain[0]["bbox"][1], candidate["bbox"][1]) - 2.0
+    y0 = min(chain[0]["bbox"][1], candidate["bbox"][1]) - vertical_margin
     y1 = max(chain[-1]["bbox"][3], candidate["bbox"][3]) + max(candidate.get("font_size", 10.0), 10.0) * 4.0
     x1 = max(item["bbox"][2] for item in chain + [candidate])
     return [
@@ -536,10 +540,132 @@ def _right_witnesses(
         for item in runs
         if item not in chain
         and item is not candidate
-        and item["flow_start"] > candidate["flow_end"]
-        and item["bbox"][0] >= x1 + 8.0
+        and (
+            not require_flow_after
+            or item["flow_start"] > candidate["flow_end"]
+        )
+        and item["bbox"][0] >= x1 + minimum_horizontal_gap
         and min(y1, item["bbox"][3]) > max(y0, item["bbox"][1])
     ]
+
+
+def _is_strong_native_vertical_pair(
+    previous: dict[str, Any], candidate: dict[str, Any]
+) -> bool:
+    """Recognize one native block's vertically wrapped single-character pair."""
+    previous_text = previous.get("text", "").strip()
+    candidate_text = candidate.get("text", "").strip()
+    if (
+        _CJK.fullmatch(previous_text) is None
+        or _CJK.fullmatch(candidate_text) is None
+        or len(previous_text) != 1
+        or len(candidate_text) != 1
+        or not previous.get("source_position_known", False)
+        or not candidate.get("source_position_known", False)
+    ):
+        return False
+
+    previous_blocks = previous.get("source_blocks", [])
+    candidate_blocks = candidate.get("source_blocks", [])
+    if len(previous_blocks) != 1 or previous_blocks != candidate_blocks:
+        return False
+
+    if (
+        previous.get("source_line_start") != previous.get("source_line_end")
+        or candidate.get("source_line_start") != candidate.get("source_line_end")
+        or candidate.get("source_line_start")
+        != previous.get("source_line_end") + 1
+    ):
+        return False
+
+    minimum_font_size = min(
+        float(previous.get("font_size", 0.0) or 0.0),
+        float(candidate.get("font_size", 0.0) or 0.0),
+    )
+    if minimum_font_size <= 0.0:
+        return False
+    if previous.get("bold") != candidate.get("bold"):
+        return False
+    if abs(previous["font_size"] - candidate["font_size"]) > max(
+        0.5, minimum_font_size * 0.1
+    ):
+        return False
+
+    previous_bbox = previous["bbox"]
+    candidate_bbox = candidate["bbox"]
+    tolerance = max(1.0, minimum_font_size * 0.12)
+    if (
+        abs(previous_bbox[0] - candidate_bbox[0]) > tolerance
+        or abs(previous_bbox[2] - candidate_bbox[2]) > tolerance
+        or candidate_bbox[1] < previous_bbox[3]
+        or candidate_bbox[1] - previous_bbox[3]
+        > max(6.0, minimum_font_size)
+    ):
+        return False
+    return candidate_bbox[1] > previous_bbox[1]
+
+
+def _is_multiline_witness(item: dict[str, Any]) -> bool:
+    """Require a right-side witness with visible multi-line geometry."""
+    font_size = float(item.get("font_size", 0.0) or 0.0)
+    if font_size <= 0.0:
+        return False
+    return item["bbox"][3] - item["bbox"][1] >= max(
+        font_size * 1.5,
+        font_size + 3.0,
+    )
+
+
+def _has_multiline_right_witness(
+    chain: Sequence[dict[str, Any]],
+    candidate: dict[str, Any],
+    runs: Sequence[dict[str, Any]],
+) -> bool:
+    """Find a vertically complete right-column witness independent of flow."""
+    font_size = min(
+        float(chain[-1].get("font_size", 0.0) or 0.0),
+        float(candidate.get("font_size", 0.0) or 0.0),
+    )
+    if font_size <= 0.0:
+        return False
+
+    witnesses = _right_witnesses(
+        chain,
+        candidate,
+        runs,
+        require_flow_after=False,
+        minimum_horizontal_gap=max(6.0, font_size * 0.6),
+        vertical_margin=max(2.0, font_size * 0.8),
+    )
+    if not witnesses:
+        return False
+
+    for seed in witnesses:
+        seed_width = seed["bbox"][2] - seed["bbox"][0]
+        group = [
+            item
+            for item in witnesses
+            if _horizontal_overlap(seed["bbox"], item["bbox"])
+            >= max(2.0, min(seed_width, item["bbox"][2] - item["bbox"][0]) * 0.45)
+        ]
+        ordered = sorted(group, key=lambda item: item["bbox"][1])
+        if len(ordered) == 1 and not _is_multiline_witness(ordered[0]):
+            continue
+        if any(
+            right["bbox"][1] - left["bbox"][3]
+            > max(4.0, font_size * 0.5)
+            for left, right in zip(ordered, ordered[1:])
+        ):
+            continue
+
+        group_y0 = min(item["bbox"][1] for item in ordered)
+        group_y1 = max(item["bbox"][3] for item in ordered)
+        if (
+            group_y0 <= chain[-1]["bbox"][1] - max(2.0, font_size * 0.5)
+            and candidate["bbox"][3] >= group_y1 - font_size
+        ):
+            return True
+    return False
 
 
 def _is_wrapped_chain_pair(
@@ -584,9 +710,11 @@ def _is_wrapped_chain_pair(
         return False
 
     witnesses = _right_witnesses(chain, candidate, runs)
-    if not witnesses:
+    if witnesses:
+        return True
+    if not _is_strong_native_vertical_pair(left, candidate):
         return False
-    return True
+    return _has_multiline_right_witness(chain, candidate, runs)
 
 
 def _merge_run_chain(

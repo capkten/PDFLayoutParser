@@ -391,6 +391,121 @@ def test_build_text_runs_merges_consecutive_vertical_blocks_with_right_witness()
     assert result[0]["merge_kind"] == "wrapped_field"
 
 
+def test_build_text_runs_merges_native_cjk_lines_when_right_witness_precedes_in_flow():
+    right = _atom(
+        "\u671f\u672b\u4f59\u989d",
+        463.1,
+        505.3,
+        9,
+        (7, 0, 0),
+        y=162.2,
+    )
+    right["bbox"] = [463.1, 162.2, 505.3, 200.0]
+    upper = _atom("\u5176", 443.14, 453.7, 50, (22, 0, 0), y=177.4)
+    lower = _atom("\u4ed6", 443.14, 453.7, 51, (22, 1, 0), y=191.1)
+    upper["source_position_known"] = True
+    lower["source_position_known"] = True
+
+    result = build_text_runs([right, upper, lower])
+
+    merged = next(item for item in result if item["text"] == "\u5176\n\u4ed6")
+    assert merged["span_refs"] == ["S50", "S51"]
+    assert merged["source_blocks"] == [22]
+    assert merged["source_line_start"] == 0
+    assert merged["source_line_end"] == 1
+
+
+def test_build_text_runs_keeps_native_cjk_lines_separate_when_source_lines_skip():
+    right = _atom(
+        "\u671f\u672b\u4f59\u989d",
+        463.1,
+        505.3,
+        9,
+        (7, 0, 0),
+        y=162.2,
+    )
+    right["bbox"] = [463.1, 162.2, 505.3, 200.0]
+    upper = _atom("\u5176", 443.14, 453.7, 50, (22, 0, 0), y=177.4)
+    lower = _atom("\u4ed6", 443.14, 453.7, 51, (22, 2, 0), y=191.1)
+    upper["source_position_known"] = True
+    lower["source_position_known"] = True
+
+    result = build_text_runs([right, upper, lower])
+
+    assert "\u5176\n\u4ed6" not in {item["text"] for item in result}
+
+
+def test_build_text_runs_keeps_native_cjk_lines_separate_without_right_witness():
+    upper = _atom("\u5176", 443.14, 453.7, 50, (22, 0, 0), y=177.4)
+    lower = _atom("\u4ed6", 443.14, 453.7, 51, (22, 1, 0), y=191.1)
+    upper["source_position_known"] = True
+    lower["source_position_known"] = True
+
+    result = build_text_runs([upper, lower])
+
+    assert "\u5176\n\u4ed6" not in {item["text"] for item in result}
+
+
+def test_build_text_runs_rejects_single_line_preceding_right_witness_for_cjk_pair():
+    right = _atom("\u5bf9\u5408\u8425\u4f01", 455.6, 497.9, 9, (4, 3, 0), y=20.0)
+    upper = _atom("\u95f4", 435.2, 445.8, 15, (6, 1, 0), y=22.1)
+    lower = _atom("\u63a5", 435.2, 445.8, 16, (6, 2, 0), y=35.8)
+    upper["source_position_known"] = True
+    lower["source_position_known"] = True
+
+    result = build_text_runs([right, upper, lower])
+
+    assert "\u95f4\n\u63a5" not in {item["text"] for item in result}
+
+
+def test_build_text_runs_rejects_right_multiline_witness_starting_on_pair_line():
+    right_upper = _atom("\u4f01\u4e1a\u6295\u8d44", 455.6, 497.9, 9, (4, 3, 0), y=20.4)
+    right_lower = _atom("\u7684\u4f1a\u8ba1\u5904", 455.6, 497.9, 10, (4, 4, 0), y=34.1)
+    upper = _atom("\u95f4", 435.2, 445.8, 15, (6, 1, 0), y=22.1)
+    lower = _atom("\u63a5", 435.2, 445.8, 16, (6, 2, 0), y=35.8)
+    upper["source_position_known"] = True
+    lower["source_position_known"] = True
+
+    result = build_text_runs([right_upper, right_lower, upper, lower])
+
+    assert "\u95f4\n\u63a5" not in {item["text"] for item in result}
+
+
+def test_build_text_runs_rejects_right_witness_that_continues_below_cjk_pair():
+    right = [
+        _atom(
+            f"\u53f3\u4fa7{index}",
+            455.6,
+            497.9,
+            index * 2,
+            (4 + index, 0, 0),
+            y=y,
+        )
+        for index, y in enumerate([93.2, 106.9, 120.6, 134.3, 148.0])
+    ]
+    upper = _atom("\u95f4", 435.2, 445.8, 15, (6, 1, 0), y=122.1)
+    lower = _atom("\u63a5", 435.2, 445.8, 16, (6, 2, 0), y=135.8)
+    upper["source_position_known"] = True
+    lower["source_position_known"] = True
+
+    result = build_text_runs(right + [upper, lower])
+
+    assert "\u95f4\n\u63a5" not in {item["text"] for item in result}
+
+
+def test_build_text_runs_accepts_preceding_right_multiline_witness_sequence():
+    right_upper = _atom("\u671f\u521d\u4f59\u989d", 455.6, 497.9, 9, (4, 0, 0), y=15.0)
+    right_lower = _atom("\uff08\u8d26\u9762\u4ef7\uff09", 455.6, 497.9, 10, (4, 1, 0), y=28.7)
+    upper = _atom("\u5176", 435.2, 445.8, 15, (6, 1, 0), y=22.1)
+    lower = _atom("\u4ed6", 435.2, 445.8, 16, (6, 2, 0), y=35.8)
+    upper["source_position_known"] = True
+    lower["source_position_known"] = True
+
+    result = build_text_runs([right_upper, right_lower, upper, lower])
+
+    assert "\u5176\n\u4ed6" in {item["text"] for item in result}
+
+
 def test_build_text_runs_merges_three_line_flow_chain_with_right_witness():
     atoms = [
         _atom("第一行", 100, 160, 0, (1, 0, 0), y=10),
