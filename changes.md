@@ -7,7 +7,7 @@
   - **修复判定**：有线提取器优先读取 `page.get_drawings(extended=True)`，按 PyMuPDF 的 clip 层级恢复当前绘图对象的父裁剪矩形；矩形窄线和轴对齐 `l` 线均先与可见裁剪区求交，再生成水平/竖直候选线。无法提供 `extended=True` 的测试页回退到原有 `get_drawings()` 行为。修复仅修改 `WiredTableExtractor`，未改动 `TableExtractor` 的另一套线提取路径。
   - **结构约束**：不使用页脚文字、固定 y 阈值或下游文字过滤推断表格底边；保留现有线合并、连通拓扑、虚拟边界和合法物理空行处理。
   - **测试与页面验证**：新增 PDF clip 截断回归测试，先确认原实现返回 `823.2422` 的 RED，再验证可见终点为 `813.4832`；`tests/test_wired_table_extractor.py` 为 `33 passed`。相关组合测试为 `119 passed, 1 failed`，唯一失败为既有 `test_hybrid_wired_table_replaces_full_rowspan_body_before_shifting_footer`，与本次有线 clip 修复无关。
-  - **端到端验证**：使用 `test_single.py` 对 `征信解析样例.pdf` 页索引 `0、1` 独立输出到 `D:\codes\PDFLayoutParser\.worktrees\codex-fix-wired-visible-lines-20260907\output\e2e_visible_lines_20260907\`。第 1 页目标表为 `line_projection`、`3x11`、bbox `[28.0,765.8,564.7,810.9]`，仅含 `2025-12` 数据行；第 2 页首行 `2025-09` 保留，表格为 `11x11`。最终 PNG `征信解析样例_page_000_visualized.png` 与 `征信解析样例_page_001_visualized.png` 视觉核验通过，页脚位于表格框外且表格与页脚之间存在空白。
+  - **端到端验证**：使用 `test_single.py` 对 `征信解析样例.pdf` 页索引 `0、1` 独立输出到 `D:\codes\PDFLayoutParser\output\e2e_visible_lines_20260907_final\`。第 1 页目标表为 `line_projection`、`3x11`、bbox `[28.0,765.8,564.7,810.9]`，仅含 `2025-12` 数据行；第 2 页首行 `2025-09` 保留，表格为 `11x11`。最终 PNG `征信解析样例_page_000_visualized.png` 与 `征信解析样例_page_001_visualized.png` 视觉核验通过，页脚位于表格框外且表格与页脚之间存在空白。
 
 ## 2026-09-03
 
