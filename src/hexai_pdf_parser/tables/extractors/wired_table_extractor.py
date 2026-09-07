@@ -103,14 +103,13 @@ class WiredTableExtractor(BaseTableExtractor):
         h_lines = []
         v_lines = []
 
-        try:
-            drawings = page.get_drawings()
-        except Exception:
+        drawings_with_clips = self._get_drawings_with_clips(page)
+        if drawings_with_clips is None:
             return [], []
 
         background_color = self._estimate_page_background_color(page)
         type3_char_regions = self._get_type3_character_regions(page)
-        for d in drawings:
+        for d, pdf_clip in drawings_with_clips:
             if self._drawing_is_inside_character_region(d, type3_char_regions):
                 continue
             # Ignore rules that are transparent or visually identical to the
@@ -141,13 +140,18 @@ class WiredTableExtractor(BaseTableExtractor):
             drawing_rect = d.get("rect")
             if d.get("type") == "f" and drawing_rect is not None:
                 try:
-                    x0 = float(drawing_rect.x0)
-                    y0 = float(drawing_rect.y0)
-                    x1 = float(drawing_rect.x1)
-                    y1 = float(drawing_rect.y1)
+                    visible_rect = self._intersect_rect(
+                        fitz.Rect(drawing_rect), pdf_clip
+                    )
                 except (AttributeError, TypeError, ValueError):
-                    drawing_rect = None
+                    visible_rect = None
                 else:
+                    if visible_rect is None:
+                        continue
+                    x0 = float(visible_rect.x0)
+                    y0 = float(visible_rect.y0)
+                    x1 = float(visible_rect.x1)
+                    y1 = float(visible_rect.y1)
                     width = x1 - x0
                     height = y1 - y0
                     if clip_bbox:
@@ -186,6 +190,13 @@ class WiredTableExtractor(BaseTableExtractor):
                         if max(y1, y2) < clip_bbox.y0 - 2.0 or min(y1, y2) > clip_bbox.y1 + 2.0:
                             continue
 
+                    clipped_line = self._clip_axis_aligned_line(
+                        x1, y1, x2, y2, pdf_clip
+                    )
+                    if clipped_line is None:
+                        continue
+                    x1, y1, x2, y2 = clipped_line
+
                     if abs(y1 - y2) <= self.line_tolerance and abs(x1 - x2) >= 3.0:
                         h_lines.append((min(x1, x2), (y1 + y2) / 2.0, max(x1, x2), (y1 + y2) / 2.0))
                     elif abs(x1 - x2) <= self.line_tolerance and abs(y1 - y2) >= 3.0:
@@ -204,6 +215,16 @@ class WiredTableExtractor(BaseTableExtractor):
                         if y1 < clip_bbox.y0 - 2.0 or y0 > clip_bbox.y1 + 2.0:
                             continue
 
+                    visible_rect = self._intersect_rect(
+                        fitz.Rect(x0, y0, x1, y1), pdf_clip
+                    )
+                    if visible_rect is None:
+                        continue
+                    x0, y0 = float(visible_rect.x0), float(visible_rect.y0)
+                    x1, y1 = float(visible_rect.x1), float(visible_rect.y1)
+                    w = x1 - x0
+                    h = y1 - y0
+
                     if h <= self.line_tolerance and w >= 3.0:
                         h_lines.append((x0, (y0 + y1) / 2.0, x1, (y0 + y1) / 2.0))
                     elif w <= self.line_tolerance and h >= 3.0:
@@ -216,6 +237,126 @@ class WiredTableExtractor(BaseTableExtractor):
         v_lines.extend(image_v)
 
         return h_lines, v_lines
+
+    @staticmethod
+    def _intersect_rect(
+        rect: fitz.Rect, clip_rect: Optional[fitz.Rect]
+    ) -> Optional[fitz.Rect]:
+        """Return the visible part of an axis-aligned rectangle."""
+        if clip_rect is None:
+            return rect
+
+        x0 = max(rect.x0, clip_rect.x0)
+        y0 = max(rect.y0, clip_rect.y0)
+        x1 = min(rect.x1, clip_rect.x1)
+        y1 = min(rect.y1, clip_rect.y1)
+        if x1 <= x0 or y1 <= y0:
+            return None
+        return fitz.Rect(x0, y0, x1, y1)
+
+    def _clip_axis_aligned_line(
+        self,
+        x1: float,
+        y1: float,
+        x2: float,
+        y2: float,
+        clip_rect: Optional[fitz.Rect],
+    ) -> Optional[Tuple[float, float, float, float]]:
+        """Clip an axis-aligned line to the active PDF clipping rectangle."""
+        if clip_rect is None:
+            return x1, y1, x2, y2
+
+        if abs(y1 - y2) <= self.line_tolerance:
+            y = (y1 + y2) / 2.0
+            if y < clip_rect.y0 or y > clip_rect.y1:
+                return None
+            return (
+                max(min(x1, x2), clip_rect.x0),
+                y,
+                min(max(x1, x2), clip_rect.x1),
+                y,
+            )
+
+        if abs(x1 - x2) <= self.line_tolerance:
+            x = (x1 + x2) / 2.0
+            if x < clip_rect.x0 or x > clip_rect.x1:
+                return None
+            return (
+                x,
+                max(min(y1, y2), clip_rect.y0),
+                x,
+                min(max(y1, y2), clip_rect.y1),
+            )
+
+        return x1, y1, x2, y2
+
+    @classmethod
+    def _get_drawings_with_clips(
+        cls, page: fitz.Page
+    ) -> Optional[List[Tuple[dict, Optional[fitz.Rect]]]]:
+        """Return wired drawings paired with their active PDF clip rectangles."""
+        try:
+            drawings = page.get_drawings(extended=True)
+        except Exception:
+            try:
+                drawings = page.get_drawings()
+            except Exception:
+                return None
+            return [
+                (drawing, None)
+                for drawing in drawings
+                if not str(drawing.get("type", "")).startswith("clip")
+                and drawing.get("type") != "group"
+            ]
+
+        result = []
+        for index, drawing in enumerate(drawings):
+            drawing_type = str(drawing.get("type", ""))
+            if drawing_type.startswith("clip") or drawing_type == "group":
+                continue
+
+            clip_rect = cls._get_active_clip_rect(page, drawings, index)
+            result.append((drawing, clip_rect))
+        return result
+
+    @classmethod
+    def _get_active_clip_rect(
+        cls, page: fitz.Page, drawings: List[dict], drawing_index: int
+    ) -> Optional[fitz.Rect]:
+        """Reconstruct the parent clip rectangles for one drawing."""
+        drawing = drawings[drawing_index]
+        level = drawing.get("level")
+        if level is None:
+            return None
+
+        clips = [
+            candidate
+            for candidate in drawings[:drawing_index]
+            if str(candidate.get("type", "")).startswith("clip")
+            and candidate.get("level") is not None
+            and candidate["level"] < level
+        ]
+        if not clips:
+            return None
+
+        # Keep the nearest clip at each nested level, matching PyMuPDF's
+        # parent-clip reconstruction for extended drawings.
+        clips.reverse()
+        parent_clips = [clips[0]]
+        for candidate in clips[1:]:
+            if candidate["level"] >= parent_clips[-1]["level"]:
+                continue
+            parent_clips.append(candidate)
+
+        visible = fitz.Rect(page.rect)
+        for clip in parent_clips:
+            scissor = clip.get("scissor")
+            if scissor is None:
+                continue
+            visible = cls._intersect_rect(visible, fitz.Rect(scissor))
+            if visible is None:
+                return None
+        return visible
 
     @staticmethod
     def _get_type3_character_regions(page: fitz.Page) -> List[BBox]:

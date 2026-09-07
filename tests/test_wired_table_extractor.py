@@ -53,6 +53,40 @@ def test_extract_lines_accepts_visible_fill_only_rules():
     assert v_lines == [(10.25, 20.0, 10.25, 80.0)]
 
 
+def test_extract_lines_clips_filled_rule_to_pdf_clip_region():
+    extractor = WiredTableExtractor()
+    raw_rect = fitz.Rect(28.0, 810.4804, 28.7507, 823.2422)
+    drawing = {
+        "type": "f",
+        "color": None,
+        "fill": (0.6275, 0.6275, 0.6275),
+        "rect": raw_rect,
+        "items": [("re", raw_rect)],
+    }
+    clip_rect = fitz.Rect(28.0, 23.0, 567.0, 813.4832)
+
+    def get_drawings(**kwargs):
+        if kwargs.get("extended"):
+            return [
+                {"type": "group", "level": 0, "rect": fitz.Rect(0, 0, 595, 842)},
+                {"type": "clip", "level": 1, "scissor": clip_rect},
+                {**drawing, "level": 2, "seqno": 361},
+            ]
+        return [drawing]
+
+    page = SimpleNamespace(
+        rect=fitz.Rect(0, 0, 595, 842),
+        get_drawings=get_drawings,
+        get_image_info=lambda **_kwargs: [],
+    )
+
+    _h_lines, v_lines = extractor._extract_lines_from_drawings(page)
+
+    assert len(v_lines) == 1
+    assert v_lines[0][:3] == pytest.approx((28.37535, 810.4804, 28.37535))
+    assert v_lines[0][3] == pytest.approx(813.4832)
+
+
 def test_extract_lines_ignores_non_narrow_filled_path_outline():
     extractor = WiredTableExtractor()
     page = SimpleNamespace(
@@ -850,5 +884,4 @@ def test_page_900_open_table_right_column():
         assert any(c.col_index == 2 and "1,057,563.39" in c.text for c in t900_0.cells)
     finally:
         doc.close()
-
 
