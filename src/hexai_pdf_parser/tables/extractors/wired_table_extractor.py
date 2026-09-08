@@ -36,7 +36,7 @@ class WiredTableExtractor(BaseTableExtractor):
             return []
 
         h_lines = self._merge_h_lines(h_lines)
-        v_lines = self._merge_v_lines(v_lines)
+        v_lines = self._merge_v_lines(v_lines, h_lines=h_lines)
 
         if len(h_lines) < 2 or not v_lines:
             return []
@@ -55,6 +55,10 @@ class WiredTableExtractor(BaseTableExtractor):
 
             cells = self._assign_text_to_line_cells(cells, page)
             cells = self._merge_oversegmented_line_columns(cells)
+            cells = self._trim_ghost_edge_rows(cells, region_h_lines, tol=self.line_tolerance)
+            if not cells:
+                continue
+
             if (
                 len(cells) == 1
                 and cells[0].rowspan == 1
@@ -71,14 +75,18 @@ class WiredTableExtractor(BaseTableExtractor):
 
             if row_count >= 1 and col_count >= 1 and cells:
                 has_text = any(c.text.strip() for c in cells)
-                table_height = region_bbox.y1 - region_bbox.y0
+                actual_y0 = min(c.bbox.y0 for c in cells)
+                actual_y1 = max(c.bbox.y1 for c in cells)
+                # 保持水平方向为完整 region_bbox 宽度，避免截断无竖线开放列 (如三线表)
+                table_bbox = BBox(region_bbox.x0, actual_y0, region_bbox.x1, actual_y1)
+                table_height = actual_y1 - actual_y0
                 if not has_text and (table_height < 6.0 or row_count * col_count <= 1):
                     continue
 
                 conf_score = round(confidence, 4) if confidence is not None else 0.90
                 tables.append(
                     Table(
-                        bbox=region_bbox,
+                        bbox=table_bbox,
                         rows=row_count,
                         cols=col_count,
                         cells=cells,
@@ -95,14 +103,13 @@ class WiredTableExtractor(BaseTableExtractor):
         h_lines = []
         v_lines = []
 
-        try:
-            drawings = page.get_drawings()
-        except Exception:
+        drawings_with_clips = self._get_drawings_with_clips(page)
+        if drawings_with_clips is None:
             return [], []
 
         background_color = self._estimate_page_background_color(page)
         type3_char_regions = self._get_type3_character_regions(page)
-        for d in drawings:
+        for d, pdf_clip in drawings_with_clips:
             if self._drawing_is_inside_character_region(d, type3_char_regions):
                 continue
             # Ignore rules that are transparent or visually identical to the
@@ -133,13 +140,18 @@ class WiredTableExtractor(BaseTableExtractor):
             drawing_rect = d.get("rect")
             if d.get("type") == "f" and drawing_rect is not None:
                 try:
-                    x0 = float(drawing_rect.x0)
-                    y0 = float(drawing_rect.y0)
-                    x1 = float(drawing_rect.x1)
-                    y1 = float(drawing_rect.y1)
+                    visible_rect = self._intersect_rect(
+                        fitz.Rect(drawing_rect), pdf_clip
+                    )
                 except (AttributeError, TypeError, ValueError):
-                    drawing_rect = None
+                    visible_rect = None
                 else:
+                    if visible_rect is None:
+                        continue
+                    x0 = float(visible_rect.x0)
+                    y0 = float(visible_rect.y0)
+                    x1 = float(visible_rect.x1)
+                    y1 = float(visible_rect.y1)
                     width = x1 - x0
                     height = y1 - y0
                     if clip_bbox:
@@ -178,6 +190,13 @@ class WiredTableExtractor(BaseTableExtractor):
                         if max(y1, y2) < clip_bbox.y0 - 2.0 or min(y1, y2) > clip_bbox.y1 + 2.0:
                             continue
 
+                    clipped_line = self._clip_axis_aligned_line(
+                        x1, y1, x2, y2, pdf_clip
+                    )
+                    if clipped_line is None:
+                        continue
+                    x1, y1, x2, y2 = clipped_line
+
                     if abs(y1 - y2) <= self.line_tolerance and abs(x1 - x2) >= 3.0:
                         h_lines.append((min(x1, x2), (y1 + y2) / 2.0, max(x1, x2), (y1 + y2) / 2.0))
                     elif abs(x1 - x2) <= self.line_tolerance and abs(y1 - y2) >= 3.0:
@@ -196,6 +215,16 @@ class WiredTableExtractor(BaseTableExtractor):
                         if y1 < clip_bbox.y0 - 2.0 or y0 > clip_bbox.y1 + 2.0:
                             continue
 
+                    visible_rect = self._intersect_rect(
+                        fitz.Rect(x0, y0, x1, y1), pdf_clip
+                    )
+                    if visible_rect is None:
+                        continue
+                    x0, y0 = float(visible_rect.x0), float(visible_rect.y0)
+                    x1, y1 = float(visible_rect.x1), float(visible_rect.y1)
+                    w = x1 - x0
+                    h = y1 - y0
+
                     if h <= self.line_tolerance and w >= 3.0:
                         h_lines.append((x0, (y0 + y1) / 2.0, x1, (y0 + y1) / 2.0))
                     elif w <= self.line_tolerance and h >= 3.0:
@@ -208,6 +237,126 @@ class WiredTableExtractor(BaseTableExtractor):
         v_lines.extend(image_v)
 
         return h_lines, v_lines
+
+    @staticmethod
+    def _intersect_rect(
+        rect: fitz.Rect, clip_rect: Optional[fitz.Rect]
+    ) -> Optional[fitz.Rect]:
+        """Return the visible part of an axis-aligned rectangle."""
+        if clip_rect is None:
+            return rect
+
+        x0 = max(rect.x0, clip_rect.x0)
+        y0 = max(rect.y0, clip_rect.y0)
+        x1 = min(rect.x1, clip_rect.x1)
+        y1 = min(rect.y1, clip_rect.y1)
+        if x1 <= x0 or y1 <= y0:
+            return None
+        return fitz.Rect(x0, y0, x1, y1)
+
+    def _clip_axis_aligned_line(
+        self,
+        x1: float,
+        y1: float,
+        x2: float,
+        y2: float,
+        clip_rect: Optional[fitz.Rect],
+    ) -> Optional[Tuple[float, float, float, float]]:
+        """Clip an axis-aligned line to the active PDF clipping rectangle."""
+        if clip_rect is None:
+            return x1, y1, x2, y2
+
+        if abs(y1 - y2) <= self.line_tolerance:
+            y = (y1 + y2) / 2.0
+            if y < clip_rect.y0 or y > clip_rect.y1:
+                return None
+            return (
+                max(min(x1, x2), clip_rect.x0),
+                y,
+                min(max(x1, x2), clip_rect.x1),
+                y,
+            )
+
+        if abs(x1 - x2) <= self.line_tolerance:
+            x = (x1 + x2) / 2.0
+            if x < clip_rect.x0 or x > clip_rect.x1:
+                return None
+            return (
+                x,
+                max(min(y1, y2), clip_rect.y0),
+                x,
+                min(max(y1, y2), clip_rect.y1),
+            )
+
+        return x1, y1, x2, y2
+
+    @classmethod
+    def _get_drawings_with_clips(
+        cls, page: fitz.Page
+    ) -> Optional[List[Tuple[dict, Optional[fitz.Rect]]]]:
+        """Return wired drawings paired with their active PDF clip rectangles."""
+        try:
+            drawings = page.get_drawings(extended=True)
+        except Exception:
+            try:
+                drawings = page.get_drawings()
+            except Exception:
+                return None
+            return [
+                (drawing, None)
+                for drawing in drawings
+                if not str(drawing.get("type", "")).startswith("clip")
+                and drawing.get("type") != "group"
+            ]
+
+        result = []
+        for index, drawing in enumerate(drawings):
+            drawing_type = str(drawing.get("type", ""))
+            if drawing_type.startswith("clip") or drawing_type == "group":
+                continue
+
+            clip_rect = cls._get_active_clip_rect(page, drawings, index)
+            result.append((drawing, clip_rect))
+        return result
+
+    @classmethod
+    def _get_active_clip_rect(
+        cls, page: fitz.Page, drawings: List[dict], drawing_index: int
+    ) -> Optional[fitz.Rect]:
+        """Reconstruct the parent clip rectangles for one drawing."""
+        drawing = drawings[drawing_index]
+        level = drawing.get("level")
+        if level is None:
+            return None
+
+        clips = [
+            candidate
+            for candidate in drawings[:drawing_index]
+            if str(candidate.get("type", "")).startswith("clip")
+            and candidate.get("level") is not None
+            and candidate["level"] < level
+        ]
+        if not clips:
+            return None
+
+        # Keep the nearest clip at each nested level, matching PyMuPDF's
+        # parent-clip reconstruction for extended drawings.
+        clips.reverse()
+        parent_clips = [clips[0]]
+        for candidate in clips[1:]:
+            if candidate["level"] >= parent_clips[-1]["level"]:
+                continue
+            parent_clips.append(candidate)
+
+        visible = fitz.Rect(page.rect)
+        for clip in parent_clips:
+            scissor = clip.get("scissor")
+            if scissor is None:
+                continue
+            visible = cls._intersect_rect(visible, fitz.Rect(scissor))
+            if visible is None:
+                return None
+        return visible
 
     @staticmethod
     def _get_type3_character_regions(page: fitz.Page) -> List[BBox]:
@@ -436,7 +585,9 @@ class WiredTableExtractor(BaseTableExtractor):
         return merged
 
     def _merge_v_lines(
-        self, lines: List[Tuple[float, float, float, float]]
+        self,
+        lines: List[Tuple[float, float, float, float]],
+        h_lines: Optional[List[Tuple[float, float, float, float]]] = None,
     ) -> List[Tuple[float, float, float, float]]:
         if not lines:
             return []
@@ -462,7 +613,8 @@ class WiredTableExtractor(BaseTableExtractor):
             cur_y0, cur_y1 = segs[0]
 
             for s_y0, s_y1 in segs[1:]:
-                if s_y0 <= cur_y1 + 3.0:
+                gap = s_y0 - cur_y1
+                if gap <= self.line_tolerance:
                     cur_y1 = max(cur_y1, s_y1)
                 else:
                     merged.append((avg_x, cur_y0, avg_x, cur_y1))
@@ -583,6 +735,107 @@ class WiredTableExtractor(BaseTableExtractor):
             and vy0 - tolerance <= hy <= vy1 + tolerance
         )
 
+    @staticmethod
+    def _snap_coordinates(
+        coords: List[float],
+        anchor_coords: List[float],
+        tol: float = 1.5,
+    ) -> List[float]:
+        """Snap close coordinates to actual line anchors and merge duplicates within tol."""
+        snapped = []
+        for c in coords:
+            matched = [a for a in anchor_coords if abs(a - c) <= tol]
+            if matched:
+                best = min(matched, key=lambda a: abs(a - c))
+                snapped.append(round(best, 1))
+            else:
+                snapped.append(round(c, 1))
+
+        unique_sorted = sorted(set(snapped))
+        merged: List[float] = []
+        for val in unique_sorted:
+            if not merged:
+                merged.append(val)
+            elif val - merged[-1] <= tol:
+                curr_is_anchor = any(abs(a - val) <= 0.05 for a in anchor_coords)
+                prev_is_anchor = any(abs(a - merged[-1]) <= 0.05 for a in anchor_coords)
+                if curr_is_anchor and not prev_is_anchor:
+                    merged[-1] = val
+            else:
+                merged.append(val)
+        return merged
+
+    @staticmethod
+    def _trim_ghost_edge_rows(
+        cells: List[Cell],
+        h_lines: List[Tuple[float, float, float, float]],
+        tol: float = 2.0,
+    ) -> List[Cell]:
+        """Only trim ghost edge rows that are ultra-thin seams or lack physical line support.
+
+        Legitimate empty rows that have real physical horizontal line boundaries
+        and normal row height (e.g. Page 291) are strictly preserved.
+        """
+        if not cells:
+            return cells
+
+        row_indices = sorted({c.row_index for c in cells})
+        if not row_indices:
+            return cells
+
+        min_row = row_indices[0]
+        max_row = row_indices[-1]
+
+        while min_row <= max_row:
+            row_cells = [c for c in cells if c.row_index == min_row]
+            if not row_cells:
+                min_row += 1
+                continue
+            has_text = any(c.text.strip() != "" for c in row_cells)
+            if has_text:
+                break
+
+            top_y = min(c.bbox.y0 for c in row_cells)
+            bot_y = max(c.bbox.y1 for c in row_cells)
+            height = bot_y - top_y
+            has_real_top_line = any(abs(line[1] - top_y) <= tol for line in h_lines)
+
+            # 仅在是超薄缝隙行 (<= tol) 或者顶边没有真实物理横线支撑时才修剪
+            if height <= tol or not has_real_top_line:
+                min_row += 1
+            else:
+                break
+
+        while max_row >= min_row:
+            row_cells = [c for c in cells if c.row_index == max_row]
+            if not row_cells:
+                max_row -= 1
+                continue
+            has_text = any(c.text.strip() != "" for c in row_cells)
+            if has_text:
+                break
+
+            top_y = min(c.bbox.y0 for c in row_cells)
+            bot_y = max(c.bbox.y1 for c in row_cells)
+            height = bot_y - top_y
+            has_real_bot_line = any(abs(line[1] - bot_y) <= tol for line in h_lines)
+
+            # 仅在是超薄缝隙行 (<= tol) 或者底边没有真实物理横线支撑时才修剪
+            if height <= tol or not has_real_bot_line:
+                max_row -= 1
+            else:
+                break
+
+        if min_row > max_row:
+            return []
+
+        trimmed = []
+        for c in cells:
+            if min_row <= c.row_index <= max_row:
+                c.row_index -= min_row
+                trimmed.append(c)
+        return trimmed
+
     def _build_cells_for_region(
         self,
         bbox: BBox,
@@ -591,54 +844,80 @@ class WiredTableExtractor(BaseTableExtractor):
     ) -> List[Cell]:
         existing_v_xs = [line[0] for line in v_lines]
         if existing_v_xs:
-            start_groups: Dict[float, List[Tuple[float, float, float, float]]] = defaultdict(list)
-            for line in h_lines:
-                start_groups[round(line[0], 1)].append(line)
             left_v_x = min(existing_v_xs)
-            for start_x, supporting_lines in start_groups.items():
-                if (
-                    len(supporting_lines) < 3
-                    or start_x <= bbox.x0 + self.line_tolerance
-                    or start_x >= left_v_x - self.line_tolerance
-                ):
-                    continue
-                v_lines = [
-                    *v_lines,
-                    (start_x, bbox.y0, start_x, bbox.y1),
-                ]
-                break
+            start_clusters: List[List[Tuple[float, float, float, float]]] = []
+            for line in sorted(h_lines, key=lambda l: l[0]):
+                matched_cluster = None
+                for cluster in start_clusters:
+                    if abs(cluster[0][0] - line[0]) <= self.line_tolerance:
+                        matched_cluster = cluster
+                        break
+                if matched_cluster is not None:
+                    matched_cluster.append(line)
+                else:
+                    start_clusters.append([line])
 
-        h_ys = sorted(
-            {
-                round(bbox.y0, 1),
-                round(bbox.y1, 1),
-                *(round(line[1], 1) for line in h_lines),
-            }
-        )
-        v_xs = sorted(
-            {
-                round(bbox.x0, 1),
-                round(bbox.x1, 1),
-                *(round(line[0], 1) for line in v_lines),
-            }
-        )
+            for cluster in start_clusters:
+                avg_start_x = sum(l[0] for l in cluster) / len(cluster)
+                if (
+                    len(cluster) >= 2
+                    and avg_start_x > bbox.x0 + self.line_tolerance
+                    and avg_start_x < left_v_x - self.line_tolerance
+                ):
+                    v_lines = [
+                        *v_lines,
+                        (avg_start_x, bbox.y0, avg_start_x, bbox.y1),
+                    ]
+                    break
+
+            right_v_x = max(existing_v_xs)
+            end_clusters: List[List[Tuple[float, float, float, float]]] = []
+            for line in sorted(h_lines, key=lambda l: l[2], reverse=True):
+                matched_cluster = None
+                for cluster in end_clusters:
+                    if abs(cluster[0][2] - line[2]) <= self.line_tolerance:
+                        matched_cluster = cluster
+                        break
+                if matched_cluster is not None:
+                    matched_cluster.append(line)
+                else:
+                    end_clusters.append([line])
+
+            for cluster in end_clusters:
+                avg_end_x = sum(l[2] for l in cluster) / len(cluster)
+                if (
+                    len(cluster) >= 2
+                    and avg_end_x < bbox.x1 - self.line_tolerance
+                    and avg_end_x > right_v_x + self.line_tolerance
+                ):
+                    v_lines = [
+                        *v_lines,
+                        (avg_end_x, bbox.y0, avg_end_x, bbox.y1),
+                    ]
+                    break
+
+        tol = self.line_tolerance
+        raw_h = [bbox.y0, bbox.y1, *(line[1] for line in h_lines)]
+        raw_v = [bbox.x0, bbox.x1, *(line[0] for line in v_lines)]
+
+        h_ys = self._snap_coordinates(raw_h, [line[1] for line in h_lines], tol=tol)
+        v_xs = self._snap_coordinates(raw_v, [line[0] for line in v_lines], tol=tol)
 
         if len(h_ys) < 2 or len(v_xs) < 2:
             return []
 
         rows = len(h_ys) - 1
         cols = len(v_xs) - 1
-        tol = self.line_tolerance
         effective_h_lines = list(h_lines)
         effective_v_lines = list(v_lines)
-        if not any(abs(line[1] - bbox.y0) <= tol for line in h_lines):
-            effective_h_lines.append((bbox.x0, bbox.y0, bbox.x1, bbox.y0))
-        if not any(abs(line[1] - bbox.y1) <= tol for line in h_lines):
-            effective_h_lines.append((bbox.x0, bbox.y1, bbox.x1, bbox.y1))
-        if not any(abs(line[0] - bbox.x0) <= tol for line in v_lines):
-            effective_v_lines.append((bbox.x0, bbox.y0, bbox.x0, bbox.y1))
-        if not any(abs(line[0] - bbox.x1) <= tol for line in v_lines):
-            effective_v_lines.append((bbox.x1, bbox.y0, bbox.x1, bbox.y1))
+        if not any(abs(line[1] - h_ys[0]) <= tol for line in h_lines):
+            effective_h_lines.append((v_xs[0], h_ys[0], v_xs[-1], h_ys[0]))
+        if not any(abs(line[1] - h_ys[-1]) <= tol for line in h_lines):
+            effective_h_lines.append((v_xs[0], h_ys[-1], v_xs[-1], h_ys[-1]))
+        if not any(abs(line[0] - v_xs[0]) <= tol for line in v_lines):
+            effective_v_lines.append((v_xs[0], h_ys[0], v_xs[0], h_ys[-1]))
+        if not any(abs(line[0] - v_xs[-1]) <= tol for line in v_lines):
+            effective_v_lines.append((v_xs[-1], h_ys[0], v_xs[-1], h_ys[-1]))
 
         def has_h_segment(y: float, x0: float, x1: float) -> bool:
             span = x1 - x0
@@ -790,6 +1069,12 @@ class WiredTableExtractor(BaseTableExtractor):
                     colspan=max_col - min_col + 1,
                 )
             )
+
+        if cells:
+            min_c = min(cell.col_index for cell in cells)
+            if min_c > 0:
+                for cell in cells:
+                    cell.col_index -= min_c
 
         cells.sort(key=lambda cell: (cell.row_index, cell.col_index))
         return cells
