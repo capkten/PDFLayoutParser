@@ -12,6 +12,7 @@ import json
 import os
 import statistics
 import threading
+import atexit
 from time import perf_counter
 from typing import List, Optional
 
@@ -35,9 +36,72 @@ from hexai_pdf_parser.extractors.text_extractor import TextExtractor
 from hexai_pdf_parser.page_normalizer import normalize_page_rotation
 
 
-# Persistent process pool for multi-processing execution backend
+# Process pool reference for the multi-processing execution backend.  The pool
+# is recreated for each run so worker-local PDF handles cannot outlive inputs.
 _PROCESS_POOL = None
 _PROCESS_POOL_WORKERS = None
+_PROCESS_WORKER_DOCUMENT = None
+_PROCESS_WORKER_RESOURCES_KEY = None
+_PROCESS_WORKER_TABLE_EXTRACTOR = None
+
+
+def _close_process_worker_resources() -> None:
+    """Release the document and extractor cached inside a process worker."""
+    global _PROCESS_WORKER_DOCUMENT
+    global _PROCESS_WORKER_RESOURCES_KEY
+    global _PROCESS_WORKER_TABLE_EXTRACTOR
+
+    if _PROCESS_WORKER_DOCUMENT is not None:
+        _PROCESS_WORKER_DOCUMENT.close()
+    _PROCESS_WORKER_DOCUMENT = None
+    _PROCESS_WORKER_RESOURCES_KEY = None
+    _PROCESS_WORKER_TABLE_EXTRACTOR = None
+
+
+def _get_process_worker_resources(
+    pdf_path: str,
+    ml_model_path,
+    ml_confidence: float,
+    use_ml_table_detector: bool,
+    debug_pipeline: bool,
+    table_config,
+    table_extractor_cls,
+):
+    """Return process-local PDF and table extractor resources for one run."""
+    global _PROCESS_WORKER_DOCUMENT
+    global _PROCESS_WORKER_RESOURCES_KEY
+    global _PROCESS_WORKER_TABLE_EXTRACTOR
+
+    normalized_model_path = (
+        os.path.abspath(os.fspath(ml_model_path))
+        if ml_model_path is not None
+        else None
+    )
+    resource_key = (
+        os.path.abspath(os.fspath(pdf_path)),
+        normalized_model_path,
+        float(ml_confidence),
+        bool(use_ml_table_detector),
+        bool(debug_pipeline),
+        repr(table_config),
+        table_extractor_cls,
+    )
+    if _PROCESS_WORKER_RESOURCES_KEY != resource_key:
+        _close_process_worker_resources()
+        _PROCESS_WORKER_DOCUMENT = fitz.open(pdf_path)
+        _PROCESS_WORKER_TABLE_EXTRACTOR = table_extractor_cls(
+            ml_model_path=ml_model_path,
+            ml_confidence=ml_confidence,
+            table_config=table_config,
+            debug_pipeline=debug_pipeline,
+            use_ml_table_detector=use_ml_table_detector,
+        )
+        _PROCESS_WORKER_RESOURCES_KEY = resource_key
+
+    return _PROCESS_WORKER_DOCUMENT, _PROCESS_WORKER_TABLE_EXTRACTOR
+
+
+atexit.register(_close_process_worker_resources)
 
 
 def _run_scanned_page_pipeline(
@@ -106,7 +170,7 @@ def _run_scanned_page_pipeline(
                 output_path=table_vis_path,
                 page_index=page.index,
                 dpi=render_dpi,
-                page_type=page.page_type,
+                page_type=None,
                 page_already_normalized=True,
             ),
         )
@@ -131,6 +195,7 @@ def _run_page_pipeline(
     output_dir,
     use_ml_table_detector: bool = True,
     table_extractor_cls=TableExtractor,
+    table_extractor=None,
     table_extractor_factory=None,
 ):
     """Run all pipeline stages for a single page.
@@ -171,7 +236,7 @@ def _run_page_pipeline(
     )
 
     # b. Table extraction
-    if table_extractor_factory is None:
+    if table_extractor is None and table_extractor_factory is None:
         table_extractor = table_extractor_cls(
             ml_model_path=ml_model_path,
             ml_confidence=ml_confidence,
@@ -179,7 +244,7 @@ def _run_page_pipeline(
             debug_pipeline=debug_pipeline,
             use_ml_table_detector=use_ml_table_detector,
         )
-    else:
+    elif table_extractor is None:
         table_extractor = table_extractor_factory()
     page.tables = time_stage(
         "table_extract",
@@ -305,14 +370,20 @@ def _run_page_pipeline(
     if output_dir is not None:
         page.render = time_stage(
             "render",
-            lambda: RenderEngine(
-                output_dir, render_dpi
-            ).render_page(
-                pdf_doc,
-                page.index,
-                page=page_handle,
-                page_type=page.page_type,
-                page_already_normalized=True,
+            lambda: (
+                RenderEngine(output_dir, render_dpi).render(
+                    pdf_path,
+                    page.index,
+                    page_type=page.page_type,
+                )
+                if debug
+                else RenderEngine(output_dir, render_dpi).render_page(
+                    pdf_doc,
+                    page.index,
+                    page=page_handle,
+                    page_type=page.page_type,
+                    page_already_normalized=True,
+                )
             ),
         )
 
@@ -345,8 +416,8 @@ def _run_page_pipeline(
                 output_path=table_vis_path,
                 page_index=page.index,
                 dpi=render_dpi,
-                page_type=page.page_type,
-                page_already_normalized=True,
+                page_type=page.page_type if debug else None,
+                page_already_normalized=not debug,
             ),
         )
 
@@ -374,8 +445,8 @@ def _process_page_process_worker(
 ) -> tuple[int, Page, dict[str, float], float]:
     """Worker function for process-based parallelism.
 
-    Opens its own fitz document, delegates to ``_run_page_pipeline``,
-    and returns results that can be serialized across process boundaries.
+    Uses process-local fitz and extractor resources, delegates to
+    ``_run_page_pipeline``, and returns serializable page results.
     """
     page_start = perf_counter()
 
@@ -388,28 +459,34 @@ def _process_page_process_worker(
 
     output_dir = os.path.dirname(images_dir) if images_dir else None
 
-    pdf_doc = fitz.open(pdf_path)
-    try:
-        stage_totals = _run_page_pipeline(
-            pdf_doc=pdf_doc,
-            page=page,
-            pdf_path=pdf_path,
-            images_dir=images_dir,
-            pages_dir=pages_dir,
-            text_alignment_debug_dir=text_alignment_debug_dir,
-            render_dpi=render_dpi,
-            seal_coords=seal_coords,
-            ml_model_path=ml_model_path,
-            ml_confidence=ml_confidence,
-            debug=debug,
-            debug_pipeline=debug_pipeline,
-            table_config=table_config,
-            output_dir=output_dir,
-            use_ml_table_detector=use_ml_table_detector,
-            table_extractor_cls=table_extractor_cls,
-        )
-    finally:
-        pdf_doc.close()
+    pdf_doc, table_extractor = _get_process_worker_resources(
+        pdf_path=pdf_path,
+        ml_model_path=ml_model_path,
+        ml_confidence=ml_confidence,
+        use_ml_table_detector=use_ml_table_detector,
+        debug_pipeline=debug_pipeline,
+        table_config=table_config,
+        table_extractor_cls=table_extractor_cls,
+    )
+    stage_totals = _run_page_pipeline(
+        pdf_doc=pdf_doc,
+        page=page,
+        pdf_path=pdf_path,
+        images_dir=images_dir,
+        pages_dir=pages_dir,
+        text_alignment_debug_dir=text_alignment_debug_dir,
+        render_dpi=render_dpi,
+        seal_coords=seal_coords,
+        ml_model_path=ml_model_path,
+        ml_confidence=ml_confidence,
+        debug=debug,
+        debug_pipeline=debug_pipeline,
+        table_config=table_config,
+        output_dir=output_dir,
+        use_ml_table_detector=use_ml_table_detector,
+        table_extractor=table_extractor,
+        table_extractor_cls=table_extractor_cls,
+    )
 
     total_page_time = perf_counter() - page_start
     return page_index, page, stage_totals, total_page_time
@@ -457,6 +534,7 @@ class Pipeline:
         self._fitz_lock = threading.Lock()
         self._stage_totals: dict[str, float] = {}
         self._page_totals: list[dict[str, float]] = []
+        self._thread_state = threading.local()
 
     def _get_table_extractor_class(self):
         """Return the page table extractor class used by this pipeline."""
@@ -471,6 +549,16 @@ class Pipeline:
             debug_pipeline=self.debug_pipeline,
             use_ml_table_detector=self._use_ml_table_detector,
         )
+
+    def _get_thread_table_extractor(self, page_type: str):
+        """Return one table extractor per thread for the current run."""
+        if page_type == "scanned":
+            return None
+        extractor = getattr(self._thread_state, "table_extractor", None)
+        if extractor is None:
+            extractor = self._create_table_extractor()
+            self._thread_state.table_extractor = extractor
+        return extractor
 
     def _time_stage(self, stage: str, func):
         """Measure and accumulate elapsed time for a callable stage."""
@@ -562,6 +650,7 @@ class Pipeline:
         pages_dir: str,
         text_alignment_debug_dir: str,
         pdf_doc: fitz.Document,
+        table_extractor=None,
     ) -> None:
         page = document.pages[page_index]
         page_start = perf_counter()
@@ -583,6 +672,7 @@ class Pipeline:
                 table_config=self._table_config,
                 output_dir=self.output_dir,
                 use_ml_table_detector=self._use_ml_table_detector,
+                table_extractor=table_extractor,
                 table_extractor_factory=self._create_table_extractor,
             )
 
@@ -595,6 +685,7 @@ class Pipeline:
         """Run the full processing pipeline and return the Document."""
         self._stage_totals = {}
         self._page_totals = []
+        self._thread_state = threading.local()
         overall_start = perf_counter()
 
         # 1. Load PDF
@@ -624,9 +715,15 @@ class Pipeline:
                 os.makedirs(text_alignment_debug_dir, exist_ok=True)
 
         # 2. Per-page processing
+        selected_page_indices = (
+            set(self.page_indices) if self.page_indices is not None else None
+        )
         pages_to_process = []
         for page in document.pages:
-            if self.page_indices is not None and page.index not in self.page_indices:
+            if (
+                selected_page_indices is not None
+                and page.index not in selected_page_indices
+            ):
                 continue
             pages_to_process.append(page.index)
 
@@ -643,48 +740,54 @@ class Pipeline:
             if self.backend == "process":
                 global _PROCESS_POOL, _PROCESS_POOL_WORKERS
                 if _PROCESS_POOL is None or _PROCESS_POOL_WORKERS != num_workers:
-                    if _PROCESS_POOL is not None:
+                    if _PROCESS_POOL is not None and _PROCESS_POOL_WORKERS is not None:
                         _PROCESS_POOL.shutdown()
                     from concurrent.futures import ProcessPoolExecutor
                     _PROCESS_POOL = ProcessPoolExecutor(max_workers=num_workers)
                     _PROCESS_POOL_WORKERS = num_workers
 
-                futures = []
-                for page_index in pages_to_process:
-                    page = document.pages[page_index]
-                    futures.append(
-                        _PROCESS_POOL.submit(
-                            _process_page_process_worker,
-                            self.pdf_path,
-                            page_index,
-                            images_dir,
-                            pages_dir,
-                            text_alignment_debug_dir,
-                            self.render_dpi,
-                            self.seal_coords,
-                            self._ml_model_path,
-                            self._ml_confidence,
-                            self._use_ml_table_detector,
-                            self.debug,
-                            self.debug_pipeline,
-                            self._table_config,
-                            page.size,
-                            page.rotation,
-                            self._get_table_extractor_class(),
-                            page_type=page.page_type,
+                process_pool = _PROCESS_POOL
+                try:
+                    futures = []
+                    for page_index in pages_to_process:
+                        page = document.pages[page_index]
+                        futures.append(
+                            process_pool.submit(
+                                _process_page_process_worker,
+                                self.pdf_path,
+                                page_index,
+                                images_dir,
+                                pages_dir,
+                                text_alignment_debug_dir,
+                                self.render_dpi,
+                                self.seal_coords,
+                                self._ml_model_path,
+                                self._ml_confidence,
+                                self._use_ml_table_detector,
+                                self.debug,
+                                self.debug_pipeline,
+                                self._table_config,
+                                page.size,
+                                page.rotation,
+                                self._get_table_extractor_class(),
+                                page_type=page.page_type,
+                            )
                         )
-                    )
-                for future in futures:
-                    page_index, populated_page, stage_timings, total_page_time = future.result()
-                    document.pages[page_index] = populated_page
-                    for stage, elapsed in stage_timings.items():
-                        self._stage_totals[stage] = self._stage_totals.get(stage, 0.0) + elapsed
-                    self._record_page_total(page_index, total_page_time)
+                    for future in futures:
+                        page_index, populated_page, stage_timings, total_page_time = future.result()
+                        document.pages[page_index] = populated_page
+                        for stage, elapsed in stage_timings.items():
+                            self._stage_totals[stage] = self._stage_totals.get(stage, 0.0) + elapsed
+                        self._record_page_total(page_index, total_page_time)
+                finally:
+                    process_pool.shutdown(wait=True)
+                    _PROCESS_POOL_WORKERS = None
             else:
                 from concurrent.futures import ThreadPoolExecutor
                 def process_page_job(page_index: int):
                     thread_doc = fitz.open(self.pdf_path)
                     try:
+                        page_type = document.pages[page_index].page_type
                         self._process_single_page(
                             page_index,
                             document,
@@ -692,6 +795,7 @@ class Pipeline:
                             pages_dir,
                             text_alignment_debug_dir,
                             thread_doc,
+                            table_extractor=self._get_thread_table_extractor(page_type),
                         )
                     finally:
                         thread_doc.close()
@@ -700,8 +804,14 @@ class Pipeline:
                     list(executor.map(process_page_job, pages_to_process))
         else:
             pdf_doc = fitz.open(self.pdf_path)
+            sequential_table_extractor = None
             try:
                 for page_index in pages_to_process:
+                    if (
+                        sequential_table_extractor is None
+                        and document.pages[page_index].page_type != "scanned"
+                    ):
+                        sequential_table_extractor = self._create_table_extractor()
                     self._process_single_page(
                         page_index,
                         document,
@@ -709,6 +819,7 @@ class Pipeline:
                         pages_dir,
                         text_alignment_debug_dir,
                         pdf_doc,
+                        table_extractor=sequential_table_extractor,
                     )
             finally:
                 pdf_doc.close()

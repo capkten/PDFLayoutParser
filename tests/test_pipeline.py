@@ -156,6 +156,124 @@ def test_pipeline_end_to_end(tmp_dir):
     assert os.path.exists(os.path.join(tmp_dir, "page-000.png"))
 
 
+def test_pipeline_reuses_table_extractor_per_sequential_run(tmp_dir):
+    pdf_path = os.path.join(tmp_dir, "reused-extractor.pdf")
+    from tests.conftest import make_multi_page_pdf
+
+    make_multi_page_pdf(pdf_path, ["Page 0", "Page 1"])
+
+    class CountingExtractor:
+        instances = 0
+        extracts = 0
+
+        def __init__(self, **_kwargs):
+            type(self).instances += 1
+            self._last_text_alignment_debug = None
+            self._last_pipeline_debug = None
+
+        def extract(self, _page, *, page_already_normalized=False):
+            assert page_already_normalized is True
+            type(self).extracts += 1
+            return []
+
+    pipeline = Pipeline(
+        pdf_path=pdf_path,
+        backend="sequential",
+        num_workers=1,
+    )
+    pipeline._get_table_extractor_class = lambda: CountingExtractor
+
+    document = pipeline.run()
+
+    assert document.page_count == 2
+    assert CountingExtractor.instances == 1
+    assert CountingExtractor.extracts == 2
+
+
+def test_process_worker_reuses_document_and_extractor(tmp_dir):
+    pdf_path = os.path.join(tmp_dir, "worker-resources.pdf")
+    other_pdf_path = os.path.join(tmp_dir, "other-worker-resources.pdf")
+    from tests.conftest import make_multi_page_pdf
+
+    make_multi_page_pdf(pdf_path, ["Page 0", "Page 1"])
+    make_multi_page_pdf(other_pdf_path, ["Other page"])
+
+    class CountingExtractor:
+        instances = 0
+
+        def __init__(self, **_kwargs):
+            type(self).instances += 1
+
+    first_document = first_extractor = None
+    try:
+        first_document, first_extractor = pipeline_module._get_process_worker_resources(
+            pdf_path,
+            None,
+            0.40,
+            True,
+            False,
+            None,
+            CountingExtractor,
+        )
+        second_document, second_extractor = pipeline_module._get_process_worker_resources(
+            pdf_path,
+            None,
+            0.40,
+            True,
+            False,
+            None,
+            CountingExtractor,
+        )
+
+        assert second_document is first_document
+        assert second_extractor is first_extractor
+        assert CountingExtractor.instances == 1
+
+        other_document, other_extractor = pipeline_module._get_process_worker_resources(
+            other_pdf_path,
+            None,
+            0.40,
+            True,
+            False,
+            None,
+            CountingExtractor,
+        )
+        assert other_document is not first_document
+        assert other_extractor is not first_extractor
+        assert CountingExtractor.instances == 2
+    finally:
+        pipeline_module._close_process_worker_resources()
+
+
+def test_pipeline_deduplicates_page_indices_without_renumbering(tmp_dir):
+    pdf_path = os.path.join(tmp_dir, "selected-pages.pdf")
+    from tests.conftest import make_multi_page_pdf
+
+    make_multi_page_pdf(pdf_path, ["Page 0", "Page 1", "Page 2"])
+
+    class TrackingPageIndices(list):
+        contains_calls = 0
+
+        def __contains__(self, value):
+            type(self).contains_calls += 1
+            return super().__contains__(value)
+
+    selected = TrackingPageIndices([2, 0, 2])
+    document = Pipeline(
+        pdf_path=pdf_path,
+        page_indices=selected,
+        backend="sequential",
+        num_workers=1,
+    ).run()
+
+    assert document.page_count == 3
+    assert [page.index for page in document.pages] == [0, 1, 2]
+    assert document.pages[0].blocks
+    assert document.pages[1].blocks == []
+    assert document.pages[2].blocks
+    assert TrackingPageIndices.contains_calls == 0
+
+
 def test_pipeline_sorts_seals_into_page_order(tmp_dir):
     pdf_path = os.path.join(tmp_dir, "seal_order.pdf")
     doc = fitz.open()
