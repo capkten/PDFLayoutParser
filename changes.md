@@ -1,5 +1,15 @@
 # Changes
 
+## 2026-09-08
+
+- 为个人征信专用入口增加表格检测模型开关：`PersonalCreditReportPipeline` 和 `parse_personal_credit_report()` 默认使用 `use_ml_table_detector=False`；显式传入 `True` 时恢复模型检测。通用 `Pipeline`、`TableExtractor` 及默认正常调用仍保持 `True`。
+  - **根因与调用位置**：原 `TableExtractor.extract()` 在规则候选完成后无条件进入 `_extract_model_tables()`；开关现在从 `Pipeline` 贯通到线程、进程 worker 和 extractor。个人征信入口只改变默认值，不改变 `_document_result()` 输出结构。
+  - **无模型路径**：仅使用有线线框候选和中文/混合页面的 native-span 无线候选；过滤 `wireless_page_signal` 占位信号，有线 `line_projection` 与重叠无线候选去重并优先保留有线结果。不创建、不调用 `MLTableDetector`，中文/混合表格不进入 zebra 或 words 二次重建路径。无模型结果与模型标签允许因候选边界不同而不同，本次标签验收针对正常模型调用不受影响。
+  - **测试**：`tests/test_rule_first_table_detection.py tests/test_pipeline.py tests/test_table_extractor.py` 排除既有 hybrid source 预期后为 `114 passed, 1 deselected`；完整该集合为 `114 passed, 1 failed`，唯一失败为既有 `test_hybrid_wired_table_replaces_full_rowspan_body_before_shifting_footer`（预期 `hybrid_line_span_recovery`、实际 `line_projection`，与本次开关无关）。
+  - **正常模型端到端标签验证**：使用 `D:\codes\PDFLayoutParser\fix\zh_all_table_pages.pdf` 和默认 `Pipeline(use_ml_table_detector=True)`，输出至 `D:\codes\PDFLayoutParser\output\fix_zh_all_table_pages_normal_model_20260908\`。共处理 `1023` 页，生成 `1023` 个页面 JSON 和 `1023` 张表格 PNG；表格来源为 `line_projection=1711`、`wireless_span_recovery=445`、`text_alignment=1`、`english_general_wireless=32`、`hybrid_line_span_recovery=10`。与现有黄金标签逐页比较：`passed=1022`、`skipped=1`、`failed=0`、`missing=0`、`extra=0`。
+  - **个人征信无模型端到端验证**：使用同一 PDF 输出至 `D:\codes\PDFLayoutParser\output\fix_zh_all_table_pages_personal_no_ml_20260908_v2\`，共处理 `1023` 页、`2372` 张表格，来源为 `line_projection=1714`、`wireless_span_recovery=648`、`hybrid_line_span_recovery=10`，无 `wireless_page_signal` 泄漏；该结果不与模型黄金标签做逐表等价断言。
+  - **demo 验证**：使用 worktree 源码运行 `D:\codes\PDFLayoutParser\demo.py` 成功退出，生成 `D:\codes\PDFLayoutParser\征信解析样例.json`；JSON 包含 `document` 和 `pages`，共 `12` 页。
+
 ## 2026-09-07
 
 - 修复 `征信解析样例.pdf` 第 1 页“负债历史”有线表格将页脚 URL、页码误纳入末行的问题。
