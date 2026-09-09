@@ -109,6 +109,7 @@ class TableExtractor:
         ml_confidence: float = 0.40,
         table_config: Optional[TableConfig] = None,
         debug_pipeline: bool = False,
+        use_ml_table_detector: bool = True,
     ):
         self.line_tolerance = line_tolerance
         self.merge_group_tol = merge_group_tol
@@ -117,6 +118,7 @@ class TableExtractor:
         self.fallback_max_tables = fallback_max_tables
         self._ml_model_path = ml_model_path
         self._ml_confidence = ml_confidence
+        self._use_ml_table_detector = use_ml_table_detector
         self._ml_detector = None  # Lazy initialization
         self._last_text_alignment_debug: Optional[dict] = None
         self.debug_pipeline = debug_pipeline
@@ -410,6 +412,30 @@ class TableExtractor:
         )
         return tables
 
+    def _extract_rule_tables(
+        self,
+        page: fitz.Page,
+        candidates: List[Table],
+        page_language: str,
+    ) -> List[Table]:
+        """Return rule/native-span candidates without invoking the ML detector."""
+        wired_tables = [
+            self._recover_hybrid_wired_table(page, table, page_language)
+            for table in candidates
+            if table.source == "line_projection"
+        ]
+        tables = list(wired_tables)
+        for candidate in candidates:
+            if candidate.source in {"line_projection", "wireless_page_signal"}:
+                continue
+            if any(
+                self._bbox_overlaps(candidate.bbox, table.bbox)
+                for table in tables
+            ):
+                continue
+            tables.append(candidate)
+        return tables
+
     def _recover_hybrid_wired_table(
         self, page: fitz.Page, table: Table, page_language: str
     ) -> Table:
@@ -605,9 +631,14 @@ class TableExtractor:
         wired_tables = [
             table for table in candidates if table.source == "line_projection"
         ]
-        tables = self._extract_model_tables(
-            page, wired_tables=wired_tables, page_language=page_language
-        )
+        if self._use_ml_table_detector:
+            tables = self._extract_model_tables(
+                page, wired_tables=wired_tables, page_language=page_language
+            )
+        else:
+            tables = self._extract_rule_tables(
+                page, candidates=candidates, page_language=page_language
+            )
 
         # Apply layout rule system when a config with profiles is provided.
         if self._table_config and self._table_config.profiles:
