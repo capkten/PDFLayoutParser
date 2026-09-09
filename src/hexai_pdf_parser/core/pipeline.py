@@ -784,24 +784,38 @@ class Pipeline:
                     _PROCESS_POOL_WORKERS = None
             else:
                 from concurrent.futures import ThreadPoolExecutor
-                def process_page_job(page_index: int):
-                    thread_doc = fitz.open(self.pdf_path)
-                    try:
-                        page_type = document.pages[page_index].page_type
-                        self._process_single_page(
-                            page_index,
-                            document,
-                            images_dir,
-                            pages_dir,
-                            text_alignment_debug_dir,
-                            thread_doc,
-                            table_extractor=self._get_thread_table_extractor(page_type),
-                        )
-                    finally:
-                        thread_doc.close()
 
-                with ThreadPoolExecutor(max_workers=num_workers) as executor:
-                    list(executor.map(process_page_job, pages_to_process))
+                thread_documents = {}
+                thread_documents_lock = threading.Lock()
+
+                def get_thread_document():
+                    thread_id = threading.get_ident()
+                    with thread_documents_lock:
+                        thread_doc = thread_documents.get(thread_id)
+                        if thread_doc is None:
+                            thread_doc = fitz.open(self.pdf_path)
+                            thread_documents[thread_id] = thread_doc
+                        return thread_doc
+
+                def process_page_job(page_index: int):
+                    thread_doc = get_thread_document()
+                    page_type = document.pages[page_index].page_type
+                    self._process_single_page(
+                        page_index,
+                        document,
+                        images_dir,
+                        pages_dir,
+                        text_alignment_debug_dir,
+                        thread_doc,
+                        table_extractor=self._get_thread_table_extractor(page_type),
+                    )
+
+                try:
+                    with ThreadPoolExecutor(max_workers=num_workers) as executor:
+                        list(executor.map(process_page_job, pages_to_process))
+                finally:
+                    for thread_doc in thread_documents.values():
+                        thread_doc.close()
         else:
             pdf_doc = fitz.open(self.pdf_path)
             sequential_table_extractor = None

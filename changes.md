@@ -1,5 +1,14 @@
 # Changes
 
+## 2026-09-09
+
+- 优化 Python 页面处理管线的重复资源开销，同时保持现有 API、页面索引、表格结构语义和输出文件契约不变。
+  - **根因与调用位置**：`src/hexai_pdf_parser/core/pipeline.py` 原先在同一页面的文本/表格阶段重复读取 PyMuPDF 文本和 drawing，在输出阶段重新打开 PDF 做图片提取、渲染和表格可视化；thread/process 后端还会按页重复创建文档句柄和 `TableExtractor`。页面归一化也可能在多个入口重复执行。
+  - **修复判定**：新增 `core/page_cache.py::CachedPage`，仅缓存相同参数的 `get_text()`/`get_drawings()` 读取；`_run_page_pipeline()` 对当前页只做一次 rotation 归一化，并把已有文档/页面句柄传给 `ImageExtractor.extract_page()`、`RenderEngine.render_page()` 和表格可视化。sequential 每次运行复用一个表格提取器，thread 按线程复用独立 PDF 文档和提取器，process 按进程复用文档和提取器；PyMuPDF 文档不跨线程共享。`page_indices` 只转为 set 优化筛选，不改变未选页面的兼容语义。
+  - **结构约束**：中文/混合无线表格仍只消费 native span、atom、列带、物理 Cell 和逻辑 Cell；本次没有新增 `page.get_text("words")` 回读，也没有进入 zebra 或 legacy 二次重建路径。debug 模式继续使用独立路径式渲染，避免调试标注污染主页面 PNG。
+  - **测试与页面验证**：`tests/test_page_cache.py tests/test_pipeline.py tests/test_pdf_parser.py tests/test_image_extractor.py tests/test_render_engine.py tests/test_table_visualizer.py tests/test_pipeline_debug.py tests/test_text_extractor.py` → `91 passed, 32 skipped`；表格结构专项 256 项通过；直接相关的 `tests/test_table_extractor.py tests/test_rule_first_table_detection.py tests/test_wireless_table_recovery.py` → `123 passed, 1 failed`，唯一失败为既有 hybrid source 期望，与本次参数和资源复用改动无关。`git diff --check`、`compileall` 通过。全仓收集仍有 3 个既有导入错误：缺少 `camelot_stream_demo`、`benchmark_utils.extract_model_profile` 和 `layout_model_utils`。
+  - **独立页面输出**：矢量页 `tests/fixtures/page_000_vector.pdf` 输出至 `D:\codes\PDFLayoutParser\output\python_pipeline_optimization_20260909_vector\`，生成页面 JSON、主页面 PNG、表格 PNG，识别 1 张表；扫描页 `tests/fixtures/page_705_scanned.pdf` 输出至 `D:\codes\PDFLayoutParser\output\python_pipeline_optimization_20260909_scanned\`，保持 `scanned`、0 张表并生成页面 JSON/PNG。PNG 视觉核验未发现表格边界、重复文字或正文污染。
+
 ## 2026-09-08
 
 - 为个人征信专用入口增加表格检测模型开关：`PersonalCreditReportPipeline` 和 `parse_personal_credit_report()` 默认使用 `use_ml_table_detector=False`；显式传入 `True` 时恢复模型检测。通用 `Pipeline`、`TableExtractor` 及默认正常调用仍保持 `True`。

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from pathlib import Path
 
 import fitz
@@ -272,6 +273,54 @@ def test_pipeline_deduplicates_page_indices_without_renumbering(tmp_dir):
     assert document.pages[1].blocks == []
     assert document.pages[2].blocks
     assert TrackingPageIndices.contains_calls == 0
+
+
+def test_thread_backend_reuses_one_document_per_thread(tmp_dir, monkeypatch):
+    pdf_path = os.path.join(tmp_dir, "thread-doc-reuse.pdf")
+    from tests.conftest import make_multi_page_pdf
+
+    make_multi_page_pdf(pdf_path, [f"Page {index}" for index in range(4)])
+    real_open = pipeline_module.fitz.open
+    open_calls = []
+
+    def counted_open(*args, **kwargs):
+        if args and args[0] == pdf_path:
+            open_calls.append(True)
+        return real_open(*args, **kwargs)
+
+    monkeypatch.setattr(pipeline_module.fitz, "open", counted_open)
+
+    barrier = threading.Barrier(2)
+    worker_document_ids = set()
+    worker_document_ids_lock = threading.Lock()
+
+    def record_page_processing(
+        _self,
+        _page_index,
+        _document,
+        _images_dir,
+        _pages_dir,
+        _text_alignment_debug_dir,
+        pdf_doc,
+        table_extractor=None,
+    ):
+        del table_extractor
+        with worker_document_ids_lock:
+            worker_document_ids.add(id(pdf_doc))
+        barrier.wait(timeout=5)
+
+    monkeypatch.setattr(Pipeline, "_process_single_page", record_page_processing)
+
+    document = Pipeline(
+        pdf_path=pdf_path,
+        backend="thread",
+        num_workers=2,
+        use_ml_table_detector=False,
+    ).run()
+
+    assert document.page_count == 4
+    assert len(worker_document_ids) == 2
+    assert len(open_calls) == 3  # one loader document plus one per thread
 
 
 def test_pipeline_sorts_seals_into_page_order(tmp_dir):
