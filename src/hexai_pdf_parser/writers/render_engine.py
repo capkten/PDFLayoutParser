@@ -38,21 +38,34 @@ class RenderEngine:
         """Render *page_index* of *file_path* to a PNG and return :class:`RenderInfo`."""
         doc = fitz.open(file_path)
         try:
-            page = doc[page_index]
-            normalize_page_rotation(page)
-            draw_page_type_label(page, page_type)
-            mat = fitz.Matrix(self.dpi / 72, self.dpi / 72)
-            pix = page.get_pixmap(matrix=mat)
-
-            file_name = f"page-{page_index:03d}.png"
-            path = os.path.join(self.output_dir, file_name)
-            pix.save(path)
-
-            return RenderInfo(
-                path=path,
-                width=pix.width,
-                height=pix.height,
-                dpi=self.dpi,
-            )
+            return self.render_page(doc, page_index, page_type=page_type)
         finally:
             doc.close()
+
+    def render_page(
+        self,
+        document: fitz.Document,
+        page_index: int,
+        page: Optional[fitz.Page] = None,
+        page_type: Optional[str] = None,
+        *,
+        page_already_normalized: bool = False,
+    ) -> RenderInfo:
+        """Render an existing document/page without reopening the PDF."""
+        page = page if page is not None else document[page_index]
+        if not page_already_normalized:
+            normalize_page_rotation(page)
+        draw_page_type_label(page, page_type)
+        mat = fitz.Matrix(self.dpi / 72, self.dpi / 72)
+        pix = page.get_pixmap(matrix=mat)
+
+        file_name = f"page-{page_index:03d}.png"
+        path = os.path.join(self.output_dir, file_name)
+        pix.save(path)
+
+        return RenderInfo(
+            path=path,
+            width=pix.width,
+            height=pix.height,
+            dpi=self.dpi,
+        )

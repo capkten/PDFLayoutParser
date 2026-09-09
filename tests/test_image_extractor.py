@@ -3,8 +3,10 @@
 from pathlib import Path
 from types import SimpleNamespace
 
+import fitz
 import pytest
 
+import hexai_pdf_parser.extractors.image_extractor as image_extractor_module
 from hexai_pdf_parser.image_extractor import ImageExtractor
 from tests.conftest import make_pdf_with_image
 
@@ -72,3 +74,48 @@ class TestImageExtractor:
         assert images[0].bbox.y0 == 20.0
         assert images[1].bbox.x0 == 200.0
         assert images[1].bbox.y0 == 200.0
+
+    def test_extract_page_uses_existing_document(self, tmp_dir):
+        pdf_path = Path(tmp_dir) / "with_image_page.pdf"
+        make_pdf_with_image(pdf_path)
+        output_dir = Path(tmp_dir) / "images"
+        extractor = ImageExtractor(str(output_dir))
+
+        document = fitz.open(str(pdf_path))
+        try:
+            images = extractor.extract_page(
+                document,
+                page_index=0,
+                page=document[0],
+                page_already_normalized=True,
+            )
+        finally:
+            document.close()
+
+        assert len(images) >= 1
+        assert Path(images[0].path).exists()
+
+    def test_extract_page_can_skip_normalization(self, tmp_dir, monkeypatch):
+        pdf_path = Path(tmp_dir) / "with_image_normalization.pdf"
+        make_pdf_with_image(pdf_path)
+        output_dir = Path(tmp_dir) / "images"
+        extractor = ImageExtractor(str(output_dir))
+        calls = []
+        monkeypatch.setattr(
+            image_extractor_module,
+            "normalize_page_rotation",
+            lambda _page: calls.append(True),
+        )
+
+        document = fitz.open(str(pdf_path))
+        try:
+            extractor.extract_page(
+                document,
+                page_index=0,
+                page=document[0],
+                page_already_normalized=True,
+            )
+        finally:
+            document.close()
+
+        assert calls == []

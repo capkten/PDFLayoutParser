@@ -604,9 +604,15 @@ class TableExtractor:
             v_lines=table.v_lines,
         )
 
-    def extract(self, page: fitz.Page) -> List[Table]:
+    def extract(
+        self,
+        page: fitz.Page,
+        *,
+        page_already_normalized: bool = False,
+    ) -> List[Table]:
         """Detect rule candidates, then use the model for final table results."""
-        normalize_page_rotation(page)
+        if not page_already_normalized:
+            normalize_page_rotation(page)
         from hexai_pdf_parser.extractors.language_detector import detect_page_language
 
         page_language = detect_page_language(page)

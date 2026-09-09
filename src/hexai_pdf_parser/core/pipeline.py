@@ -22,6 +22,7 @@ from hexai_pdf_parser.writers.json_writer import JSONWriter
 from hexai_pdf_parser.extractors.layout_builder import LayoutBuilder
 from hexai_pdf_parser.extractors.layout_mapper import LayoutMapper
 from hexai_pdf_parser.core.loader import Loader
+from hexai_pdf_parser.core.page_cache import CachedPage
 from hexai_pdf_parser.writers.markdown_writer import MarkdownWriter
 from hexai_pdf_parser.core.models import BBox, Document, LayoutElement, Page, Seal
 from hexai_pdf_parser.debug.pipeline_debug import render_pipeline_debug_page
@@ -42,6 +43,7 @@ _PROCESS_POOL_WORKERS = None
 def _run_scanned_page_pipeline(
     pdf_doc: fitz.Document,
     page: Page,
+    page_handle: fitz.Page,
     pdf_path: str,
     pages_dir: str,
     render_dpi: int,
@@ -68,7 +70,13 @@ def _run_scanned_page_pipeline(
             "render",
             lambda: RenderEngine(
                 output_dir, render_dpi
-            ).render(pdf_path, page.index, page_type=page.page_type),
+            ).render_page(
+                pdf_doc,
+                page.index,
+                page=page_handle,
+                page_type=page.page_type,
+                page_already_normalized=True,
+            ),
         )
 
         page_json_path = os.path.join(
@@ -93,12 +101,13 @@ def _run_scanned_page_pipeline(
         time_stage(
             "write_table_visualization",
             lambda: render_table_visualization(
-                source=pdf_path,
+                source=page_handle,
                 tables=page.tables,
                 output_path=table_vis_path,
                 page_index=page.index,
                 dpi=render_dpi,
                 page_type=page.page_type,
+                page_already_normalized=True,
             ),
         )
 
@@ -145,17 +154,20 @@ def _run_page_pipeline(
         return _run_scanned_page_pipeline(
             pdf_doc=pdf_doc,
             page=page,
+            page_handle=page_handle,
             pdf_path=pdf_path,
             pages_dir=pages_dir,
             render_dpi=render_dpi,
             output_dir=output_dir,
         )
 
+    cached_page = CachedPage(page_handle)
+
     # a. Text extraction
     text_extractor = TextExtractor()
     page.blocks = time_stage(
         "text_extract",
-        lambda: text_extractor.extract_blocks(page_handle),
+        lambda: text_extractor.extract_blocks(cached_page),
     )
 
     # b. Table extraction
@@ -171,7 +183,10 @@ def _run_page_pipeline(
         table_extractor = table_extractor_factory()
     page.tables = time_stage(
         "table_extract",
-        lambda: table_extractor.extract(page_handle),
+        lambda: table_extractor.extract(
+            cached_page,
+            page_already_normalized=True,
+        ),
     )
 
     # c. Rebuild final text blocks after table regions are known.  The raw
@@ -179,7 +194,7 @@ def _run_page_pipeline(
     page.blocks = time_stage(
         "text_refine",
         lambda: text_extractor.extract_layout_blocks(
-            page_handle,
+            cached_page,
             page.tables,
         ),
     )
@@ -234,8 +249,11 @@ def _run_page_pipeline(
     if output_dir is not None:
         page.images = time_stage(
             "image_extract",
-            lambda: ImageExtractor(images_dir).extract(
-                pdf_path, page.index
+            lambda: ImageExtractor(images_dir).extract_page(
+                pdf_doc,
+                page.index,
+                page=page_handle,
+                page_already_normalized=True,
             ),
         )
     else:
@@ -289,10 +307,12 @@ def _run_page_pipeline(
             "render",
             lambda: RenderEngine(
                 output_dir, render_dpi
-            ).render(
-                pdf_path,
+            ).render_page(
+                pdf_doc,
                 page.index,
+                page=page_handle,
                 page_type=page.page_type,
+                page_already_normalized=True,
             ),
         )
 
@@ -320,12 +340,13 @@ def _run_page_pipeline(
         time_stage(
             "write_table_visualization",
             lambda: render_table_visualization(
-                source=pdf_path,
+                source=page_handle,
                 tables=page.tables,
                 output_path=table_vis_path,
                 page_index=page.index,
                 dpi=render_dpi,
                 page_type=page.page_type,
+                page_already_normalized=True,
             ),
         )
 
