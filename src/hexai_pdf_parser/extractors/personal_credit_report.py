@@ -8,6 +8,7 @@ from typing import List, Optional
 import fitz
 
 from hexai_pdf_parser.core.models import BBox, Cell, Document, Table
+from hexai_pdf_parser.extractors.text_extractor import TextExtractor
 from hexai_pdf_parser.writers.markdown_writer import MarkdownWriter
 from hexai_pdf_parser.core.pipeline import Pipeline
 from hexai_pdf_parser.tables.table_extractor import TableExtractor
@@ -513,6 +514,18 @@ class PersonalCreditReportTableExtractor(TableExtractor):
 class PersonalCreditReportPipeline(Pipeline):
     """Main pipeline with a personal-credit-report table extractor."""
 
+    def __init__(
+        self,
+        *args,
+        use_ml_table_detector: bool = False,
+        **kwargs,
+    ):
+        super().__init__(
+            *args,
+            use_ml_table_detector=use_ml_table_detector,
+            **kwargs,
+        )
+
     def _get_table_extractor_class(self):
         return PersonalCreditReportTableExtractor
 
@@ -524,6 +537,7 @@ def parse_personal_credit_report(
     page_indices: list[int] | None = None,
     debug: bool = False,
     debug_pipeline: bool = False,
+    use_ml_table_detector: bool = False,
 ) -> dict:
     """Parse a personal credit report into the compact public result format."""
     document = PersonalCreditReportPipeline(
@@ -533,5 +547,6 @@ def parse_personal_credit_report(
         page_indices=page_indices,
         debug=debug,
         debug_pipeline=debug_pipeline,
+        use_ml_table_detector=use_ml_table_detector,
     ).run()
     return _document_result(document)

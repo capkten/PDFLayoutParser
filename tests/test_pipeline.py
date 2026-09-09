@@ -11,6 +11,7 @@ import pytest
 
 import hexai_pdf_parser.core.pipeline as pipeline_module
 from hexai_pdf_parser.pipeline import Pipeline
+from hexai_pdf_parser.personal_credit_report import PersonalCreditReportPipeline
 from hexai_pdf_parser.table_config import (
     GlobalTableSettings,
     LayoutProfile,
@@ -351,3 +352,24 @@ def test_pipeline_without_table_config_works(tmp_dir):
         render_dpi=150,
     ).run()
     assert doc.page_count == 1
+
+
+def test_personal_credit_pipeline_disables_ml_by_default():
+    pipeline = PersonalCreditReportPipeline(pdf_path="unused.pdf")
+
+    assert pipeline._create_table_extractor()._use_ml_table_detector is False
+
+
+def test_personal_credit_pipeline_can_enable_ml():
+    pipeline = PersonalCreditReportPipeline(
+        pdf_path="unused.pdf",
+        use_ml_table_detector=True,
+    )
+
+    assert pipeline._create_table_extractor()._use_ml_table_detector is True
+
+
+def test_generic_pipeline_keeps_ml_enabled_by_default():
+    pipeline = Pipeline(pdf_path="unused.pdf")
+
+    assert pipeline._create_table_extractor()._use_ml_table_detector is True

@@ -120,6 +120,7 @@ def _run_page_pipeline(
     debug_pipeline: bool,
     table_config,
     output_dir,
+    use_ml_table_detector: bool = True,
     table_extractor_cls=TableExtractor,
     table_extractor_factory=None,
 ):
@@ -164,6 +165,7 @@ def _run_page_pipeline(
             ml_confidence=ml_confidence,
             table_config=table_config,
             debug_pipeline=debug_pipeline,
+            use_ml_table_detector=use_ml_table_detector,
         )
     else:
         table_extractor = table_extractor_factory()
@@ -340,6 +342,7 @@ def _process_page_process_worker(
     seal_coords,
     ml_model_path,
     ml_confidence: float,
+    use_ml_table_detector: bool,
     debug: bool,
     debug_pipeline: bool,
     table_config,
@@ -381,6 +384,7 @@ def _process_page_process_worker(
             debug_pipeline=debug_pipeline,
             table_config=table_config,
             output_dir=output_dir,
+            use_ml_table_detector=use_ml_table_detector,
             table_extractor_cls=table_extractor_cls,
         )
     finally:
@@ -413,6 +417,7 @@ class Pipeline:
         table_config: Optional[TableConfig] = None,
         num_workers: Optional[int] = None,
         backend: str = "thread",
+        use_ml_table_detector: bool = True,
     ):
         self.pdf_path = pdf_path
         self.output_dir = output_dir
@@ -426,6 +431,7 @@ class Pipeline:
         self._table_config = table_config
         self.num_workers = num_workers
         self.backend = backend
+        self._use_ml_table_detector = use_ml_table_detector
         self._lock = threading.Lock()
         self._fitz_lock = threading.Lock()
         self._stage_totals: dict[str, float] = {}
@@ -442,6 +448,7 @@ class Pipeline:
             ml_confidence=self._ml_confidence,
             table_config=self._table_config,
             debug_pipeline=self.debug_pipeline,
+            use_ml_table_detector=self._use_ml_table_detector,
         )
 
     def _time_stage(self, stage: str, func):
@@ -554,6 +561,7 @@ class Pipeline:
                 debug_pipeline=self.debug_pipeline,
                 table_config=self._table_config,
                 output_dir=self.output_dir,
+                use_ml_table_detector=self._use_ml_table_detector,
                 table_extractor_factory=self._create_table_extractor,
             )
 
@@ -635,6 +643,7 @@ class Pipeline:
                             self.seal_coords,
                             self._ml_model_path,
                             self._ml_confidence,
+                            self._use_ml_table_detector,
                             self.debug,
                             self.debug_pipeline,
                             self._table_config,
