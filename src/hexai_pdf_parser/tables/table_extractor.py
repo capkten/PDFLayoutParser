@@ -100,7 +100,7 @@ class TableExtractor:
 
     def __init__(
         self,
-        line_tolerance: float = 2.0,
+        line_tolerance: float = 2.3,
         merge_group_tol: float = 0.3,
         row_gap_threshold: float = 30.0,
         fallback_max_cols: int = 30,

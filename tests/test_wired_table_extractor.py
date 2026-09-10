@@ -1085,3 +1085,42 @@ def test_build_cells_rejects_unanchored_partial_right_boundary():
 
     assert len(cells) == 7
     assert sum(cell.col_index == 2 for cell in cells) == 1
+
+
+def test_merge_v_lines_bridges_segmented_borders_within_tolerance():
+    """垂直线段断隙在2.5pt容差内时能够成功合并。"""
+    extractor = WiredTableExtractor()
+    # 模拟个人征信报告中常见的 2.28pt 拼接断隙
+    v_lines = [
+        (44.16, 283.13, 44.16, 300.89),
+        (44.16, 303.17, 44.16, 319.01),
+    ]
+    merged = extractor._merge_v_lines(v_lines)
+    assert len(merged) == 1
+    assert merged[0][1] == pytest.approx(283.13)
+    assert merged[0][3] == pytest.approx(319.01)
+
+
+def test_wired_extractor_finds_three_credit_record_tables_on_personal_report():
+    """个人信用报告(本人简版).pdf第0页信贷记录下的3个有线表格均能正常识别。"""
+    import os
+    candidates = [
+        os.path.abspath(r"个人信用报告/个人信用报告(本人简版).pdf"),
+        os.path.abspath(r"D:/codes/PDFLayoutParser/个人信用报告/个人信用报告(本人简版).pdf"),
+    ]
+    pdf_path = next((p for p in candidates if os.path.exists(p)), None)
+    if not pdf_path:
+        pytest.skip("个人信用报告(本人简版).pdf not found")
+
+    doc = fitz.open(pdf_path)
+    page = doc[0]
+    extractor = WiredTableExtractor()
+    tables = extractor.extract(page)
+
+    assert len(tables) == 3
+    # 1. 资产处置信息 / 垫款信息
+    assert any(any("资产处置信息" in c.text for c in t.cells) for t in tables)
+    # 2. 信用卡 / 贷款 / 其他业务
+    assert any(any("信用卡" in c.text for c in t.cells) and any("账户数" in c.text for c in t.cells) for t in tables)
+    # 3. 为个人 / 为企业
+    assert any(any("相关还款责任" in c.text for c in t.cells) for t in tables)

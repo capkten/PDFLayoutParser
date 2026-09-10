@@ -17,7 +17,7 @@ class WiredTableExtractor(BaseTableExtractor):
 
     def __init__(
         self,
-        line_tolerance: float = 2.0,
+        line_tolerance: float = 2.3,
         merge_group_tol: float = 0.3,
     ):
         self.line_tolerance = line_tolerance
