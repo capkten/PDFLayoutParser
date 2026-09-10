@@ -2,6 +2,17 @@
 
 ## 2026-09-10
 
+- 统一中英文无线表格结构恢复核心逻辑，解耦表格区域检测（Detection）与表格结构恢复（Structure Recovery），解决无模型分支（`use_ml_table_detector=False`）下个人征信报告中居中对齐列丢失合并的问题。
+  - **根因与调用位置**：`src/hexai_pdf_parser/tables/table_extractor.py::_extract_rule_tables()` 原先直接消费 `_detect_rule_candidates()` 产出的未恢复 candidate，而没有像 `_extract_model_tables()` 那样将检测区域送入 `self._wireless_extractor.extract()` 做结构恢复。在纯规则候选生成阶段，旧版 `wireless_table_recovery.py` 中的 `_column_tracks` 硬编码文本按左沿（`bbox.x0`）作为列锚点；而在 `个人征信报告（简版）(1).pdf` 第 4 页中，“查询原因”列文本为居中对齐，文本长短不一导致各行左沿相差达 `63.4pt`，超出中位数容差 `15.17pt` 被切分为 4 个单行碎片并因 `support < 2` 作为噪声丢弃，造成第 4 列轨迹丢失，最终在 `_assign_column` 时全部向左合并入“查询机构”列。
+  - **重构与设计**：
+    - 将 `_extract_model_tables` 中的完整表格结构恢复流程（包括重叠有线优先匹配、中英文无线表格结构恢复、有线回退和未匹配有线合并）提取为公共方法 `_recover_tables_from_regions(page, regions, wired_tables, page_language)`；
+    - `_extract_rule_tables()` 将规则检测出的非有线区域送入 `_recover_tables_from_regions` 进行结构恢复，统一调用 `_wireless_extractor.extract()`（中文调用基于 native-span、投影重叠列带推断的新引擎 `recover_cells_from_region`，英文调用英文策略），使无模型分支与有模型分支共享完全相同的结构恢复能力；
+    - 在 `EnglishTableExtractor.extract` 中增加对 `extract_zebra` 及 `extract_general_wireless` 的 `TypeError` 参数容错，提升单元测试与自定义 mock 的健壮性。
+  - **测试与验证**：
+    - 在 `tests/test_unify_wireless_recovery.py` 中新增单元测试与端到端恢复测试，验证规则分支下个人查询记录明细恢复为 4 列，且“查询机构”与“查询原因”列完全独立；
+    - 全量回归测试 `test_unify_wireless_recovery.py`, `test_rule_first_table_detection.py`, `test_wireless_extractor_split.py`, `test_personal_credit_report.py` 共 23 项全部通过（`23 passed`）；
+    - 使用 `parse_personal_credit_report(use_ml_table_detector=False)` 重跑 `个人征信报告（简版）(1).pdf`，验证 Page 3 的“机构查询记录明细”（10x4）与“本人查询记录明细”（5x4）均生成为标准的 4 列表格，`source` 为 `wireless_span_recovery`，列头与各数据行均准确对应。
+
 - 调整有线表格提取器 `WiredTableExtractor` 默认垂直线断隙容差 `line_tolerance`（由 2.0pt 调整为 2.3pt），解决 `个人信用报告(本人简版).pdf` 等报告中由于短边框矩形拼接断隙导致信贷记录 3 个表格漏检的问题。
   - **根因与调用位置**：`src/hexai_pdf_parser/tables/extractors/wired_table_extractor.py::_merge_v_lines()` 原先使用 `gap <= self.line_tolerance`（默认 `2.0pt`）。在 `个人信用报告(本人简版).pdf` 第 0 页中，表格边框由小矩形拼接，垂直线段断隙达到 `2.28pt`，超出 `2.0pt` 阈值未被合并；随后 `_find_table_regions()` 连通分量遍历因上下横线未被纵向贯穿而孤立（`len(component_h) < 2`），导致第 0 页信贷记录下的“资产处置信息/垫款信息”(2x3)、“信息概要明细”(6x5) 和“相关还款责任信息”(2x3) 共 3 个有线表格被抛弃。
   - **修复判定与防回归**：
