@@ -435,6 +435,7 @@ def _process_page_process_worker(
     ml_model_path,
     ml_confidence: float,
     use_ml_table_detector: bool,
+    use_ml_table_detector: bool,
     debug: bool,
     debug_pipeline: bool,
     table_config,
@@ -516,6 +517,7 @@ class Pipeline:
         num_workers: Optional[int] = None,
         backend: str = "thread",
         use_ml_table_detector: bool = True,
+        use_ml_table_detector: bool = True,
     ):
         self.pdf_path = pdf_path
         self.output_dir = output_dir
@@ -529,6 +531,7 @@ class Pipeline:
         self._table_config = table_config
         self.num_workers = num_workers
         self.backend = backend
+        self._use_ml_table_detector = use_ml_table_detector
         self._use_ml_table_detector = use_ml_table_detector
         self._lock = threading.Lock()
         self._fitz_lock = threading.Lock()
