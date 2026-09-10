@@ -1124,3 +1124,72 @@ def test_wired_extractor_finds_three_credit_record_tables_on_personal_report():
     assert any(any("信用卡" in c.text for c in t.cells) and any("账户数" in c.text for c in t.cells) for t in tables)
     # 3. 为个人 / 为企业
     assert any(any("相关还款责任" in c.text for c in t.cells) for t in tables)
+
+
+def test_extract_lines_decomposes_stroked_rectangle_borders():
+    """验证带描边的封闭矩形会被分解为4条边框线，纯填充路径不分解。"""
+    extractor = WiredTableExtractor()
+
+    # 1. 描边矩形 (type="s", color=(0,0,0), w=100, h=60)
+    page_stroked = SimpleNamespace(
+        rect=fitz.Rect(0, 0, 500, 500),
+        get_drawings=lambda: [
+            {
+                "type": "s",
+                "color": (0.0, 0.0, 0.0),
+                "fill": None,
+                "items": [("re", fitz.Rect(10.0, 20.0, 110.0, 80.0), 1)],
+            }
+        ],
+    )
+    h_lines, v_lines = extractor._extract_lines_from_drawings(page_stroked)
+    assert len(h_lines) == 2
+    assert (10.0, 20.0, 110.0, 20.0) in h_lines
+    assert (10.0, 80.0, 110.0, 80.0) in h_lines
+    assert len(v_lines) == 2
+    assert (10.0, 20.0, 10.0, 80.0) in v_lines
+    assert (110.0, 20.0, 110.0, 80.0) in v_lines
+
+    # 2. 纯填充矩形 (type="f", color=None, fill=(0.9, 0.9, 0.9)) 不应分解为边线
+    page_fill_only = SimpleNamespace(
+        rect=fitz.Rect(0, 0, 500, 500),
+        get_drawings=lambda: [
+            {
+                "type": "f",
+                "color": None,
+                "fill": (0.9, 0.9, 0.9),
+                "items": [("re", fitz.Rect(10.0, 20.0, 110.0, 80.0), 0)],
+            }
+        ],
+    )
+    h_fill, v_fill = extractor._extract_lines_from_drawings(page_fill_only)
+    assert h_fill == []
+    assert v_fill == []
+
+
+def test_wired_extractor_finds_tables_on_pdfsam_merge1_page0():
+    """PDFsam_merge1.pdf第0页中用描边矩形绘制的信贷记录、信息概要等有线表格能被正常检出。"""
+    import os
+    candidates = [
+        os.path.abspath(r"个人信用报告/PDFsam_merge1.pdf"),
+        os.path.abspath(r"D:/codes/PDFLayoutParser/个人信用报告/PDFsam_merge1.pdf"),
+    ]
+    pdf_path = next((p for p in candidates if os.path.exists(p)), None)
+    if not pdf_path:
+        pytest.skip("PDFsam_merge1.pdf not found")
+
+    doc = fitz.open(pdf_path)
+    page = doc[0]
+    extractor = WiredTableExtractor()
+    tables = extractor.extract(page)
+
+    assert len(tables) >= 3
+    # 验证信息概要 6x5 有线表格被成功识别
+    overview = next(
+        (t for t in tables if any("信息概要" in c.text or "账户数" in c.text for c in t.cells)),
+        None,
+    )
+    assert overview is not None
+    assert overview.source == "line_projection"
+    assert (overview.rows, overview.cols) == (6, 5)
+

@@ -229,6 +229,31 @@ class WiredTableExtractor(BaseTableExtractor):
                         h_lines.append((x0, (y0 + y1) / 2.0, x1, (y0 + y1) / 2.0))
                     elif w <= self.line_tolerance and h >= 3.0:
                         v_lines.append(((x0 + x1) / 2.0, y0, (x0 + x1) / 2.0, y1))
+                    elif w >= self.line_tolerance and h >= self.line_tolerance:
+                        page_area = (
+                            float(page.rect.width * page.rect.height)
+                            if hasattr(page, "rect") and page.rect
+                            else 1e9
+                        )
+                        rect_area = w * h
+                        is_stroked = (
+                            d.get("type") != "f"
+                            and (d.get("type") in ("s", "fs") or stroke_color is not None)
+                        )
+                        if (
+                            is_stroked
+                            and rect_area < page_area * 0.5
+                            and w >= 3.0
+                            and h >= 3.0
+                        ):
+                            if not clip_bbox or (clip_bbox.y0 - 2.0 <= y0 <= clip_bbox.y1 + 2.0):
+                                h_lines.append((x0, y0, x1, y0))
+                            if not clip_bbox or (clip_bbox.y0 - 2.0 <= y1 <= clip_bbox.y1 + 2.0):
+                                h_lines.append((x0, y1, x1, y1))
+                            if not clip_bbox or (clip_bbox.x0 - 2.0 <= x0 <= clip_bbox.x1 + 2.0):
+                                v_lines.append((x0, y0, x0, y1))
+                            if not clip_bbox or (clip_bbox.x0 - 2.0 <= x1 <= clip_bbox.x1 + 2.0):
+                                v_lines.append((x1, y0, x1, y1))
 
         image_h, image_v = self._extract_lines_from_tiled_images(
             page, clip_bbox=clip_bbox
