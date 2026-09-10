@@ -2,6 +2,22 @@
 
 ## 2026-09-10
 
+- 在有线表格提取器 `WiredTableExtractor` 中补回把描边封闭矩形（`('re', Rect, 1)`）分解为 4 条边框线的逻辑，解决 `PDFsam_merge1.pdf` 及 `PDFsam_merge2.pdf` 等文档中有线表格（如“信息概要明细”和 2x1 标题表）无法提取线段而漏检、或被误退化为无线表格的问题。
+  - **根因与调用位置**：`src/hexai_pdf_parser/tables/extractors/wired_table_extractor.py::_extract_lines_from_drawings()`。在将有线提取逻辑从通用 `TableExtractor` 拆分重构为独立类时，绘图项解析中仅保留了宽高任一维度 $\le \text{line\_tolerance}$ 的“细窄条矩形”判断，遗漏了此前旧版本中针对具有描边属性（`stroke_color is not None` 或 `type in ("s", "fs")`）的宽/高较大封闭矩形的 4 边边框拆解逻辑。导致以描边矩形（`('re', Rect, 1)` 且 `type="s"`）构建网格的征信报告在 `WiredTableExtractor` 中提取出的水平线与垂直线数量几乎为 0，有线表格检出数为 0，进而引发信息概要表退化为 8x6 无线表、而其余 2x1 有线表格全部漏检。
+  - **修复判定与守卫约束**：
+    - **严格区分描边与填充**：判定 `is_stroked = d.get("type") != "f" and (d.get("type") in ("s", "fs") or stroke_color is not None)`，严格防止纯填充色块（`type="f"`，如背景色块、logo）被误分解为表格线条（遵守 Page 336 填充 logo 误报防回归约束）；
+    - **尺寸与面积过滤**：要求 $w \ge 3.0, h \ge 3.0$ 且面积 `rect_area < page_area * 0.5`（防止全页大外框被误提取为表格边框）；
+    - **裁剪区求交**：生成的 4 条边框线（上横线、下横线、左竖线、右竖线）与当前 drawing 节点的父裁剪矩形（`clip_bbox`）求交，过滤完全处于视口外的无效边框。
+  - **结构约束**：全流程仅消费矢量 drawing 与 clip 信息，不回读 `page.get_text("words")`，不进入 zebra 或 legacy 路径，不影响任何其他既有提取逻辑。
+  - **测试与验证**：
+    - 在 `tests/test_wired_table_extractor.py` 中新增单元测试 `test_extract_lines_decomposes_stroked_rectangle_borders`（验证描边矩形正确分解 4 条边、填充矩形被过滤）以及端到端回归测试 `test_wired_extractor_finds_tables_on_pdfsam_merge1_page0`；
+    - `tests/test_wired_table_extractor.py` 全量 45 项测试 100% 通过（`45 passed`）；
+    - 个人征信及无线恢复回归测试 `test_personal_credit_report.py`, `test_unify_wireless_recovery.py`, `test_rule_first_table_detection.py` 共 18 项全部通过；
+    - 端到端重新生成可视化结果并核验 `D:\codes\PDFLayoutParser\output\credit_reports_visualize_fixed_20260910\`：
+      - `03_PDFsam_merge1.pdf` 第 0 页成功检出 4 个有线表格（Table 1: 2x1 信贷记录；Table 2: 6x5 信息概要明细；Table 3: 2x1 非信贷交易记录；Table 4: 2x1 公共记录），第 1 页检出 2x1 查询记录 + 13x4 机构查询明细；
+      - 视觉核验确认网格线对齐贴合无重叠，信息概要精准恢复为 6x5 有线表格（`line_projection`），漏检的 2x1 标题框全部找回。
+
+
 - 在个人征信报告专用提取器 `PersonalCreditReportTableExtractor` 中增强正文长句段落过滤（`_is_numbered_prose_candidate`），采用按行聚合机制，解决 `PDFsam_merge1.pdf` 及 `PDFsam_merge2.pdf` 中“信用卡-从未逾期过的贷记卡及透支未超过60天的准贷记卡账户明细如下”正文列表被误识别为表格的问题。
   - **根因与调用位置**：`src/hexai_pdf_parser/extractors/personal_credit_report.py::PersonalCreditReportTableExtractor._is_numbered_prose_candidate()` 原先仅简单检查独立单元格：`sum(len(text) >= 50 for text in cells) >= 2` 且 `sum(bool(re.match(r"^\d+[.、]", text)) for text in cells) >= 2`。而无线表格结构恢复将长句段落横向切分为两列，导致单单元格字符数均在 35~45 之间，无法满足 `>= 50` 阈值，导致长句段落过滤器失效而被误判为表格。
   - **修复判定与定制隔离**：
