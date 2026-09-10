@@ -411,12 +411,30 @@ class PersonalCreditReportTableExtractor(TableExtractor):
     @staticmethod
     def _is_numbered_prose_candidate(table: Table) -> bool:
         """Reject sparse long numbered paragraphs emitted as two-column tables."""
-        cells = [cell.text.strip() for cell in table.cells if cell.text.strip()]
-        return (
-            table.cols <= 2
-            and sum(len(text) >= 50 for text in cells) >= 2
-            and sum(bool(re.match(r"^\d+[.、]", text)) for text in cells) >= 2
-        )
+        if table.cols > 2:
+            return False
+
+        all_text = " ".join(cell.text for cell in table.cells)
+        if any(k in all_text for k in ("\u67e5\u8be2\u539f\u56e0", "\u67e5\u8be2\u673a\u6784", "\u67e5\u8be2\u65e5\u671f")):
+            return False
+
+        from collections import defaultdict
+
+        rows: dict[int, list[str]] = defaultdict(list)
+        for cell in table.cells:
+            text = cell.text.strip()
+            if text:
+                rows[cell.row_index].append(text)
+
+        long_numbered_rows = 0
+        has_prose_lead = "\u660e\u7ec6\u5982\u4e0b" in all_text
+
+        for r_texts in rows.values():
+            row_text = "".join(r_texts)
+            if re.match(r"^\d+[.、]", row_text) and len(row_text) >= 40:
+                long_numbered_rows += 1
+
+        return (has_prose_lead and long_numbered_rows >= 1) or (long_numbered_rows >= 2)
 
     @staticmethod
     def _is_report_metadata_candidate(table: Table) -> bool:
