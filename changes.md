@@ -2,6 +2,20 @@
 
 ## 2026-09-10
 
+- 在个人征信报告专用提取器 `PersonalCreditReportTableExtractor` 中增强正文长句段落过滤（`_is_numbered_prose_candidate`），采用按行聚合机制，解决 `PDFsam_merge1.pdf` 及 `PDFsam_merge2.pdf` 中“信用卡-从未逾期过的贷记卡及透支未超过60天的准贷记卡账户明细如下”正文列表被误识别为表格的问题。
+  - **根因与调用位置**：`src/hexai_pdf_parser/extractors/personal_credit_report.py::PersonalCreditReportTableExtractor._is_numbered_prose_candidate()` 原先仅简单检查独立单元格：`sum(len(text) >= 50 for text in cells) >= 2` 且 `sum(bool(re.match(r"^\d+[.、]", text)) for text in cells) >= 2`。而无线表格结构恢复将长句段落横向切分为两列，导致单单元格字符数均在 35~45 之间，无法满足 `>= 50` 阈值，导致长句段落过滤器失效而被误判为表格。
+  - **修复判定与定制隔离**：
+    - **严格定制与零通用污染**：段落过滤逻辑仅在 `PersonalCreditReportTableExtractor` 内部定义并生效，通用 `TableExtractor` 及所有通用提取管线 0 修改，严格保证不影响通用逻辑；
+    - **查询明细保护守卫**：优先排除包含“查询原因/查询机构/查询日期”或列数 `cols > 2` 的表格，彻底消除对任何页面（包括未来可能出现的跨页查询记录明细）的误伤风险；
+    - **按行聚合（Row-Aggregated）检测**：按 `cell.row_index` 聚合该行所有单元格文本后，匹配编号前缀 `^\d+[.、]` 并判断整行长度 `len >= 40` 作为长编号行；
+    - 包含“明细如下”正文引导词且长编号行 $\ge 1$，或长编号行 $\ge 2$ 时，判定为正文候选予以剔除。
+  - **结构约束**：全流程仅使用提取器已产出的 `Table` 与 `Cell` 元数据，不回读 `page.get_text("words")`，不进入 zebra 或 legacy 路径，不破坏跨页或常规表格的通用结构。
+  - **测试与页面验证**：
+    - 在 `tests/test_personal_credit_report.py` 中新增单元测试 `test_is_numbered_prose_candidate_rejects_two_column_split_prose` 与端到端回归测试 `test_pdfsam_merge_numbered_prose_not_extracted_as_table`；
+    - `tests/test_personal_credit_report.py` 全量 4 项测试全部通过（`4 passed`）；
+    - 端到端验证 `PDFsam_merge1.pdf`（2 页）与 `PDFsam_merge2.pdf`（3 页）：第 0 页均成功过滤“信用卡-从未逾期过的贷记卡...”误报正文，保留真实的“信息概要”（8x6）表格；第 1 页完整的“查询记录明细”（分别为 13x4、2x4）100% 正确提取；
+    - 同时验证既有 `个人信用报告(本人简版).pdf` 与 `个人征信报告（简版）(1).pdf`，问题一信贷记录有线表格与问题二查询记录明细无线表格提取均完全保持正常。
+
 - 统一中英文无线表格结构恢复核心逻辑，解耦表格区域检测（Detection）与表格结构恢复（Structure Recovery），解决无模型分支（`use_ml_table_detector=False`）下个人征信报告中居中对齐列丢失合并的问题。
   - **根因与调用位置**：`src/hexai_pdf_parser/tables/table_extractor.py::_extract_rule_tables()` 原先直接消费 `_detect_rule_candidates()` 产出的未恢复 candidate，而没有像 `_extract_model_tables()` 那样将检测区域送入 `self._wireless_extractor.extract()` 做结构恢复。在纯规则候选生成阶段，旧版 `wireless_table_recovery.py` 中的 `_column_tracks` 硬编码文本按左沿（`bbox.x0`）作为列锚点；而在 `个人征信报告（简版）(1).pdf` 第 4 页中，“查询原因”列文本为居中对齐，文本长短不一导致各行左沿相差达 `63.4pt`，超出中位数容差 `15.17pt` 被切分为 4 个单行碎片并因 `support < 2` 作为噪声丢弃，造成第 4 列轨迹丢失，最终在 `_assign_column` 时全部向左合并入“查询机构”列。
   - **重构与设计**：
