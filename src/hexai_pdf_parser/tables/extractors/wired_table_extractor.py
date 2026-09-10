@@ -811,6 +811,17 @@ class WiredTableExtractor(BaseTableExtractor):
         def touches(value: float, anchors: List[float]) -> bool:
             return any(abs(value - anchor) <= tol for anchor in anchors)
 
+        def reaches_outer_endpoint(
+            start: float,
+            end: float,
+            outer_start: float,
+            outer_end: float,
+        ) -> bool:
+            return (
+                abs(start - outer_start) <= tol
+                or abs(end - outer_end) <= tol
+            )
+
         width = v_xs[-1] - v_xs[0]
         height = h_ys[-1] - h_ys[0]
         full_width = max(width - tol, width * 0.9)
@@ -845,7 +856,14 @@ class WiredTableExtractor(BaseTableExtractor):
                     coverage([(line[0], line[2])], left, right)
                     >= max(right - left - tol, (right - left) * 0.9)
                     and (
-                        touches(line[0], v_xs) or touches(line[2], v_xs)
+                        touches(min(line[0], line[2]), v_xs)
+                        or touches(max(line[0], line[2]), v_xs)
+                    )
+                    and reaches_outer_endpoint(
+                        min(line[0], line[2]),
+                        max(line[0], line[2]),
+                        bbox.x0,
+                        bbox.x1,
                     )
                     for line in boundary
                     for left, right in zip(v_xs, v_xs[1:])
@@ -866,7 +884,14 @@ class WiredTableExtractor(BaseTableExtractor):
                     coverage([(line[1], line[3])], top, bottom)
                     >= max(bottom - top - tol, (bottom - top) * 0.9)
                     and (
-                        touches(line[1], h_ys) or touches(line[3], h_ys)
+                        touches(min(line[1], line[3]), h_ys)
+                        or touches(max(line[1], line[3]), h_ys)
+                    )
+                    and reaches_outer_endpoint(
+                        min(line[1], line[3]),
+                        max(line[1], line[3]),
+                        bbox.y0,
+                        bbox.y1,
                     )
                     for line in boundary
                     for top, bottom in zip(h_ys, h_ys[1:])
