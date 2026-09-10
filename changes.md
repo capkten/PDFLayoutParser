@@ -1,5 +1,19 @@
 # Changes
 
+## 2026-09-10
+
+- 调整有线表格提取器 `WiredTableExtractor` 默认垂直线断隙容差 `line_tolerance`（由 2.0pt 调整为 2.3pt），解决 `个人信用报告(本人简版).pdf` 等报告中由于短边框矩形拼接断隙导致信贷记录 3 个表格漏检的问题。
+  - **根因与调用位置**：`src/hexai_pdf_parser/tables/extractors/wired_table_extractor.py::_merge_v_lines()` 原先使用 `gap <= self.line_tolerance`（默认 `2.0pt`）。在 `个人信用报告(本人简版).pdf` 第 0 页中，表格边框由小矩形拼接，垂直线段断隙达到 `2.28pt`，超出 `2.0pt` 阈值未被合并；随后 `_find_table_regions()` 连通分量遍历因上下横线未被纵向贯穿而孤立（`len(component_h) < 2`），导致第 0 页信贷记录下的“资产处置信息/垫款信息”(2x3)、“信息概要明细”(6x5) 和“相关还款责任信息”(2x3) 共 3 个有线表格被抛弃。
+  - **修复判定与防回归**：
+    - 将 `line_tolerance` 默认值调整为 `2.3pt`（同步更新 `WiredTableExtractor`、`TableExtractor` 和 `TableConfig`）；
+    - 验证表明 `2.28pt <= 2.3pt` 成功桥接个人信用报告断隙，恢复全部 3 个表格；
+    - 同时严格低于 `2.5pt`，防范并保留既有回归测试 `test_merge_v_lines_does_not_connect_adjacent_tables_separated_by_gap`（避免将垂直间隙为 `2.5pt` 的上下相邻独立表格误串联）。
+  - **测试与页面验证**：
+    - 在 `tests/test_wired_table_extractor.py` 中新增断隙合并单元测试与 `个人信用报告(本人简版).pdf` 3 个表格识别端到端测试；
+    - `tests/test_wired_table_extractor.py` 全量 43 项测试 100% 通过（`43 passed`）；
+    - 重新运行 `demo.py` 生成 `个人信用报告(本人简版).json`，核验第 1 页成功生成 3 个独立表格（Table 0: 2x3 资产处置/垫款；Table 1: 6x5 信用卡/贷款/其他业务；Table 2: 2x3 为个人/为企业）；
+    - 生成可视化图 `output/verify_tol_result/个人信用报告(本人简版)_p0_fixed.png`，视觉核验确认 3 个有线表格红线网格清晰独立，右侧说明文字未被误吸入。
+
 ## 2026-09-09
 
 - 优化 Python 页面处理管线的重复资源开销，同时保持现有 API、页面索引、表格结构语义和输出文件契约不变。
