@@ -347,6 +347,26 @@ class TableExtractor:
         if not model_items:
             return list(wired_tables or [])
 
+        return self._recover_tables_from_regions(
+            page,
+            regions=model_items,
+            wired_tables=wired_tables,
+            page_language=page_language,
+        )
+
+    def _recover_tables_from_regions(
+        self,
+        page: fitz.Page,
+        regions: List[Tuple[BBox, float]],
+        wired_tables: Optional[List[Table]] = None,
+        page_language: Optional[str] = None,
+    ) -> List[Table]:
+        """Recover tables from detected regions, preferring overlapping wired results."""
+        if page_language is None:
+            from hexai_pdf_parser.extractors.language_detector import detect_page_language
+
+            page_language = detect_page_language(page)
+
         tables: List[Table] = []
         valid_wired_tables = list(wired_tables or [])
         if page_language in {"zh", "mixed"}:
@@ -355,7 +375,13 @@ class TableExtractor:
                 for table in valid_wired_tables
             ]
         included_wired: set[int] = set()
-        for bbox, score in model_items:
+        for item in regions:
+            if len(item) >= 3:
+                bbox, score, fallback_table = item[0], item[1], item[2]
+            else:
+                bbox, score = item[0], item[1]
+                fallback_table = None
+
             bbox_h = max(1.0, bbox.y1 - bbox.y0)
             full_matching_wired = [
                 table
@@ -402,6 +428,8 @@ class TableExtractor:
                     except Exception:
                         region_tables = []
                     region_tables = [t for t in region_tables if t.cols > 1]
+                    if not region_tables and fallback_table is not None:
+                        region_tables = [fallback_table]
             tables.extend(region_tables)
 
         tables.extend(
@@ -420,21 +448,34 @@ class TableExtractor:
     ) -> List[Table]:
         """Return rule/native-span candidates without invoking the ML detector."""
         wired_tables = [
-            self._recover_hybrid_wired_table(page, table, page_language)
+            table
             for table in candidates
             if table.source == "line_projection"
         ]
-        tables = list(wired_tables)
-        for candidate in candidates:
-            if candidate.source in {"line_projection", "wireless_page_signal"}:
-                continue
-            if any(
-                self._bbox_overlaps(candidate.bbox, table.bbox)
-                for table in tables
-            ):
-                continue
-            tables.append(candidate)
-        return tables
+        wireless_candidates = [
+            candidate
+            for candidate in candidates
+            if candidate.source not in {"line_projection", "wireless_page_signal"}
+        ]
+        raw_items = [
+            (candidate.bbox, candidate.confidence)
+            for candidate in wireless_candidates
+        ]
+        filtered_items = self._filter_contained_bboxes(raw_items)
+        filtered_items = self._refine_overlapping_model_bboxes(filtered_items, page)
+        rule_regions = []
+        for bbox, score in filtered_items:
+            orig = next(
+                (c for c in wireless_candidates if self._bbox_overlaps(c.bbox, bbox)),
+                None,
+            )
+            rule_regions.append((bbox, score, orig))
+        return self._recover_tables_from_regions(
+            page,
+            regions=rule_regions,
+            wired_tables=wired_tables,
+            page_language=page_language,
+        )
 
     def _recover_hybrid_wired_table(
         self, page: fitz.Page, table: Table, page_language: str
