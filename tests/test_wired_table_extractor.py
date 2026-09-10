@@ -977,3 +977,49 @@ def test_build_cells_closes_partial_right_boundary_without_breaking_header_span(
     )
     assert date_cell.colspan == 3
     assert any(cell.row_index == 1 and cell.col_index == 3 for cell in cells)
+
+
+def test_build_cells_rejects_internal_only_partial_bottom_boundary():
+    extractor = WiredTableExtractor()
+
+    cells = extractor._build_cells_for_region(
+        BBox(0.0, 0.0, 120.0, 30.0),
+        h_lines=[
+            (0.0, 0.0, 120.0, 0.0),
+            (0.0, 10.0, 120.0, 10.0),
+            (0.0, 20.0, 120.0, 20.0),
+            (40.0, 30.0, 80.0, 30.0),
+        ],
+        v_lines=[
+            (0.0, 0.0, 0.0, 30.0),
+            (40.0, 0.0, 40.0, 30.0),
+            (80.0, 0.0, 80.0, 30.0),
+            (120.0, 0.0, 120.0, 30.0),
+        ],
+    )
+
+    assert len(cells) == 7
+    assert sum(cell.row_index == 2 for cell in cells) == 1
+
+
+def test_build_cells_rejects_internal_only_partial_right_boundary():
+    extractor = WiredTableExtractor()
+
+    cells = extractor._build_cells_for_region(
+        BBox(0.0, 0.0, 120.0, 30.0),
+        h_lines=[
+            (0.0, 0.0, 120.0, 0.0),
+            (0.0, 10.0, 120.0, 10.0),
+            (0.0, 20.0, 120.0, 20.0),
+            (0.0, 30.0, 120.0, 30.0),
+        ],
+        v_lines=[
+            (0.0, 0.0, 0.0, 30.0),
+            (40.0, 0.0, 40.0, 30.0),
+            (80.0, 0.0, 80.0, 30.0),
+            (120.0, 10.0, 120.0, 20.0),
+        ],
+    )
+
+    assert len(cells) == 7
+    assert sum(cell.col_index == 2 for cell in cells) == 1
