@@ -808,8 +808,12 @@ class WiredTableExtractor(BaseTableExtractor):
                 total += current[1] - current[0]
             return total
 
+        endpoint_anchor_tol = self.merge_group_tol
+
         def touches(value: float, anchors: List[float]) -> bool:
-            return any(abs(value - anchor) <= tol for anchor in anchors)
+            return any(
+                abs(value - anchor) <= endpoint_anchor_tol for anchor in anchors
+            )
 
         def reaches_outer_endpoint(
             start: float,
@@ -856,8 +860,8 @@ class WiredTableExtractor(BaseTableExtractor):
                     coverage([(line[0], line[2])], left, right)
                     >= max(right - left - tol, (right - left) * 0.9)
                     and (
-                        touches(min(line[0], line[2]), v_xs)
-                        or touches(max(line[0], line[2]), v_xs)
+                        touches(min(line[0], line[2]), v_xs[1:-1])
+                        or touches(max(line[0], line[2]), v_xs[1:-1])
                     )
                     and reaches_outer_endpoint(
                         min(line[0], line[2]),
@@ -879,13 +883,16 @@ class WiredTableExtractor(BaseTableExtractor):
                 h_ys[-1],
             )
             if boundary and boundary_coverage < full_height:
-                supported = len(full_width_levels) >= 2
+                # Two complete horizontal rules can be an unrelated form
+                # fragment. Require a third level before extending a partial
+                # vertical edge across the whole candidate region.
+                supported = len(full_width_levels) >= 3
                 covers_grid_row = any(
                     coverage([(line[1], line[3])], top, bottom)
                     >= max(bottom - top - tol, (bottom - top) * 0.9)
                     and (
-                        touches(min(line[1], line[3]), h_ys)
-                        or touches(max(line[1], line[3]), h_ys)
+                        touches(min(line[1], line[3]), h_ys[1:-1])
+                        or touches(max(line[1], line[3]), h_ys[1:-1])
                     )
                     and reaches_outer_endpoint(
                         min(line[1], line[3]),

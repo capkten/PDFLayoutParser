@@ -886,6 +886,22 @@ def test_page_900_open_table_right_column():
         doc.close()
 
 
+def test_page_197_form_lines_do_not_create_wired_table():
+    """页面表单线条不能被开放边界补全误识别为整页 2x1 表格。"""
+    import os
+
+    pdf_path = r"D:\codes\PDFLayoutParser\fix\zh_all_table_pages.pdf"
+    if not os.path.exists(pdf_path):
+        pytest.skip("PDF file not available")
+
+    doc = fitz.open(pdf_path)
+    try:
+        tables = WiredTableExtractor().extract(doc[197])
+        assert tables == []
+    finally:
+        doc.close()
+
+
 def test_build_cells_keeps_empty_cell_behind_partial_bottom_boundary():
     extractor = WiredTableExtractor()
 
@@ -1018,6 +1034,52 @@ def test_build_cells_rejects_internal_only_partial_right_boundary():
             (40.0, 0.0, 40.0, 30.0),
             (80.0, 0.0, 80.0, 30.0),
             (120.0, 10.0, 120.0, 20.0),
+        ],
+    )
+
+    assert len(cells) == 7
+    assert sum(cell.col_index == 2 for cell in cells) == 1
+
+
+def test_build_cells_rejects_unanchored_partial_bottom_boundary():
+    extractor = WiredTableExtractor()
+
+    cells = extractor._build_cells_for_region(
+        BBox(0.0, 0.0, 30.0, 30.0),
+        h_lines=[
+            (0.0, 0.0, 30.0, 0.0),
+            (0.0, 10.0, 30.0, 10.0),
+            (0.0, 20.0, 30.0, 20.0),
+            (0.0, 30.0, 9.0, 30.0),
+        ],
+        v_lines=[
+            (0.0, 0.0, 0.0, 30.0),
+            (10.0, 0.0, 10.0, 30.0),
+            (20.0, 0.0, 20.0, 30.0),
+            (30.0, 0.0, 30.0, 30.0),
+        ],
+    )
+
+    assert len(cells) == 7
+    assert sum(cell.row_index == 2 for cell in cells) == 1
+
+
+def test_build_cells_rejects_unanchored_partial_right_boundary():
+    extractor = WiredTableExtractor()
+
+    cells = extractor._build_cells_for_region(
+        BBox(0.0, 0.0, 30.0, 30.0),
+        h_lines=[
+            (0.0, 0.0, 30.0, 0.0),
+            (0.0, 10.0, 30.0, 10.0),
+            (0.0, 20.0, 30.0, 20.0),
+            (0.0, 30.0, 30.0, 30.0),
+        ],
+        v_lines=[
+            (0.0, 0.0, 0.0, 30.0),
+            (10.0, 0.0, 10.0, 30.0),
+            (20.0, 0.0, 20.0, 30.0),
+            (30.0, 0.0, 30.0, 9.0),
         ],
     )
 
