@@ -885,3 +885,95 @@ def test_page_900_open_table_right_column():
     finally:
         doc.close()
 
+
+def test_build_cells_keeps_empty_cell_behind_partial_bottom_boundary():
+    extractor = WiredTableExtractor()
+
+    cells = extractor._build_cells_for_region(
+        BBox(0.0, 0.0, 100.0, 30.0),
+        h_lines=[
+            (0.0, 0.0, 100.0, 0.0),
+            (0.0, 10.0, 100.0, 10.0),
+            (0.0, 20.0, 100.0, 20.0),
+            (0.0, 30.0, 50.0, 30.0),
+        ],
+        v_lines=[
+            (0.0, 0.0, 0.0, 30.0),
+            (50.0, 0.0, 50.0, 30.0),
+            (100.0, 0.0, 100.0, 20.0),
+        ],
+    )
+
+    assert len(cells) == 6
+    assert any(
+        cell.row_index == 2
+        and cell.col_index == 1
+        and cell.text == ""
+        and cell.bbox == BBox(50.0, 20.0, 100.0, 30.0)
+        for cell in cells
+    )
+
+
+def test_extract_binds_text_inside_partial_bottom_boundary_cell():
+    page = SimpleNamespace(
+        get_drawings=lambda: [
+            {
+                "color": (0.0, 0.0, 0.0),
+                "fill": None,
+                "items": [
+                    ("l", fitz.Point(0.0, 0.0), fitz.Point(100.0, 0.0)),
+                    ("l", fitz.Point(0.0, 10.0), fitz.Point(100.0, 10.0)),
+                    ("l", fitz.Point(0.0, 20.0), fitz.Point(100.0, 20.0)),
+                    ("l", fitz.Point(0.0, 30.0), fitz.Point(50.0, 30.0)),
+                    ("l", fitz.Point(0.0, 0.0), fitz.Point(0.0, 30.0)),
+                    ("l", fitz.Point(50.0, 0.0), fitz.Point(50.0, 30.0)),
+                    ("l", fitz.Point(100.0, 0.0), fitz.Point(100.0, 20.0)),
+                ],
+            }
+        ],
+        get_fonts=lambda **_kwargs: [],
+        get_image_info=lambda **_kwargs: [],
+        get_text=lambda kind: (
+            [(65.0, 22.0, 90.0, 28.0, "right-value", 0, 0, 0)]
+            if kind == "words"
+            else {"blocks": []}
+        ),
+    )
+
+    tables = WiredTableExtractor().extract(page)
+
+    assert len(tables) == 1
+    recovered = next(
+        cell
+        for cell in tables[0].cells
+        if cell.row_index == 2 and cell.col_index == 1
+    )
+    assert recovered.text == "right-value"
+
+
+def test_build_cells_closes_partial_right_boundary_without_breaking_header_span():
+    extractor = WiredTableExtractor()
+
+    cells = extractor._build_cells_for_region(
+        BBox(0.0, 0.0, 100.0, 40.0),
+        h_lines=[
+            (0.0, 0.0, 100.0, 0.0),
+            (25.0, 10.0, 100.0, 10.0),
+            (0.0, 20.0, 100.0, 20.0),
+            (0.0, 30.0, 100.0, 30.0),
+            (0.0, 40.0, 100.0, 40.0),
+        ],
+        v_lines=[
+            (25.0, 0.0, 25.0, 40.0),
+            (50.0, 10.0, 50.0, 40.0),
+            (75.0, 10.0, 75.0, 40.0),
+            (100.0, 20.0, 100.0, 40.0),
+        ],
+    )
+
+    assert len(cells) == 13
+    date_cell = next(
+        cell for cell in cells if cell.row_index == 0 and cell.col_index == 1
+    )
+    assert date_cell.colspan == 3
+    assert any(cell.row_index == 1 and cell.col_index == 3 for cell in cells)
