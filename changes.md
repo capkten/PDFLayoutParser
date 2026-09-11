@@ -2,6 +2,14 @@
 
 ## 2026-09-11
 
+- 在 `TableConfig`、`TableExtractor`、`Pipeline` 及 `parse_personal_credit_report` 中支持可配置的表格目标检测分辨率 `ml_render_dpi`（默认 `72`），打通从顶层入口到模型检测器的完整参数透传链路。
+  - **根因与调用位置**：`src/hexai_pdf_parser/tables/table_extractor.py::TableExtractor._extract_model_tables()` 原先实例化 `MLTableDetector` 时未传递 `render_dpi`，且 `Pipeline` 及 `TableConfig` 中缺少对应字段，导致外部即使指定 `render_dpi` 也仅作用于整页渲染图片，无法改变表格目标检测的图像尺寸。
+  - **设计与改动**：
+    - 在 `TableConfig.GlobalTableSettings` 中增加 `ml_render_dpi: int = 72`；
+    - 在 `TableExtractor.__init__` 中新增 `ml_render_dpi: Optional[int] = None`，支持从入参或 `TableConfig` 读取，并在 `_extract_model_tables` 传递给 `MLTableDetector(render_dpi=self.ml_render_dpi)`；
+    - 在 `Pipeline`、`_process_page_worker`、`PersonalCreditReportPipeline` 和 `parse_personal_credit_report` 中全链路透传 `ml_render_dpi`。
+  - **测试与验证**：新增 `tests/test_table_ml_render_dpi.py` 覆盖全局配置、dict 解析、提取器自定义、模型检测器 mock 调用及 Pipeline 贯通透传（`7 passed`），相关回归测试（`test_table_config.py` 等 32 项）全量通过。端到端验证显式传入 `ml_render_dpi=200` 与 `72` 均生效且输出一致。
+
 - 优化表格目标检测模型输入渲染分辨率：将 `MLTableDetector` 默认 `render_dpi` 从 200 降低到 72（对应 1pt = 1px），大幅削减 PDF 转图片及降采样缩放耗时，全量端到端批处理提速超 51%。
   - **根因与调用位置**：`src/hexai_pdf_parser/ml/ml_table_detector.py::MLTableDetector.__init__()`。在表格检测流程中，PDF 页面渲染成图片仅用于通过轻量级目标检测模型（YOLO `best.onnx`）定位表格候选区域（BBox），不用于字符识别（OCR）或文本提取。YOLO 模型的固定输入尺度为 $640 \times 640$；标准 A4 页面在 200 DPI 下渲染出的图片分辨率高达 $1656 \times 2339$（近 400 万像素），在送入模型前必须经历大比例的双线性/双三次插值降采样缩放至 $640 \times 640$，既消耗了大量的 CPU 栅格化时间，又浪费了图片缩放算力。而在 72 DPI 下（PDF 标准点位 $1\text{pt} = 1\text{px}$），A4 页面尺寸约为 $595 \times 842$，与模型的 $640 \times 640$ 输入尺寸最为贴近，避免了过采样与过度下采样带来的无谓开销。
   - **精度与差异性验证**：
