@@ -17,7 +17,7 @@ class WiredTableExtractor(BaseTableExtractor):
 
     def __init__(
         self,
-        line_tolerance: float = 2.0,
+        line_tolerance: float = 2.3,
         merge_group_tol: float = 0.3,
     ):
         self.line_tolerance = line_tolerance
@@ -229,6 +229,31 @@ class WiredTableExtractor(BaseTableExtractor):
                         h_lines.append((x0, (y0 + y1) / 2.0, x1, (y0 + y1) / 2.0))
                     elif w <= self.line_tolerance and h >= 3.0:
                         v_lines.append(((x0 + x1) / 2.0, y0, (x0 + x1) / 2.0, y1))
+                    elif w >= self.line_tolerance and h >= self.line_tolerance:
+                        page_area = (
+                            float(page.rect.width * page.rect.height)
+                            if hasattr(page, "rect") and page.rect
+                            else 1e9
+                        )
+                        rect_area = w * h
+                        is_stroked = (
+                            d.get("type") != "f"
+                            and (d.get("type") in ("s", "fs") or stroke_color is not None)
+                        )
+                        if (
+                            is_stroked
+                            and rect_area < page_area * 0.5
+                            and w >= 3.0
+                            and h >= 3.0
+                        ):
+                            if not clip_bbox or (clip_bbox.y0 - 2.0 <= y0 <= clip_bbox.y1 + 2.0):
+                                h_lines.append((x0, y0, x1, y0))
+                            if not clip_bbox or (clip_bbox.y0 - 2.0 <= y1 <= clip_bbox.y1 + 2.0):
+                                h_lines.append((x0, y1, x1, y1))
+                            if not clip_bbox or (clip_bbox.x0 - 2.0 <= x0 <= clip_bbox.x1 + 2.0):
+                                v_lines.append((x0, y0, x0, y1))
+                            if not clip_bbox or (clip_bbox.x0 - 2.0 <= x1 <= clip_bbox.x1 + 2.0):
+                                v_lines.append((x1, y0, x1, y1))
 
         image_h, image_v = self._extract_lines_from_tiled_images(
             page, clip_bbox=clip_bbox
@@ -765,6 +790,149 @@ class WiredTableExtractor(BaseTableExtractor):
                 merged.append(val)
         return merged
 
+    def _complete_partial_outer_boundaries(
+        self,
+        bbox: BBox,
+        h_lines: List[Tuple[float, float, float, float]],
+        v_lines: List[Tuple[float, float, float, float]],
+        h_ys: List[float],
+        v_xs: List[float],
+    ) -> Tuple[
+        List[Tuple[float, float, float, float]],
+        List[Tuple[float, float, float, float]],
+    ]:
+        """Complete only well-supported partial lines on the outer boundary."""
+        tol = self.line_tolerance
+        effective_h = list(h_lines)
+        effective_v = list(v_lines)
+
+        def coverage(
+            intervals: List[Tuple[float, float]],
+            start: float,
+            end: float,
+        ) -> float:
+            clipped = sorted(
+                (
+                    max(start, min(left, right)),
+                    min(end, max(left, right)),
+                )
+                for left, right in intervals
+                if min(end, max(left, right)) > max(start, min(left, right))
+            )
+            total = 0.0
+            current = None
+            for left, right in clipped:
+                if current is None:
+                    current = [left, right]
+                elif left <= current[1] + tol:
+                    current[1] = max(current[1], right)
+                else:
+                    total += current[1] - current[0]
+                    current = [left, right]
+            if current is not None:
+                total += current[1] - current[0]
+            return total
+
+        endpoint_anchor_tol = self.merge_group_tol
+
+        def touches(value: float, anchors: List[float]) -> bool:
+            return any(
+                abs(value - anchor) <= endpoint_anchor_tol for anchor in anchors
+            )
+
+        def reaches_outer_endpoint(
+            start: float,
+            end: float,
+            outer_start: float,
+            outer_end: float,
+        ) -> bool:
+            return (
+                abs(start - outer_start) <= tol
+                or abs(end - outer_end) <= tol
+            )
+
+        width = v_xs[-1] - v_xs[0]
+        height = h_ys[-1] - h_ys[0]
+        full_width = max(width - tol, width * 0.9)
+        full_height = max(height - tol, height * 0.9)
+
+        def horizontal_segments(y: float) -> List[Tuple[float, float]]:
+            return [
+                (line[0], line[2])
+                for line in h_lines
+                if abs(line[1] - y) <= tol
+            ]
+
+        full_width_levels = [
+            y
+            for y in h_ys
+            if coverage(horizontal_segments(y), v_xs[0], v_xs[-1])
+            >= full_width
+        ]
+
+        for y in (h_ys[0], h_ys[-1]):
+            boundary = [line for line in h_lines if abs(line[1] - y) <= tol]
+            boundary_coverage = coverage(
+                [(line[0], line[2]) for line in boundary],
+                v_xs[0],
+                v_xs[-1],
+            )
+            if boundary and boundary_coverage < full_width:
+                supported = (
+                    sum(abs(level - y) > tol for level in full_width_levels) >= 2
+                )
+                covers_grid_column = any(
+                    coverage([(line[0], line[2])], left, right)
+                    >= max(right - left - tol, (right - left) * 0.9)
+                    and (
+                        touches(min(line[0], line[2]), v_xs[1:-1])
+                        or touches(max(line[0], line[2]), v_xs[1:-1])
+                    )
+                    and reaches_outer_endpoint(
+                        min(line[0], line[2]),
+                        max(line[0], line[2]),
+                        bbox.x0,
+                        bbox.x1,
+                    )
+                    for line in boundary
+                    for left, right in zip(v_xs, v_xs[1:])
+                )
+                if supported and covers_grid_column:
+                    effective_h.append((v_xs[0], y, v_xs[-1], y))
+
+        for x in (v_xs[0], v_xs[-1]):
+            boundary = [line for line in v_lines if abs(line[0] - x) <= tol]
+            boundary_coverage = coverage(
+                [(line[1], line[3]) for line in boundary],
+                h_ys[0],
+                h_ys[-1],
+            )
+            if boundary and boundary_coverage < full_height:
+                # Two complete horizontal rules can be an unrelated form
+                # fragment. Require a third level before extending a partial
+                # vertical edge across the whole candidate region.
+                supported = len(full_width_levels) >= 3
+                covers_grid_row = any(
+                    coverage([(line[1], line[3])], top, bottom)
+                    >= max(bottom - top - tol, (bottom - top) * 0.9)
+                    and (
+                        touches(min(line[1], line[3]), h_ys[1:-1])
+                        or touches(max(line[1], line[3]), h_ys[1:-1])
+                    )
+                    and reaches_outer_endpoint(
+                        min(line[1], line[3]),
+                        max(line[1], line[3]),
+                        bbox.y0,
+                        bbox.y1,
+                    )
+                    for line in boundary
+                    for top, bottom in zip(h_ys, h_ys[1:])
+                )
+                if supported and covers_grid_row:
+                    effective_v.append((x, h_ys[0], x, h_ys[-1]))
+
+        return effective_h, effective_v
+
     @staticmethod
     def _trim_ghost_edge_rows(
         cells: List[Cell],
@@ -908,8 +1076,15 @@ class WiredTableExtractor(BaseTableExtractor):
 
         rows = len(h_ys) - 1
         cols = len(v_xs) - 1
-        effective_h_lines = list(h_lines)
-        effective_v_lines = list(v_lines)
+        effective_h_lines, effective_v_lines = (
+            self._complete_partial_outer_boundaries(
+                bbox,
+                h_lines,
+                v_lines,
+                h_ys,
+                v_xs,
+            )
+        )
         if not any(abs(line[1] - h_ys[0]) <= tol for line in h_lines):
             effective_h_lines.append((v_xs[0], h_ys[0], v_xs[-1], h_ys[0]))
         if not any(abs(line[1] - h_ys[-1]) <= tol for line in h_lines):

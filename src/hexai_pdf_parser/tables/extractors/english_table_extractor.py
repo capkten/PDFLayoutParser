@@ -255,15 +255,31 @@ class EnglishTableExtractor(BaseTableExtractor):
             return []
 
         owner = self._method_owner or self
-        zebra_tables = owner.extract_zebra(
-            page, table_bbox=table_bbox, confidence=confidence
-        )
+        try:
+            zebra_tables = owner.extract_zebra(
+                page, table_bbox=table_bbox, confidence=confidence
+            )
+        except TypeError:
+            try:
+                zebra_tables = owner.extract_zebra(page)
+            except Exception:
+                zebra_tables = []
+        except Exception:
+            zebra_tables = []
         if zebra_tables:
             return zebra_tables
 
-        general_tables = owner.extract_general_wireless(
-            page, table_bbox=table_bbox, confidence=confidence
-        )
+        try:
+            general_tables = owner.extract_general_wireless(
+                page, table_bbox=table_bbox, confidence=confidence
+            )
+        except TypeError:
+            try:
+                general_tables = owner.extract_general_wireless(page)
+            except Exception:
+                general_tables = []
+        except Exception:
+            general_tables = []
         if general_tables:
             return general_tables
 

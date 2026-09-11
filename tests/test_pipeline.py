@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from pathlib import Path
 
 import fitz
@@ -11,6 +12,7 @@ import pytest
 
 import hexai_pdf_parser.core.pipeline as pipeline_module
 from hexai_pdf_parser.pipeline import Pipeline
+from hexai_pdf_parser.personal_credit_report import PersonalCreditReportPipeline
 from hexai_pdf_parser.table_config import (
     GlobalTableSettings,
     LayoutProfile,
@@ -153,6 +155,172 @@ def test_pipeline_end_to_end(tmp_dir):
     assert os.path.exists(os.path.join(tmp_dir, "output.json"))
     assert os.path.exists(os.path.join(tmp_dir, "output.md"))
     assert os.path.exists(os.path.join(tmp_dir, "page-000.png"))
+
+
+def test_pipeline_reuses_table_extractor_per_sequential_run(tmp_dir):
+    pdf_path = os.path.join(tmp_dir, "reused-extractor.pdf")
+    from tests.conftest import make_multi_page_pdf
+
+    make_multi_page_pdf(pdf_path, ["Page 0", "Page 1"])
+
+    class CountingExtractor:
+        instances = 0
+        extracts = 0
+
+        def __init__(self, **_kwargs):
+            type(self).instances += 1
+            self._last_text_alignment_debug = None
+            self._last_pipeline_debug = None
+
+        def extract(self, _page, *, page_already_normalized=False):
+            assert page_already_normalized is True
+            type(self).extracts += 1
+            return []
+
+    pipeline = Pipeline(
+        pdf_path=pdf_path,
+        backend="sequential",
+        num_workers=1,
+    )
+    pipeline._get_table_extractor_class = lambda: CountingExtractor
+
+    document = pipeline.run()
+
+    assert document.page_count == 2
+    assert CountingExtractor.instances == 1
+    assert CountingExtractor.extracts == 2
+
+
+def test_process_worker_reuses_document_and_extractor(tmp_dir):
+    pdf_path = os.path.join(tmp_dir, "worker-resources.pdf")
+    other_pdf_path = os.path.join(tmp_dir, "other-worker-resources.pdf")
+    from tests.conftest import make_multi_page_pdf
+
+    make_multi_page_pdf(pdf_path, ["Page 0", "Page 1"])
+    make_multi_page_pdf(other_pdf_path, ["Other page"])
+
+    class CountingExtractor:
+        instances = 0
+
+        def __init__(self, **_kwargs):
+            type(self).instances += 1
+
+    first_document = first_extractor = None
+    try:
+        first_document, first_extractor = pipeline_module._get_process_worker_resources(
+            pdf_path,
+            None,
+            0.40,
+            True,
+            False,
+            None,
+            CountingExtractor,
+        )
+        second_document, second_extractor = pipeline_module._get_process_worker_resources(
+            pdf_path,
+            None,
+            0.40,
+            True,
+            False,
+            None,
+            CountingExtractor,
+        )
+
+        assert second_document is first_document
+        assert second_extractor is first_extractor
+        assert CountingExtractor.instances == 1
+
+        other_document, other_extractor = pipeline_module._get_process_worker_resources(
+            other_pdf_path,
+            None,
+            0.40,
+            True,
+            False,
+            None,
+            CountingExtractor,
+        )
+        assert other_document is not first_document
+        assert other_extractor is not first_extractor
+        assert CountingExtractor.instances == 2
+    finally:
+        pipeline_module._close_process_worker_resources()
+
+
+def test_pipeline_deduplicates_page_indices_without_renumbering(tmp_dir):
+    pdf_path = os.path.join(tmp_dir, "selected-pages.pdf")
+    from tests.conftest import make_multi_page_pdf
+
+    make_multi_page_pdf(pdf_path, ["Page 0", "Page 1", "Page 2"])
+
+    class TrackingPageIndices(list):
+        contains_calls = 0
+
+        def __contains__(self, value):
+            type(self).contains_calls += 1
+            return super().__contains__(value)
+
+    selected = TrackingPageIndices([2, 0, 2])
+    document = Pipeline(
+        pdf_path=pdf_path,
+        page_indices=selected,
+        backend="sequential",
+        num_workers=1,
+    ).run()
+
+    assert document.page_count == 3
+    assert [page.index for page in document.pages] == [0, 1, 2]
+    assert document.pages[0].blocks
+    assert document.pages[1].blocks == []
+    assert document.pages[2].blocks
+    assert TrackingPageIndices.contains_calls == 0
+
+
+def test_thread_backend_reuses_one_document_per_thread(tmp_dir, monkeypatch):
+    pdf_path = os.path.join(tmp_dir, "thread-doc-reuse.pdf")
+    from tests.conftest import make_multi_page_pdf
+
+    make_multi_page_pdf(pdf_path, [f"Page {index}" for index in range(4)])
+    real_open = pipeline_module.fitz.open
+    open_calls = []
+
+    def counted_open(*args, **kwargs):
+        if args and args[0] == pdf_path:
+            open_calls.append(True)
+        return real_open(*args, **kwargs)
+
+    monkeypatch.setattr(pipeline_module.fitz, "open", counted_open)
+
+    barrier = threading.Barrier(2)
+    worker_document_ids = set()
+    worker_document_ids_lock = threading.Lock()
+
+    def record_page_processing(
+        _self,
+        _page_index,
+        _document,
+        _images_dir,
+        _pages_dir,
+        _text_alignment_debug_dir,
+        pdf_doc,
+        table_extractor=None,
+    ):
+        del table_extractor
+        with worker_document_ids_lock:
+            worker_document_ids.add(id(pdf_doc))
+        barrier.wait(timeout=5)
+
+    monkeypatch.setattr(Pipeline, "_process_single_page", record_page_processing)
+
+    document = Pipeline(
+        pdf_path=pdf_path,
+        backend="thread",
+        num_workers=2,
+        use_ml_table_detector=False,
+    ).run()
+
+    assert document.page_count == 4
+    assert len(worker_document_ids) == 2
+    assert len(open_calls) == 3  # one loader document plus one per thread
 
 
 def test_pipeline_sorts_seals_into_page_order(tmp_dir):
@@ -351,3 +519,24 @@ def test_pipeline_without_table_config_works(tmp_dir):
         render_dpi=150,
     ).run()
     assert doc.page_count == 1
+
+
+def test_personal_credit_pipeline_disables_ml_by_default():
+    pipeline = PersonalCreditReportPipeline(pdf_path="unused.pdf")
+
+    assert pipeline._create_table_extractor()._use_ml_table_detector is False
+
+
+def test_personal_credit_pipeline_can_enable_ml():
+    pipeline = PersonalCreditReportPipeline(
+        pdf_path="unused.pdf",
+        use_ml_table_detector=True,
+    )
+
+    assert pipeline._create_table_extractor()._use_ml_table_detector is True
+
+
+def test_generic_pipeline_keeps_ml_enabled_by_default():
+    pipeline = Pipeline(pdf_path="unused.pdf")
+
+    assert pipeline._create_table_extractor()._use_ml_table_detector is True

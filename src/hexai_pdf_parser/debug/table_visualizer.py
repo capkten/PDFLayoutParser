@@ -379,6 +379,7 @@ def render_table_visualization(
     page_index: Optional[int] = None,
     dpi: int = 200,
     page_type: Optional[str] = None,
+    page_already_normalized: bool = False,
 ) -> str:
     """Render a PDF page with table detection overlays and save to output_path.
 
@@ -405,7 +406,8 @@ def render_table_visualization(
 
     if isinstance(source, fitz.Page):
         # Draw directly on the provided page
-        normalize_page_rotation(source)
+        if not page_already_normalized:
+            normalize_page_rotation(source)
         draw_tables_on_page(source, tables)
         draw_page_type_label(source, page_type)
         pix = source.get_pixmap(matrix=matrix, alpha=False)

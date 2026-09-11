@@ -12,6 +12,7 @@ import pytest
 from hexai_pdf_parser.models import BBox, Cell, Table
 from hexai_pdf_parser.personal_credit_report import (
     PersonalCreditReportTableExtractor,
+    _query_rows,
     parse_personal_credit_report,
 )
 from hexai_pdf_parser.text_region_detector import CandidateRegion
@@ -180,6 +181,87 @@ def test_native_span_table_skips_legacy_word_rebuild(monkeypatch):
         ("坏账准备", 1),
     ]
     assert get_text_calls == []
+
+
+def test_personal_credit_no_model_keeps_native_span_wireless_source(monkeypatch):
+    extractor = PersonalCreditReportTableExtractor(use_ml_table_detector=False)
+    bbox = BBox(0, 0, 100, 100)
+    wireless = Table(
+        bbox=bbox,
+        rows=1,
+        cols=1,
+        cells=[Cell("混合", 0, 0, bbox)],
+        source="wireless_span_recovery",
+    )
+    page = SimpleNamespace(
+        number=0,
+        rect=fitz.Rect(0, 0, 100, 100),
+        get_drawings=lambda: [],
+        get_text=lambda mode: [],
+    )
+    extractor._wired_extractor.extract = lambda page: []
+    extractor._extract_via_text_alignment = (
+        lambda page, excluded_regions=None: [wireless]
+    )
+
+    class FailDetector:
+        def detect_with_scores(self, page):
+            raise AssertionError("ML detector must not run for personal reports")
+
+    extractor._ml_detector = FailDetector()
+    monkeypatch.setattr(
+        "hexai_pdf_parser.extractors.language_detector.detect_page_language",
+        lambda page: "mixed",
+    )
+    monkeypatch.setattr(
+        "hexai_pdf_parser.tables.table_extractor.normalize_page_rotation",
+        lambda page: None,
+        raising=False,
+    )
+
+    result = extractor.extract(page)
+
+    assert len(result) == 1
+    assert result[0].source == "wireless_span_recovery"
+    assert result[0].rows == wireless.rows
+    assert result[0].cols == wireless.cols
+    assert [(cell.text, cell.row_index, cell.col_index) for cell in result[0].cells] == [
+        ("混合", 0, 0)
+    ]
+
+
+def test_personal_query_rows_merged_path_uses_text_extractor():
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_text((40, 40), "query rows")
+
+    rows = _query_rows(page, merged=True)
+
+    doc.close()
+    assert rows
+    assert "query" in "".join(item[4] for item in rows[0])
+
+
+def test_parse_personal_credit_report_forwards_ml_switch(monkeypatch):
+    captured = []
+
+    class FakePipeline:
+        def __init__(self, **kwargs):
+            captured.append(kwargs)
+
+        def run(self):
+            return SimpleNamespace(file_name="sample.pdf", page_count=0, pages=[])
+
+    monkeypatch.setattr(
+        "hexai_pdf_parser.extractors.personal_credit_report.PersonalCreditReportPipeline",
+        FakePipeline,
+    )
+
+    parse_personal_credit_report("sample.pdf")
+    parse_personal_credit_report("sample.pdf", use_ml_table_detector=True)
+
+    assert captured[0]["use_ml_table_detector"] is False
+    assert captured[1]["use_ml_table_detector"] is True
 
 
 def test_hybrid_wired_table_recovers_only_tall_body_cell(monkeypatch):

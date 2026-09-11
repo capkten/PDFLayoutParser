@@ -53,6 +53,40 @@ def test_extract_lines_accepts_visible_fill_only_rules():
     assert v_lines == [(10.25, 20.0, 10.25, 80.0)]
 
 
+def test_extract_lines_clips_filled_rule_to_pdf_clip_region():
+    extractor = WiredTableExtractor()
+    raw_rect = fitz.Rect(28.0, 810.4804, 28.7507, 823.2422)
+    drawing = {
+        "type": "f",
+        "color": None,
+        "fill": (0.6275, 0.6275, 0.6275),
+        "rect": raw_rect,
+        "items": [("re", raw_rect)],
+    }
+    clip_rect = fitz.Rect(28.0, 23.0, 567.0, 813.4832)
+
+    def get_drawings(**kwargs):
+        if kwargs.get("extended"):
+            return [
+                {"type": "group", "level": 0, "rect": fitz.Rect(0, 0, 595, 842)},
+                {"type": "clip", "level": 1, "scissor": clip_rect},
+                {**drawing, "level": 2, "seqno": 361},
+            ]
+        return [drawing]
+
+    page = SimpleNamespace(
+        rect=fitz.Rect(0, 0, 595, 842),
+        get_drawings=get_drawings,
+        get_image_info=lambda **_kwargs: [],
+    )
+
+    _h_lines, v_lines = extractor._extract_lines_from_drawings(page)
+
+    assert len(v_lines) == 1
+    assert v_lines[0][:3] == pytest.approx((28.37535, 810.4804, 28.37535))
+    assert v_lines[0][3] == pytest.approx(813.4832)
+
+
 def test_extract_lines_ignores_non_narrow_filled_path_outline():
     extractor = WiredTableExtractor()
     page = SimpleNamespace(
@@ -851,4 +885,311 @@ def test_page_900_open_table_right_column():
     finally:
         doc.close()
 
+
+def test_page_197_form_lines_do_not_create_wired_table():
+    """页面表单线条不能被开放边界补全误识别为整页 2x1 表格。"""
+    import os
+
+    pdf_path = r"D:\codes\PDFLayoutParser\fix\zh_all_table_pages.pdf"
+    if not os.path.exists(pdf_path):
+        pytest.skip("PDF file not available")
+
+    doc = fitz.open(pdf_path)
+    try:
+        tables = WiredTableExtractor().extract(doc[197])
+        assert tables == []
+    finally:
+        doc.close()
+
+
+def test_build_cells_keeps_empty_cell_behind_partial_bottom_boundary():
+    extractor = WiredTableExtractor()
+
+    cells = extractor._build_cells_for_region(
+        BBox(0.0, 0.0, 100.0, 30.0),
+        h_lines=[
+            (0.0, 0.0, 100.0, 0.0),
+            (0.0, 10.0, 100.0, 10.0),
+            (0.0, 20.0, 100.0, 20.0),
+            (0.0, 30.0, 50.0, 30.0),
+        ],
+        v_lines=[
+            (0.0, 0.0, 0.0, 30.0),
+            (50.0, 0.0, 50.0, 30.0),
+            (100.0, 0.0, 100.0, 20.0),
+        ],
+    )
+
+    assert len(cells) == 6
+    assert any(
+        cell.row_index == 2
+        and cell.col_index == 1
+        and cell.text == ""
+        and cell.bbox == BBox(50.0, 20.0, 100.0, 30.0)
+        for cell in cells
+    )
+
+
+def test_extract_binds_text_inside_partial_bottom_boundary_cell():
+    page = SimpleNamespace(
+        get_drawings=lambda: [
+            {
+                "color": (0.0, 0.0, 0.0),
+                "fill": None,
+                "items": [
+                    ("l", fitz.Point(0.0, 0.0), fitz.Point(100.0, 0.0)),
+                    ("l", fitz.Point(0.0, 10.0), fitz.Point(100.0, 10.0)),
+                    ("l", fitz.Point(0.0, 20.0), fitz.Point(100.0, 20.0)),
+                    ("l", fitz.Point(0.0, 30.0), fitz.Point(50.0, 30.0)),
+                    ("l", fitz.Point(0.0, 0.0), fitz.Point(0.0, 30.0)),
+                    ("l", fitz.Point(50.0, 0.0), fitz.Point(50.0, 30.0)),
+                    ("l", fitz.Point(100.0, 0.0), fitz.Point(100.0, 20.0)),
+                ],
+            }
+        ],
+        get_fonts=lambda **_kwargs: [],
+        get_image_info=lambda **_kwargs: [],
+        get_text=lambda kind: (
+            [(65.0, 22.0, 90.0, 28.0, "right-value", 0, 0, 0)]
+            if kind == "words"
+            else {"blocks": []}
+        ),
+    )
+
+    tables = WiredTableExtractor().extract(page)
+
+    assert len(tables) == 1
+    recovered = next(
+        cell
+        for cell in tables[0].cells
+        if cell.row_index == 2 and cell.col_index == 1
+    )
+    assert recovered.text == "right-value"
+
+
+def test_build_cells_closes_partial_right_boundary_without_breaking_header_span():
+    extractor = WiredTableExtractor()
+
+    cells = extractor._build_cells_for_region(
+        BBox(0.0, 0.0, 100.0, 40.0),
+        h_lines=[
+            (0.0, 0.0, 100.0, 0.0),
+            (25.0, 10.0, 100.0, 10.0),
+            (0.0, 20.0, 100.0, 20.0),
+            (0.0, 30.0, 100.0, 30.0),
+            (0.0, 40.0, 100.0, 40.0),
+        ],
+        v_lines=[
+            (25.0, 0.0, 25.0, 40.0),
+            (50.0, 10.0, 50.0, 40.0),
+            (75.0, 10.0, 75.0, 40.0),
+            (100.0, 20.0, 100.0, 40.0),
+        ],
+    )
+
+    assert len(cells) == 13
+    date_cell = next(
+        cell for cell in cells if cell.row_index == 0 and cell.col_index == 1
+    )
+    assert date_cell.colspan == 3
+    assert any(cell.row_index == 1 and cell.col_index == 3 for cell in cells)
+
+
+def test_build_cells_rejects_internal_only_partial_bottom_boundary():
+    extractor = WiredTableExtractor()
+
+    cells = extractor._build_cells_for_region(
+        BBox(0.0, 0.0, 120.0, 30.0),
+        h_lines=[
+            (0.0, 0.0, 120.0, 0.0),
+            (0.0, 10.0, 120.0, 10.0),
+            (0.0, 20.0, 120.0, 20.0),
+            (40.0, 30.0, 80.0, 30.0),
+        ],
+        v_lines=[
+            (0.0, 0.0, 0.0, 30.0),
+            (40.0, 0.0, 40.0, 30.0),
+            (80.0, 0.0, 80.0, 30.0),
+            (120.0, 0.0, 120.0, 30.0),
+        ],
+    )
+
+    assert len(cells) == 7
+    assert sum(cell.row_index == 2 for cell in cells) == 1
+
+
+def test_build_cells_rejects_internal_only_partial_right_boundary():
+    extractor = WiredTableExtractor()
+
+    cells = extractor._build_cells_for_region(
+        BBox(0.0, 0.0, 120.0, 30.0),
+        h_lines=[
+            (0.0, 0.0, 120.0, 0.0),
+            (0.0, 10.0, 120.0, 10.0),
+            (0.0, 20.0, 120.0, 20.0),
+            (0.0, 30.0, 120.0, 30.0),
+        ],
+        v_lines=[
+            (0.0, 0.0, 0.0, 30.0),
+            (40.0, 0.0, 40.0, 30.0),
+            (80.0, 0.0, 80.0, 30.0),
+            (120.0, 10.0, 120.0, 20.0),
+        ],
+    )
+
+    assert len(cells) == 7
+    assert sum(cell.col_index == 2 for cell in cells) == 1
+
+
+def test_build_cells_rejects_unanchored_partial_bottom_boundary():
+    extractor = WiredTableExtractor()
+
+    cells = extractor._build_cells_for_region(
+        BBox(0.0, 0.0, 30.0, 30.0),
+        h_lines=[
+            (0.0, 0.0, 30.0, 0.0),
+            (0.0, 10.0, 30.0, 10.0),
+            (0.0, 20.0, 30.0, 20.0),
+            (0.0, 30.0, 9.0, 30.0),
+        ],
+        v_lines=[
+            (0.0, 0.0, 0.0, 30.0),
+            (10.0, 0.0, 10.0, 30.0),
+            (20.0, 0.0, 20.0, 30.0),
+            (30.0, 0.0, 30.0, 30.0),
+        ],
+    )
+
+    assert len(cells) == 7
+    assert sum(cell.row_index == 2 for cell in cells) == 1
+
+
+def test_build_cells_rejects_unanchored_partial_right_boundary():
+    extractor = WiredTableExtractor()
+
+    cells = extractor._build_cells_for_region(
+        BBox(0.0, 0.0, 30.0, 30.0),
+        h_lines=[
+            (0.0, 0.0, 30.0, 0.0),
+            (0.0, 10.0, 30.0, 10.0),
+            (0.0, 20.0, 30.0, 20.0),
+            (0.0, 30.0, 30.0, 30.0),
+        ],
+        v_lines=[
+            (0.0, 0.0, 0.0, 30.0),
+            (10.0, 0.0, 10.0, 30.0),
+            (20.0, 0.0, 20.0, 30.0),
+            (30.0, 0.0, 30.0, 9.0),
+        ],
+    )
+
+    assert len(cells) == 7
+    assert sum(cell.col_index == 2 for cell in cells) == 1
+
+
+def test_merge_v_lines_bridges_segmented_borders_within_tolerance():
+    """垂直线段断隙在2.5pt容差内时能够成功合并。"""
+    extractor = WiredTableExtractor()
+    # 模拟个人征信报告中常见的 2.28pt 拼接断隙
+    v_lines = [
+        (44.16, 283.13, 44.16, 300.89),
+        (44.16, 303.17, 44.16, 319.01),
+    ]
+    merged = extractor._merge_v_lines(v_lines)
+    assert len(merged) == 1
+    assert merged[0][1] == pytest.approx(283.13)
+    assert merged[0][3] == pytest.approx(319.01)
+
+
+def test_wired_extractor_finds_three_credit_record_tables_on_personal_report():
+    """个人信用报告(本人简版).pdf第0页信贷记录下的3个有线表格均能正常识别。"""
+    import os
+    candidates = [
+        os.path.abspath(r"个人信用报告/个人信用报告(本人简版).pdf"),
+        os.path.abspath(r"D:/codes/PDFLayoutParser/个人信用报告/个人信用报告(本人简版).pdf"),
+    ]
+    pdf_path = next((p for p in candidates if os.path.exists(p)), None)
+    if not pdf_path:
+        pytest.skip("个人信用报告(本人简版).pdf not found")
+
+    doc = fitz.open(pdf_path)
+    page = doc[0]
+    extractor = WiredTableExtractor()
+    tables = extractor.extract(page)
+
+    assert len(tables) == 3
+    # 1. 资产处置信息 / 垫款信息
+    assert any(any("资产处置信息" in c.text for c in t.cells) for t in tables)
+    # 2. 信用卡 / 贷款 / 其他业务
+    assert any(any("信用卡" in c.text for c in t.cells) and any("账户数" in c.text for c in t.cells) for t in tables)
+    # 3. 为个人 / 为企业
+    assert any(any("相关还款责任" in c.text for c in t.cells) for t in tables)
+
+
+def test_extract_lines_decomposes_stroked_rectangle_borders():
+    """验证带描边的封闭矩形会被分解为4条边框线，纯填充路径不分解。"""
+    extractor = WiredTableExtractor()
+
+    # 1. 描边矩形 (type="s", color=(0,0,0), w=100, h=60)
+    page_stroked = SimpleNamespace(
+        rect=fitz.Rect(0, 0, 500, 500),
+        get_drawings=lambda: [
+            {
+                "type": "s",
+                "color": (0.0, 0.0, 0.0),
+                "fill": None,
+                "items": [("re", fitz.Rect(10.0, 20.0, 110.0, 80.0), 1)],
+            }
+        ],
+    )
+    h_lines, v_lines = extractor._extract_lines_from_drawings(page_stroked)
+    assert len(h_lines) == 2
+    assert (10.0, 20.0, 110.0, 20.0) in h_lines
+    assert (10.0, 80.0, 110.0, 80.0) in h_lines
+    assert len(v_lines) == 2
+    assert (10.0, 20.0, 10.0, 80.0) in v_lines
+    assert (110.0, 20.0, 110.0, 80.0) in v_lines
+
+    # 2. 纯填充矩形 (type="f", color=None, fill=(0.9, 0.9, 0.9)) 不应分解为边线
+    page_fill_only = SimpleNamespace(
+        rect=fitz.Rect(0, 0, 500, 500),
+        get_drawings=lambda: [
+            {
+                "type": "f",
+                "color": None,
+                "fill": (0.9, 0.9, 0.9),
+                "items": [("re", fitz.Rect(10.0, 20.0, 110.0, 80.0), 0)],
+            }
+        ],
+    )
+    h_fill, v_fill = extractor._extract_lines_from_drawings(page_fill_only)
+    assert h_fill == []
+    assert v_fill == []
+
+
+def test_wired_extractor_finds_tables_on_pdfsam_merge1_page0():
+    """PDFsam_merge1.pdf第0页中用描边矩形绘制的信贷记录、信息概要等有线表格能被正常检出。"""
+    import os
+    candidates = [
+        os.path.abspath(r"个人信用报告/PDFsam_merge1.pdf"),
+        os.path.abspath(r"D:/codes/PDFLayoutParser/个人信用报告/PDFsam_merge1.pdf"),
+    ]
+    pdf_path = next((p for p in candidates if os.path.exists(p)), None)
+    if not pdf_path:
+        pytest.skip("PDFsam_merge1.pdf not found")
+
+    doc = fitz.open(pdf_path)
+    page = doc[0]
+    extractor = WiredTableExtractor()
+    tables = extractor.extract(page)
+
+    assert len(tables) >= 3
+    # 验证信息概要 6x5 有线表格被成功识别
+    overview = next(
+        (t for t in tables if any("信息概要" in c.text or "账户数" in c.text for c in t.cells)),
+        None,
+    )
+    assert overview is not None
+    assert overview.source == "line_projection"
+    assert (overview.rows, overview.cols) == (6, 5)
 
