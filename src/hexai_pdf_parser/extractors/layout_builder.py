@@ -8,6 +8,7 @@ LayoutElements per page.
 from typing import List
 
 from hexai_pdf_parser.core.models import Image, LayoutElement, Table
+from hexai_pdf_parser.extractors.reading_order import sort_by_reading_order
 
 
 TEXT_TABLE_IOU_THRESHOLD = 0.5
@@ -70,15 +71,7 @@ class LayoutBuilder:
         elements: List[LayoutElement],
     ) -> List[LayoutElement]:
         """Sort layout elements in page reading order and renumber them."""
-        sorted_elements = sorted(
-            elements,
-            key=lambda e: (
-                e.bbox.y0,
-                e.bbox.x0,
-                e.bbox.y1,
-                e.bbox.x1,
-            ),
-        )
+        sorted_elements = sort_by_reading_order(elements)
         for order, element in enumerate(sorted_elements):
             element.order = order
         return sorted_elements
