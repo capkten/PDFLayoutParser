@@ -47,3 +47,39 @@ def test_ml_table_detector_default_render_dpi_is_72():
 def test_ml_table_detector_accepts_custom_render_dpi():
     detector = MLTableDetector(render_dpi=150)
     assert detector.render_dpi == 150
+
+
+def test_ml_table_detector_reuses_shared_session():
+    from hexai_pdf_parser.ml.ml_table_detector import clear_session_cache
+
+    clear_session_cache()
+    det1 = MLTableDetector()
+    session1 = det1._load_session()
+
+    det2 = MLTableDetector()
+    session2 = det2._load_session()
+
+    # Both instances must share the exact same underlying session
+    assert session1 is session2
+
+    # Even if det1 closes its local reference, det2 or new detectors still reuse the cache
+    det1.close()
+    assert det1._session is None
+
+    det3 = MLTableDetector()
+    assert det3._load_session() is session2
+
+
+def test_clear_session_cache_forces_recreation():
+    from hexai_pdf_parser.ml.ml_table_detector import clear_session_cache
+
+    det1 = MLTableDetector()
+    session1 = det1._load_session()
+
+    clear_session_cache()
+
+    det2 = MLTableDetector()
+    session2 = det2._load_session()
+
+    assert session1 is not session2
+
