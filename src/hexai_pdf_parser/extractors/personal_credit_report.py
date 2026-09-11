@@ -16,7 +16,7 @@ from hexai_pdf_parser.tables.table_extractor import TableExtractor
 
 _QUERY_SECTION = "查询记录"
 _INSTITUTION_TITLE = "机构查询记录明细"
-_PERSONAL_TITLE = "个人查询记录明细"
+_PERSONAL_TITLES = ("个人查询记录明细", "本人查询记录明细")
 _QUERY_HEADERS = ("编号", "查询日期", "查询机构", "查询原因")
 
 
@@ -36,7 +36,7 @@ def _find_text_line_bboxes(page: fitz.Page, texts: List[str]) -> dict[str, BBox]
                 matches = (
                     text in line_text
                     and _INSTITUTION_TITLE not in line_text
-                    and _PERSONAL_TITLE not in line_text
+                    and not any(pt in line_text for pt in _PERSONAL_TITLES)
                 )
             else:
                 matches = text in line_text
@@ -55,12 +55,12 @@ def _query_regions(page: fitz.Page) -> Optional[List[BBox]]:
     """Build query-detail regions from section titles and spatial boundaries."""
     anchors = _find_text_line_bboxes(
         page,
-        [_QUERY_SECTION, _INSTITUTION_TITLE, _PERSONAL_TITLE],
+        [_QUERY_SECTION, _INSTITUTION_TITLE, *_PERSONAL_TITLES],
     )
     if _QUERY_SECTION not in anchors:
         return []
     institution = anchors.get(_INSTITUTION_TITLE)
-    personal = anchors.get(_PERSONAL_TITLE)
+    personal = next((anchors[pt] for pt in _PERSONAL_TITLES if pt in anchors), None)
     if institution is None or personal is None or personal.y0 <= institution.y0:
         return []
 
@@ -76,12 +76,9 @@ def _trim_query_table(table: Table) -> Table:
     """Drop section-title rows before the four-column query header."""
     header_row = None
     for row_index in range(table.rows):
-        row_text = {
-            cell.text.strip()
-            for cell in table.cells
-            if cell.row_index == row_index
-        }
-        if all(header in row_text for header in _QUERY_HEADERS):
+        cells_in_row = [cell for cell in table.cells if cell.row_index == row_index]
+        row_text_combined = "".join(cell.text.replace(" ", "") for cell in cells_in_row)
+        if all(header in row_text_combined for header in _QUERY_HEADERS):
             header_row = row_index
             break
     if header_row is None or header_row == 0:
@@ -309,7 +306,7 @@ def _make_query_tables(page: fitz.Page) -> list[Table]:
         row_text = "".join(item[4] for item in row)
         if all(header in row_text for header in _QUERY_HEADERS):
             header_indices.append(index)
-        if _INSTITUTION_TITLE in row_text or _PERSONAL_TITLE in row_text:
+        if _INSTITUTION_TITLE in row_text or any(pt in row_text for pt in _PERSONAL_TITLES):
             section_indices.append(index)
 
     if not header_indices:
@@ -527,6 +524,12 @@ class PersonalCreditReportTableExtractor(TableExtractor):
             for table in filtered
             for split in self._split_repeated_record_table(table)
         ]
+
+    def extract(self, page: fitz.Page, *args, **kwargs) -> List[Table]:
+        """Ensure query tables do not retain leading section-title rows."""
+        tables = super().extract(page, *args, **kwargs)
+        return [_trim_query_table(table) for table in tables]
+
 
 
 class PersonalCreditReportPipeline(Pipeline):
