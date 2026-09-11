@@ -23,18 +23,20 @@ class TestTableConfigDefault:
 
     def test_default_settings_have_expected_values(self):
         settings = GlobalTableSettings()
-        assert settings.line_tolerance == 2.0
+        assert settings.line_tolerance == 2.3
         assert settings.merge_group_tol == 0.3
         assert settings.row_gap_threshold == 30.0
         assert settings.fallback_max_cols == 30
         assert settings.fallback_max_tables == 10
+        assert settings.ml_render_dpi == 72
 
 
 class TestTableConfigFromDict:
     def test_empty_dict_yields_defaults(self):
         config = TableConfig.from_dict({})
         assert config.profiles == []
-        assert config.settings.line_tolerance == 2.0
+        assert config.settings.line_tolerance == 2.3
+        assert config.settings.ml_render_dpi == 72
 
     def test_settings_override(self):
         config = TableConfig.from_dict(
@@ -47,7 +49,7 @@ class TestTableConfigFromDict:
         config = TableConfig.from_dict(
             {"settings": {"future_field": "value"}}
         )
-        assert config.settings.line_tolerance == 2.0
+        assert config.settings.line_tolerance == 2.3
 
     def test_single_profile(self):
         config = TableConfig.from_dict(

@@ -559,6 +559,7 @@ def parse_personal_credit_report(
     debug: bool = False,
     debug_pipeline: bool = False,
     use_ml_table_detector: bool = False,
+    ml_render_dpi: int | None = None,
 ) -> dict:
     """Parse a personal credit report into the compact public result format."""
     document = PersonalCreditReportPipeline(
@@ -569,5 +570,6 @@ def parse_personal_credit_report(
         debug=debug,
         debug_pipeline=debug_pipeline,
         use_ml_table_detector=use_ml_table_detector,
+        ml_render_dpi=ml_render_dpi,
     ).run()
     return _document_result(document)
