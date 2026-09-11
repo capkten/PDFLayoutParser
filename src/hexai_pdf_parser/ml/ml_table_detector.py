@@ -8,7 +8,8 @@ the recall-oriented rule pass identifies as table candidates.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import List, Optional, Tuple, Union
+import threading
+from typing import Any, List, Optional, Tuple, Union
 
 import fitz
 import numpy as np
@@ -19,6 +20,35 @@ from hexai_pdf_parser.ml.yolo_layout_utils import (
     postprocess_yolo_layout,
     preprocess_yolo_image,
 )
+
+_GLOBAL_SESSION_CACHE: dict[tuple[str, tuple[str, ...]], Any] = {}
+_GLOBAL_SESSION_LOCK = threading.Lock()
+
+
+def clear_session_cache() -> None:
+    """Clear all cached ONNX Runtime sessions."""
+    with _GLOBAL_SESSION_LOCK:
+        _GLOBAL_SESSION_CACHE.clear()
+
+
+def get_shared_session(
+    model_path: Union[str, Path],
+    providers: Optional[list[str]] = None,
+) -> Any:
+    """Get or create a cached, process-level ONNX Runtime InferenceSession."""
+    abs_path = str(Path(model_path).resolve())
+    providers_tuple = tuple(providers or ["CPUExecutionProvider"])
+    cache_key = (abs_path, providers_tuple)
+
+    if cache_key not in _GLOBAL_SESSION_CACHE:
+        with _GLOBAL_SESSION_LOCK:
+            if cache_key not in _GLOBAL_SESSION_CACHE:
+                ort = _require_onnxruntime()
+                _GLOBAL_SESSION_CACHE[cache_key] = ort.InferenceSession(
+                    abs_path,
+                    providers=list(providers_tuple),
+                )
+    return _GLOBAL_SESSION_CACHE[cache_key]
 
 
 def _require_onnxruntime():
@@ -198,15 +228,11 @@ class MLTableDetector:
     # ------------------------------------------------------------------
 
     def _load_session(self):
-        """Lazy-load the ONNX Runtime inference session."""
+        """Lazy-load the ONNX Runtime inference session from global cache."""
         if self._session is not None:
             return self._session
 
-        ort = _require_onnxruntime()
-        self._session = ort.InferenceSession(
-            str(self._model_path),
-            providers=["CPUExecutionProvider"],
-        )
+        self._session = get_shared_session(self._model_path)
         return self._session
 
     def _run_inference(self, tensor: np.ndarray) -> np.ndarray:
