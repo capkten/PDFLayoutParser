@@ -1,5 +1,23 @@
 # Changes
 
+## 2026-09-11
+
+- 优化表格目标检测模型输入渲染分辨率：将 `MLTableDetector` 默认 `render_dpi` 从 200 降低到 72（对应 1pt = 1px），大幅削减 PDF 转图片及降采样缩放耗时，全量端到端批处理提速超 51%。
+  - **根因与调用位置**：`src/hexai_pdf_parser/ml/ml_table_detector.py::MLTableDetector.__init__()`。在表格检测流程中，PDF 页面渲染成图片仅用于通过轻量级目标检测模型（YOLO `best.onnx`）定位表格候选区域（BBox），不用于字符识别（OCR）或文本提取。YOLO 模型的固定输入尺度为 $640 \times 640$；标准 A4 页面在 200 DPI 下渲染出的图片分辨率高达 $1656 \times 2339$（近 400 万像素），在送入模型前必须经历大比例的双线性/双三次插值降采样缩放至 $640 \times 640$，既消耗了大量的 CPU 栅格化时间，又浪费了图片缩放算力。而在 72 DPI 下（PDF 标准点位 $1\text{pt} = 1\text{px}$），A4 页面尺寸约为 $595 \times 842$，与模型的 $640 \times 640$ 输入尺寸最为贴近，避免了过采样与过度下采样带来的无谓开销。
+  - **精度与差异性验证**：
+    - 在 100 页样本集上对 200 DPI 与 72 DPI 检出框进行逐框 IoU 与坐标比对：200 DPI 检出 204 个框，72 DPI 同样检出 204 个框，差异页数为 0/100；
+    - 在 20 页典型密集表格/复杂表头样本上进行单元格级全文比对：单元格文本 100% 一致（20/20 True）。
+  - **端到端全量性能评测**：
+    - 测试集：`fix/zh_all_table_pages.pdf`（全量 1023 页）；
+    - 全量结果输出路径：`D:\codes\PDFLayoutParser\output\fix_zh_all_table_pages_rerun_72dpi_20260911\part_000_pages_0000_1022`；
+    - **处理耗时**：从 200 DPI 下的 **1114.2s** 大幅降低至 72 DPI 下的 **544.3s**，**整体耗时减少 51.1%（提速超 2 倍，节约 9.5 分钟）**；
+    - **表格数量与分布**：表格总数依然稳定保持在 **2199** 张（`line_projection`: 1713, `wireless_span_recovery`: 445, `english_general_wireless`: 31, `hybrid_line_span_recovery`: 10）；
+    - **黄金标签对比**：除 Page 408 历史已知差异页外，1022 页 100% 保持一致，无新增遗漏或误检；比对中发现的少量差异均为正向改进（如 Page 182 边缘置信度略高找回漏检无线表格、Page 337 英文多表头折行融合质量提升）。
+  - **结构约束**：只调整区域检测前向图像渲染分辨率，表格内部结构恢复继续 100% 基于 native span、矢量 drawings、拓扑网格与列带，绝对不回读 `page.get_text("words")`，不退回 zebra 路径。
+  - **测试覆盖**：
+    - 在 `tests/test_ml_table_detector.py` 中新增 `test_ml_table_detector_default_render_dpi_is_72` 与 `test_ml_table_detector_accepts_custom_render_dpi`，测试通过率 100%；
+    - 在 `pyproject.toml` 的 pytest 配置中固化 `pythonpath = ["src"]`，杜绝子进程加载旧全局包。
+
 ## 2026-09-10
 
 - 在有线表格提取器 `WiredTableExtractor` 中补回把描边封闭矩形（`('re', Rect, 1)`）分解为 4 条边框线的逻辑，解决 `PDFsam_merge1.pdf` 及 `PDFsam_merge2.pdf` 等文档中有线表格（如“信息概要明细”和 2x1 标题表）无法提取线段而漏检、或被误退化为无线表格的问题。
