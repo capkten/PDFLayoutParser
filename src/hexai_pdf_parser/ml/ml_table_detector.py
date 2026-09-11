@@ -79,8 +79,9 @@ class MLTableDetector:
     input_size:
         Model input image size (height == width).  Default ``640``.
     render_dpi:
-        DPI used to rasterize the PDF page.  Higher values give better
-        accuracy but use more memory and CPU time.  Default ``200``.
+        DPI used to rasterize the PDF page for table region detection.
+        Since model input is 640x640, 72 DPI (1pt = 1px) is optimal for speed
+        and accuracy. Default ``72``.
     """
 
     def __init__(
@@ -90,7 +91,7 @@ class MLTableDetector:
         iou_threshold: float = 0.50,
         table_class_ids: Optional[set[int]] = None,
         input_size: int = 640,
-        render_dpi: int = 200,
+        render_dpi: int = 72,
     ) -> None:
         self._model_path = (
             Path(model_path) if model_path else _resolve_default_model_path()

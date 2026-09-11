@@ -37,3 +37,13 @@ def test_expand_bbox_ignores_page_background_drawing():
     )
 
     assert result == BBox(10, 10, 20, 20)
+
+
+def test_ml_table_detector_default_render_dpi_is_72():
+    detector = MLTableDetector()
+    assert detector.render_dpi == 72
+
+
+def test_ml_table_detector_accepts_custom_render_dpi():
+    detector = MLTableDetector(render_dpi=150)
+    assert detector.render_dpi == 150
