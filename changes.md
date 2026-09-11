@@ -2,6 +2,14 @@
 
 ## 2026-09-11
 
+- 在 `MLTableDetector` 中实现进程级共享会话缓存（`_GLOBAL_SESSION_CACHE` 与 `get_shared_session`），彻底解决多次实例化检测器时重复从磁盘加载 36.4 MB 模型并初始化 ONNX Runtime Session 的冷启动开销。
+  - **根因与调用位置**：`src/hexai_pdf_parser/ml/ml_table_detector.py::MLTableDetector._load_session()`。原实现将 `self._session` 绑定为实例变量，当外部连续处理不同 PDF 文档、API 多次调用或外部脚本按页循环调用 `_run_page_pipeline` 时，每次创建 `TableExtractor` / `MLTableDetector` 都会重新触发 `ort.InferenceSession()`，导致每次均需耗费 ~300ms 从磁盘重读 36.4MB 模型并重新构建计算图。
+  - **设计与改动**：
+    - 在 `ml_table_detector.py` 模块级引入线程安全的 `_GLOBAL_SESSION_CACHE` 与 `get_shared_session(model_path, providers)`，以模型的绝对规范路径与 providers 组合为键实现单例共享；
+    - `MLTableDetector._load_session()` 优先从全局缓存获取会话；`close()` 仅清理当前实例本地引用，不影响全局缓存；同时提供 `clear_session_cache()` 支持显式缓存清理与单测重置。
+  - **测试与验证**：在 `tests/test_ml_table_detector.py` 中新增 `test_ml_table_detector_reuses_shared_session` 和 `test_clear_session_cache_forces_recreation`，验证多实例间 `is` 强一致共享以及显式清理重置逻辑，全量 34 项关联测试 100% 通过。
+
+
 - 在 `TableConfig`、`TableExtractor`、`Pipeline` 及 `parse_personal_credit_report` 中支持可配置的表格目标检测分辨率 `ml_render_dpi`（默认 `72`），打通从顶层入口到模型检测器的完整参数透传链路。
   - **根因与调用位置**：`src/hexai_pdf_parser/tables/table_extractor.py::TableExtractor._extract_model_tables()` 原先实例化 `MLTableDetector` 时未传递 `render_dpi`，且 `Pipeline` 及 `TableConfig` 中缺少对应字段，导致外部即使指定 `render_dpi` 也仅作用于整页渲染图片，无法改变表格目标检测的图像尺寸。
   - **设计与改动**：
