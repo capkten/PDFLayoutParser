@@ -72,6 +72,7 @@ class GlobalTableSettings:
     fallback_max_tables: int = 10
     separator_min_width: float = 200.0
     separator_max_height: float = 1.5
+    ml_render_dpi: int = 72
 
 
 @dataclass

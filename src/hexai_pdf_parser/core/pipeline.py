@@ -66,6 +66,7 @@ def _get_process_worker_resources(
     debug_pipeline: bool,
     table_config,
     table_extractor_cls,
+    ml_render_dpi: Optional[int] = None,
 ):
     """Return process-local PDF and table extractor resources for one run."""
     global _PROCESS_WORKER_DOCUMENT
@@ -85,6 +86,7 @@ def _get_process_worker_resources(
         bool(debug_pipeline),
         repr(table_config),
         table_extractor_cls,
+        ml_render_dpi,
     )
     if _PROCESS_WORKER_RESOURCES_KEY != resource_key:
         _close_process_worker_resources()
@@ -92,6 +94,7 @@ def _get_process_worker_resources(
         _PROCESS_WORKER_TABLE_EXTRACTOR = table_extractor_cls(
             ml_model_path=ml_model_path,
             ml_confidence=ml_confidence,
+            ml_render_dpi=ml_render_dpi,
             table_config=table_config,
             debug_pipeline=debug_pipeline,
             use_ml_table_detector=use_ml_table_detector,
@@ -197,6 +200,7 @@ def _run_page_pipeline(
     table_extractor_cls=TableExtractor,
     table_extractor=None,
     table_extractor_factory=None,
+    ml_render_dpi: Optional[int] = None,
 ):
     """Run all pipeline stages for a single page.
 
@@ -240,6 +244,7 @@ def _run_page_pipeline(
         table_extractor = table_extractor_cls(
             ml_model_path=ml_model_path,
             ml_confidence=ml_confidence,
+            ml_render_dpi=ml_render_dpi,
             table_config=table_config,
             debug_pipeline=debug_pipeline,
             use_ml_table_detector=use_ml_table_detector,
@@ -442,6 +447,7 @@ def _process_page_process_worker(
     page_rotation: int,
     table_extractor_cls=TableExtractor,
     page_type: str = "vector",
+    ml_render_dpi: Optional[int] = None,
 ) -> tuple[int, Page, dict[str, float], float]:
     """Worker function for process-based parallelism.
 
@@ -467,6 +473,7 @@ def _process_page_process_worker(
         debug_pipeline=debug_pipeline,
         table_config=table_config,
         table_extractor_cls=table_extractor_cls,
+        ml_render_dpi=ml_render_dpi,
     )
     stage_totals = _run_page_pipeline(
         pdf_doc=pdf_doc,
@@ -486,6 +493,7 @@ def _process_page_process_worker(
         use_ml_table_detector=use_ml_table_detector,
         table_extractor=table_extractor,
         table_extractor_cls=table_extractor_cls,
+        ml_render_dpi=ml_render_dpi,
     )
 
     total_page_time = perf_counter() - page_start
@@ -516,10 +524,12 @@ class Pipeline:
         num_workers: Optional[int] = None,
         backend: str = "thread",
         use_ml_table_detector: bool = True,
+        ml_render_dpi: Optional[int] = None,
     ):
         self.pdf_path = pdf_path
         self.output_dir = output_dir
         self.render_dpi = render_dpi
+        self.ml_render_dpi = ml_render_dpi
         self.seal_coords = seal_coords or []
         self.page_indices = page_indices
         self._ml_model_path = ml_model_path
@@ -545,6 +555,7 @@ class Pipeline:
         return self._get_table_extractor_class()(
             ml_model_path=self._ml_model_path,
             ml_confidence=self._ml_confidence,
+            ml_render_dpi=self.ml_render_dpi,
             table_config=self._table_config,
             debug_pipeline=self.debug_pipeline,
             use_ml_table_detector=self._use_ml_table_detector,
@@ -771,6 +782,7 @@ class Pipeline:
                                 page.rotation,
                                 self._get_table_extractor_class(),
                                 page_type=page.page_type,
+                                ml_render_dpi=self.ml_render_dpi,
                             )
                         )
                     for future in futures:
