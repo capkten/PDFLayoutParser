@@ -3,7 +3,7 @@
 from collections import Counter
 from html.parser import HTMLParser
 import re
-from typing import Any
+from typing import Any, Dict, List, Optional, Tuple
 
 
 _WS_RE = re.compile(r"\s+")
@@ -16,14 +16,16 @@ def _clean_text(value: str) -> str:
 class _MarkdownParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
-        self.tables: list[dict[str, Any]] = []
-        self._table_stack: list[dict[str, Any]] = []
-        self._row: list[dict[str, Any]] | None = None
-        self._cell: dict[str, Any] | None = None
-        self.body_units: list[str] = []
-        self.visible_units: list[str] = []
+        self.tables: List[Dict[str, Any]] = []
+        self._table_stack: List[Dict[str, Any]] = []
+        self._row: Optional[List[Dict[str, Any]]] = None
+        self._cell: Optional[Dict[str, Any]] = None
+        self.body_units: List[str] = []
+        self.visible_units: List[str] = []
 
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+    def handle_starttag(
+        self, tag: str, attrs: List[Tuple[str, Optional[str]]]
+    ) -> None:
         tag = tag.lower()
         if tag == "table":
             table = {"rows": [], "texts": []}
@@ -67,14 +69,14 @@ class _MarkdownParser(HTMLParser):
                 self.visible_units.append(text)
 
     @staticmethod
-    def _span(value: str | None) -> int:
+    def _span(value: Optional[str]) -> int:
         try:
             return max(1, int(value or "1"))
         except ValueError:
             return 1
 
 
-def parse_markdown(markdown: str) -> dict[str, Any]:
+def parse_markdown(markdown: str) -> Dict[str, Any]:
     parser = _MarkdownParser()
     parser.feed(markdown)
     parser.close()
@@ -100,14 +102,14 @@ def parse_markdown(markdown: str) -> dict[str, Any]:
     }
 
 
-def _table_shapes(snapshot: dict[str, Any]) -> list[Any]:
+def _table_shapes(snapshot: Dict[str, Any]) -> List[Any]:
     return [
         (table["rows"], tuple(table["cells_per_row"]), tuple(map(tuple, table["spans"])))
         for table in snapshot["tables"]
     ]
 
 
-def _table_text(snapshot: dict[str, Any]) -> list[str]:
+def _table_text(snapshot: Dict[str, Any]) -> List[str]:
     return [text for table in snapshot["tables"] for text in table["texts"]]
 
 
@@ -118,8 +120,8 @@ def _normal_form(markdown: str) -> str:
     return f"{body}\n{tables}"
 
 
-def detect_signals(expected: dict[str, Any], actual: dict[str, Any]) -> list[str]:
-    signals: list[str] = []
+def detect_signals(expected: Dict[str, Any], actual: Dict[str, Any]) -> List[str]:
+    signals: List[str] = []
     same_count = expected["table_count"] == actual["table_count"]
     shapes_differ = _table_shapes(expected) != _table_shapes(actual)
     table_text_differ = _table_text(expected) != _table_text(actual)
@@ -140,7 +142,9 @@ def detect_signals(expected: dict[str, Any], actual: dict[str, Any]) -> list[str
     return signals
 
 
-def build_classification(expected: str, actual: str, signals: list[str]) -> dict[str, Any]:
+def build_classification(
+    expected: str, actual: str, signals: List[str]
+) -> Dict[str, Any]:
     if len(signals) == 1:
         primary = signals[0]
         categories = signals
@@ -174,13 +178,13 @@ def build_classification(expected: str, actual: str, signals: list[str]) -> dict
     }
 
 
-def classify_markdown(expected: str, actual: str) -> dict[str, Any]:
+def classify_markdown(expected: str, actual: str) -> Dict[str, Any]:
     expected_snapshot = parse_markdown(expected)
     actual_snapshot = parse_markdown(actual)
     signals = detect_signals(expected_snapshot, actual_snapshot)
     return build_classification(expected, actual, signals)
 
 
-def build_review(*args: Any, **kwargs: Any) -> dict[str, Any]:
+def build_review(*args: Any, **kwargs: Any) -> Dict[str, Any]:
     """Reserved for the review artifact builder implemented in a later task."""
     raise NotImplementedError("build_review is not part of Task 1")

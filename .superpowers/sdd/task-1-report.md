@@ -1,67 +1,90 @@
-# Task 1 报告：等宽多样文本列的合并否决
+# Task 1 报告：分类纯函数
 
-## 结论
+## 状态
 
-已完成。`build_text_runs` 在对齐走廊 veto 中补入了“文本值多样性”证据，避免把 Page 979 这种“右侧固定宽度、左侧多样金额”的列误合并；同时保留了固定单位场景的原有合并行为。
+分类纯函数已完成并通过 7 个分类测试。完整测试文件中 `build_review` 用例仍失败；该生成器属于后续任务，本 Task 1 仅提供导入占位，不实现生成器逻辑。
 
-## RED
+## 实现
 
-命令：
+- 新增 `scripts/pdf_diff_review.py`。
+- 实现 `parse_markdown`、`detect_signals`、`build_classification` 和 `classify_markdown`。
+- 支持表数量、行列形状、`rowspan`/`colspan`、表格单元格文本、表格外正文、可见文本顺序及纯格式差异证据。
+- 未修改测试、原始 PDF、输出目录或标签。
 
-```powershell
-$env:PYTHONPATH=(Resolve-Path 'src').Path
-$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'
-& 'C:\Users\23662\AppData\Local\Programs\Python\Python312\Scripts\pytest.exe' -q tests/test_wireless_structure_text_runs.py -k 'fixed_width_diverse or varying_amounts_with_fixed_unit'
+## 测试命令与原始输出摘要
+
+红灯确认：
+
+```text
+$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; $env:PYTHONPATH='src'; pytest tests/test_pdf_diff_review.py -q
+ImportError while importing test module
+ModuleNotFoundError: No module named 'scripts.pdf_diff_review'
 ```
 
-预期失败摘要：
+分类定向测试：
 
-- `test_build_text_runs_vetoes_fixed_width_diverse_aligned_column_join` 失败
-- 实际结果把三组“金额+地点”错误合并成了 `金额+地点`
-- `test_build_text_runs_keeps_varying_amounts_with_fixed_unit_joined` 通过，说明反例方向正确
-
-## GREEN
-
-命令：
-
-```powershell
-$env:PYTHONPATH=(Resolve-Path 'src').Path
-$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'
-& 'C:\Users\23662\AppData\Local\Programs\Python\Python312\Scripts\pytest.exe' -q tests/test_wireless_structure_text_runs.py -k 'fixed_width_diverse or varying_amounts_with_fixed_unit'
+```text
+$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; $env:PYTHONPATH='src'; pytest tests/test_pdf_diff_review.py -q -k 'classify'
+7 passed, 1 deselected, 5 warnings in 0.06s
 ```
 
-通过摘要：
+完整测试：
 
-- 2 passed
-- 仅保留既有的 PyMuPDF / SWIG DeprecationWarning
-
-## 相关回归
-
-命令：
-
-```powershell
-$env:PYTHONPATH=(Resolve-Path 'src').Path
-$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'
-& 'C:\Users\23662\AppData\Local\Programs\Python\Python312\Scripts\pytest.exe' -q tests/test_wireless_output_order.py tests/test_wireless_structure_text_runs.py tests/test_wireless_structure_recoverer.py
+```text
+$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; $env:PYTHONPATH='src'; pytest tests/test_pdf_diff_review.py -q
+1 failed, 7 passed, 5 warnings in 0.23s
+失败：test_build_review_writes_json_images_and_html
+原因：build_review 尚未实现（后续任务范围）。
 ```
 
-结果：
+自检与静态检查：
 
-- 56 passed
-- 仅保留既有的 PyMuPDF / SWIG DeprecationWarning
+```text
+python -m py_compile scripts/pdf_diff_review.py       # 通过
+git diff --check                                      # 通过
+```
 
-## 改动文件
+## Commit
 
-- `tests/test_wireless_structure_text_runs.py`
-- `src/hexai_pdf_parser/tables/wireless_structure/text_runs.py`
+`feat: classify PDF markdown differences`
 
-## 自审
+## 审阅修复
 
-- 修改是最小化的，只加了一个文本多样性辅助判断，并且只挂在 alignment corridor veto 路径上。
-- 新增测试覆盖了目标误合并场景和固定单位反例，能证明这次改动没有把原本该保留的合并打坏。
-- 相关回归通过，说明对现有文本拼接路径没有明显回归。
+- 按 I-1 将 `scripts/pdf_diff_review.py` 的类型注解改为 `typing.List`、`Dict`、`Tuple` 和 `Optional`，消除 Python 3.7 导入阶段对 PEP 585/604 注解的依赖；七个分类规则和返回字段未改变。
+- 按 I-2 将已有的 `tests/test_pdf_diff_review.py` 纳入本次修复提交。
+- 未修改原始 PDF、标签或输出目录。当前环境提供 Python 3.8/3.12，没有 Python 3.7；已通过 Python 3.8 导入验证及 Python 3.12 分类测试，且注解扫描确认不再使用不兼容写法。
 
-## 顾虑
+## 审阅修复测试
 
-- 目前的多样性阈值是 `>= 3` 个去空白后的不同文本值，和任务说明保持一致；如果后续 Page 979 周边还有更复杂的低样本结构，可能需要再补更具体的几何证据。
-- 回归里仍有既有的 SwigPy* 弃用警告，但它们不影响本次修复结论。
+Python 3.8 导入验证：
+
+```text
+py -3.8 -c "import scripts.pdf_diff_review"
+exit code 0
+```
+
+分类定向测试：
+
+```text
+$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; $env:PYTHONPATH='src'; pytest tests/test_pdf_diff_review.py -q -k 'classify'
+7 passed, 1 deselected, 5 warnings in 0.11s
+```
+
+完整当前测试文件：
+
+```text
+$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; $env:PYTHONPATH='src'; pytest tests/test_pdf_diff_review.py -q
+1 failed, 7 passed, 5 warnings in 0.43s
+失败：test_build_review_writes_json_images_and_html；`build_review` 是后续任务占位，抛出 `NotImplementedError`。
+```
+
+附加检查：
+
+```text
+python -m py_compile scripts/pdf_diff_review.py       # 通过
+git diff --check                                      # 通过；报告文件末尾已有空行提示，不影响脚本/测试改动
+```
+
+## 修复 Commit
+
+待提交：修复 Python 3.7 类型注解兼容性并纳入分类测试。
