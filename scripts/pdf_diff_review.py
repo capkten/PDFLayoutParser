@@ -201,28 +201,52 @@ def _relative(root: Path, path: Optional[Path]) -> Optional[str]:
         return str(path.resolve()).replace("\\", "/")
 
 
-def _actual_pages(actual_root: Path) -> Tuple[Dict[int, Dict[str, Any]], List[str]]:
+def _actual_pages(
+    actual_root: Path,
+) -> Tuple[Dict[int, Dict[str, Any]], List[str], Dict[int, List[str]]]:
     """Use the established scanner, but retain a tolerant index for incomplete pages."""
     try:
-        return scan_page_outputs(actual_root), []
-    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        return scan_page_outputs(actual_root), [], {}
+    except (OSError, ValueError, AttributeError, TypeError, json.JSONDecodeError) as exc:
         scan_error = str(exc)
 
     pages: Dict[int, Dict[str, Any]] = {}
     errors: List[str] = []
+    page_errors: Dict[int, List[str]] = {}
     for json_path in sorted(actual_root.rglob("*.json")):
         if json_path.parent.name != "pages":
             continue
+        page_index: Optional[int] = None
         try:
-            data = json.loads(json_path.read_text(encoding="utf-8"))
             local_index = int(json_path.stem.rsplit("-", 1)[1])
             page_index = source_page_index(json_path, local_index)
+            data = json.loads(json_path.read_text(encoding="utf-8"))
+            if data.get("index") != local_index:
+                raise ValueError("JSON index does not match filename index")
             page_type = data.get("page_type")
-        except (OSError, ValueError, KeyError, json.JSONDecodeError) as exc:
-            errors.append("{}: {}".format(json_path, exc))
+            if not page_type:
+                raise ValueError("missing page_type")
+        except (
+            OSError,
+            ValueError,
+            AttributeError,
+            TypeError,
+            KeyError,
+            IndexError,
+            json.JSONDecodeError,
+        ) as exc:
+            message = "{}: {}".format(json_path, exc)
+            errors.append(message)
+            if page_index is not None:
+                page_errors.setdefault(page_index, []).append(message)
             continue
         markdown_path = json_path.with_suffix(".md")
         visual_path = json_path.parent.parent / "tables" / (json_path.stem + ".png")
+        if page_index in pages:
+            message = "conflicting outputs for page {}: {}".format(page_index, json_path)
+            errors.append(message)
+            page_errors.setdefault(page_index, []).append(message)
+            continue
         pages[page_index] = {
             "page_index": page_index,
             "page_type": page_type,
@@ -235,33 +259,43 @@ def _actual_pages(actual_root: Path) -> Tuple[Dict[int, Dict[str, Any]], List[st
             "visualized_image_path": None,
             "visualized_image_name": None,
         }
-    if not pages and scan_error:
-        errors.append(scan_error)
-    return pages, errors
+    if scan_error:
+        errors.insert(0, scan_error)
+    return pages, errors, page_errors
 
 
 def _find_label_image(testset_root: Path, page: Dict[str, Any]) -> Optional[Path]:
-    for key in ("source_visual_path", "source_table_png"):
-        source = page.get(key)
-        if not source:
-            continue
-        for root in (testset_root, testset_root.parent):
-            candidate = (root / source).resolve()
-            if candidate.exists():
-                return candidate
+    candidates = []
+    source_visual_path = page.get("source_visual_path")
+    if source_visual_path:
+        candidates.extend(
+            [testset_root / source_visual_path, testset_root.parent / source_visual_path]
+        )
+    source_table_png = page.get("source_table_png")
+    if source_table_png:
+        candidates.append(testset_root.parent / source_table_png)
+    for candidate in candidates:
+        if candidate.resolve().exists():
+            return candidate.resolve()
     return None
 
 
 def make_side_by_side(
-    expected_png: Optional[Path], actual_png: Optional[Path], output_png: Path, page_index: int
+    expected_png: Optional[Path],
+    actual_png: Optional[Path],
+    output_png: Path,
+    page_index: int,
+    errors: Optional[List[str]] = None,
 ) -> None:
     """Render two PNGs on one PyMuPDF page, including placeholders for missing inputs."""
     pixmaps: List[Optional[fitz.Pixmap]] = []
-    for path in (expected_png, actual_png):
+    for label, path in zip(("label", "current"), (expected_png, actual_png)):
         try:
             pixmaps.append(fitz.Pixmap(str(path)) if path is not None else None)
-        except (OSError, RuntimeError, ValueError):
+        except Exception as exc:
             pixmaps.append(None)
+            if errors is not None:
+                errors.append("unreadable {} PNG: {}".format(label, exc))
     valid = [pix for pix in pixmaps if pix is not None]
     max_height = max([pix.height for pix in valid] or [360])
     scale = min(1.0, 900.0 / max_height)
@@ -282,7 +316,8 @@ def make_side_by_side(
             page.insert_image(rect, pixmap=pix, keep_proportion=True)
     page.insert_text((page.rect.width - 100, 22), "PAGE {:03d}".format(page_index), fontsize=10)
     output_png.parent.mkdir(parents=True, exist_ok=True)
-    doc.save(str(output_png))
+    rendered = page.get_pixmap(alpha=False)
+    rendered.save(str(output_png))
     doc.close()
 
 
@@ -298,7 +333,7 @@ def build_review(actual_root: Path, testset_root: Path, review_dir: Path) -> Dic
     testset_root = Path(testset_root)
     review_dir = Path(review_dir)
     manifest = _load_manifest(testset_root)
-    actual_pages, scan_errors = _actual_pages(actual_root)
+    actual_pages, scan_errors, page_errors = _actual_pages(actual_root)
     pages: List[Dict[str, Any]] = []
     category_counts: Counter = Counter()
     review_dir.mkdir(parents=True, exist_ok=True)
@@ -315,10 +350,18 @@ def build_review(actual_root: Path, testset_root: Path, review_dir: Path) -> Dic
         actual_md = actual.get("markdown_path") if actual else None
         expected_text = expected_md.read_text(encoding="utf-8") if expected_md and expected_md.exists() else ""
         actual_text = actual_md.read_text(encoding="utf-8") if actual_md and actual_md.exists() else ""
-        errors: List[str] = []
-        if expected_md is None:
+        errors: List[str] = list(page_errors.get(page_index, []))
+        actual_json = actual.get("json_path") if actual else None
+        for scan_error in scan_errors:
+            if (actual_json is not None and str(actual_json) in scan_error) or (
+                "page-{:03d}".format(page_index) in scan_error
+            ):
+                if scan_error not in errors:
+                    errors.append(scan_error)
+        markdown_required = manifest_page.get("markdown_status") == "markdown"
+        if markdown_required and expected_md is None:
             errors.append("missing label Markdown")
-        if actual_md is None:
+        if markdown_required and actual_md is None:
             errors.append("missing actual Markdown")
         expected_png = _find_label_image(testset_root, manifest_page)
         actual_png = actual.get("visual_path") if actual else None
@@ -334,7 +377,7 @@ def build_review(actual_root: Path, testset_root: Path, review_dir: Path) -> Dic
             primary = classification["primary_category"]
             category_counts[primary] += 1
         image_path = review_dir / "images" / "page-{:03d}.png".format(page_index)
-        make_side_by_side(expected_png, actual_png, image_path, page_index)
+        make_side_by_side(expected_png, actual_png, image_path, page_index, errors)
         record = dict(classification)
         record.update(
             {

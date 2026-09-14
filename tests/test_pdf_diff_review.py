@@ -150,6 +150,12 @@ def test_build_review_writes_json_images_and_html(tmp_path: Path) -> None:
     assert "+当前文本" in classification["pages"][0]["diff"]
     assert summary["category_counts"] == {"body_text": 1}
 
+    image_bytes = (review_dir / "images" / "page-000.png").read_bytes()
+    assert image_bytes.startswith(b"\x89PNG")
+    decoded = fitz.Pixmap(str(review_dir / "images" / "page-000.png"))
+    assert decoded.width > 0
+    assert decoded.height > 0
+
 
 def test_build_review_keeps_page_when_actual_resources_are_missing(tmp_path: Path) -> None:
     testset_root = tmp_path / "testset"
@@ -181,3 +187,161 @@ def test_build_review_keeps_page_when_actual_resources_are_missing(tmp_path: Pat
     assert any("Markdown" in error for error in page["errors"])
     assert any("PNG" in error for error in page["errors"])
     assert (tmp_path / "review" / "images" / "page-000.png").is_file()
+
+
+def test_build_review_does_not_classify_absent_expected_as_missing_markdown(tmp_path: Path) -> None:
+    testset_root = tmp_path / "testset"
+    testset_root.mkdir()
+    label_visual = testset_root / "label.png"
+    _write_png(label_visual)
+    (testset_root / "manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "page_count": 1,
+                "pages": [
+                    {
+                        "page_index": 0,
+                        "markdown_status": "absent_expected",
+                        "source_visual_path": "label.png",
+                    }
+                ],
+                "failed_pages": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    pages_dir = tmp_path / "actual" / "page-000" / "pages"
+    tables_dir = pages_dir.parent / "tables"
+    pages_dir.mkdir(parents=True)
+    tables_dir.mkdir()
+    (pages_dir / "page-000.json").write_text(
+        json.dumps({"index": 0, "page_type": "scanned"}), encoding="utf-8"
+    )
+    _write_png(tables_dir / "page-000.png")
+
+    summary = build_review(tmp_path / "actual", testset_root, tmp_path / "review")
+
+    page = summary["pages"][0]
+    assert page["primary_category"] != "missing_resource"
+    assert not any("Markdown" in error for error in page["errors"])
+
+
+def test_build_review_preserves_scan_error_and_validates_fallback_pages(tmp_path: Path) -> None:
+    testset_root = tmp_path / "testset"
+    testset_root.mkdir()
+    (testset_root / "manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "page_count": 2,
+                "pages": [
+                    {"page_index": 0, "markdown_status": "absent_expected"},
+                    {"page_index": 1, "markdown_status": "absent_expected"},
+                ],
+                "failed_pages": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    actual_root = tmp_path / "actual"
+    pages_dir = actual_root / "part_000_pages_0000_0001" / "pages"
+    tables_dir = pages_dir.parent / "tables"
+    pages_dir.mkdir(parents=True)
+    tables_dir.mkdir()
+    (pages_dir / "page-000.json").write_text(
+        json.dumps({"index": 99, "page_type": "scanned"}), encoding="utf-8"
+    )
+    (pages_dir / "page-001.json").write_text(
+        json.dumps({"index": 1, "page_type": "scanned"}), encoding="utf-8"
+    )
+    _write_png(tables_dir / "page-000.png")
+    _write_png(tables_dir / "page-001.png")
+
+    summary = build_review(actual_root, testset_root, tmp_path / "review")
+
+    assert summary["scan_errors"]
+    assert any("JSON index" in error for error in summary["pages"][0]["errors"])
+    assert not any("JSON index" in error for error in summary["pages"][1]["errors"])
+
+
+def test_find_label_image_uses_manifest_candidate_order(tmp_path: Path) -> None:
+    testset_root = tmp_path / "testset"
+    testset_root.mkdir()
+    root_visual = testset_root / "visual.png"
+    parent_visual = testset_root.parent / "visual.png"
+    root_table = testset_root / "table.png"
+    _write_png(root_visual)
+    _write_png(parent_visual)
+    _write_png(root_table)
+    (testset_root / "manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "page_count": 1,
+                "pages": [
+                    {
+                        "page_index": 0,
+                        "markdown_status": "absent_expected",
+                        "source_visual_path": "visual.png",
+                        "source_table_png": "table.png",
+                    }
+                ],
+                "failed_pages": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    pages_dir = tmp_path / "actual" / "page-000" / "pages"
+    tables_dir = pages_dir.parent / "tables"
+    pages_dir.mkdir(parents=True)
+    tables_dir.mkdir()
+    (pages_dir / "page-000.json").write_text(
+        json.dumps({"index": 0, "page_type": "scanned"}), encoding="utf-8"
+    )
+    _write_png(tables_dir / "page-000.png")
+
+    summary = build_review(tmp_path / "actual", testset_root, tmp_path / "review")
+
+    assert summary["pages"][0]["label_png"] == "visual.png"
+
+
+def test_build_review_records_corrupt_png_read_error(tmp_path: Path) -> None:
+    testset_root = tmp_path / "testset"
+    (testset_root / "labels").mkdir(parents=True)
+    (testset_root / "labels" / "page-000.md").write_text("标签", encoding="utf-8")
+    (testset_root / "label.png").write_bytes(b"not a png")
+    (testset_root / "manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "page_count": 1,
+                "pages": [
+                    {
+                        "page_index": 0,
+                        "markdown_status": "markdown",
+                        "label_path": "labels/page-000.md",
+                        "source_visual_path": "label.png",
+                    }
+                ],
+                "failed_pages": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    pages_dir = tmp_path / "actual" / "page-000" / "pages"
+    tables_dir = pages_dir.parent / "tables"
+    pages_dir.mkdir(parents=True)
+    tables_dir.mkdir()
+    (pages_dir / "page-000.md").write_text("当前", encoding="utf-8")
+    (pages_dir / "page-000.json").write_text(
+        json.dumps({"index": 0, "page_type": "vector"}), encoding="utf-8"
+    )
+    _write_png(tables_dir / "page-000.png")
+
+    summary = build_review(tmp_path / "actual", testset_root, tmp_path / "review")
+
+    assert any(
+        "label PNG" in error and "unknown image file format" in error
+        for error in summary["pages"][0]["errors"]
+    )
