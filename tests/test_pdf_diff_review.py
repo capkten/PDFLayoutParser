@@ -287,6 +287,90 @@ def test_build_review_writes_json_images_and_html(tmp_path: Path) -> None:
     assert decoded.height > 0
 
 
+def test_build_review_normalizes_comparator_text_and_only_emits_review_pages(tmp_path: Path) -> None:
+    testset_root = tmp_path / "testset_markdown"
+    labels_dir = testset_root / "labels"
+    visuals_dir = testset_root / "visualized_images"
+    labels_dir.mkdir(parents=True)
+    visuals_dir.mkdir()
+    (labels_dir / "page-000.md").write_text(
+        "正文\n\n![label](old-label.png)\n", encoding="utf-8"
+    )
+    (labels_dir / "page-001.md").write_text("标签正文", encoding="utf-8")
+    _write_png(visuals_dir / "page-000.png")
+    _write_png(visuals_dir / "page-001.png")
+    _write_png(visuals_dir / "page-002.png")
+    (testset_root / "manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "input_pdf": str(tmp_path / "input.pdf"),
+                "page_count": 3,
+                "pages": [
+                    {
+                        "page_index": 0,
+                        "page_type": "vector",
+                        "markdown_status": "markdown",
+                        "label_path": "labels/page-000.md",
+                        "source_visual_path": "visualized_images/page-000.png",
+                    },
+                    {
+                        "page_index": 1,
+                        "page_type": "vector",
+                        "markdown_status": "markdown",
+                        "label_path": "labels/page-001.md",
+                        "source_visual_path": "visualized_images/page-001.png",
+                    },
+                    {
+                        "page_index": 2,
+                        "page_type": "vector",
+                        "markdown_status": "excluded",
+                        "source_visual_path": "visualized_images/page-002.png",
+                    },
+                ],
+                "failed_pages": [],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    actual_root = tmp_path / "actual"
+    pages_dir = actual_root / "part_000_pages_0000_0002" / "pages"
+    tables_dir = pages_dir.parent / "tables"
+    pages_dir.mkdir(parents=True)
+    tables_dir.mkdir()
+    for page_index in range(3):
+        (pages_dir / "page-{0:03d}.json".format(page_index)).write_text(
+            json.dumps({"index": page_index, "page_type": "vector"}), encoding="utf-8"
+        )
+        (tables_dir / "page-{0:03d}.png".format(page_index)).write_bytes(
+            (visuals_dir / "page-{0:03d}.png".format(page_index)).read_bytes()
+        )
+    (pages_dir / "page-000.md").write_text(
+        "正文\n\n![current](new-current.png)\n", encoding="utf-8"
+    )
+    (pages_dir / "page-001.md").write_text("当前正文", encoding="utf-8")
+    (pages_dir / "page-002.md").write_text("排除页当前文本", encoding="utf-8")
+
+    review_dir = tmp_path / "review"
+    summary = build_review(actual_root, testset_root, review_dir)
+
+    assert summary["page_count"] == 3
+    assert summary["review_page_count"] == 1
+    assert summary["diff_count"] == 1
+    assert summary["category_counts"] == {"body_text": 1}
+    assert summary["pages"][0]["primary_category"] == "same"
+    assert summary["pages"][2]["primary_category"] == "excluded"
+    classification = json.loads(
+        (review_dir / "classification.json").read_text(encoding="utf-8")
+    )
+    assert [page["page_index"] for page in classification["pages"]] == [1]
+    assert classification["category_counts"] == {"body_text": 1}
+    assert "page-000.png" not in (review_dir / "index.html").read_text(encoding="utf-8")
+    assert "page-001.png" in (review_dir / "index.html").read_text(encoding="utf-8")
+
+
 def test_build_review_keeps_page_when_actual_resources_are_missing(tmp_path: Path) -> None:
     testset_root = tmp_path / "testset"
     (testset_root / "labels").mkdir(parents=True)

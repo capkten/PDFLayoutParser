@@ -11,7 +11,12 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import fitz
 
-from scripts.markdown_golden_testset import _load_manifest, scan_page_outputs, source_page_index
+from scripts.markdown_golden_testset import (
+    _load_manifest,
+    normalize_markdown,
+    scan_page_outputs,
+    source_page_index,
+)
 
 
 _WS_RE = re.compile(r"\s+")
@@ -399,6 +404,7 @@ def build_review(actual_root: Path, testset_root: Path, review_dir: Path) -> Dic
     manifest = _load_manifest(testset_root)
     actual_pages, scan_errors, page_errors = _actual_pages(actual_root)
     pages: List[Dict[str, Any]] = []
+    review_pages: List[Dict[str, Any]] = []
     category_counts: Counter = Counter()
     review_dir.mkdir(parents=True, exist_ok=True)
     (review_dir / "images").mkdir(parents=True, exist_ok=True)
@@ -412,8 +418,10 @@ def build_review(actual_root: Path, testset_root: Path, review_dir: Path) -> Dic
         if label_path:
             expected_md = (testset_root / label_path).resolve()
         actual_md = actual.get("markdown_path") if actual else None
-        expected_text = expected_md.read_text(encoding="utf-8") if expected_md and expected_md.exists() else ""
-        actual_text = actual_md.read_text(encoding="utf-8") if actual_md and actual_md.exists() else ""
+        expected_raw = expected_md.read_text(encoding="utf-8") if expected_md and expected_md.exists() else ""
+        actual_raw = actual_md.read_text(encoding="utf-8") if actual_md and actual_md.exists() else ""
+        expected_text = normalize_markdown(expected_raw)
+        actual_text = normalize_markdown(actual_raw)
         errors: List[str] = list(page_errors.get(page_index, []))
         actual_json = actual.get("json_path") if actual else None
         for scan_error in scan_errors:
@@ -433,13 +441,12 @@ def build_review(actual_root: Path, testset_root: Path, review_dir: Path) -> Dic
             errors.append("missing label PNG")
         if actual_png is None:
             errors.append("missing actual PNG")
-        classification = classify_markdown(expected_text, actual_text)
-        if errors:
-            primary = "missing_resource"
-            category_counts[primary] += 1
+        if manifest_page.get("markdown_status") == "excluded":
+            classification = classify_markdown("", "")
+            primary = "excluded"
         else:
+            classification = classify_markdown(expected_text, actual_text)
             primary = classification["primary_category"]
-            category_counts[primary] += 1
         image_path = review_dir / "images" / "page-{:03d}.png".format(page_index)
         make_side_by_side(expected_png, actual_png, image_path, page_index, errors)
         label_review_path = None
@@ -460,11 +467,19 @@ def build_review(actual_root: Path, testset_root: Path, review_dir: Path) -> Dic
             except OSError as exc:
                 errors.append("failed to copy current PNG: {}".format(exc))
                 source_review_path = None
+        if errors and primary != "excluded":
+            primary = "missing_resource"
+            classification = dict(classification)
+            classification["categories"] = ["missing_resource"]
+            classification["signals"] = ["missing_resource"]
+        if primary not in {"same", "excluded"}:
+            category_counts[primary] += 1
         record = dict(classification)
         record.update(
             {
                 "page_index": page_index,
                 "page_type": actual.get("page_type") if actual else manifest_page.get("page_type", "unknown"),
+                "markdown_status": manifest_page.get("markdown_status"),
                 "primary_category": primary,
                 "diff": _diff(expected_text, actual_text),
                 "label_path": _relative(testset_root, expected_md),
@@ -482,14 +497,25 @@ def build_review(actual_root: Path, testset_root: Path, review_dir: Path) -> Dic
             }
         )
         pages.append(record)
+        if primary not in {"same", "excluded"}:
+            review_pages.append(record)
 
-    payload = {"pages": pages, "category_counts": dict(category_counts)}
+    payload = {
+        "page_count": len(pages),
+        "review_page_count": len(review_pages),
+        "pages": review_pages,
+        "category_counts": dict(category_counts),
+    }
     (review_dir / "classification.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     summary = {
         "page_count": len(pages),
-        "diff_count": sum(1 for page in pages if page["primary_category"] != "same"),
+        "review_page_count": len(review_pages),
+        "diff_count": len(review_pages),
+        "same_count": sum(1 for page in pages if page["primary_category"] == "same"),
+        "excluded_count": sum(1 for page in pages if page["primary_category"] == "excluded"),
         "category_counts": dict(category_counts),
         "pages": pages,
+        "review_pages": review_pages,
         "scan_errors": scan_errors,
     }
     (review_dir / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
