@@ -71,6 +71,29 @@ def test_render_html_contains_offline_review_workbench_contract() -> None:
     assert html.count('<input type="radio" name="decision" value="pending"') == 1
 
 
+def test_render_html_binds_each_image_card_and_zoom_to_its_declared_resources() -> None:
+    payload = {
+        "pages": [
+            {
+                "page_index": 7,
+                "primary_category": "same",
+                "diff": "",
+                "label_png": "../labels/page-007.png",
+                "source_png": "../actual/page-007.png",
+                "image_path": "images/page-007.png",
+                "errors": [],
+            }
+        ],
+        "category_counts": {"same": 1},
+    }
+
+    html = render_html(payload)
+
+    assert "img.src=pair[1]||\"\"" in html
+    assert "openImage(pair[1],pair[0]+\"原图\")" in html
+    assert "openImage(p.image_path||\"\",\"合成审阅图\")" in html
+
+
 def test_classify_reading_order_only() -> None:
     expected = "标题\n第一段\n第二段"
     actual = "标题\n第二段\n第一段"
