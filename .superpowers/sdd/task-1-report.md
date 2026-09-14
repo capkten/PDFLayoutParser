@@ -87,4 +87,4 @@ git diff --check                                      # 通过；报告文件末
 
 ## 修复 Commit
 
-待提交：修复 Python 3.7 类型注解兼容性并纳入分类测试。
+修复实现已提交：`7ff5d21 fix: make PDF diff classifier Python 3.7 compatible`。
