@@ -141,3 +141,43 @@ def test_build_review_writes_json_images_and_html(tmp_path: Path) -> None:
     assert (review_dir / "images" / "page-000.png").is_file()
     html = (review_dir / "index.html").read_text(encoding="utf-8")
     assert "page-000.png" in html
+    classification = json.loads((review_dir / "classification.json").read_text(encoding="utf-8"))
+    assert classification["pages"][0]["page_index"] == 0
+    assert classification["pages"][0]["primary_category"] == "body_text"
+    assert classification["pages"][0]["label_path"] == "labels/page-000.md"
+    assert classification["pages"][0]["source_markdown"] == "part_000_pages_0000_0000/pages/page-000.md"
+    assert "-标签文本" in classification["pages"][0]["diff"]
+    assert "+当前文本" in classification["pages"][0]["diff"]
+    assert summary["category_counts"] == {"body_text": 1}
+
+
+def test_build_review_keeps_page_when_actual_resources_are_missing(tmp_path: Path) -> None:
+    testset_root = tmp_path / "testset"
+    (testset_root / "labels").mkdir(parents=True)
+    (testset_root / "labels" / "page-000.md").write_text("标签", encoding="utf-8")
+    (testset_root / "manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "page_count": 1,
+                "pages": [{"page_index": 0, "markdown_status": "markdown", "label_path": "labels/page-000.md"}],
+                "failed_pages": [],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    pages_dir = tmp_path.joinpath("actual", "part_000_pages_0000_0000", "pages")
+    pages_dir.mkdir(parents=True)
+    (pages_dir / "page-000.json").write_text(
+        json.dumps({"index": 0, "page_type": "vector"}), encoding="utf-8"
+    )
+
+    summary = build_review(tmp_path / "actual", testset_root, tmp_path / "review")
+
+    page = summary["pages"][0]
+    assert page["page_index"] == 0
+    assert page["primary_category"] == "missing_resource"
+    assert any("Markdown" in error for error in page["errors"])
+    assert any("PNG" in error for error in page["errors"])
+    assert (tmp_path / "review" / "images" / "page-000.png").is_file()
