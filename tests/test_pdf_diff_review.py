@@ -3,7 +3,72 @@ from pathlib import Path
 
 import fitz
 
-from scripts.pdf_diff_review import build_review, classify_markdown
+from scripts.pdf_diff_review import build_review, classify_markdown, render_html
+
+
+def test_render_html_escapes_json_and_renders_diff_in_browser() -> None:
+    payload = {
+        "pages": [
+            {
+                "page_index": 0,
+                "primary_category": "body_text",
+                "page_type": "vector",
+                "diff": "-<script>bad</script>\n+\"quoted\" & <b>bold</b>",
+                "image_path": "images/page-000.png",
+                "errors": [],
+            }
+        ],
+        "category_counts": {"body_text": 1},
+    }
+
+    html = render_html(payload)
+
+    assert "</script>bad" not in html
+    assert "\\u003cscript\\u003ebad\\u003c/script\\u003e" in html
+    assert "textContent" in html
+    assert "innerHTML" not in html
+    assert "images/page-000.png" in html
+
+
+def test_render_html_contains_offline_review_workbench_contract() -> None:
+    payload = {
+        "pages": [
+            {
+                "page_index": index,
+                "primary_category": "same" if index == 0 else "mixed",
+                "page_type": "vector",
+                "diff": "",
+                "image_path": "images/page-{0:03d}.png".format(index),
+                "errors": [],
+            }
+            for index in range(121)
+        ],
+        "category_counts": {"same": 1, "mixed": 120},
+    }
+
+    html = render_html(payload)
+
+    for marker in (
+        "PDF Diff Review",
+        "total-count",
+        "decided-count",
+        "pending-count",
+        "category-filter",
+        "page-search",
+        "previous-page",
+        "next-page",
+        "保留当前",
+        "保留标签",
+        "待确认",
+        "localStorage",
+        "export-review",
+        "keydown",
+        "images/page-120.png",
+    ):
+        assert marker in html
+    assert html.count('<input type="radio" name="decision" value="keep-current">') == 1
+    assert html.count('<input type="radio" name="decision" value="keep-label">') == 1
+    assert html.count('<input type="radio" name="decision" value="pending"') == 1
 
 
 def test_classify_reading_order_only() -> None:

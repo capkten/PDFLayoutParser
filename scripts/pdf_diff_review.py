@@ -328,6 +328,62 @@ def _diff(expected: str, actual: str) -> str:
     return "\n".join(lines)
 
 
+def _safe_json(value: Any) -> str:
+    """Serialize data for an inline script without allowing HTML script termination."""
+    return (
+        json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+        .replace("&", "\\u0026")
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("\u2028", "\\u2028")
+        .replace("\u2029", "\\u2029")
+    )
+
+
+def render_html(payload: Dict[str, Any]) -> str:
+    """Render the self-contained offline review workbench."""
+    data = _safe_json(payload)
+    return """<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PDF Diff Review</title>
+<style>
+:root{--paper:#f5f0e7;--ink:#24231f;--muted:#756e63;--line:#d8cdbb;--red:#a74337;--green:#347054;--blue:#315b79}
+*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:14px/1.45 Georgia,"Times New Roman",serif;height:100vh;overflow:hidden}
+button,input,select{font:inherit;color:inherit}button{cursor:pointer;border:1px solid var(--line);background:#fffaf1;padding:7px 10px;border-radius:4px}button:hover{border-color:var(--blue)}
+header{height:76px;display:flex;align-items:center;gap:24px;padding:12px 22px;border-bottom:2px solid var(--ink);background:#eee5d6}h1{font-size:23px;margin:0;letter-spacing:.04em}.stats{display:flex;gap:20px;margin-left:auto}.stat b{display:block;font-size:21px}.stat span{color:var(--muted);font-size:12px}
+.layout{display:grid;grid-template-columns:255px minmax(420px,1fr) 390px;height:calc(100vh - 76px)}aside,.diff-panel{overflow:auto;padding:16px;border-right:1px solid var(--line)}.diff-panel{border-right:0;border-left:1px solid var(--line);background:#f9f4eb}
+.filters{display:grid;gap:8px;margin-bottom:14px}.filters input,.filters select{width:100%;padding:8px;border:1px solid var(--line);background:#fffdf8;border-radius:3px}.page-list{list-style:none;padding:0;margin:0}.page-list button{width:100%;display:grid;grid-template-columns:44px 1fr auto;text-align:left;gap:5px;margin:3px 0;background:transparent;border-color:transparent}.page-list button.active{background:#e0d5c4;border-color:#b9aa94}.kind{color:var(--muted);font-size:11px}.signal{color:var(--red);font-size:11px}.main{padding:16px;overflow:auto}.toolbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}.nav{display:flex;gap:7px;align-items:center}.current-page{font-size:17px}.images{display:grid;grid-template-columns:1fr 1fr;gap:12px}.image-card{border:1px solid var(--line);background:#fffdf8;padding:8px}.image-card h2{font-size:13px;margin:0 0 7px;color:var(--muted)}.image-card img{display:block;width:100%;height:auto;min-height:180px;object-fit:contain;background:#e9e1d5}.image-card img.zoomable{cursor:zoom-in}.decision{margin-top:14px;padding:12px;background:#eee5d6;border:1px solid var(--line)}.decision-options{display:flex;gap:8px;flex-wrap:wrap}.decision label{padding:7px 10px;background:#fffaf1;border:1px solid var(--line);border-radius:4px}.decision label.selected{outline:2px solid var(--blue)}
+.diff-panel h2{font-size:16px;margin:0 0 9px}.diff-meta{color:var(--muted);font-size:12px;margin-bottom:12px}.diff{white-space:pre-wrap;word-break:break-word;font:12px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace;background:#fffdf8;border:1px solid var(--line);padding:11px;min-height:140px}.diff .add{color:var(--green);background:#e4f1e8}.diff .del{color:var(--red);background:#f6e3df}.errors{color:var(--red);margin-top:12px}.empty{color:var(--muted);padding:16px;text-align:center}.modal{position:fixed;inset:0;background:#191713d9;display:none;align-items:center;justify-content:center;padding:24px;z-index:2}.modal.open{display:flex}.modal img{max-width:95vw;max-height:92vh;background:white}.modal button{position:absolute;right:20px;top:20px}
+@media(max-width:1000px){.layout{grid-template-columns:210px minmax(360px,1fr)}.diff-panel{display:none}.stats{gap:10px}.images{grid-template-columns:1fr}}
+</style></head><body>
+<header><h1>PDF Diff Review</h1><div class="stats"><div class="stat"><b id="total-count">0</b><span>总页数</span></div><div class="stat"><b id="decided-count">0</b><span>已决策</span></div><div class="stat"><b id="pending-count">0</b><span>待确认</span></div></div><button id="export-review">导出审阅结果</button></header>
+<div class="layout"><aside><div class="filters"><select id="category-filter"><option value="all">全部分类</option></select><input id="page-search" type="search" placeholder="搜索页码或文本"></div><ul id="page-list" class="page-list"></ul></aside>
+<main class="main"><div class="toolbar"><div class="nav"><button id="previous-page">上一页</button><span id="current-page" class="current-page"></span><button id="next-page">下一页</button></div><button id="zoom-image">放大原图</button></div><div id="images" class="images"></div><section class="decision"><strong>审阅决策</strong><div id="decision-options" class="decision-options"><label><input type="radio" name="decision" value="keep-current"> 保留当前</label><label><input type="radio" name="decision" value="keep-label"> 保留标签</label><label><input type="radio" name="decision" value="pending" checked> 待确认</label></div></section></main>
+<section class="diff-panel"><h2>文本差异</h2><div id="diff-meta" class="diff-meta"></div><pre id="diff" class="diff"></pre><div id="errors" class="errors"></div></section></div>
+<div id="image-modal" class="modal"><button id="close-modal">关闭</button><img id="modal-image" alt="放大原图"></div>
+<script>
+(function(){
+"use strict";
+var payload=__PAYLOAD__;
+var pages=payload.pages||[], decisions=loadDecisions(), visible=[], selectedIndex=0;
+var $=function(id){return document.getElementById(id)};
+function loadDecisions(){try{return JSON.parse(localStorage.getItem("pdf-diff-review-decisions")||"{}")}catch(e){return {}}}
+function save(){localStorage.setItem("pdf-diff-review-decisions",JSON.stringify(decisions));updateStats()}
+function labelFor(category){return {same:"相同",formatting:"格式",body_text:"正文",table_text:"表格文本",table_structure:"表格结构",table_count:"表格数量",reading_order:"阅读顺序",mixed:"混合",missing_resource:"资源缺失"}[category]||category}
+function updateStats(){var decided=0;pages.forEach(function(p){if(decisions[p.page_index]&&decisions[p.page_index]!=="pending")decided++});$("total-count").textContent=pages.length;$("decided-count").textContent=decided;$("pending-count").textContent=pages.length-decided}
+function renderList(){var filter=$("category-filter").value, query=$("page-search").value.toLowerCase();visible=pages.map(function(p,i){return {p:p,i:i}}).filter(function(x){var p=x.p, text=(p.page_index+" "+(p.primary_category||"")+" "+(p.diff||"")).toLowerCase();return (filter==="all"||p.primary_category===filter)&&(!query||text.indexOf(query)>=0)});var list=$("page-list");list.textContent="";if(!visible.length){var empty=document.createElement("li");empty.className="empty";empty.textContent="没有匹配页面";list.appendChild(empty);return}visible.forEach(function(x){var b=document.createElement("button"), n=document.createElement("span"), c=document.createElement("span"), s=document.createElement("span");b.type="button";b.className=x.i===selectedIndex?"active":"";n.textContent="P"+String(x.p.page_index+1).padStart(3,"0");c.textContent=labelFor(x.p.primary_category);c.className="kind";s.textContent=decisions[x.p.page_index]&&decisions[x.p.page_index]!=="pending"?"已决策":"待确认";s.className="signal";b.append(n,c,s);b.onclick=function(){selectedIndex=x.i;renderList();renderPage()};list.appendChild(b)})}
+function renderDiff(text){var out=$("diff");out.textContent="";(text||"").split("\\n").forEach(function(line,i){var span=document.createElement("span");span.textContent=line+(i<((text||"").split("\\n").length-1)?"\\n":"");if(line.charAt(0)==="+")span.className="add";if(line.charAt(0)==="-")span.className="del";out.appendChild(span)})}
+function renderPage(){var p=pages[selectedIndex];if(!p)return;$("current-page").textContent="第 "+(p.page_index+1)+" / "+pages.length+" 页";$("images").textContent="";[["标签",p.label_png],["当前",p.source_png]].forEach(function(pair){var card=document.createElement("div"),h=document.createElement("h2"),img=document.createElement("img");card.className="image-card";h.textContent=pair[0];img.src=p.image_path||"";img.alt=pair[0]+"页面图像";img.className="zoomable";card.append(h,img);$("images").appendChild(card)});$("diff-meta").textContent=labelFor(p.primary_category)+" · "+(p.signals||[]).join(", ");renderDiff(p.diff);$("errors").textContent=(p.errors||[]).join("\\n");var value=decisions[p.page_index]||"pending";document.querySelectorAll('input[name="decision"]').forEach(function(input){input.checked=input.value===value;input.parentElement.className=input.checked?"selected":""})}
+function move(step){if(!visible.length)return;var pos=visible.findIndex(function(x){return x.i===selectedIndex}), next=pos<0?0:Math.max(0,Math.min(visible.length-1,pos+step));selectedIndex=visible[next].i;renderList();renderPage()}
+$("category-filter").append.apply($("category-filter"),Object.keys(payload.category_counts||{}).sort().map(function(k){var o=document.createElement("option");o.value=k;o.textContent=labelFor(k);return o}));$("category-filter").onchange=renderList;$("page-search").oninput=function(){renderList()};$("previous-page").onclick=function(){move(-1)};$("next-page").onclick=function(){move(1)};
+document.querySelectorAll('input[name="decision"]').forEach(function(input){input.onchange=function(){decisions[pages[selectedIndex].page_index]=input.value;save();renderList()}});document.onkeydown=function(e){if(e.target&&/input|select|textarea/i.test(e.target.tagName))return;if(e.key==="1")document.querySelector('input[value="keep-current"]').click();if(e.key==="2")document.querySelector('input[value="keep-label"]').click();if(e.key==="3")document.querySelector('input[value="pending"]').click();if(e.key==="ArrowLeft")move(-1);if(e.key==="ArrowRight")move(1)};
+$("zoom-image").onclick=function(){var p=pages[selectedIndex];if(!p)return;$("modal-image").src=p.image_path||"";$("image-modal").className="modal open"};$("close-modal").onclick=function(){$("image-modal").className="modal"};$("image-modal").onclick=function(e){if(e.target===$("image-modal"))$("close-modal").click()};$("export-review").onclick=function(){var result={exported_at:new Date().toISOString(),decisions:decisions,pages:pages.map(function(p){return {page_index:p.page_index,decision:decisions[p.page_index]||"pending",primary_category:p.primary_category}})};var blob=new Blob([JSON.stringify(result,null,2)],{type:"application/json"}),a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download="pdf-diff-review.json";a.click();URL.revokeObjectURL(a.href)};
+updateStats();renderList();renderPage();
+})();
+</script></body></html>""".replace("__PAYLOAD__", data)
+
+
 def build_review(actual_root: Path, testset_root: Path, review_dir: Path) -> Dict[str, Any]:
     actual_root = Path(actual_root)
     testset_root = Path(testset_root)
@@ -382,6 +438,7 @@ def build_review(actual_root: Path, testset_root: Path, review_dir: Path) -> Dic
         record.update(
             {
                 "page_index": page_index,
+                "page_type": actual.get("page_type") if actual else manifest_page.get("page_type", "unknown"),
                 "primary_category": primary,
                 "diff": _diff(expected_text, actual_text),
                 "label_path": _relative(testset_root, expected_md),
@@ -407,14 +464,5 @@ def build_review(actual_root: Path, testset_root: Path, review_dir: Path) -> Dic
         "scan_errors": scan_errors,
     }
     (review_dir / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    data = json.dumps(pages, ensure_ascii=False).replace("</", "<\\/")
-    links = "\n".join(
-        '<li>Page {0}: <a href="images/page-{0:03d}.png">page-{0:03d}.png</a></li>'.format(page["page_index"])
-        for page in pages
-    )
-    (review_dir / "index.html").write_text(
-        "<!doctype html><meta charset=\"utf-8\"><title>PDF diff review</title>"
-        "<ul>{}</ul><script>window.reviewPages={};</script>".format(links, data),
-        encoding="utf-8",
-    )
+    (review_dir / "index.html").write_text(render_html(payload), encoding="utf-8")
     return summary
