@@ -5,6 +5,7 @@ import difflib
 from html.parser import HTMLParser
 import json
 import re
+import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -328,6 +329,11 @@ def _diff(expected: str, actual: str) -> str:
     return "\n".join(lines)
 
 
+def _searchable_text(markdown: str) -> str:
+    """Return body and table cell text used only by the page search index."""
+    return "\n".join(parse_markdown(markdown)["visible_units"])
+
+
 def _safe_json(value: Any) -> str:
     """Serialize data for an inline script without allowing HTML script termination."""
     return (
@@ -357,7 +363,7 @@ header{height:76px;display:flex;align-items:center;gap:24px;padding:12px 22px;bo
 .diff-panel h2{font-size:16px;margin:0 0 9px}.diff-meta{color:var(--muted);font-size:12px;margin-bottom:12px}.diff{white-space:pre-wrap;word-break:break-word;font:12px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace;background:#fffdf8;border:1px solid var(--line);padding:11px;min-height:140px}.diff .add{color:var(--green);background:#e4f1e8}.diff .del{color:var(--red);background:#f6e3df}.errors{color:var(--red);margin-top:12px}.empty{color:var(--muted);padding:16px;text-align:center}.modal{position:fixed;inset:0;background:#191713d9;display:none;align-items:center;justify-content:center;padding:24px;z-index:2}.modal.open{display:flex}.modal img{max-width:95vw;max-height:92vh;background:white}.modal button{position:absolute;right:20px;top:20px}
 @media(max-width:1000px){.layout{grid-template-columns:210px minmax(360px,1fr)}.diff-panel{display:none}.stats{gap:10px}.images{grid-template-columns:1fr}}
 </style></head><body>
-<header><h1>PDF Diff Review</h1><div class="stats"><div class="stat"><b id="total-count">0</b><span>总页数</span></div><div class="stat"><b id="decided-count">0</b><span>已决策</span></div><div class="stat"><b id="pending-count">0</b><span>待确认</span></div></div><button id="export-review">导出审阅结果</button></header>
+<header><h1>PDF Diff Review</h1><div class="stats"><div class="stat"><b id="total-count">0</b><span>总页数</span></div><div class="stat"><b id="decided-count">0</b><span>已决策</span></div><div class="stat"><b id="pending-count">0</b><span>待确认</span></div></div><button id="export-review">导出审阅结果</button><span id="storage-warning" role="status" aria-live="polite"></span></header>
 <div class="layout"><aside><div class="filters"><select id="category-filter"><option value="all">全部分类</option></select><input id="page-search" type="search" placeholder="搜索页码或文本"></div><ul id="page-list" class="page-list"></ul></aside>
 <main class="main"><div class="toolbar"><div class="nav"><button id="previous-page">上一页</button><span id="current-page" class="current-page"></span><button id="next-page">下一页</button></div><button id="zoom-image">放大合成图</button></div><div id="images" class="images"></div><section class="decision"><strong>审阅决策</strong><div id="decision-options" class="decision-options"><label><input type="radio" name="decision" value="keep-current"> 保留当前</label><label><input type="radio" name="decision" value="keep-label"> 保留标签</label><label><input type="radio" name="decision" value="pending" checked> 待确认</label></div></section></main>
 <section class="diff-panel"><h2>文本差异</h2><div id="diff-meta" class="diff-meta"></div><pre id="diff" class="diff"></pre><div id="errors" class="errors"></div></section></div>
@@ -369,10 +375,11 @@ var payload=__PAYLOAD__;
 var pages=payload.pages||[], decisions=loadDecisions(), visible=[], selectedIndex=0;
 var $=function(id){return document.getElementById(id)};
 function loadDecisions(){try{return JSON.parse(localStorage.getItem("pdf-diff-review-decisions")||"{}")}catch(e){return {}}}
-function save(){localStorage.setItem("pdf-diff-review-decisions",JSON.stringify(decisions));updateStats()}
+function showStorageWarning(){var warning=$("storage-warning");if(warning){warning.textContent="浏览器存储不可用，决策仅保留在当前页面";setTimeout(function(){warning.textContent=""},4000)}}
+function save(){try{localStorage.setItem("pdf-diff-review-decisions",JSON.stringify(decisions))}catch(e){showStorageWarning()}updateStats()}
 function labelFor(category){return {same:"相同",formatting:"格式",body_text:"正文",table_text:"表格文本",table_structure:"表格结构",table_count:"表格数量",reading_order:"阅读顺序",mixed:"混合",missing_resource:"资源缺失"}[category]||category}
 function updateStats(){var decided=0;pages.forEach(function(p){if(decisions[p.page_index]&&decisions[p.page_index]!=="pending")decided++});$("total-count").textContent=pages.length;$("decided-count").textContent=decided;$("pending-count").textContent=pages.length-decided}
-function renderList(){var filter=$("category-filter").value, query=$("page-search").value.toLowerCase();visible=pages.map(function(p,i){return {p:p,i:i}}).filter(function(x){var p=x.p, text=(p.page_index+" "+(p.primary_category||"")+" "+(p.diff||"")).toLowerCase();return (filter==="all"||p.primary_category===filter)&&(!query||text.indexOf(query)>=0)});var list=$("page-list");list.textContent="";if(!visible.length){var empty=document.createElement("li");empty.className="empty";empty.textContent="没有匹配页面";list.appendChild(empty);return}visible.forEach(function(x){var b=document.createElement("button"), n=document.createElement("span"), c=document.createElement("span"), s=document.createElement("span");b.type="button";b.className=x.i===selectedIndex?"active":"";n.textContent="P"+String(x.p.page_index+1).padStart(3,"0");c.textContent=labelFor(x.p.primary_category);c.className="kind";s.textContent=decisions[x.p.page_index]&&decisions[x.p.page_index]!=="pending"?"已决策":"待确认";s.className="signal";b.append(n,c,s);b.onclick=function(){selectedIndex=x.i;renderList();renderPage()};list.appendChild(b)})}
+function renderList(){var filter=$("category-filter").value, query=$("page-search").value.toLowerCase();visible=pages.map(function(p,i){return {p:p,i:i}}).filter(function(x){var p=x.p, text=(p.page_index+" "+(p.primary_category||"")+" "+(p.searchable_text||"")+" "+(p.diff||"")).toLowerCase();return (filter==="all"||p.primary_category===filter)&&(!query||text.indexOf(query)>=0)});var list=$("page-list");list.textContent="";if(!visible.length){var empty=document.createElement("li");empty.className="empty";empty.textContent="没有匹配页面";list.appendChild(empty);return}visible.forEach(function(x){var b=document.createElement("button"), n=document.createElement("span"), c=document.createElement("span"), s=document.createElement("span");b.type="button";b.className=x.i===selectedIndex?"active":"";n.textContent="P"+String(x.p.page_index+1).padStart(3,"0");c.textContent=labelFor(x.p.primary_category);c.className="kind";s.textContent=decisions[x.p.page_index]&&decisions[x.p.page_index]!=="pending"?"已决策":"待确认";s.className="signal";b.append(n,c,s);b.onclick=function(){selectedIndex=x.i;renderList();renderPage()};list.appendChild(b)})}
 function renderDiff(text){var out=$("diff");out.textContent="";(text||"").split("\\n").forEach(function(line,i){var span=document.createElement("span");span.textContent=line+(i<((text||"").split("\\n").length-1)?"\\n":"");if(line.charAt(0)==="+")span.className="add";if(line.charAt(0)==="-")span.className="del";out.appendChild(span)})}
 function openImage(path,alt){$("modal-image").src=path||"";$("modal-image").alt=alt||"放大原图";$("image-modal").className="modal open"}
 function renderPage(){var p=pages[selectedIndex];if(!p)return;$("current-page").textContent="第 "+(p.page_index+1)+" / "+pages.length+" 页";$("images").textContent="";[["标签",p.label_png],["当前",p.source_png]].forEach(function(pair){var card=document.createElement("div"),h=document.createElement("h2"),img=document.createElement("img");card.className="image-card";h.textContent=pair[0];img.src=pair[1]||"";img.alt=pair[0]+"页面图像";img.className="zoomable";img.onclick=function(){openImage(pair[1],pair[0]+"原图")};card.append(h,img);$("images").appendChild(card)});$("diff-meta").textContent=labelFor(p.primary_category)+" · "+(p.signals||[]).join(", ");renderDiff(p.diff);$("errors").textContent=(p.errors||[]).join("\\n");var value=decisions[p.page_index]||"pending";document.querySelectorAll('input[name="decision"]').forEach(function(input){input.checked=input.value===value;input.parentElement.className=input.checked?"selected":""})}
@@ -435,6 +442,24 @@ def build_review(actual_root: Path, testset_root: Path, review_dir: Path) -> Dic
             category_counts[primary] += 1
         image_path = review_dir / "images" / "page-{:03d}.png".format(page_index)
         make_side_by_side(expected_png, actual_png, image_path, page_index, errors)
+        label_review_path = None
+        if expected_png is not None:
+            label_review_path = review_dir / "images" / "source" / "page-{:03d}-label.png".format(page_index)
+            try:
+                label_review_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(str(expected_png), str(label_review_path))
+            except OSError as exc:
+                errors.append("failed to copy label PNG: {}".format(exc))
+                label_review_path = None
+        source_review_path = None
+        if actual_png is not None:
+            source_review_path = review_dir / "images" / "source" / "page-{:03d}-current.png".format(page_index)
+            try:
+                source_review_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(str(actual_png), str(source_review_path))
+            except OSError as exc:
+                errors.append("failed to copy current PNG: {}".format(exc))
+                source_review_path = None
         record = dict(classification)
         record.update(
             {
@@ -444,8 +469,11 @@ def build_review(actual_root: Path, testset_root: Path, review_dir: Path) -> Dic
                 "diff": _diff(expected_text, actual_text),
                 "label_path": _relative(testset_root, expected_md),
                 "source_markdown": _relative(actual_root, actual_md),
-                "label_png": _relative(testset_root, expected_png),
-                "source_png": _relative(actual_root, actual_png),
+                "label_png": _relative(review_dir, label_review_path),
+                "source_png": _relative(review_dir, source_review_path),
+                "searchable_text": "\n".join(
+                    value for value in (_searchable_text(expected_text), _searchable_text(actual_text)) if value
+                ),
                 "source_visual_path": manifest_page.get("source_visual_path"),
                 "source_table_png": manifest_page.get("source_table_png"),
                 "image_path": "images/page-{:03d}.png".format(page_index),

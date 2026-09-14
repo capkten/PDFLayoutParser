@@ -1,4 +1,6 @@
 import json
+import re
+import subprocess
 from pathlib import Path
 
 import fitz
@@ -92,6 +94,37 @@ def test_render_html_binds_each_image_card_and_zoom_to_its_declared_resources() 
     assert "img.src=pair[1]||\"\"" in html
     assert "openImage(pair[1],pair[0]+\"原图\")" in html
     assert "openImage(p.image_path||\"\",\"合成审阅图\")" in html
+
+
+def test_render_html_searches_label_and_current_page_text() -> None:
+    payload = {
+        "pages": [
+            {
+                "page_index": 0,
+                "primary_category": "same",
+                "diff": "",
+                "searchable_text": "标签和当前都相同的正文\n表格字段",
+                "image_path": "images/page-000.png",
+                "errors": [],
+            }
+        ],
+        "category_counts": {"same": 1},
+    }
+
+    html = render_html(payload)
+
+    assert "(p.searchable_text||\"\")" in html
+
+
+def test_render_html_storage_failure_keeps_decision_and_stats_available() -> None:
+    payload = {"pages": [], "category_counts": {}}
+    html = render_html(payload)
+    match = re.search(r"function save\(\)\{(.*?)\}\s*function labelFor", html)
+    assert match is not None
+    javascript = "function updateStats(){stats++};function showStorageWarning(){};var stats=0;var decisions={};" + "function save(){" + match.group(1) + "}"
+    script = javascript + "localStorage={setItem:function(){throw new Error('disabled')}}; decisions[0]='keep-label'; save(); if(stats!==1 || decisions[0]!=='keep-label') throw new Error('decision lost');"
+    result = subprocess.run(["node", "-e", script], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
 
 
 def test_classify_reading_order_only() -> None:
@@ -234,6 +267,15 @@ def test_build_review_writes_json_images_and_html(tmp_path: Path) -> None:
     assert classification["pages"][0]["primary_category"] == "body_text"
     assert classification["pages"][0]["label_path"] == "labels/page-000.md"
     assert classification["pages"][0]["source_markdown"] == "part_000_pages_0000_0000/pages/page-000.md"
+    assert classification["pages"][0]["label_png"] == "images/source/page-000-label.png"
+    assert classification["pages"][0]["source_png"] == "images/source/page-000-current.png"
+    for image_name in ("page-000-label.png", "page-000-current.png"):
+        image_path = review_dir / "images" / "source" / image_name
+        assert image_path.is_file()
+        decoded = fitz.Pixmap(str(image_path))
+        assert decoded.width > 0
+        assert decoded.height > 0
+    assert classification["pages"][0]["searchable_text"] == "标签文本\n当前文本"
     assert "-标签文本" in classification["pages"][0]["diff"]
     assert "+当前文本" in classification["pages"][0]["diff"]
     assert summary["category_counts"] == {"body_text": 1}
@@ -391,7 +433,7 @@ def test_find_label_image_uses_manifest_candidate_order(tmp_path: Path) -> None:
 
     summary = build_review(tmp_path / "actual", testset_root, tmp_path / "review")
 
-    assert summary["pages"][0]["label_png"] == "visual.png"
+    assert summary["pages"][0]["label_png"] == "images/source/page-000-label.png"
 
 
 def test_build_review_records_corrupt_png_read_error(tmp_path: Path) -> None:

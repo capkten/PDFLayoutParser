@@ -45,3 +45,18 @@
 ## 变更边界
 
 仅修改 `scripts/pdf_diff_review.py` 与 `tests/test_pdf_diff_review.py`。worktree 中其他 agent 的 `.superpowers/sdd` 文件未回退、未修改、未纳入本次提交。
+
+## 本轮 Important/Minor 修复追加（2026-09-14）
+
+本轮针对复审报告中的两个 Important 和一个 Minor 完成修复：
+
+1. `build_review()` 将存在的标签/当前 PNG 复制到审阅目录的 `images/source/page-XXX-label.png` 与 `images/source/page-XXX-current.png`，payload 的 `label_png`/`source_png` 改为 review-relative 路径；合成图仍为 `images/page-XXX.png`。回归测试检查两侧文件存在且可由 PyMuPDF 解码。
+2. 每页新增仅供筛选使用的 `searchable_text`，由标签和当前 Markdown 的正文单元及表格单元组成；HTML 搜索同时读取该字段和 diff，因此文本相同页面也可命中，全文不展示。
+3. 决策保存捕获 `localStorage.setItem()` 异常，继续更新内存决策和统计，并通过 `role=status` 提供非阻塞提示。Node 可执行回归测试覆盖存储禁用时决策不丢失且统计仍更新。
+
+验证结果：
+
+- `$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; pytest -q tests/test_pdf_diff_review.py`：18 passed，5 个既有弃用警告。
+- `python -m py_compile scripts/pdf_diff_review.py`：通过。
+- HTML 自检：通过，确认 payload 使用三类 review-relative 图片路径、搜索字段、存储降级逻辑、JSON 安全和 121 页工作台契约。
+- 浏览器手工验收仍由主代理负责；本轮未声称已完成浏览器点击验收。
