@@ -107,6 +107,7 @@ class TableExtractor:
         fallback_max_tables: int = 10,
         ml_model_path: Optional[str] = None,
         ml_confidence: float = 0.40,
+        ml_render_dpi: Optional[int] = None,
         table_config: Optional[TableConfig] = None,
         debug_pipeline: bool = False,
         use_ml_table_detector: bool = True,
@@ -118,6 +119,7 @@ class TableExtractor:
         self.fallback_max_tables = fallback_max_tables
         self._ml_model_path = ml_model_path
         self._ml_confidence = ml_confidence
+        self.ml_render_dpi = ml_render_dpi if ml_render_dpi is not None else 72
         self._use_ml_table_detector = use_ml_table_detector
         self._ml_detector = None  # Lazy initialization
         self._last_text_alignment_debug: Optional[dict] = None
@@ -147,6 +149,8 @@ class TableExtractor:
             self.fallback_max_tables = settings.fallback_max_tables
             self._separator_min_width = settings.separator_min_width
             self._separator_max_height = settings.separator_max_height
+            if ml_render_dpi is None and hasattr(settings, "ml_render_dpi"):
+                self.ml_render_dpi = settings.ml_render_dpi
         else:
             self._separator_min_width = 200.0
             self._separator_max_height = 1.5
@@ -337,6 +341,7 @@ class TableExtractor:
                 self._ml_detector = MLTableDetector(
                     model_path=self._ml_model_path,
                     confidence_threshold=self._ml_confidence,
+                    render_dpi=self.ml_render_dpi,
                 )
             model_items = self._ml_detector.detect_with_scores(page)
             model_items = self._filter_contained_bboxes(model_items)

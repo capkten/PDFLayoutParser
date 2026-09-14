@@ -1,5 +1,39 @@
 # Changes
 
+## 2026-09-11
+
+- 在 `MLTableDetector` 中实现进程级共享会话缓存（`_GLOBAL_SESSION_CACHE` 与 `get_shared_session`），彻底解决多次实例化检测器时重复从磁盘加载 36.4 MB 模型并初始化 ONNX Runtime Session 的冷启动开销。
+  - **根因与调用位置**：`src/hexai_pdf_parser/ml/ml_table_detector.py::MLTableDetector._load_session()`。原实现将 `self._session` 绑定为实例变量，当外部连续处理不同 PDF 文档、API 多次调用或外部脚本按页循环调用 `_run_page_pipeline` 时，每次创建 `TableExtractor` / `MLTableDetector` 都会重新触发 `ort.InferenceSession()`，导致每次均需耗费 ~300ms 从磁盘重读 36.4MB 模型并重新构建计算图。
+  - **设计与改动**：
+    - 在 `ml_table_detector.py` 模块级引入线程安全的 `_GLOBAL_SESSION_CACHE` 与 `get_shared_session(model_path, providers)`，以模型的绝对规范路径与 providers 组合为键实现单例共享；
+    - `MLTableDetector._load_session()` 优先从全局缓存获取会话；`close()` 仅清理当前实例本地引用，不影响全局缓存；同时提供 `clear_session_cache()` 支持显式缓存清理与单测重置。
+  - **测试与验证**：在 `tests/test_ml_table_detector.py` 中新增 `test_ml_table_detector_reuses_shared_session` 和 `test_clear_session_cache_forces_recreation`，验证多实例间 `is` 强一致共享以及显式清理重置逻辑，全量 34 项关联测试 100% 通过。
+
+
+- 在 `TableConfig`、`TableExtractor`、`Pipeline` 及 `parse_personal_credit_report` 中支持可配置的表格目标检测分辨率 `ml_render_dpi`（默认 `72`），打通从顶层入口到模型检测器的完整参数透传链路。
+  - **根因与调用位置**：`src/hexai_pdf_parser/tables/table_extractor.py::TableExtractor._extract_model_tables()` 原先实例化 `MLTableDetector` 时未传递 `render_dpi`，且 `Pipeline` 及 `TableConfig` 中缺少对应字段，导致外部即使指定 `render_dpi` 也仅作用于整页渲染图片，无法改变表格目标检测的图像尺寸。
+  - **设计与改动**：
+    - 在 `TableConfig.GlobalTableSettings` 中增加 `ml_render_dpi: int = 72`；
+    - 在 `TableExtractor.__init__` 中新增 `ml_render_dpi: Optional[int] = None`，支持从入参或 `TableConfig` 读取，并在 `_extract_model_tables` 传递给 `MLTableDetector(render_dpi=self.ml_render_dpi)`；
+    - 在 `Pipeline`、`_process_page_worker`、`PersonalCreditReportPipeline` 和 `parse_personal_credit_report` 中全链路透传 `ml_render_dpi`。
+  - **测试与验证**：新增 `tests/test_table_ml_render_dpi.py` 覆盖全局配置、dict 解析、提取器自定义、模型检测器 mock 调用及 Pipeline 贯通透传（`7 passed`），相关回归测试（`test_table_config.py` 等 32 项）全量通过。端到端验证显式传入 `ml_render_dpi=200` 与 `72` 均生效且输出一致。
+
+- 优化表格目标检测模型输入渲染分辨率：将 `MLTableDetector` 默认 `render_dpi` 从 200 降低到 72（对应 1pt = 1px），大幅削减 PDF 转图片及降采样缩放耗时，全量端到端批处理提速超 51%。
+  - **根因与调用位置**：`src/hexai_pdf_parser/ml/ml_table_detector.py::MLTableDetector.__init__()`。在表格检测流程中，PDF 页面渲染成图片仅用于通过轻量级目标检测模型（YOLO `best.onnx`）定位表格候选区域（BBox），不用于字符识别（OCR）或文本提取。YOLO 模型的固定输入尺度为 $640 \times 640$；标准 A4 页面在 200 DPI 下渲染出的图片分辨率高达 $1656 \times 2339$（近 400 万像素），在送入模型前必须经历大比例的双线性/双三次插值降采样缩放至 $640 \times 640$，既消耗了大量的 CPU 栅格化时间，又浪费了图片缩放算力。而在 72 DPI 下（PDF 标准点位 $1\text{pt} = 1\text{px}$），A4 页面尺寸约为 $595 \times 842$，与模型的 $640 \times 640$ 输入尺寸最为贴近，避免了过采样与过度下采样带来的无谓开销。
+  - **精度与差异性验证**：
+    - 在 100 页样本集上对 200 DPI 与 72 DPI 检出框进行逐框 IoU 与坐标比对：200 DPI 检出 204 个框，72 DPI 同样检出 204 个框，差异页数为 0/100；
+    - 在 20 页典型密集表格/复杂表头样本上进行单元格级全文比对：单元格文本 100% 一致（20/20 True）。
+  - **端到端全量性能评测**：
+    - 测试集：`fix/zh_all_table_pages.pdf`（全量 1023 页）；
+    - 全量结果输出路径：`D:\codes\PDFLayoutParser\output\fix_zh_all_table_pages_rerun_72dpi_20260911\part_000_pages_0000_1022`；
+    - **处理耗时**：从 200 DPI 下的 **1114.2s** 大幅降低至 72 DPI 下的 **544.3s**，**整体耗时减少 51.1%（提速超 2 倍，节约 9.5 分钟）**；
+    - **表格数量与分布**：表格总数依然稳定保持在 **2199** 张（`line_projection`: 1713, `wireless_span_recovery`: 445, `english_general_wireless`: 31, `hybrid_line_span_recovery`: 10）；
+    - **黄金标签对比**：除 Page 408 历史已知差异页外，1022 页 100% 保持一致，无新增遗漏或误检；比对中发现的少量差异均为正向改进（如 Page 182 边缘置信度略高找回漏检无线表格、Page 337 英文多表头折行融合质量提升）。
+  - **结构约束**：只调整区域检测前向图像渲染分辨率，表格内部结构恢复继续 100% 基于 native span、矢量 drawings、拓扑网格与列带，绝对不回读 `page.get_text("words")`，不退回 zebra 路径。
+  - **测试覆盖**：
+    - 在 `tests/test_ml_table_detector.py` 中新增 `test_ml_table_detector_default_render_dpi_is_72` 与 `test_ml_table_detector_accepts_custom_render_dpi`，测试通过率 100%；
+    - 在 `pyproject.toml` 的 pytest 配置中固化 `pythonpath = ["src"]`，杜绝子进程加载旧全局包。
+
 ## 2026-09-10
 
 - 在有线表格提取器 `WiredTableExtractor` 中补回把描边封闭矩形（`('re', Rect, 1)`）分解为 4 条边框线的逻辑，解决 `PDFsam_merge1.pdf` 及 `PDFsam_merge2.pdf` 等文档中有线表格（如“信息概要明细”和 2x1 标题表）无法提取线段而漏检、或被误退化为无线表格的问题。
@@ -560,3 +594,7 @@
 - 新增局部线段和视觉近似相交的回归测试；wired 提取器专项测试结果为 6 passed。
 - 调整最终表格门控：有线规则识别到的表格即使未被 ML 检测到，也会保留并补充到最终结果；避免模型漏检导致有线表格丢失。
 - 收紧有线线段的可见性判断：drawing 线在进入虚线/普通线候选前检查透明度及描边颜色，透明或接近页面背景色的线不再参与 `line_projection`，避免文本边框和不可见装饰形成碎片表格；可见黑色/彩色虚线、黑色填充细线及 `1x1/2x2` 图像 tile 恢复路径保持不变。新增背景色虚线、透明虚线拒绝测试和可见黑色虚线保留测试；有线提取器专项测试 12 passed。
+## 2026-09-14
+
+- 新增 `scripts/run_pdf_diff_review.ps1` 真实审阅运行入口：固定默认的实际输出、测试集和 review 目录，同时允许通过参数覆盖；使用主项目 Python 调用 `build_review()` 生成分类摘要、JSON、HTML 和合成 PNG，不修改原始 PDF、标签或真实 E2E 输出。
+- 修正 `build_review()` 与 Markdown golden comparator 的判定口径：分类、文本 diff 和搜索索引统一先调用 `normalize_markdown()`，移除图片行并归一化空白，避免把资源路径差异误判为正文/格式差异；manifest 标记为 `excluded` 的页面不进入差异审阅列表。真实 `fix/zh_all_table_pages.pdf` 快照复核结果为 1023 页，其中 901 页相同、1 页排除、121 页待审阅；分类为正文 97、混合 10、表格结构 8、表格数量 3、表格文本 1、资源缺失 2。分类 JSON 和离线网页只载入 121 个差异页，合成图与两侧 PNG 资源保留在 `output/fix_zh_all_table_pages_review_20260914/review/`。

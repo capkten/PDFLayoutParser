@@ -5,7 +5,8 @@ from __future__ import annotations
 import re
 import statistics
 from collections import Counter
-from typing import Any, Literal, Sequence
+from typing import Any, Sequence
+from typing_extensions import Literal
 
 from .columns import assign_column
 from .span_chain import _union
