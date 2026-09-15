@@ -51,6 +51,12 @@ class WiredTableExtractor(BaseTableExtractor):
 
         tables: List[Table] = []
         for region_bbox, region_h_lines, region_v_lines in table_regions:
+            region_h_lines = self._merge_region_line_coordinates(
+                region_h_lines, horizontal=True
+            )
+            region_v_lines = self._merge_region_line_coordinates(
+                region_v_lines, horizontal=False
+            )
             cells = self._build_cells_for_region(
                 region_bbox, region_h_lines, region_v_lines
             )
@@ -96,6 +102,8 @@ class WiredTableExtractor(BaseTableExtractor):
                         cells=cells,
                         confidence=conf_score,
                         source="line_projection",
+                        h_lines=list(region_h_lines),
+                        v_lines=list(region_v_lines),
                     )
                 )
 
@@ -108,6 +116,18 @@ class WiredTableExtractor(BaseTableExtractor):
         v_lines = []
         self._last_bar_chart_regions = []
         self._last_bar_chart_page = page
+        rectangle_h_edges = []
+        rectangle_v_edges = []
+
+        def add_h_line(line, rectangle=None):
+            h_lines.append(line)
+            if rectangle is not None:
+                rectangle_h_edges.append((line, rectangle))
+
+        def add_v_line(line, rectangle=None):
+            v_lines.append(line)
+            if rectangle is not None:
+                rectangle_v_edges.append((line, rectangle))
 
         drawings_with_clips = self._get_drawings_with_clips(page)
         if drawings_with_clips is None:
@@ -162,11 +182,11 @@ class WiredTableExtractor(BaseTableExtractor):
                             continue
                     if height <= self.line_tolerance and width >= 3.0:
                         center_y = (y0 + y1) / 2.0
-                        h_lines.append((x0, center_y, x1, center_y))
+                        add_h_line((x0, center_y, x1, center_y), visible_rect)
                         continue
                     if width <= self.line_tolerance and height >= 3.0:
                         center_x = (x0 + x1) / 2.0
-                        v_lines.append((center_x, y0, center_x, y1))
+                        add_v_line((center_x, y0, center_x, y1), visible_rect)
                         continue
 
             items = d.get("items", [])
@@ -196,9 +216,23 @@ class WiredTableExtractor(BaseTableExtractor):
                     x1, y1, x2, y2 = clipped_line
 
                     if abs(y1 - y2) <= self.line_tolerance and abs(x1 - x2) >= 3.0:
-                        h_lines.append((min(x1, x2), (y1 + y2) / 2.0, max(x1, x2), (y1 + y2) / 2.0))
+                        add_h_line(
+                            (
+                                min(x1, x2),
+                                (y1 + y2) / 2.0,
+                                max(x1, x2),
+                                (y1 + y2) / 2.0,
+                            )
+                        )
                     elif abs(x1 - x2) <= self.line_tolerance and abs(y1 - y2) >= 3.0:
-                        v_lines.append(((x1 + x2) / 2.0, min(y1, y2), (x1 + x2) / 2.0, max(y1, y2)))
+                        add_v_line(
+                            (
+                                (x1 + x2) / 2.0,
+                                min(y1, y2),
+                                (x1 + x2) / 2.0,
+                                max(y1, y2),
+                            )
+                        )
 
                 elif item[0] == "re":
                     rect = item[1]
@@ -224,9 +258,15 @@ class WiredTableExtractor(BaseTableExtractor):
                     h = y1 - y0
 
                     if h <= self.line_tolerance and w >= 3.0:
-                        h_lines.append((x0, (y0 + y1) / 2.0, x1, (y0 + y1) / 2.0))
+                        add_h_line(
+                            (x0, (y0 + y1) / 2.0, x1, (y0 + y1) / 2.0),
+                            visible_rect,
+                        )
                     elif w <= self.line_tolerance and h >= 3.0:
-                        v_lines.append(((x0 + x1) / 2.0, y0, (x0 + x1) / 2.0, y1))
+                        add_v_line(
+                            ((x0 + x1) / 2.0, y0, (x0 + x1) / 2.0, y1),
+                            visible_rect,
+                        )
                     elif w >= self.line_tolerance and h >= self.line_tolerance:
                         # 不能删除 0ca829e 的封闭描边矩形拆边；仅在本方法末尾
                         # 命中成组柱形图 mask 时过滤其线候选，真实有线表格仍保留。
@@ -247,19 +287,26 @@ class WiredTableExtractor(BaseTableExtractor):
                             and h >= 3.0
                         ):
                             if not clip_bbox or (clip_bbox.y0 - 2.0 <= y0 <= clip_bbox.y1 + 2.0):
-                                h_lines.append((x0, y0, x1, y0))
+                                add_h_line((x0, y0, x1, y0), visible_rect)
                             if not clip_bbox or (clip_bbox.y0 - 2.0 <= y1 <= clip_bbox.y1 + 2.0):
-                                h_lines.append((x0, y1, x1, y1))
+                                add_h_line((x0, y1, x1, y1), visible_rect)
                             if not clip_bbox or (clip_bbox.x0 - 2.0 <= x0 <= clip_bbox.x1 + 2.0):
-                                v_lines.append((x0, y0, x0, y1))
+                                add_v_line((x0, y0, x0, y1), visible_rect)
                             if not clip_bbox or (clip_bbox.x0 - 2.0 <= x1 <= clip_bbox.x1 + 2.0):
-                                v_lines.append((x1, y0, x1, y1))
+                                add_v_line((x1, y0, x1, y1), visible_rect)
 
         image_h, image_v = self._extract_lines_from_tiled_images(
             page, clip_bbox=clip_bbox
         )
         h_lines.extend(image_h)
         v_lines.extend(image_v)
+
+        h_lines = self._deduplicate_rectangle_edges(
+            h_lines, rectangle_h_edges, horizontal=True
+        )
+        v_lines = self._deduplicate_rectangle_edges(
+            v_lines, rectangle_v_edges, horizontal=False
+        )
 
         if chart_regions:
             h_lines = [
@@ -491,6 +538,95 @@ class WiredTableExtractor(BaseTableExtractor):
             and line_y1 <= region.y1 + tolerance
             for region in chart_regions
         )
+    def _deduplicate_rectangle_edges(
+        self,
+        lines: List[Tuple[float, float, float, float]],
+        rectangle_edges: List[
+            Tuple[Tuple[float, float, float, float], fitz.Rect]
+        ],
+        *,
+        horizontal: bool,
+    ) -> List[Tuple[float, float, float, float]]:
+        """Drop a duplicate only when it matches one geometric rectangle edge.
+
+        A nearby ``re`` is not sufficient by itself: the candidate must also
+        match that rectangle edge's long-axis span, endpoints, and normal
+        coordinate.  The strict merge-group tolerance remains responsible for
+        unrelated line candidates.
+        """
+        if not lines or not rectangle_edges:
+            return lines
+
+        rectangle_line_keys = {
+            tuple(round(value, 6) for value in edge_line)
+            for edge_line, _rectangle in rectangle_edges
+        }
+        deduplicated = []
+        for line in lines:
+            line_key = tuple(round(value, 6) for value in line)
+            if line_key in rectangle_line_keys:
+                deduplicated.append(line)
+                continue
+            if any(
+                self._matches_rectangle_edge(
+                    line,
+                    edge_line,
+                    rectangle,
+                    horizontal=horizontal,
+                )
+                for edge_line, rectangle in rectangle_edges
+            ):
+                continue
+            deduplicated.append(line)
+        return deduplicated
+
+    @staticmethod
+    def _matches_rectangle_edge(
+        line: Tuple[float, float, float, float],
+        rectangle_line: Tuple[float, float, float, float],
+        rectangle: fitz.Rect,
+        *,
+        horizontal: bool,
+    ) -> bool:
+        if horizontal:
+            line_coordinate = line[1]
+            rectangle_coordinate = rectangle_line[1]
+            line_start, line_end = sorted((line[0], line[2]))
+            rectangle_line_start, rectangle_line_end = sorted(
+                (rectangle_line[0], rectangle_line[2])
+            )
+            thickness = abs(rectangle.y1 - rectangle.y0)
+        else:
+            line_coordinate = line[0]
+            rectangle_coordinate = rectangle_line[0]
+            line_start, line_end = sorted((line[1], line[3]))
+            rectangle_line_start, rectangle_line_end = sorted(
+                (rectangle_line[1], rectangle_line[3])
+            )
+            thickness = abs(rectangle.x1 - rectangle.x0)
+
+        minimum_span = min(
+            line_end - line_start,
+            rectangle_line_end - rectangle_line_start,
+        )
+        if minimum_span <= 0.0:
+            return False
+
+        overlap = min(line_end, rectangle_line_end) - max(
+            line_start, rectangle_line_start
+        )
+        if overlap / minimum_span < 0.98:
+            return False
+
+        endpoint_tolerance = max(0.25, min(1.0, thickness * 0.75))
+        if (
+            abs(line_start - rectangle_line_start) > endpoint_tolerance
+            or abs(line_end - rectangle_line_end) > endpoint_tolerance
+        ):
+            return False
+
+        coordinate_tolerance = max(0.35, min(1.0, thickness * 0.5 + 0.25))
+        return abs(line_coordinate - rectangle_coordinate) <= coordinate_tolerance
 
     @staticmethod
     def _intersect_rect(
@@ -786,6 +922,78 @@ class WiredTableExtractor(BaseTableExtractor):
         except Exception:
             return fallback
 
+    def _merge_region_line_coordinates(
+        self,
+        lines: List[Tuple[float, float, float, float]],
+        *,
+        horizontal: bool,
+    ) -> List[Tuple[float, float, float, float]]:
+        """Merge continuous line fragments that are nearly on the same coordinate.
+
+        The global line merge intentionally stays strict so lines from separate
+        tables cannot be connected.  At this point each input list belongs to a
+        single connected table region, so a one-point coordinate tolerance is
+        safe only when the fragments also overlap or nearly touch along their
+        long axis.
+        """
+        if not lines:
+            return []
+
+        coordinate_index = 1 if horizontal else 0
+        start_index = 0 if horizontal else 1
+        end_index = 2 if horizontal else 3
+        coordinate_tolerance = 1.0
+
+        sorted_lines = sorted(
+            lines,
+            key=lambda line: (
+                line[coordinate_index],
+                min(line[start_index], line[end_index]),
+            ),
+        )
+        groups: List[List[Tuple[float, float, float, float]]] = []
+
+        for line in sorted_lines:
+            line_start = min(line[start_index], line[end_index])
+            line_end = max(line[start_index], line[end_index])
+            if not groups:
+                groups.append([line])
+                continue
+
+            group = groups[-1]
+            group_coordinate = group[0][coordinate_index]
+            group_start = min(
+                min(item[start_index], item[end_index]) for item in group
+            )
+            group_end = max(
+                max(item[start_index], item[end_index]) for item in group
+            )
+            if (
+                abs(group_coordinate - line[coordinate_index])
+                <= coordinate_tolerance
+                and line_start <= group_end + self.line_tolerance
+                and line_end >= group_start - self.line_tolerance
+            ):
+                group.append(line)
+            else:
+                groups.append([line])
+
+        merged = []
+        for group in groups:
+            coordinate = sum(line[coordinate_index] for line in group) / len(group)
+            start = min(
+                min(line[start_index], line[end_index]) for line in group
+            )
+            end = max(
+                max(line[start_index], line[end_index]) for line in group
+            )
+            if horizontal:
+                merged.append((start, coordinate, end, coordinate))
+            else:
+                merged.append((coordinate, start, coordinate, end))
+
+        return merged
+
     @staticmethod
     def _colors_are_similar(
         color: object,
@@ -1019,6 +1227,103 @@ class WiredTableExtractor(BaseTableExtractor):
                 merged.append(val)
         return merged
 
+    def _snap_grid_coordinates(
+        self,
+        *,
+        start: float,
+        end: float,
+        orthogonal_start: float,
+        orthogonal_end: float,
+        lines: List[Tuple[float, float, float, float]],
+        horizontal: bool,
+    ) -> List[float]:
+        """Build grid coordinates without collapsing distinct local line anchors.
+
+        Region bounds are allowed to absorb a nearby line only when that line
+        covers almost the whole orthogonal side.  A short line near a region
+        bound remains a separate coordinate, so it cannot become a boundary
+        for unrelated rows or columns.
+        """
+        tol = self.line_tolerance
+        coordinate_spans = []
+        for line in lines:
+            if horizontal:
+                coordinate_spans.append((line[1], line[0], line[2]))
+            else:
+                coordinate_spans.append((line[0], line[1], line[3]))
+
+        clusters: List[List[Tuple[float, float, float]]] = []
+        for item in sorted(coordinate_spans, key=lambda value: value[0]):
+            if (
+                clusters
+                and item[0] - clusters[-1][-1][0] <= self.merge_group_tol
+            ):
+                clusters[-1].append(item)
+            else:
+                clusters.append([item])
+
+        orthogonal_span = orthogonal_end - orthogonal_start
+        required_coverage = max(
+            orthogonal_span - tol,
+            orthogonal_span * 0.9,
+        )
+
+        def coverage(intervals: List[Tuple[float, float]]) -> float:
+            clipped = sorted(
+                (
+                    max(orthogonal_start, min(left, right)),
+                    min(orthogonal_end, max(left, right)),
+                )
+                for left, right in intervals
+                if min(orthogonal_end, max(left, right))
+                > max(orthogonal_start, min(left, right))
+            )
+            total = 0.0
+            current: Optional[List[float]] = None
+            for left, right in clipped:
+                if current is None:
+                    current = [left, right]
+                elif left <= current[1] + tol:
+                    current[1] = max(current[1], right)
+                else:
+                    total += current[1] - current[0]
+                    current = [left, right]
+            if current is not None:
+                total += current[1] - current[0]
+            return total
+
+        cluster_data = []
+        for cluster in clusters:
+            coordinate = sum(item[0] for item in cluster) / len(cluster)
+            span_coverage = coverage([(item[1], item[2]) for item in cluster])
+            cluster_data.append((coordinate, span_coverage))
+
+        start_coordinate = start
+        end_coordinate = end
+        for boundary_name, boundary in (("start", start), ("end", end)):
+            supported = [
+                (abs(coordinate - boundary), coordinate)
+                for coordinate, span_coverage in cluster_data
+                if abs(coordinate - boundary) <= tol
+                and span_coverage >= required_coverage
+            ]
+            if supported:
+                if boundary_name == "start":
+                    start_coordinate = min(supported)[1]
+                else:
+                    end_coordinate = min(supported)[1]
+
+        return sorted(
+            {
+                round(coordinate, 1)
+                for coordinate in [
+                    start_coordinate,
+                    end_coordinate,
+                    *(coordinate for coordinate, _span_coverage in cluster_data),
+                ]
+            }
+        )
+
     def _complete_partial_outer_boundaries(
         self,
         bbox: BBox,
@@ -1229,6 +1534,7 @@ class WiredTableExtractor(BaseTableExtractor):
         trimmed = []
         for c in cells:
             if min_row <= c.row_index <= max_row:
+                c.rowspan = min(c.rowspan, max_row - c.row_index + 1)
                 c.row_index -= min_row
                 trimmed.append(c)
         return trimmed
@@ -1294,11 +1600,23 @@ class WiredTableExtractor(BaseTableExtractor):
                     break
 
         tol = self.line_tolerance
-        raw_h = [bbox.y0, bbox.y1, *(line[1] for line in h_lines)]
-        raw_v = [bbox.x0, bbox.x1, *(line[0] for line in v_lines)]
 
-        h_ys = self._snap_coordinates(raw_h, [line[1] for line in h_lines], tol=tol)
-        v_xs = self._snap_coordinates(raw_v, [line[0] for line in v_lines], tol=tol)
+        h_ys = self._snap_grid_coordinates(
+            start=bbox.y0,
+            end=bbox.y1,
+            orthogonal_start=bbox.x0,
+            orthogonal_end=bbox.x1,
+            lines=h_lines,
+            horizontal=True,
+        )
+        v_xs = self._snap_grid_coordinates(
+            start=bbox.x0,
+            end=bbox.x1,
+            orthogonal_start=bbox.y0,
+            orthogonal_end=bbox.y1,
+            lines=v_lines,
+            horizontal=False,
+        )
 
         if len(h_ys) < 2 or len(v_xs) < 2:
             return []
@@ -1325,8 +1643,16 @@ class WiredTableExtractor(BaseTableExtractor):
 
         def has_h_segment(y: float, x0: float, x1: float) -> bool:
             span = x1 - x0
-            for lx0, ly, lx1, _ in effective_h_lines:
-                if abs(ly - y) > tol:
+            candidates = [
+                line
+                for line in effective_h_lines
+                if abs(line[1] - y) <= tol
+            ]
+            if not candidates:
+                return False
+            nearest_distance = min(abs(line[1] - y) for line in candidates)
+            for lx0, ly, lx1, _ in candidates:
+                if abs(abs(ly - y) - nearest_distance) > 1e-6:
                     continue
                 overlap = min(lx1, x1 + tol) - max(lx0, x0 - tol)
                 if overlap >= max(span - tol, span * 0.9):
@@ -1335,8 +1661,16 @@ class WiredTableExtractor(BaseTableExtractor):
 
         def has_v_segment(x: float, y0: float, y1: float) -> bool:
             span = y1 - y0
-            for lx, ly0, _, ly1 in effective_v_lines:
-                if abs(lx - x) > tol:
+            candidates = [
+                line
+                for line in effective_v_lines
+                if abs(line[0] - x) <= tol
+            ]
+            if not candidates:
+                return False
+            nearest_distance = min(abs(line[0] - x) for line in candidates)
+            for lx, ly0, _, ly1 in candidates:
+                if abs(abs(lx - x) - nearest_distance) > 1e-6:
                     continue
                 overlap = min(ly1, y1 + tol) - max(ly0, y0 - tol)
                 if overlap >= max(span - tol, span * 0.9):
@@ -1435,44 +1769,60 @@ class WiredTableExtractor(BaseTableExtractor):
 
         cells: List[Cell] = []
         for coords in components.values():
-            min_row = min(row for row, _ in coords)
-            max_row = max(row for row, _ in coords)
-            min_col = min(col for _, col in coords)
-            max_col = max(col for _, col in coords)
-            expected_size = (max_row - min_row + 1) * (max_col - min_col + 1)
+            component = set(coords)
+            rows_with_cells: Dict[int, List[Tuple[int, int]]] = defaultdict(list)
 
-            if len(coords) != expected_size:
-                for row, col in sorted(coords):
-                    cells.append(
-                        Cell(
-                            text="",
-                            row_index=row,
-                            col_index=col,
-                            bbox=BBox(
-                                v_xs[col],
-                                h_ys[row],
-                                v_xs[col + 1],
-                                h_ys[row + 1],
-                            ),
-                        )
+            # First form the widest safe horizontal runs.  A run may cross an
+            # atomic column only when the physical vertical edge is absent.
+            for row in sorted({row for row, _ in component}):
+                columns = sorted(col for current_row, col in component if current_row == row)
+                start_col = previous_col = columns[0]
+                for col in columns[1:]:
+                    if col == previous_col + 1 and not v_edges[row][col]:
+                        previous_col = col
+                        continue
+                    rows_with_cells[row].append((start_col, previous_col))
+                    start_col = previous_col = col
+                rows_with_cells[row].append((start_col, previous_col))
+
+            # Merge equal runs downwards only when the complete intervening
+            # horizontal boundary is absent.  This partitions even an
+            # irregular component into non-overlapping rectangles while
+            # preserving legitimate rowspans and colspans.
+            active: Dict[Tuple[int, int], List[int]] = {}
+            rectangles: List[List[int]] = []
+            for row in sorted(rows_with_cells):
+                next_active: Dict[Tuple[int, int], List[int]] = {}
+                for start_col, end_col in rows_with_cells[row]:
+                    run = (start_col, end_col)
+                    rectangle = active.get(run)
+                    if rectangle is not None and all(
+                        not h_edges[row][col]
+                        for col in range(start_col, end_col + 1)
+                    ):
+                        rectangle[2] = row
+                    else:
+                        rectangle = [row, start_col, row, end_col]
+                        rectangles.append(rectangle)
+                    next_active[run] = rectangle
+                active = next_active
+
+            for start_row, start_col, end_row, end_col in rectangles:
+                cells.append(
+                    Cell(
+                        text="",
+                        row_index=start_row,
+                        col_index=start_col,
+                        bbox=BBox(
+                            v_xs[start_col],
+                            h_ys[start_row],
+                            v_xs[end_col + 1],
+                            h_ys[end_row + 1],
+                        ),
+                        rowspan=end_row - start_row + 1,
+                        colspan=end_col - start_col + 1,
                     )
-                continue
-
-            cells.append(
-                Cell(
-                    text="",
-                    row_index=min_row,
-                    col_index=min_col,
-                    bbox=BBox(
-                        v_xs[min_col],
-                        h_ys[min_row],
-                        v_xs[max_col + 1],
-                        h_ys[max_row + 1],
-                    ),
-                    rowspan=max_row - min_row + 1,
-                    colspan=max_col - min_col + 1,
                 )
-            )
 
         if cells:
             min_c = min(cell.col_index for cell in cells)
