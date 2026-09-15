@@ -751,6 +751,8 @@ class TableExtractor:
             cells=clamped_cells,
             confidence=table.confidence,
             source=table.source,
+            h_lines=table.h_lines,
+            v_lines=table.v_lines,
         )
 
     @staticmethod

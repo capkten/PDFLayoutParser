@@ -175,6 +175,41 @@ def _compute_cell_grid_rects(table: Table) -> list[tuple[Cell, fitz.Rect]]:
     return results
 
 
+def _draw_physical_line_segments(shape, table: Table) -> None:
+    """Draw the physical line segments carried by a wired table."""
+    table_rect = fitz.Rect(
+        table.bbox.x0, table.bbox.y0, table.bbox.x1, table.bbox.y1
+    )
+
+    for line in table.h_lines or []:
+        try:
+            x0, y, x1, _ = (float(value) for value in line)
+        except (TypeError, ValueError):
+            continue
+        if y < table_rect.y0 or y > table_rect.y1:
+            continue
+        start = max(table_rect.x0, min(x0, x1))
+        end = min(table_rect.x1, max(x0, x1))
+        if end <= start:
+            continue
+        shape.draw_line(fitz.Point(start, y), fitz.Point(end, y))
+        shape.finish(color=CELL_BORDER_COLOR, width=0.8)
+
+    for line in table.v_lines or []:
+        try:
+            x, y0, _, y1 = (float(value) for value in line)
+        except (TypeError, ValueError):
+            continue
+        if x < table_rect.x0 or x > table_rect.x1:
+            continue
+        start = max(table_rect.y0, min(y0, y1))
+        end = min(table_rect.y1, max(y0, y1))
+        if end <= start:
+            continue
+        shape.draw_line(fitz.Point(x, start), fitz.Point(x, end))
+        shape.finish(color=CELL_BORDER_COLOR, width=0.8)
+
+
 LAYOUT_TEXT_COLOR = (0.15, 0.65, 0.35)       # Emerald green for natural text blocks
 LAYOUT_TEXT_FILL = (0.15, 0.65, 0.35)        # Emerald green for text badge fill
 
@@ -239,10 +274,14 @@ def draw_tables_on_page(
         table_rect = fitz.Rect(tb.x0, tb.y0, tb.x1, tb.y1)
 
         # 2a. Draw full 2D Cell Grid boundaries (Blue) & cell text blocks (Green)
+        has_physical_lines = table.h_lines is not None or table.v_lines is not None
+        if has_physical_lines:
+            _draw_physical_line_segments(shape, table)
         cell_grid_pairs = _compute_cell_grid_rects(table)
         for cell, grid_rect in cell_grid_pairs:
-            shape.draw_rect(grid_rect)
-            shape.finish(color=CELL_BORDER_COLOR, width=0.8)
+            if not has_physical_lines:
+                shape.draw_rect(grid_rect)
+                shape.finish(color=CELL_BORDER_COLOR, width=0.8)
 
             if cell.text.strip():
                 bx0 = max(grid_rect.x0, cell.bbox.x0)
