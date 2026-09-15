@@ -1193,3 +1193,220 @@ def test_wired_extractor_finds_tables_on_pdfsam_merge1_page0():
     assert overview.source == "line_projection"
     assert (overview.rows, overview.cols) == (6, 5)
 
+
+def _make_wired_test_page(drawings, width=240.0, height=200.0):
+    return SimpleNamespace(
+        rect=fitz.Rect(0.0, 0.0, width, height),
+        get_drawings=lambda **_kwargs: drawings,
+        get_fonts=lambda **_kwargs: [],
+        get_image_info=lambda **_kwargs: [],
+        get_text=lambda kind: [] if kind == "words" else {"blocks": []},
+    )
+
+
+def _make_paired_bar_chart_page():
+    drawings = []
+    baseline = 120.0
+    x = 50.0
+    bar_colors = (
+        (0.0, 0.0, 1.0),
+        (1.0, 0.0, 0.0),
+        (0.0, 0.0, 1.0),
+        (1.0, 0.0, 0.0),
+        (0.0, 0.0, 1.0),
+    )
+    for bar_height, fill_color in zip((60.0, 10.0, 35.0, 20.0, 50.0), bar_colors):
+        rect = fitz.Rect(x, baseline - bar_height, x + 12.0, baseline)
+        drawings.append(
+            {
+                "type": "f",
+                "color": None,
+                "fill": fill_color,
+                "rect": rect,
+                "items": [("re", rect, 0)],
+            }
+        )
+        drawings.append(
+            {
+                "type": "s",
+                "color": (0.0, 0.0, 0.0),
+                "fill": None,
+                "width": 0.5,
+                "rect": rect,
+                "items": [("re", rect, 1)],
+            }
+        )
+        x += 20.0
+
+    drawings.extend(
+        [
+            {
+                "type": "s",
+                "color": (0.0, 0.0, 0.0),
+                "fill": None,
+                "items": [("l", fitz.Point(40.0, 40.0), fitz.Point(40.0, 125.0))],
+            },
+            {
+                "type": "s",
+                "color": (0.0, 0.0, 0.0),
+                "fill": None,
+                "items": [("l", fitz.Point(40.0, baseline), fitz.Point(150.0, baseline))],
+            },
+        ]
+    )
+    for y in (40.0, 60.0, 80.0, 100.0, 120.0):
+        drawings.append(
+            {
+                "type": "s",
+                "color": (0.0, 0.0, 0.0),
+                "fill": None,
+                "items": [("l", fitz.Point(37.0, y), fitz.Point(40.0, y))],
+            }
+        )
+
+    return _make_wired_test_page(drawings)
+
+
+def test_extract_rejects_paired_stroked_bar_chart():
+    """多根共基线柱形图不能因描边矩形拆边而生成有线表格。"""
+    tables = WiredTableExtractor().extract(_make_paired_bar_chart_page())
+
+    assert tables == []
+
+
+def test_p415_bar_chart_does_not_create_wired_table():
+    """P415 图表区域不能被误报为 wired 表格。"""
+    import os
+
+    pdf_path = r"D:\codes\PDFLayoutParser\fix\zh_all_table_pages.pdf"
+    if not os.path.exists(pdf_path):
+        pytest.skip("zh_all_table_pages.pdf not found")
+
+    doc = fitz.open(pdf_path)
+    try:
+        tables = WiredTableExtractor().extract(doc[415])
+        assert all(
+            not (table.bbox.y0 < 280.0 and table.bbox.x0 < 400.0)
+            for table in tables
+        )
+    finally:
+        doc.close()
+
+
+def test_extract_keeps_unfilled_stroked_rectangle_table():
+    """没有填充配对证据时，描边封闭矩形表格仍保持 0ca829e 能力。"""
+    drawings = []
+    for y0, y1 in ((20.0, 50.0), (50.0, 80.0)):
+        for x0, x1 in ((10.0, 60.0), (60.0, 110.0)):
+            rect = fitz.Rect(x0, y0, x1, y1)
+            drawings.append(
+                {
+                    "type": "s",
+                    "color": (0.0, 0.0, 0.0),
+                    "fill": None,
+                    "rect": rect,
+                    "items": [("re", rect, 1)],
+                }
+            )
+
+    tables = WiredTableExtractor().extract(_make_wired_test_page(drawings))
+
+    assert len(tables) == 1
+    assert (tables[0].rows, tables[0].cols) == (2, 2)
+
+
+def test_extract_keeps_filled_stroked_rowspan_table():
+    """共享列边界的填充描边跨行表格不能被当作柱形图。"""
+    drawings = []
+    # 第一列跨两行；另外两列各自有上下两个单元格。
+    cell_rects = (
+        (10.0, 20.0, 60.0, 80.0),
+        (60.0, 20.0, 110.0, 50.0),
+        (110.0, 20.0, 160.0, 50.0),
+        (60.0, 50.0, 110.0, 80.0),
+        (110.0, 50.0, 160.0, 80.0),
+    )
+    for x0, y0, x1, y1 in cell_rects:
+        rect = fitz.Rect(x0, y0, x1, y1)
+        drawings.extend(
+            [
+                {
+                    "type": "f",
+                    "color": None,
+                    "fill": (0.8, 0.9, 1.0),
+                    "rect": rect,
+                    "items": [("re", rect, 0)],
+                },
+                {
+                    "type": "s",
+                    "color": (0.0, 0.0, 0.0),
+                    "fill": None,
+                    "rect": rect,
+                    "items": [("re", rect, 1)],
+                },
+            ]
+        )
+
+    tables = WiredTableExtractor().extract(_make_wired_test_page(drawings))
+
+    assert len(tables) == 1
+    assert (tables[0].rows, tables[0].cols) == (2, 3)
+
+
+def test_extract_keeps_same_height_paired_stroked_table():
+    """同高的填充+描边单元格不能仅因成对就触发柱形图过滤。"""
+    drawings = []
+    for x0, x1 in ((10.0, 60.0), (60.0, 110.0), (110.0, 160.0)):
+        rect = fitz.Rect(x0, 20.0, x1, 50.0)
+        drawings.extend(
+            [
+                {
+                    "type": "f",
+                    "color": None,
+                    "fill": (0.8, 0.9, 1.0),
+                    "rect": rect,
+                    "items": [("re", rect, 0)],
+                },
+                {
+                    "type": "s",
+                    "color": (0.0, 0.0, 0.0),
+                    "fill": None,
+                    "rect": rect,
+                    "items": [("re", rect, 1)],
+                },
+            ]
+        )
+
+    tables = WiredTableExtractor().extract(
+        _make_wired_test_page(drawings, width=200.0, height=100.0)
+    )
+
+    assert len(tables) == 1
+    assert (tables[0].rows, tables[0].cols) == (1, 3)
+
+
+def test_extract_does_not_treat_two_same_height_paired_swatches_as_chart():
+    """两个同高小色块（如图例）不足以构成柱形图组件。"""
+    drawings = []
+    for x in (30.0, 50.0):
+        rect = fitz.Rect(x, 100.0, x + 6.0, 104.0)
+        drawings.extend(
+            [
+                {
+                    "type": "f",
+                    "color": None,
+                    "fill": (0.0, 0.0, 1.0),
+                    "rect": rect,
+                    "items": [("re", rect, 0)],
+                },
+                {
+                    "type": "s",
+                    "color": (0.0, 0.0, 0.0),
+                    "fill": None,
+                    "rect": rect,
+                    "items": [("re", rect, 1)],
+                },
+            ]
+        )
+
+    assert WiredTableExtractor().extract(_make_wired_test_page(drawings)) == []

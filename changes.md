@@ -1,5 +1,14 @@
 # Changes
 
+## 2026-09-14
+
+- 修复 `fix/zh_all_table_pages.pdf` 页面索引 `415`（印刷页 17）柱形图被误检为有线表格，并阻止同一图表候选在下游重新变成 `english_general_wireless` 表格。
+  - **根因与调用链**：提交 `0ca829e` 在 `src/hexai_pdf_parser/tables/extractors/wired_table_extractor.py::_extract_lines_from_drawings()` 中恢复了描边封闭矩形的四条边，以支持 `PDFsam_merge1.pdf` 等真实有线表格。P415 的每个柱子也由同 bbox 的彩色填充 `re` 和黑色 `type="s"` 描边 `re` 组成；10 个柱子的底边与坐标轴相交后，经 `_find_table_regions()` 的“横竖线相交即连通”规则生成 `11x10` 的 `line_projection` 伪表格。移除 wired 结果后，ML 候选框仍会被 `TableExtractor._recover_tables_from_regions()` 送入 `EnglishTableExtractor.extract_general_wireless()`，因此单修 wired 层会把同一误检改名为 `english_general_wireless`。
+  - **修复判定**：在 wired 线拓扑之前，仅收集可见轴对齐 `re` 矩形；只有填充矩形与可见描边矩形 bbox 在 `1.0pt` 内匹配，并且成组满足“至少 3 根、共用底边、宽度差不超过 `max(1.5pt, 中位宽度的 15%)`、高度差至少 `max(4pt, 中位宽度的 50%)`、横向不重叠且至少有一个 `>= max(线容差, 中位柱宽的 25%)` 的柱间空隙”的组件，才建立柱形图 mask。最后一条是防止共享列边界的填充描边 `rowspan` 表格被误判；P415 的成对柱之间仍有明显空隙。mask 按 `max(6pt, 3 * 中位柱宽)` 扩展，覆盖 P415 坐标轴和图例；仅完整位于 mask 内的横/竖候选线被过滤。
+  - **下游守卫与兼容边界**：`WiredTableExtractor` 保存当前页面的 chart mask，并绑定产生它的 page 对象；`TableExtractor._recover_tables_from_regions()` 仅在同一 page 上、且候选 bbox 被 mask 覆盖比例达到 `0.5` 时跳过无线/回退候选。该规则不按页码、业务文字或“Cell 必须有文字”判定，也不新增 `page.get_text("words")` 读取。没有成组“填充+描边”柱形证据时，`0ca829e` 的 `type="s"`/`type="fs"` 封闭矩形四边拆解保持不变；`PDFsam_merge1.pdf` 第 0 页仍保留 4 张有线表格，目标“信息概要明细”仍为 `6x5`。
+  - **测试先行与回归**：在 `tests/test_wired_table_extractor.py` 新增合成柱形图反例、P415 页面反例、无填充描边 2x2 正例、填充描边 `rowspan` 正例和两色块图例反例；在 `tests/test_table_extractor.py` 新增候选恢复层及主入口 P415 回归、跨页 mask 隔离和局部重叠保留测试。新增边界测试均先在旧实现下稳定失败，修复后 wired 专项为 `51 passed`，表格模块排除既有历史失败项后为 `93 passed, 1 deselected`。完整 `tests/test_table_extractor.py` 仍有 1 个既有失败：`test_hybrid_wired_table_replaces_full_rowspan_body_before_shifting_footer` 的历史 source 期望差异。
+  - **页面验证**：使用 `D:\codes\PDFLayoutParser\fix\zh_all_table_pages.pdf`、页索引 `415` 和当前 worktree 源码独立输出到 `D:\codes\PDFLayoutParser\output\p415_bar_chart_filter_20260914\`。`pages/page-415.json` 的 `page_type=vector`，最终只有下方 `english_general_wireless`、`9x4`、bbox `[59.8,549.9,549.9,718.0]` 的 Operating Expenses 表格，图表区域表格数为 `0`。`zh_all_table_pages_page_415_visualized.png` 视觉核验确认图表未被红色表格框覆盖、下方真表边界和文字归属正常；调试图左上角的 `page_type: vector` 标注会遮住少量 logo，但不影响解析结果。
+
 ## 2026-09-11
 
 - 在 `MLTableDetector` 中实现进程级共享会话缓存（`_GLOBAL_SESSION_CACHE` 与 `get_shared_session`），彻底解决多次实例化检测器时重复从磁盘加载 36.4 MB 模型并初始化 ONNX Runtime Session 的冷启动开销。

@@ -98,6 +98,10 @@ class _RegionRowView:
 class TableExtractor:
     """Extract tables from a single PDF page using line-projection."""
 
+    # The chart mask is padded around bars, so suppress a model candidate only
+    # when most of that candidate is chart area.
+    _CHART_CANDIDATE_OVERLAP_THRESHOLD = 0.5
+
     def __init__(
         self,
         line_tolerance: float = 2.3,
@@ -323,6 +327,18 @@ class TableExtractor:
             and min(left.y1, right.y1) > max(left.y0, right.y0)
         )
 
+    @staticmethod
+    def _bbox_overlap_ratio(left: BBox, right: BBox) -> float:
+        """Return the positive overlap area as a fraction of ``left``."""
+        ix0 = max(left.x0, right.x0)
+        iy0 = max(left.y0, right.y0)
+        ix1 = min(left.x1, right.x1)
+        iy1 = min(left.y1, right.y1)
+        left_area = (left.x1 - left.x0) * (left.y1 - left.y0)
+        if ix1 <= ix0 or iy1 <= iy0 or left_area <= 0:
+            return 0.0
+        return ((ix1 - ix0) * (iy1 - iy0)) / left_area
+
     def _extract_model_tables(
         self,
         page: fitz.Page,
@@ -366,7 +382,11 @@ class TableExtractor:
         wired_tables: Optional[List[Table]] = None,
         page_language: Optional[str] = None,
     ) -> List[Table]:
-        """Recover tables from detected regions, preferring overlapping wired results."""
+        """Recover detected regions, preferring wired results.
+
+        A chart mask is used only when it belongs to this page and covers at
+        least half of the candidate bbox; small overlaps remain recoverable.
+        """
         if page_language is None:
             from hexai_pdf_parser.extractors.language_detector import detect_page_language
 
@@ -374,6 +394,11 @@ class TableExtractor:
 
         tables: List[Table] = []
         valid_wired_tables = list(wired_tables or [])
+        chart_regions: List[fitz.Rect] = []
+        if getattr(self._wired_extractor, "_last_bar_chart_page", None) is page:
+            chart_regions = getattr(
+                self._wired_extractor, "_last_bar_chart_regions", []
+            )
         if page_language in {"zh", "mixed"}:
             valid_wired_tables = [
                 self._recover_hybrid_wired_table(page, table, page_language)
@@ -386,6 +411,13 @@ class TableExtractor:
             else:
                 bbox, score = item[0], item[1]
                 fallback_table = None
+
+            if any(
+                self._bbox_overlap_ratio(bbox, region)
+                >= self._CHART_CANDIDATE_OVERLAP_THRESHOLD
+                for region in chart_regions
+            ):
+                continue
 
             bbox_h = max(1.0, bbox.y1 - bbox.y0)
             full_matching_wired = [

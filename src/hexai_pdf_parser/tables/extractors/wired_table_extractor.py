@@ -22,6 +22,10 @@ class WiredTableExtractor(BaseTableExtractor):
     ):
         self.line_tolerance = line_tolerance
         self.merge_group_tol = merge_group_tol
+        self._last_bar_chart_regions: List[fitz.Rect] = []
+        # Retain the page object so a mask cannot be mistaken for another
+        # page merely because an object id happens to be reused.
+        self._last_bar_chart_page: Optional[object] = None
 
     def extract(
         self,
@@ -102,6 +106,8 @@ class WiredTableExtractor(BaseTableExtractor):
     ) -> Tuple[List[Tuple[float, float, float, float]], List[Tuple[float, float, float, float]]]:
         h_lines = []
         v_lines = []
+        self._last_bar_chart_regions = []
+        self._last_bar_chart_page = page
 
         drawings_with_clips = self._get_drawings_with_clips(page)
         if drawings_with_clips is None:
@@ -109,30 +115,22 @@ class WiredTableExtractor(BaseTableExtractor):
 
         background_color = self._estimate_page_background_color(page)
         type3_char_regions = self._get_type3_character_regions(page)
+        chart_regions = self._find_bar_chart_regions(
+            drawings_with_clips,
+            background_color=background_color,
+            type3_char_regions=type3_char_regions,
+            clip_bbox=clip_bbox,
+        )
+        self._last_bar_chart_regions = chart_regions
         for d, pdf_clip in drawings_with_clips:
             if self._drawing_is_inside_character_region(d, type3_char_regions):
                 continue
             # Ignore rules that are transparent or visually identical to the
             # page background. Keep visible black/colored rules, including
             # dashed vector rules used by real financial tables.
-            opacity = d.get("opacity")
-            if opacity is not None:
-                try:
-                    if float(opacity) <= 0.0:
-                        continue
-                except (TypeError, ValueError):
-                    pass
-            stroke_color = d.get("color")
-            if stroke_color is not None and self._colors_are_similar(
-                stroke_color, background_color
-            ):
+            if not self._drawing_is_visible(d, background_color):
                 continue
-            if d.get("color") is None:
-                fill_color = d.get("fill")
-                if fill_color is None or self._colors_are_similar(
-                    fill_color, background_color
-                ):
-                    continue
+            stroke_color = d.get("color")
 
             # A filled narrow path can represent one thick rule while exposing
             # both of its parallel edges as ``l`` items.  Use the drawing
@@ -230,6 +228,8 @@ class WiredTableExtractor(BaseTableExtractor):
                     elif w <= self.line_tolerance and h >= 3.0:
                         v_lines.append(((x0 + x1) / 2.0, y0, (x0 + x1) / 2.0, y1))
                     elif w >= self.line_tolerance and h >= self.line_tolerance:
+                        # 不能删除 0ca829e 的封闭描边矩形拆边；仅在本方法末尾
+                        # 命中成组柱形图 mask 时过滤其线候选，真实有线表格仍保留。
                         page_area = (
                             float(page.rect.width * page.rect.height)
                             if hasattr(page, "rect") and page.rect
@@ -261,7 +261,236 @@ class WiredTableExtractor(BaseTableExtractor):
         h_lines.extend(image_h)
         v_lines.extend(image_v)
 
+        if chart_regions:
+            h_lines = [
+                line
+                for line in h_lines
+                if not self._line_is_inside_chart_region(line, chart_regions)
+            ]
+            v_lines = [
+                line
+                for line in v_lines
+                if not self._line_is_inside_chart_region(line, chart_regions)
+            ]
+
         return h_lines, v_lines
+
+    @classmethod
+    def _drawing_is_visible(
+        cls, drawing: dict, background_color: Tuple[float, float, float]
+    ) -> bool:
+        """Return whether a drawing can contribute a visible table rule."""
+        opacity = drawing.get("opacity")
+        if opacity is not None:
+            try:
+                if float(opacity) <= 0.0:
+                    return False
+            except (TypeError, ValueError):
+                pass
+
+        stroke_color = drawing.get("color")
+        if stroke_color is not None and cls._colors_are_similar(
+            stroke_color, background_color
+        ):
+            return False
+        if stroke_color is None:
+            fill_color = drawing.get("fill")
+            if fill_color is None or cls._colors_are_similar(
+                fill_color, background_color
+            ):
+                return False
+        return True
+
+    @staticmethod
+    def _coerce_rect(value: object) -> Optional[fitz.Rect]:
+        try:
+            return fitz.Rect(value)  # type: ignore[arg-type]
+        except (AttributeError, TypeError, ValueError):
+            try:
+                return fitz.Rect(
+                    float(value.x0),
+                    float(value.y0),
+                    float(value.x1),
+                    float(value.y1),
+                )  # type: ignore[union-attr]
+            except (AttributeError, TypeError, ValueError):
+                return None
+
+    def _collect_visible_rectangle_drawings(
+        self,
+        drawings_with_clips: List[Tuple[dict, Optional[fitz.Rect]]],
+        *,
+        background_color: Tuple[float, float, float],
+        type3_char_regions: List[BBox],
+        clip_bbox: Optional[BBox],
+    ) -> Tuple[List[fitz.Rect], List[fitz.Rect]]:
+        """Collect visible fill and stroke rectangles for chart classification."""
+        fill_rects: List[fitz.Rect] = []
+        stroke_rects: List[fitz.Rect] = []
+
+        for drawing, pdf_clip in drawings_with_clips:
+            if self._drawing_is_inside_character_region(
+                drawing, type3_char_regions
+            ) or not self._drawing_is_visible(drawing, background_color):
+                continue
+
+            drawing_type = str(drawing.get("type", ""))
+            is_fill = drawing_type in ("f", "fs") and drawing.get("fill") is not None
+            is_stroke = drawing_type in ("s", "fs") or drawing.get("color") is not None
+            if not is_fill and not is_stroke:
+                continue
+
+            for item in drawing.get("items", []):
+                if not item or item[0] != "re" or len(item) < 2:
+                    continue
+                rect = self._coerce_rect(item[1])
+                if rect is None or rect.x1 <= rect.x0 or rect.y1 <= rect.y0:
+                    continue
+                visible_rect = self._intersect_rect(rect, pdf_clip)
+                if visible_rect is None:
+                    continue
+                if clip_bbox and (
+                    visible_rect.x1 < clip_bbox.x0 - 2.0
+                    or visible_rect.x0 > clip_bbox.x1 + 2.0
+                    or visible_rect.y1 < clip_bbox.y0 - 2.0
+                    or visible_rect.y0 > clip_bbox.y1 + 2.0
+                ):
+                    continue
+
+                if is_fill:
+                    fill_rects.append(visible_rect)
+                if is_stroke:
+                    stroke_rects.append(visible_rect)
+
+        return fill_rects, stroke_rects
+
+    @staticmethod
+    def _rects_are_close(
+        left: fitz.Rect, right: fitz.Rect, tolerance: float
+    ) -> bool:
+        return max(
+            abs(left.x0 - right.x0),
+            abs(left.y0 - right.y0),
+            abs(left.x1 - right.x1),
+            abs(left.y1 - right.y1),
+        ) <= tolerance
+
+    def _find_bar_chart_regions(
+        self,
+        drawings_with_clips: List[Tuple[dict, Optional[fitz.Rect]]],
+        *,
+        background_color: Tuple[float, float, float],
+        type3_char_regions: List[BBox],
+        clip_bbox: Optional[BBox],
+    ) -> List[fitz.Rect]:
+        """Find chart masks without weakening stroked-table rectangle recovery.
+
+        A mask is created only for several similarly wide, non-overlapping
+        rectangles sharing a baseline, having visibly different heights, and
+        containing a meaningful inter-bar gap.  Continuous shared borders are
+        table topology, not chart evidence.
+        The filled/stroked bbox pairing is the important boundary: ordinary
+        unfilled stroked table cells remain eligible for the 0ca829e edge
+        decomposition below.
+        """
+        fill_rects, stroke_rects = self._collect_visible_rectangle_drawings(
+            drawings_with_clips,
+            background_color=background_color,
+            type3_char_regions=type3_char_regions,
+            clip_bbox=clip_bbox,
+        )
+
+        bar_rects: List[fitz.Rect] = []
+        for stroke_rect in stroke_rects:
+            if not any(
+                self._rects_are_close(stroke_rect, fill_rect, tolerance=1.0)
+                for fill_rect in fill_rects
+            ):
+                continue
+            if any(
+                self._rects_are_close(stroke_rect, existing, tolerance=0.01)
+                for existing in bar_rects
+            ):
+                continue
+            bar_rects.append(stroke_rect)
+
+        baseline_groups: List[List[fitz.Rect]] = []
+        for rect in sorted(bar_rects, key=lambda candidate: (candidate.y1, candidate.x0)):
+            group = next(
+                (
+                    candidate_group
+                    for candidate_group in baseline_groups
+                    if abs(candidate_group[0].y1 - rect.y1) <= self.line_tolerance
+                ),
+                None,
+            )
+            if group is None:
+                baseline_groups.append([rect])
+            else:
+                group.append(rect)
+
+        chart_regions: List[fitz.Rect] = []
+        for group in baseline_groups:
+            if len(group) < 3:
+                continue
+
+            widths = sorted(rect.width for rect in group)
+            heights = [rect.height for rect in group]
+            median_width = widths[len(widths) // 2]
+            if median_width <= 0.0:
+                continue
+            if max(widths) - min(widths) > max(1.5, median_width * 0.15):
+                continue
+            if max(heights) - min(heights) < max(4.0, median_width * 0.5):
+                continue
+
+            sorted_group = sorted(group, key=lambda rect: rect.x0)
+            if any(
+                current.x0 < previous.x1 - self.merge_group_tol
+                for previous, current in zip(sorted_group, sorted_group[1:])
+            ):
+                continue
+            # A rowspan table can have different-height filled cells on one
+            # baseline, but its adjacent cells share their vertical borders.
+            # Require a real inter-bar gap so that this topology is not
+            # mistaken for a chart.  Paired bars in P415 still pass because
+            # the pairs are separated into distinct groups by visible gaps.
+            minimum_chart_gap = max(self.line_tolerance, median_width * 0.25)
+            if not any(
+                current.x0 - previous.x1 >= minimum_chart_gap
+                for previous, current in zip(sorted_group, sorted_group[1:])
+            ):
+                continue
+
+            padding = max(6.0, median_width * 3.0)
+            chart_regions.append(
+                fitz.Rect(
+                    min(rect.x0 for rect in group) - padding,
+                    min(rect.y0 for rect in group) - padding,
+                    max(rect.x1 for rect in group) + padding,
+                    max(rect.y1 for rect in group) + padding,
+                )
+            )
+
+        return chart_regions
+
+    def _line_is_inside_chart_region(
+        self,
+        line: Tuple[float, float, float, float],
+        chart_regions: List[fitz.Rect],
+    ) -> bool:
+        """Return whether a complete line candidate belongs to a chart mask."""
+        x0, y0, x1, y1 = line
+        line_x0, line_x1 = sorted((x0, x1))
+        line_y0, line_y1 = sorted((y0, y1))
+        tolerance = self.line_tolerance
+        return any(
+            region.x0 - tolerance <= line_x0
+            and line_x1 <= region.x1 + tolerance
+            and region.y0 - tolerance <= line_y0
+            and line_y1 <= region.y1 + tolerance
+            for region in chart_regions
+        )
 
     @staticmethod
     def _intersect_rect(
