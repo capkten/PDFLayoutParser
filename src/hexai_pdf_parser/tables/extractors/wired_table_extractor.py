@@ -104,6 +104,18 @@ class WiredTableExtractor(BaseTableExtractor):
     ) -> Tuple[List[Tuple[float, float, float, float]], List[Tuple[float, float, float, float]]]:
         h_lines = []
         v_lines = []
+        rectangle_h_edges = []
+        rectangle_v_edges = []
+
+        def add_h_line(line, rectangle=None):
+            h_lines.append(line)
+            if rectangle is not None:
+                rectangle_h_edges.append((line, rectangle))
+
+        def add_v_line(line, rectangle=None):
+            v_lines.append(line)
+            if rectangle is not None:
+                rectangle_v_edges.append((line, rectangle))
 
         drawings_with_clips = self._get_drawings_with_clips(page)
         if drawings_with_clips is None:
@@ -166,11 +178,11 @@ class WiredTableExtractor(BaseTableExtractor):
                             continue
                     if height <= self.line_tolerance and width >= 3.0:
                         center_y = (y0 + y1) / 2.0
-                        h_lines.append((x0, center_y, x1, center_y))
+                        add_h_line((x0, center_y, x1, center_y), visible_rect)
                         continue
                     if width <= self.line_tolerance and height >= 3.0:
                         center_x = (x0 + x1) / 2.0
-                        v_lines.append((center_x, y0, center_x, y1))
+                        add_v_line((center_x, y0, center_x, y1), visible_rect)
                         continue
 
             items = d.get("items", [])
@@ -200,9 +212,23 @@ class WiredTableExtractor(BaseTableExtractor):
                     x1, y1, x2, y2 = clipped_line
 
                     if abs(y1 - y2) <= self.line_tolerance and abs(x1 - x2) >= 3.0:
-                        h_lines.append((min(x1, x2), (y1 + y2) / 2.0, max(x1, x2), (y1 + y2) / 2.0))
+                        add_h_line(
+                            (
+                                min(x1, x2),
+                                (y1 + y2) / 2.0,
+                                max(x1, x2),
+                                (y1 + y2) / 2.0,
+                            )
+                        )
                     elif abs(x1 - x2) <= self.line_tolerance and abs(y1 - y2) >= 3.0:
-                        v_lines.append(((x1 + x2) / 2.0, min(y1, y2), (x1 + x2) / 2.0, max(y1, y2)))
+                        add_v_line(
+                            (
+                                (x1 + x2) / 2.0,
+                                min(y1, y2),
+                                (x1 + x2) / 2.0,
+                                max(y1, y2),
+                            )
+                        )
 
                 elif item[0] == "re":
                     rect = item[1]
@@ -228,9 +254,15 @@ class WiredTableExtractor(BaseTableExtractor):
                     h = y1 - y0
 
                     if h <= self.line_tolerance and w >= 3.0:
-                        h_lines.append((x0, (y0 + y1) / 2.0, x1, (y0 + y1) / 2.0))
+                        add_h_line(
+                            (x0, (y0 + y1) / 2.0, x1, (y0 + y1) / 2.0),
+                            visible_rect,
+                        )
                     elif w <= self.line_tolerance and h >= 3.0:
-                        v_lines.append(((x0 + x1) / 2.0, y0, (x0 + x1) / 2.0, y1))
+                        add_v_line(
+                            ((x0 + x1) / 2.0, y0, (x0 + x1) / 2.0, y1),
+                            visible_rect,
+                        )
                     elif w >= self.line_tolerance and h >= self.line_tolerance:
                         page_area = (
                             float(page.rect.width * page.rect.height)
@@ -249,13 +281,13 @@ class WiredTableExtractor(BaseTableExtractor):
                             and h >= 3.0
                         ):
                             if not clip_bbox or (clip_bbox.y0 - 2.0 <= y0 <= clip_bbox.y1 + 2.0):
-                                h_lines.append((x0, y0, x1, y0))
+                                add_h_line((x0, y0, x1, y0), visible_rect)
                             if not clip_bbox or (clip_bbox.y0 - 2.0 <= y1 <= clip_bbox.y1 + 2.0):
-                                h_lines.append((x0, y1, x1, y1))
+                                add_h_line((x0, y1, x1, y1), visible_rect)
                             if not clip_bbox or (clip_bbox.x0 - 2.0 <= x0 <= clip_bbox.x1 + 2.0):
-                                v_lines.append((x0, y0, x0, y1))
+                                add_v_line((x0, y0, x0, y1), visible_rect)
                             if not clip_bbox or (clip_bbox.x0 - 2.0 <= x1 <= clip_bbox.x1 + 2.0):
-                                v_lines.append((x1, y0, x1, y1))
+                                add_v_line((x1, y0, x1, y1), visible_rect)
 
         image_h, image_v = self._extract_lines_from_tiled_images(
             page, clip_bbox=clip_bbox
@@ -263,7 +295,104 @@ class WiredTableExtractor(BaseTableExtractor):
         h_lines.extend(image_h)
         v_lines.extend(image_v)
 
+        h_lines = self._deduplicate_rectangle_edges(
+            h_lines, rectangle_h_edges, horizontal=True
+        )
+        v_lines = self._deduplicate_rectangle_edges(
+            v_lines, rectangle_v_edges, horizontal=False
+        )
+
         return h_lines, v_lines
+
+    def _deduplicate_rectangle_edges(
+        self,
+        lines: List[Tuple[float, float, float, float]],
+        rectangle_edges: List[
+            Tuple[Tuple[float, float, float, float], fitz.Rect]
+        ],
+        *,
+        horizontal: bool,
+    ) -> List[Tuple[float, float, float, float]]:
+        """Drop a duplicate only when it matches one geometric rectangle edge.
+
+        A nearby ``re`` is not sufficient by itself: the candidate must also
+        match that rectangle edge's long-axis span, endpoints, and normal
+        coordinate.  The strict merge-group tolerance remains responsible for
+        unrelated line candidates.
+        """
+        if not lines or not rectangle_edges:
+            return lines
+
+        rectangle_line_keys = {
+            tuple(round(value, 6) for value in edge_line)
+            for edge_line, _rectangle in rectangle_edges
+        }
+        deduplicated = []
+        for line in lines:
+            line_key = tuple(round(value, 6) for value in line)
+            if line_key in rectangle_line_keys:
+                deduplicated.append(line)
+                continue
+            if any(
+                self._matches_rectangle_edge(
+                    line,
+                    edge_line,
+                    rectangle,
+                    horizontal=horizontal,
+                )
+                for edge_line, rectangle in rectangle_edges
+            ):
+                continue
+            deduplicated.append(line)
+        return deduplicated
+
+    @staticmethod
+    def _matches_rectangle_edge(
+        line: Tuple[float, float, float, float],
+        rectangle_line: Tuple[float, float, float, float],
+        rectangle: fitz.Rect,
+        *,
+        horizontal: bool,
+    ) -> bool:
+        if horizontal:
+            line_coordinate = line[1]
+            rectangle_coordinate = rectangle_line[1]
+            line_start, line_end = sorted((line[0], line[2]))
+            rectangle_line_start, rectangle_line_end = sorted(
+                (rectangle_line[0], rectangle_line[2])
+            )
+            thickness = abs(rectangle.y1 - rectangle.y0)
+        else:
+            line_coordinate = line[0]
+            rectangle_coordinate = rectangle_line[0]
+            line_start, line_end = sorted((line[1], line[3]))
+            rectangle_line_start, rectangle_line_end = sorted(
+                (rectangle_line[1], rectangle_line[3])
+            )
+            thickness = abs(rectangle.x1 - rectangle.x0)
+
+        minimum_span = min(
+            line_end - line_start,
+            rectangle_line_end - rectangle_line_start,
+        )
+        if minimum_span <= 0.0:
+            return False
+
+        overlap = min(line_end, rectangle_line_end) - max(
+            line_start, rectangle_line_start
+        )
+        if overlap / minimum_span < 0.98:
+            return False
+
+        endpoint_tolerance = max(0.25, min(1.0, thickness * 0.75))
+        if (
+            abs(line_start - rectangle_line_start) > endpoint_tolerance
+            or abs(line_end - rectangle_line_end) > endpoint_tolerance
+        ):
+            return False
+
+        coordinate_tolerance = max(0.35, min(1.0, thickness * 0.5 + 0.25))
+        return abs(line_coordinate - rectangle_coordinate) <= coordinate_tolerance
 
     @staticmethod
     def _intersect_rect(
