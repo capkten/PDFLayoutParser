@@ -521,6 +521,15 @@ def test_extract_keeps_multi_cell_wire_table():
 
     assert len(tables) == 1
     assert (tables[0].rows, tables[0].cols) == (1, 2)
+    assert tables[0].h_lines == [
+        (10.0, 20.0, 110.0, 20.0),
+        (10.0, 50.0, 110.0, 50.0),
+    ]
+    assert tables[0].v_lines == [
+        (10.0, 20.0, 10.0, 50.0),
+        (60.0, 20.0, 60.0, 50.0),
+        (110.0, 20.0, 110.0, 50.0),
+    ]
 
 
 def test_build_cells_respects_partial_line_segments_and_merges_missing_edges():
@@ -544,6 +553,66 @@ def test_build_cells_respects_partial_line_segments_and_merges_missing_edges():
     assert len(merged) == 1
     assert merged[0].bbox == BBox(0.0, 0.0, 100.0, 10.0)
     assert merged[0].colspan == 2
+
+
+def test_build_cells_materializes_non_rect_component_as_safe_spans():
+    """非矩形连通域按真实边缘切成跨度单元格，而不是逐槽位造假边界。"""
+    extractor = WiredTableExtractor()
+
+    # 外框包住一个从 y=50 开始的局部网格。上半段没有 x=20/90 的
+    # 竖线，因此上半段应保持为一个 colspan=3 的 Cell；下半段的
+    # x=20/90 真实存在，不能被上半段的全局坐标投影成贯穿线。
+    cells = extractor._build_cells_for_region(
+        BBox(0.0, 0.0, 100.0, 100.0),
+        h_lines=[
+            (0.0, 0.0, 100.0, 0.0),
+            (20.0, 50.0, 90.0, 50.0),
+            (20.0, 100.0, 90.0, 100.0),
+            (0.0, 100.0, 100.0, 100.0),
+        ],
+        v_lines=[
+            (0.0, 0.0, 0.0, 100.0),
+            (20.0, 50.0, 20.0, 100.0),
+            (90.0, 50.0, 90.0, 100.0),
+            (100.0, 0.0, 100.0, 100.0),
+        ],
+    )
+
+    assert [(c.row_index, c.col_index, c.rowspan, c.colspan) for c in cells] == [
+        (0, 0, 1, 3),
+        (1, 0, 1, 1),
+        (1, 1, 1, 1),
+        (1, 2, 1, 1),
+    ]
+
+
+def test_build_cells_does_not_project_partial_horizontal_line_to_outer_width():
+    """区域边界附近的局部横线不能被当成贯穿整行的外框。"""
+    extractor = WiredTableExtractor()
+    cells = extractor._build_cells_for_region(
+        BBox(0.0, 0.0, 100.0, 100.0),
+        h_lines=[
+            (50.0, 1.0, 100.0, 1.0),
+            (0.0, 50.0, 100.0, 50.0),
+            (0.0, 100.0, 100.0, 100.0),
+        ],
+        v_lines=[
+            (0.0, 0.0, 0.0, 100.0),
+            (50.0, 0.0, 50.0, 100.0),
+            (100.0, 0.0, 100.0, 100.0),
+        ],
+    )
+
+    assert any(
+        cell.bbox == BBox(0.0, 0.0, 50.0, 50.0)
+        and cell.rowspan == 2
+        and cell.colspan == 1
+        for cell in cells
+    )
+    assert not any(
+        cell.bbox == BBox(0.0, 0.0, 100.0, 1.0)
+        for cell in cells
+    )
 
 
 def test_build_cells_synthesizes_missing_top_and_bottom_edges():
@@ -719,6 +788,20 @@ def test_merge_v_lines_does_not_connect_adjacent_tables_separated_by_gap():
     assert len(merged) == 2
     assert merged[0] == (28.0, 10.0, 28.0, 50.0)
     assert merged[1] == (28.0, 52.5, 28.0, 90.0)
+
+
+def test_merge_h_lines_does_not_connect_adjacent_tables_separated_by_gap():
+    extractor = WiredTableExtractor()
+    h_lines = [
+        (10.0, 20.0, 50.0, 20.0),
+        (53.5, 20.0, 90.0, 20.0),
+    ]
+
+    merged = extractor._merge_h_lines(h_lines)
+
+    assert len(merged) == 2
+    assert merged[0] == (10.0, 20.0, 50.0, 20.0)
+    assert merged[1] == (53.5, 20.0, 90.0, 20.0)
 
 
 def test_trim_ghost_edge_rows_preserves_physically_closed_empty_rows():
@@ -898,6 +981,45 @@ def test_page_197_form_lines_do_not_create_wired_table():
     try:
         tables = WiredTableExtractor().extract(doc[197])
         assert tables == []
+    finally:
+        doc.close()
+
+
+def test_page_196_does_not_project_lower_columns_into_upper_form_area():
+    """P197 上方没有局部竖线时，不应被下方网格坐标切成多列。"""
+    import os
+
+    pdf_path = r"D:\codes\PDFLayoutParser\fix\zh_all_table_pages.pdf"
+    if not os.path.exists(pdf_path):
+        pytest.skip("PDF file not available")
+
+    doc = fitz.open(pdf_path)
+    try:
+        tables = WiredTableExtractor().extract(doc[196])
+        upper_cells = [
+            cell
+            for table in tables
+            for cell in table.cells
+            if cell.bbox.y0 < 390.0
+        ]
+
+        assert len(upper_cells) == 1
+        assert upper_cells[0].bbox.x0 == pytest.approx(30.6, abs=0.2)
+        assert upper_cells[0].bbox.x1 >= 559.0
+
+        for table in tables:
+            occupied = [
+                (row, col)
+                for cell in table.cells
+                for row in range(cell.row_index, cell.row_index + cell.rowspan)
+                for col in range(cell.col_index, cell.col_index + cell.colspan)
+            ]
+            assert all(
+                0 <= row < table.rows and 0 <= col < table.cols
+                for row, col in occupied
+            )
+            assert len(occupied) == table.rows * table.cols
+            assert len(set(occupied)) == len(occupied)
     finally:
         doc.close()
 
@@ -1192,4 +1314,3 @@ def test_wired_extractor_finds_tables_on_pdfsam_merge1_page0():
     assert overview is not None
     assert overview.source == "line_projection"
     assert (overview.rows, overview.cols) == (6, 5)
-

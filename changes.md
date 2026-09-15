@@ -1,5 +1,15 @@
 # Changes
 
+## 2026-09-14
+
+- 修复 `fix/zh_all_table_pages.pdf` 页面索引 `196`（印刷页码 P197）有线表格的局部线段被投影为整页网格问题。根因在 `src/hexai_pdf_parser/tables/extractors/wired_table_extractor.py::_build_cells_for_region()`：非矩形连通组件原先按全局网格逐槽位物化，局部横/竖线坐标又被边界吸附和相邻候选同时命中，最终把不属于上方区域的线表现成跨页 Cell 边界；底部 ghost 行裁剪时还可能留下未同步收缩的跨行 Cell。最终可视化中的左侧延伸横线另有一层原因：物理线没有延伸，但 `table_visualizer` 为每个 Cell 直接绘制完整矩形，补出了不存在的边界。
+  - **修复判定**：新增 `_snap_grid_coordinates()`，只有接近区域边界且在正交方向具有近乎全长覆盖的真实线才可吸附为外框；`has_h_segment()` / `has_v_segment()` 只采用距离当前网格坐标最近的真实线候选。非矩形连通组件改为依据真实 `h_edges`/`v_edges` 切分为互不重叠的安全矩形，保留合法 `rowspan`/`colspan`，不再逐槽位制造跨区域假 Cell；ghost 行被裁剪时同步截断跨行 Cell 的 `rowspan`。
+  - **线段连接边界**：保留 PDF 视觉上常见的小断隙桥接；新增横线大间隙不连接测试，并覆盖边界附近局部横线不得扩展为整行的反例。结构恢复仍只消费物理线、网格和 Cell，不新增无线表格 `page.get_text("words")` 回读或旧路径回退。
+  - **可视化修复**：有线提取结果把真实区域线段保存到 `Table.h_lines`/`Table.v_lines`，`TableExtractor._clamp_table_to_page()` 保留该元数据；带物理线元数据的表格由 `table_visualizer` 直接绘制裁剪后的真实线段并跳过完整 Cell 矩形，旧测试构造的无元数据表格保持原行为。
+  - **测试与验证结果**：`tests/test_table_extractor.py tests/test_table_visualizer.py tests/test_wired_table_extractor.py tests/test_rule_first_table_detection.py` 为 `158 passed, 1 failed`；唯一失败为既有 `test_hybrid_wired_table_replaces_full_rowspan_body_before_shifting_footer`，预期 `hybrid_line_span_recovery`、实际 `line_projection`，本次未修改该调用链。`python -m compileall -q src tests/test_table_visualizer.py tests/test_wired_table_extractor.py tests/test_table_extractor.py` 与 `git diff --check` 通过。
+  - **页面级验证**：使用当前 worktree 独立重跑 P197 到 `D:\codes\PDFLayoutParser\output\p197_line_span_visualizer_fix_20260914_v2\`。结果为 1 张 `line_projection` 表，`36x9`、73 个 Cell、bbox `[30.6,63.8,560.5,814.7]`；324 个逻辑槽位全部恰好覆盖，occupancy conflict 为 `0`，没有越界 Cell；最终表对象携带 38 条横线和 25 条竖线。新 PNG 视觉复核确认左侧假横线消失，真实表格横线仍保留。
+  - **页面产物**：结构化结果为 `D:\codes\PDFLayoutParser\output\p197_line_span_visualizer_fix_20260914_v2\pages\page-196.json`，修复后表格可视化为 `D:\codes\PDFLayoutParser\output\p197_line_span_visualizer_fix_20260914_v2\tables\page-196.png`；旧目录中的 `p197_wired_lines_raw_final_overlay.png` 和 `p197_wired_lines_merged_final_overlay.png` 仍用于物理线对照。大连通域及真实整页外框仍保留，属于按物理连通线保留的预期结果。
+
 ## 2026-09-11
 
 - 在 `MLTableDetector` 中实现进程级共享会话缓存（`_GLOBAL_SESSION_CACHE` 与 `get_shared_session`），彻底解决多次实例化检测器时重复从磁盘加载 36.4 MB 模型并初始化 ONNX Runtime Session 的冷启动开销。

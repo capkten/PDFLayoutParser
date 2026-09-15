@@ -380,6 +380,26 @@ def test_hybrid_wired_table_keeps_normal_height_grid(monkeypatch):
     assert extractor._recover_hybrid_wired_table(object(), table, "zh") is table
 
 
+def test_clamp_table_to_page_preserves_physical_line_metadata():
+    table = Table(
+        bbox=BBox(-10, -10, 110, 110),
+        rows=1,
+        cols=1,
+        cells=[Cell("", 0, 0, BBox(-10, -10, 110, 110))],
+        source="line_projection",
+        h_lines=[(-10.0, 0.0, 110.0, 0.0)],
+        v_lines=[(0.0, -10.0, 0.0, 110.0)],
+    )
+
+    class Page:
+        rect = fitz.Rect(0, 0, 100, 100)
+
+    clamped = TableExtractor._clamp_table_to_page(table, Page())
+
+    assert clamped.h_lines == table.h_lines
+    assert clamped.v_lines == table.v_lines
+
+
 def test_hybrid_wired_table_preserves_body_colspan_without_conflict(monkeypatch):
     extractor = TableExtractor()
     wired_cells = [
