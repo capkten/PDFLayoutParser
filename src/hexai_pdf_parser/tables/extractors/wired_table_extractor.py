@@ -47,6 +47,12 @@ class WiredTableExtractor(BaseTableExtractor):
 
         tables: List[Table] = []
         for region_bbox, region_h_lines, region_v_lines in table_regions:
+            region_h_lines = self._merge_region_line_coordinates(
+                region_h_lines, horizontal=True
+            )
+            region_v_lines = self._merge_region_line_coordinates(
+                region_v_lines, horizontal=False
+            )
             cells = self._build_cells_for_region(
                 region_bbox, region_h_lines, region_v_lines
             )
@@ -687,6 +693,78 @@ class WiredTableExtractor(BaseTableExtractor):
             return tuple(channel / 255.0 for channel in dominant)
         except Exception:
             return fallback
+
+    def _merge_region_line_coordinates(
+        self,
+        lines: List[Tuple[float, float, float, float]],
+        *,
+        horizontal: bool,
+    ) -> List[Tuple[float, float, float, float]]:
+        """Merge continuous line fragments that are nearly on the same coordinate.
+
+        The global line merge intentionally stays strict so lines from separate
+        tables cannot be connected.  At this point each input list belongs to a
+        single connected table region, so a one-point coordinate tolerance is
+        safe only when the fragments also overlap or nearly touch along their
+        long axis.
+        """
+        if not lines:
+            return []
+
+        coordinate_index = 1 if horizontal else 0
+        start_index = 0 if horizontal else 1
+        end_index = 2 if horizontal else 3
+        coordinate_tolerance = 1.0
+
+        sorted_lines = sorted(
+            lines,
+            key=lambda line: (
+                line[coordinate_index],
+                min(line[start_index], line[end_index]),
+            ),
+        )
+        groups: List[List[Tuple[float, float, float, float]]] = []
+
+        for line in sorted_lines:
+            line_start = min(line[start_index], line[end_index])
+            line_end = max(line[start_index], line[end_index])
+            if not groups:
+                groups.append([line])
+                continue
+
+            group = groups[-1]
+            group_coordinate = group[0][coordinate_index]
+            group_start = min(
+                min(item[start_index], item[end_index]) for item in group
+            )
+            group_end = max(
+                max(item[start_index], item[end_index]) for item in group
+            )
+            if (
+                abs(group_coordinate - line[coordinate_index])
+                <= coordinate_tolerance
+                and line_start <= group_end + self.line_tolerance
+                and line_end >= group_start - self.line_tolerance
+            ):
+                group.append(line)
+            else:
+                groups.append([line])
+
+        merged = []
+        for group in groups:
+            coordinate = sum(line[coordinate_index] for line in group) / len(group)
+            start = min(
+                min(line[start_index], line[end_index]) for line in group
+            )
+            end = max(
+                max(line[start_index], line[end_index]) for line in group
+            )
+            if horizontal:
+                merged.append((start, coordinate, end, coordinate))
+            else:
+                merged.append((coordinate, start, coordinate, end))
+
+        return merged
 
     @staticmethod
     def _colors_are_similar(

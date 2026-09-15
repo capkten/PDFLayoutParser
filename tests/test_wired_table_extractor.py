@@ -893,6 +893,64 @@ def test_merge_h_lines_does_not_connect_adjacent_tables_separated_by_gap():
     assert merged[1] == (53.5, 20.0, 90.0, 20.0)
 
 
+def test_region_line_merge_connects_nearby_vertical_fragments():
+    extractor = WiredTableExtractor()
+    v_lines = [
+        (99.00, 87.24, 99.00, 414.60),
+        (98.40, 415.08, 98.40, 705.96),
+    ]
+
+    merged = extractor._merge_region_line_coordinates(v_lines, horizontal=False)
+
+    assert len(merged) == 1
+    assert merged[0][0] == pytest.approx(98.70)
+    assert merged[0][1] == pytest.approx(87.24)
+    assert merged[0][3] == pytest.approx(705.96)
+
+
+def test_region_line_merge_keeps_disconnected_vertical_fragments_separate():
+    extractor = WiredTableExtractor()
+    v_lines = [
+        (99.00, 87.24, 99.00, 414.60),
+        (98.40, 420.00, 98.40, 705.96),
+    ]
+
+    merged = extractor._merge_region_line_coordinates(v_lines, horizontal=False)
+
+    assert len(merged) == 2
+
+
+def test_region_line_merge_is_scoped_to_each_region():
+    extractor = WiredTableExtractor()
+    first_region = [(99.00, 87.24, 99.00, 414.60)]
+    second_region = [(98.40, 415.08, 98.40, 705.96)]
+
+    first_merged = extractor._merge_region_line_coordinates(
+        first_region, horizontal=False
+    )
+    second_merged = extractor._merge_region_line_coordinates(
+        second_region, horizontal=False
+    )
+
+    assert first_merged == first_region
+    assert second_merged == second_region
+
+
+def test_region_line_merge_connects_nearby_horizontal_fragments():
+    extractor = WiredTableExtractor()
+    h_lines = [
+        (20.0, 50.0, 80.0, 50.0),
+        (80.4, 50.6, 120.0, 50.6),
+    ]
+
+    merged = extractor._merge_region_line_coordinates(h_lines, horizontal=True)
+
+    assert len(merged) == 1
+    assert merged[0][1] == pytest.approx(50.3)
+    assert merged[0][0] == pytest.approx(20.0)
+    assert merged[0][2] == pytest.approx(120.0)
+
+
 def test_trim_ghost_edge_rows_preserves_physically_closed_empty_rows():
     extractor = WiredTableExtractor()
     # 模拟真实物理空行：第 0 行有文字，第 1 行无文字但有真实的底物理横线 y=50.0 支持，且行高 25.0pt
@@ -1109,6 +1167,29 @@ def test_page_196_does_not_project_lower_columns_into_upper_form_area():
             )
             assert len(occupied) == table.rows * table.cols
             assert len(set(occupied)) == len(occupied)
+    finally:
+        doc.close()
+
+
+def test_page_2_nearby_inner_boundary_fragments_form_one_column():
+    """P2 中跨行连续但坐标相差小于 1pt 的内边界只能形成一列。"""
+    import os
+
+    pdf_path = r"D:\codes\PDFLayoutParser\fix\zh_all_table_pages.pdf"
+    if not os.path.exists(pdf_path):
+        pytest.skip("PDF file not available")
+
+    doc = fitz.open(pdf_path)
+    try:
+        tables = WiredTableExtractor().extract(doc[1])
+        assert len(tables) == 1
+        table = tables[0]
+        assert (table.rows, table.cols) == (8, 2)
+        inner_lines = [
+            line for line in table.v_lines if 98.0 <= line[0] <= 99.0
+        ]
+        assert len(inner_lines) == 1
+        assert inner_lines[0][0] == pytest.approx(98.7, abs=0.1)
     finally:
         doc.close()
 
