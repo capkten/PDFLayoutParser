@@ -53,6 +53,95 @@ def test_extract_lines_accepts_visible_fill_only_rules():
     assert v_lines == [(10.25, 20.0, 10.25, 80.0)]
 
 
+def test_extract_lines_deduplicates_stroked_edge_with_matching_filled_rectangle_edge():
+    filled_edge = fitz.Rect(10.0, 20.02, 110.0, 20.98)
+    stroked_edge = fitz.Rect(10.0, 20.08, 110.0, 20.08)
+    page = SimpleNamespace(
+        get_drawings=lambda **_kwargs: [
+            {
+                "type": "s",
+                "color": (0.0, 0.0, 0.0),
+                "rect": stroked_edge,
+                "items": [
+                    ("l", fitz.Point(10.0, 20.08), fitz.Point(110.0, 20.08))
+                ],
+            },
+            {
+                "type": "f",
+                "color": None,
+                "fill": (0.0, 0.0, 0.0),
+                "rect": filled_edge,
+                "items": [("re", filled_edge)],
+            },
+        ]
+    )
+
+    h_lines, v_lines = WiredTableExtractor()._extract_lines_from_drawings(page)
+
+    assert len(h_lines) == 1
+    assert h_lines[0] == pytest.approx((10.0, 20.5, 110.0, 20.5))
+    assert v_lines == []
+
+
+def test_extract_lines_keeps_nearby_line_without_matching_rectangle_edge():
+    filled_edge = fitz.Rect(10.0, 20.02, 110.0, 20.98)
+    nearby_line = fitz.Rect(120.0, 20.08, 220.0, 20.08)
+    page = SimpleNamespace(
+        get_drawings=lambda **_kwargs: [
+            {
+                "type": "f",
+                "color": None,
+                "fill": (0.0, 0.0, 0.0),
+                "rect": filled_edge,
+                "items": [("re", filled_edge)],
+            },
+            {
+                "type": "s",
+                "color": (0.0, 0.0, 0.0),
+                "rect": nearby_line,
+                "items": [
+                    ("l", fitz.Point(120.0, 20.08), fitz.Point(220.0, 20.08))
+                ],
+            },
+        ]
+    )
+
+    h_lines, v_lines = WiredTableExtractor()._extract_lines_from_drawings(page)
+
+    assert len(h_lines) == 2
+    assert sorted(round(line[1], 2) for line in h_lines) == [20.08, 20.5]
+    assert v_lines == []
+
+
+def test_extract_lines_keeps_two_distinct_nearby_filled_rectangles():
+    first_edge = fitz.Rect(10.0, 20.02, 110.0, 20.98)
+    second_edge = fitz.Rect(10.0, 20.52, 110.0, 21.48)
+    page = SimpleNamespace(
+        get_drawings=lambda **_kwargs: [
+            {
+                "type": "f",
+                "color": None,
+                "fill": (0.0, 0.0, 0.0),
+                "rect": first_edge,
+                "items": [("re", first_edge)],
+            },
+            {
+                "type": "f",
+                "color": None,
+                "fill": (0.0, 0.0, 0.0),
+                "rect": second_edge,
+                "items": [("re", second_edge)],
+            },
+        ]
+    )
+
+    h_lines, v_lines = WiredTableExtractor()._extract_lines_from_drawings(page)
+
+    assert len(h_lines) == 2
+    assert sorted(round(line[1], 2) for line in h_lines) == [20.5, 21.0]
+    assert v_lines == []
+
+
 def test_extract_lines_clips_filled_rule_to_pdf_clip_region():
     extractor = WiredTableExtractor()
     raw_rect = fitz.Rect(28.0, 810.4804, 28.7507, 823.2422)

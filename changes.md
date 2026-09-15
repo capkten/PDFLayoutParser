@@ -1,5 +1,12 @@
 # Changes
 
+## 2026-09-15
+
+- 收紧有线候选的矩形边重复线去重：根因是部分 PDF 将同一条可见细线同时编码为描边 `l` 和窄填充 `re`，两条中心坐标相差约 `0.4pt`，在 `_merge_h_lines()`/`_merge_v_lines()` 前会形成重复网格坐标；但不能因为候选来自 `re` 就扩大所有线的合并容差。
+  - **判定与调用位置**：`WiredTableExtractor._extract_lines_from_drawings()` 记录窄填充矩形及其几何边，只在另一条候选与该矩形边的方向、长轴覆盖率（至少 `98%`）、端点和法向坐标均匹配时提前去重。普通 `l`、独立 `re` 以及跨度不一致的近邻线继续保留；`merge_group_tol` 不因 `re` 来源而放宽。
+  - **测试与验证**：新增同一几何矩形边的 `l`/`re` 重复正例、无匹配矩形边的近邻线反例和两个独立近邻 `re` 反例；有线提取器专项测试 `52 passed`。包含表格提取器、可视化和有线专项的结果为 `150 passed, 1 failed`，唯一失败仍为既有 hybrid 路由测试（预期 `hybrid_line_span_recovery`、实际 `line_projection`），未触及本次路径；`compileall` 与 `git diff --check` 通过。
+  - **页面级验证**：在独立输出目录 `D:\codes\PDFLayoutParser\output\rectangle_frame_line_dedupe_20260915\` 重跑真实 PDF 页面索引 `84/85/86/196`（P85/P86/P87/P197）。P85、P86、P87 的结构分别为 `36x4`、`40x4`、`27x4`；P197 保持 `36x9`、73 个 Cell。PNG 视觉复核确认三页原有边框和网格连续，P197 的大外框及局部线段没有被删除或扩展。
+
 ## 2026-09-14
 
 - 修复 `fix/zh_all_table_pages.pdf` 页面索引 `196`（印刷页码 P197）有线表格的局部线段被投影为整页网格问题。根因在 `src/hexai_pdf_parser/tables/extractors/wired_table_extractor.py::_build_cells_for_region()`：非矩形连通组件原先按全局网格逐槽位物化，局部横/竖线坐标又被边界吸附和相邻候选同时命中，最终把不属于上方区域的线表现成跨页 Cell 边界；底部 ghost 行裁剪时还可能留下未同步收缩的跨行 Cell。最终可视化中的左侧延伸横线另有一层原因：物理线没有延伸，但 `table_visualizer` 为每个 Cell 直接绘制完整矩形，补出了不存在的边界。
