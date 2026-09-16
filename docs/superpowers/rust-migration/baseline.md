@@ -2,6 +2,9 @@
 
 ## 基线来源
 
+- 唯一基线完整 SHA：dc00211fe0cf95bc8c3412c883311fe86f8d8357；detached baseline worktree 必须保持该 SHA。
+- 未来 baseline artifact：output/pdf_rust_migration_baseline_feature-dev/manifest.json（不提交）。输入 SHA256、模型 SHA256、运行环境和分段计时须由 feature-dev checkout 的新 runner 生成；本 Sprint 不编造数值。
+
 - Python 行为基线：`feature-dev@dc00211fe0cf95bc8c3412c883311fe86f8d835b`。
 - 实施分支：`codex/pdf-fast-rust-migration`，从该基线创建。
 - 用户确认日期：2026-09-16。

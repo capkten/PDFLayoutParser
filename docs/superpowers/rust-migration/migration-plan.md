@@ -1,5 +1,7 @@
 # PDF 表格逻辑 Rust 迁移总计划（历史索引）
 
+superseded by docs/superpowers/plans/2026-09-16-rust-extreme-migration.md
+
 > 状态：superseded。执行入口是 [2026-09-16-rust-extreme-migration.md](../plans/2026-09-16-rust-extreme-migration.md)；本文件保留历史阶段索引，不再作为独立执行计划。
 
 完整执行计划见：[2026-09-16-rust-extreme-migration.md](../plans/2026-09-16-rust-extreme-migration.md)。本文件保留能力矩阵入口和阶段索引。

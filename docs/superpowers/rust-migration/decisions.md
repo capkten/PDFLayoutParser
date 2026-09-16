@@ -2,6 +2,7 @@
 
 | 日期 | 决策 | 状态 |
 |---|---|---|
+| 2026-09-17 | Sprint 000 核验 feature-dev 与 detached baseline worktree 均为 dc00211fe0cf95bc8c3412c883311fe86f8d8357；若 feature-dev 前进，先同步并重建 manifest。 | 生效 |
 | 2026-09-16 | 基线事实：普通 setuptools 动态版本元数据来自仓库 `version` 文件，当前为 `1.1.0`；该事实不代表本 sprint 的 Rust 扩展版本决策 | 基线记录 |
 | 2026-09-16 | 以 `feature-dev@dc00211fe0cf95bc8c3412c883311fe86f8d835b` 为行为基线 | 用户确认 |
 | 2026-09-16 | Python/PyMuPDF 保留 PDF 读取与公开 API；Rust 只接 owned DTO 并执行纯算法 | 用户确认 |
@@ -11,6 +12,7 @@
 | 2026-09-16 | 保留 Python 最低版本 `>=3.7`；目标使用 PyO3/maturin 的 abi3 wheel，按平台分别构建 | 用户确认的约束 |
 | 2026-09-16 | Sprint 001 的 Maturin/Cargo 包版本设为 `1.1.1`，与当前 `build.sh` release `VER` 一致；保留 `Requires-Python >=3.7`、`abi3-py37` wheel tag 和有效 console entry point `hexai_pdf_parser.cli:main` | 用户确认 |
 | 2026-09-16 | 中文/混合无线使用 native-span 新路径，不回读 words、不回退 zebra/legacy；空格、span 来源和 occupancy 合同继续生效 | 用户确认的项目约束 |
+| 2026-09-17 | 现有 benchmark harness 仅为准备性/历史证据；真实性能结论必须来自 feature-dev baseline 与新 runner。只有输出一致、P95 满足门槛且无回归时才允许 Rust primary。 | 生效 |
 
 ## 实施时的停止条件
 
