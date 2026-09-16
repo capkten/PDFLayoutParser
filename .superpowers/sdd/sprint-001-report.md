@@ -185,4 +185,4 @@ $env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'
 
 ### repair commit hashes
 
-- repair implementation: `de1bbb3bbfd7bfbcea05c9820494e8e7d5451f75`
+- repair implementation: `de1bbb3`
