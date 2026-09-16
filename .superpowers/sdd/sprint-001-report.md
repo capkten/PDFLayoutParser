@@ -68,7 +68,7 @@ python scripts/benchmark_rust_migration.py --mode python --suite fixture --pdf t
 
 ### reviewer findings
 
-1. `scripts/benchmark_rust_migration.py` 的 commit provenance 原先依赖调用方当前工作目录；已改为以脚本所在仓库为基准执行 `git -C <repository> rev-parse HEAD`，无法解析时显式抛出 `RuntimeError`。
+1. `scripts/benchmark_rust_migration.py` 的 commit provenance 原先依赖调用方当前工作目录；已改为以脚本所在仓库为基准执行 `git -C the repository containing scripts/benchmark_rust_migration.py rev-parse HEAD`，无法解析时显式抛出 `RuntimeError`。
 2. `hexai_pdf_parser.debug.benchmark_utils.summarize_timings` 原先缺少百分位统计；已将 `count`、`total`、`mean`、`min`、`max`、`p50`、`p95`、`p99` 统一到该公共实现，Rust migration 模块改为直接复用它。
 
 ### RED command/output
