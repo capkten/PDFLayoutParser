@@ -102,7 +102,7 @@ src/hexai_pdf_parser/tables/normalizers/financial_header_handler.py
 
 ~~~powershell
 git diff --check
-git add docs/superpowers/rust-migration
+git add -f docs/superpowers/rust-migration
 git commit -m "docs: define Rust migration benchmark baseline"
 ~~~
 
@@ -180,7 +180,8 @@ $env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'
 python -m pytest -q tests/test_rust_migration_benchmark.py
 python scripts/benchmark_rust_migration.py --mode python --suite fixture --pdf tests/fixtures/page_000_vector.pdf --pages 0 --warmups 1 --runs 2 --output-dir output/rust_migration_benchmark/sprint-001
 git diff --check
-git add scripts src/hexai_pdf_parser/debug tests .gitignore docs/superpowers/rust-migration/sprints/sprint-001-benchmark-baseline.md
+git add scripts src/hexai_pdf_parser/debug tests .gitignore
+git add -f docs/superpowers/rust-migration/sprints/sprint-001-benchmark-baseline.md
 git commit -m "feat: add Rust migration benchmark harness"
 ~~~
 
@@ -229,7 +230,8 @@ maturin develop --release
 $env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'
 python -m pytest -q tests/test_pdf_fast_dto.py tests/test_pdf_fast_binding.py
 git diff --check
-git add Cargo.toml rust src/hexai_pdf_parser/rust_adapter.py tests docs/superpowers/rust-migration/sprints/sprint-002-rust-core.md
+git add Cargo.toml rust src/hexai_pdf_parser/rust_adapter.py tests
+git add -f docs/superpowers/rust-migration/sprints/sprint-002-rust-core.md
 git commit -m "feat: add owned DTO boundary for Rust table kernels"
 ~~~
 
@@ -280,7 +282,8 @@ maturin develop --release
 $env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'
 python -m pytest -q tests/test_pdf_fast_wired.py tests/test_wired_table_extractor.py tests/test_table_extractor.py
 git diff --check
-git add rust src tests docs/superpowers/rust-migration/sprints/sprint-003-wired-geometry.md
+git add rust src tests
+git add -f docs/superpowers/rust-migration/sprints/sprint-003-wired-geometry.md
 git commit -m "feat: migrate wired table geometry kernels to Rust"
 ~~~
 
@@ -320,7 +323,8 @@ $env:PDF_RUST_MODE='rust'
 python test_single.py --pdf D:\codes\PDFLayoutParser\fix\zh_all_table_pages.pdf --pages 196,415 --output-dir output/pdf_rust_migration_wired_rust_20260916
 python scripts/compare_rust_migration.py --python output/pdf_rust_migration_wired_python_20260916 --rust output/pdf_rust_migration_wired_rust_20260916
 git diff --check
-git add rust src tests docs/superpowers/rust-migration/sprints/sprint-004-wired-cells.md changes.md
+git add rust src tests changes.md
+git add -f docs/superpowers/rust-migration/sprints/sprint-004-wired-cells.md
 git commit -m "feat: route wired cell assembly through Rust"
 ~~~
 
@@ -359,7 +363,8 @@ $env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'
 python -m pytest -q tests/test_pdf_fast_shared_geometry.py tests/test_table_extractor.py tests/test_wireless_table_recovery.py
 python scripts/benchmark_rust_migration.py --mode both --suite shared-geometry --pdf tests/fixtures/page_437_wireless.pdf --pages 0 --warmups 3 --runs 10 --output-dir output/rust_migration_benchmark/sprint-005
 git diff --check
-git add rust src tests docs/superpowers/rust-migration/sprints/sprint-005-shared-geometry.md
+git add rust src tests
+git add -f docs/superpowers/rust-migration/sprints/sprint-005-shared-geometry.md
 git commit -m "feat: share Rust geometry kernels across table paths"
 ~~~
 
@@ -397,7 +402,8 @@ $env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'
 python -m pytest -q tests/test_pdf_fast_wireless.py tests/test_wireless_structure_span_chain.py tests/test_wireless_structure_text_runs.py tests/test_wireless_output_order.py
 python scripts/benchmark_rust_migration.py --mode both --suite native-span --pdf tests/fixtures/page_437_wireless.pdf --pages 0 --warmups 3 --runs 10 --output-dir output/rust_migration_benchmark/sprint-006
 git diff --check
-git add rust src tests docs/superpowers/rust-migration/sprints/sprint-006-native-span.md
+git add rust src tests
+git add -f docs/superpowers/rust-migration/sprints/sprint-006-native-span.md
 git commit -m "feat: migrate native span and text run kernels to Rust"
 ~~~
 
@@ -439,7 +445,8 @@ $env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'
 python -m pytest -q tests/test_pdf_fast_wireless_structure.py tests/test_wireless_structure_*.py tests/test_wireless_table_recovery.py tests/test_wireless_extractor_split.py tests/test_wireless_output_order.py tests/test_unify_wireless_recovery.py
 python scripts/benchmark_rust_migration.py --mode both --suite chinese-wireless --pdf D:\codes\PDFLayoutParser\fix\zh_all_table_pages.pdf --pages 185,1002,1014 --warmups 1 --runs 3 --output-dir output/rust_migration_benchmark/sprint-007
 git diff --check
-git add rust src tests docs/superpowers/rust-migration/sprints/sprint-007-chinese-structure.md changes.md
+git add rust src tests changes.md
+git add -f docs/superpowers/rust-migration/sprints/sprint-007-chinese-structure.md
 git commit -m "feat: migrate Chinese wireless structure recovery to Rust"
 ~~~
 
@@ -477,7 +484,8 @@ python scripts/benchmark_rust_migration.py --mode both --suite shared-wireless -
 
 ~~~powershell
 git diff --check
-git add rust src tests docs/superpowers/rust-migration/sprints/sprint-008-shared-recovery.md changes.md
+git add rust src tests changes.md
+git add -f docs/superpowers/rust-migration/sprints/sprint-008-shared-recovery.md
 git commit -m "feat: migrate shared wireless candidate recovery to Rust"
 ~~~
 
@@ -517,7 +525,8 @@ $env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'
 python -m pytest -q tests/test_pdf_fast_english_wireless.py tests/test_page_347_structure.py tests/test_rule_first_table_detection.py tests/test_wireless_extractor_split.py tests/test_wireless_output_order.py tests/test_table_extractor.py
 python scripts/benchmark_rust_migration.py --mode both --suite english-wireless --pdf D:\codes\PDFLayoutParser\fix\zh_all_table_pages.pdf --pages 347,415,437 --warmups 1 --runs 3 --output-dir output/rust_migration_benchmark/sprint-009
 git diff --check
-git add rust src tests docs/superpowers/rust-migration/sprints/sprint-009-english-wireless.md changes.md
+git add rust src tests changes.md
+git add -f docs/superpowers/rust-migration/sprints/sprint-009-english-wireless.md
 git commit -m "feat: migrate English wireless kernels to Rust"
 ~~~
 
@@ -557,7 +566,8 @@ python scripts/benchmark_rust_migration.py --mode both --suite table-normalizati
 
 ~~~powershell
 git diff --check
-git add rust src tests docs/superpowers/rust-migration/sprints/sprint-010-table-normalization.md docs/superpowers/rust-migration/capability-matrix.md changes.md
+git add rust src tests changes.md
+git add -f docs/superpowers/rust-migration/sprints/sprint-010-table-normalization.md docs/superpowers/rust-migration/capability-matrix.md
 git commit -m "feat: migrate DTO-compatible table normalization to Rust"
 ~~~
 
@@ -596,7 +606,8 @@ Expected: no unclassified difference；没有 Chinese/mixed words access；没�
 $env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'
 python -m pytest -q tests/test_rust_migration_routing.py tests/test_pdf_fast_binding.py tests/test_pdf_fast_dto.py tests/test_pdf_fast_wired.py tests/test_pdf_fast_wireless.py tests/test_pdf_fast_wireless_structure.py tests/test_pdf_fast_english_wireless.py tests/test_wireless_extractor_split.py tests/test_rule_first_table_detection.py
 git diff --check
-git add src tests docs/superpowers/rust-migration/sprints/sprint-011-routing.md changes.md
+git add src tests changes.md
+git add -f docs/superpowers/rust-migration/sprints/sprint-011-routing.md
 git commit -m "feat: add differential routing for Rust table paths"
 ~~~
 
@@ -681,7 +692,8 @@ git diff --check
 
 ~~~powershell
 git diff --check
-git add docs/superpowers/rust-migration/benchmarks docs/superpowers/rust-migration/sprints/sprint-012-final-evaluation.md changes.md
+git add changes.md
+git add -f docs/superpowers/rust-migration/benchmarks docs/superpowers/rust-migration/sprints/sprint-012-final-evaluation.md
 git commit -m "docs: record Rust migration benchmark and final evaluation"
 ~~~
 
