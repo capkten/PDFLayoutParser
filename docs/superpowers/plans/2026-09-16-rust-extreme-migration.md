@@ -47,7 +47,7 @@
 
 - Cargo.toml、rust/lib.rs、pyproject.toml、build.sh：扩展模块、ABI 和发布配置。
 - rust_adapter.py、三类 extractor、wireless_table_recovery.py、wireless_structure/*.py：只替换已验收的纯计算调用点。
-- src/hexai_pdf_parser/debug/benchmark_utils.py：补充 percentile 和可序列化 summary。
+- src/hexai_pdf_parser/debug/benchmark_utils.py：保留 legacy `summarize_timings` 的五键结果，并提供供迁移 benchmark 使用的显式 `summarize_timings_with_percentiles`（含 p50/p95/p99）。
 - tests/、changes.md、迁移记录和 .gitignore：记录每个 Sprint 的结果和输出约束。
 
 ## Sprint 000：确认基线、分支和迁移矩阵
@@ -125,6 +125,7 @@ Interfaces:
 ~~~python
 # src/hexai_pdf_parser/debug/rust_migration_benchmark.py
 def summarize_timings(values: Sequence[float]) -> Dict[str, float]: ...
+def summarize_timings_with_percentiles(values: Sequence[float]) -> Dict[str, float]: ...
 def canonicalize_tables(tables: Sequence[object]) -> List[Dict[str, object]]: ...
 def compare_canonical_tables(python_tables, rust_tables) -> Dict[str, object]: ...
 def write_benchmark_run(path: Path, payload: Mapping[str, object]) -> None: ...
@@ -136,6 +137,8 @@ def run_suite(mode: str, suite: str, input_path: str, pages: Sequence[int],
 # scripts/compare_rust_migration.py
 def compare_runs(python_run: str, rust_run: str) -> Dict[str, object]: ...
 ~~~
+
+`hexai_pdf_parser.benchmark_utils.summarize_timings` 是 legacy public API，结果严格保持 `count`、`total`、`mean`、`min`、`max` 五个键；迁移 benchmark 必须调用显式的 `summarize_timings_with_percentiles`，不得通过扩展 legacy 返回值来获取百分位统计。
 
 Modes are exactly python、shadow、rust；unknown modes raise ValueError；default mode remains python。
 

@@ -6,7 +6,11 @@ import json
 from pathlib import Path
 from typing import Dict, List, Mapping, Sequence
 
-from .benchmark_utils import summarize_timings
+from .benchmark_utils import summarize_timings_with_percentiles
+
+
+# Keep the benchmark module's existing API while making its intent explicit.
+summarize_timings = summarize_timings_with_percentiles
 
 def _value(value, name):
     if isinstance(value, Mapping):

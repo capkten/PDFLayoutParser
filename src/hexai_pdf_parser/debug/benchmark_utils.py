@@ -34,7 +34,7 @@ def percentile(values: Sequence[float], percent: float) -> float:
 
 
 def summarize_timings(values: Sequence[float]):
-    """Return stable timing statistics, including interpolated percentiles."""
+    """Return the five-key legacy timing summary."""
 
     if not values:
         return {
@@ -43,9 +43,6 @@ def summarize_timings(values: Sequence[float]):
             "mean": 0.0,
             "min": 0.0,
             "max": 0.0,
-            "p50": 0.0,
-            "p95": 0.0,
-            "p99": 0.0,
         }
 
     numbers = [float(value) for value in values]
@@ -55,6 +52,16 @@ def summarize_timings(values: Sequence[float]):
         "mean": float(mean(numbers)),
         "min": min(numbers),
         "max": max(numbers),
+    }
+
+
+def summarize_timings_with_percentiles(values: Sequence[float]):
+    """Return timing statistics enriched with interpolated percentiles."""
+
+    summary = summarize_timings(values)
+    numbers = [float(value) for value in values]
+    return {
+        **summary,
         "p50": percentile(numbers, 50),
         "p95": percentile(numbers, 95),
         "p99": percentile(numbers, 99),

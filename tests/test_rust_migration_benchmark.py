@@ -12,7 +12,8 @@ from hexai_pdf_parser.debug.rust_migration_benchmark import (
     summarize_timings,
     write_benchmark_run,
 )
-from hexai_pdf_parser.debug import summarize_timings as public_summarize_timings
+from hexai_pdf_parser.debug.benchmark_utils import summarize_timings_with_percentiles
+from hexai_pdf_parser.benchmark_utils import summarize_timings as public_summarize_timings
 from scripts import benchmark_rust_migration
 from scripts.benchmark_rust_migration import run_suite
 
@@ -34,22 +35,29 @@ def test_summarize_timings_handles_empty_singleton_even_and_odd(
     assert summary["max"] == maximum
 
 
-def test_summarize_timings_includes_percentiles():
-    summary = summarize_timings([1.0, 2.0, 3.0, 4.0])
+def test_benchmark_summary_includes_percentiles():
+    summary = summarize_timings_with_percentiles([1.0, 2.0, 3.0, 4.0])
 
     assert summary["p50"] == 2.5
     assert summary["p95"] == 3.85
     assert summary["p99"] == 3.97
 
 
-def test_public_debug_summarize_timings_includes_percentiles():
+def test_public_debug_summarize_timings_remains_legacy_five_key_api():
     summary = public_summarize_timings([1.0, 2.0, 3.0, 4.0])
 
-    assert summary["count"] == 4
-    assert summary["total"] == 10.0
-    assert summary["mean"] == 2.5
-    assert summary["min"] == 1.0
-    assert summary["max"] == 4.0
+    assert summary == {
+        "count": 4,
+        "total": 10.0,
+        "mean": 2.5,
+        "min": 1.0,
+        "max": 4.0,
+    }
+
+
+def test_migration_summary_is_percentile_aware():
+    summary = summarize_timings([1.0, 2.0, 3.0, 4.0])
+
     assert summary["p50"] == 2.5
     assert summary["p95"] == 3.85
     assert summary["p99"] == 3.97

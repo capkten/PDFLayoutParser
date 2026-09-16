@@ -87,6 +87,8 @@ Benchmark 必须覆盖五层：
 - mean、min、max、P50、P95、P99、吞吐和峰值内存；
 - 表格数、Cell 数、失败页数以及结构化输出 manifest。
 
+计时 API 兼容性：`hexai_pdf_parser.benchmark_utils.summarize_timings` 保持 legacy 五键结果（`count`、`total`、`mean`、`min`、`max`）不变；迁移报告使用显式的 `summarize_timings_with_percentiles` 获取 P50/P95/P99，不改变公开 legacy API 的返回语义。
+
 推荐协议：函数级 warmup 3 次、正式 10 次；页面级 warmup 1 次、正式 5 次；全量 warmup 1 次、正式 3 次，均使用独立进程。
 
 比较规则：结构化输出先 canonicalize，再逐字段比较；不使用宽泛 ignore。差异必须记录 fixture、page、table、field、Python 值、Rust 值、容差、分类和处理结论。目标热点争取达到 `1.5x`，但在基线测得前不假设收益；Rust 路径不得造成明显端到端回退。
