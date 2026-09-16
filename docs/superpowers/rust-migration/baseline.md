@@ -6,6 +6,7 @@
 - 实施分支：`codex/pdf-fast-rust-migration`，从该基线创建。
 - 用户确认日期：2026-09-16。
 - 当前 Rust 状态：仓库没有现有 Cargo crate；迁移从 PyO3/maturin 扩展起步。
+- 原普通 setuptools 打包基线：`version` 文件为 `1.1.0`，由 `pyproject.toml` 的动态版本元数据读取；这是历史基线事实，不是 Sprint 001 扩展包版本。
 
 ## 已确认的兼容合同
 

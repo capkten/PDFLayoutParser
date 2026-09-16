@@ -2,12 +2,14 @@
 
 | 日期 | 决策 | 状态 |
 |---|---|---|
+| 2026-09-16 | 基线事实：普通 setuptools 动态版本元数据来自仓库 `version` 文件，当前为 `1.1.0`；该事实不代表本 sprint 的 Rust 扩展版本决策 | 基线记录 |
 | 2026-09-16 | 以 `feature-dev@dc00211fe0cf95bc8c3412c883311fe86f8d835b` 为行为基线 | 用户确认 |
 | 2026-09-16 | Python/PyMuPDF 保留 PDF 读取与公开 API；Rust 只接 owned DTO 并执行纯算法 | 用户确认 |
 | 2026-09-16 | 有线、中文/混合无线、英文无线按函数级逐步迁移，输入输出等价测试先行 | 用户确认 |
 | 2026-09-16 | 不做独立 benchmark；现阶段不设时间性能门槛 | 用户确认 |
 | 2026-09-16 | 保持 API、JSON、source、顺序、bbox、cell 文本/跨度、错误/空结果及浮点规则一致 | 用户确认 |
 | 2026-09-16 | 保留 Python 最低版本 `>=3.7`；目标使用 PyO3/maturin 的 abi3 wheel，按平台分别构建 | 用户确认的约束 |
+| 2026-09-16 | Sprint 001 的 Maturin/Cargo 包版本设为 `1.1.1`，与当前 `build.sh` release `VER` 一致；保留 `Requires-Python >=3.7`、`abi3-py37` wheel tag 和有效 console entry point `hexai_pdf_parser.cli:main` | 用户确认 |
 | 2026-09-16 | 中文/混合无线使用 native-span 新路径，不回读 words、不回退 zebra/legacy；空格、span 来源和 occupancy 合同继续生效 | 用户确认的项目约束 |
 
 ## 实施时的停止条件
@@ -19,5 +21,5 @@
 
 ## 当前未决项
 
-- 首次实施时，根据可用 Rust 工具链核对 PyO3 版本与 `abi3-py37` 支持；这是依赖可行性核验，不授权提高 Python 最低版本。
+- 首次实施时，核对选定的 Maturin/PyO3 组合与当前 Rust 工具链能否生成所需 wheel 和 metadata；这是构建可行性核验，不授权改变已决版本 `1.1.1`、Python 最低版本、ABI tag 或 entry point。
 - 本地 `fix/zh_all_table_pages.pdf` 不在迁移分支中；需要从原主工作区显式读取，不能复制或加入提交。
