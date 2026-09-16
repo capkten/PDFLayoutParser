@@ -6,10 +6,11 @@ from pathlib import Path
 import pytest
 
 from hexai_pdf_parser import BBox, Cell, Table
+import hexai_pdf_parser.debug.rust_migration_benchmark as migration_benchmark
 from hexai_pdf_parser.debug.rust_migration_benchmark import (
     canonicalize_tables,
     compare_canonical_tables,
-    summarize_timings,
+    summarize_timings_with_percentiles,
     write_benchmark_run,
 )
 from hexai_pdf_parser.debug.benchmark_utils import summarize_timings_with_percentiles
@@ -26,7 +27,7 @@ from scripts.benchmark_rust_migration import run_suite
 def test_summarize_timings_handles_empty_singleton_even_and_odd(
     values, count, total, mean, minimum, maximum
 ):
-    summary = summarize_timings(values)
+    summary = summarize_timings_with_percentiles(values)
 
     assert summary["count"] == count
     assert summary["total"] == total
@@ -55,8 +56,12 @@ def test_public_debug_summarize_timings_remains_legacy_five_key_api():
     }
 
 
+def test_migration_module_does_not_expose_legacy_summary_alias():
+    assert not hasattr(migration_benchmark, "summarize_timings")
+
+
 def test_migration_summary_is_percentile_aware():
-    summary = summarize_timings([1.0, 2.0, 3.0, 4.0])
+    summary = summarize_timings_with_percentiles([1.0, 2.0, 3.0, 4.0])
 
     assert summary["p50"] == 2.5
     assert summary["p95"] == 3.85
