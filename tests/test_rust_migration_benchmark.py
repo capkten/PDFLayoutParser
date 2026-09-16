@@ -10,7 +10,7 @@ import hexai_pdf_parser.debug.rust_migration_benchmark as migration_benchmark
 from hexai_pdf_parser.debug.rust_migration_benchmark import (
     canonicalize_tables,
     compare_canonical_tables,
-    summarize_timings_with_percentiles,
+    summarize_migration_timings,
     write_benchmark_run,
 )
 from hexai_pdf_parser.debug.benchmark_utils import summarize_timings_with_percentiles
@@ -37,7 +37,7 @@ def test_summarize_timings_handles_empty_singleton_even_and_odd(
 
 
 def test_benchmark_summary_includes_percentiles():
-    summary = summarize_timings_with_percentiles([1.0, 2.0, 3.0, 4.0])
+    summary = summarize_migration_timings([1.0, 2.0, 3.0, 4.0])
 
     assert summary["p50"] == 2.5
     assert summary["p95"] == 3.85

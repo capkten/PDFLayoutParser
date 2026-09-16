@@ -188,3 +188,10 @@ $env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'
 ### repair commit hashes
 
 - repair implementation: `de1bbb3`
+
+## Sprint 001 bounded repair 6 final reconciliation
+
+- Final HEAD: `8ac0202583578d8b3503ef92b87d547bca3e09f7` before this report-only reconciliation update; the amended final repair commit is recorded in the commit footer.
+- Final focused test: `14 passed, 5 warnings` from `tests/test_rust_migration_benchmark.py`.
+- Final API calls: `summarize_migration_timings(values)` explicitly delegates to `summarize_timings_with_percentiles(values)`; the CLI's existing explicit percentile API call is unchanged.
+- Earlier `unknown` and pre-fix outputs in this report are historical evidence only and do not describe the final state.

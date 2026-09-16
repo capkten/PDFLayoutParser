@@ -9,6 +9,10 @@ from typing import Dict, List, Mapping, Sequence
 from .benchmark_utils import summarize_timings_with_percentiles
 
 
+def summarize_migration_timings(values: Sequence[float]) -> Dict[str, float]:
+    return summarize_timings_with_percentiles(values)
+
+
 def _value(value, name):
     if isinstance(value, Mapping):
         return value.get(name)
