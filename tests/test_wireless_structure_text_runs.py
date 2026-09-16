@@ -643,3 +643,34 @@ def test_merge_same_band_native_line_runs_keeps_fragments_in_distinct_bands():
     )
 
     assert [item["text"] for item in result] == ["FRASERS", "PROPERTY"]
+
+
+def test_build_text_runs_merges_whitelisted_spaced_single_cjk_pair():
+    # Gap is 21.0 pt, which exceeds 1.25 * font_size (13.125) but is within 2.5 * font_size (26.25)
+    atoms = [
+        _atom("合", 124.0, 134.5, 0, (7, 0, 0), font_size=10.5, y=191.5),
+        _atom("计", 155.5, 166.0, 1, (7, 0, 1), font_size=10.5, y=191.5),
+    ]
+    result = build_text_runs(atoms)
+    assert [item["text"] for item in result] == ["合计"]
+    assert result[0]["bbox"] == [124.0, 191.5, 166.0, 201.5]
+
+
+def test_build_text_runs_does_not_merge_non_whitelisted_single_cjk_with_large_gap():
+    # Non-whitelisted pair (男, 女) with gap = 21.0 pt should NOT merge
+    atoms = [
+        _atom("男", 124.0, 134.5, 0, (7, 0, 0), font_size=10.5, y=191.5),
+        _atom("女", 155.5, 166.0, 1, (7, 0, 1), font_size=10.5, y=191.5),
+    ]
+    result = build_text_runs(atoms)
+    assert [item["text"] for item in result] == ["男", "女"]
+
+
+def test_build_text_runs_merges_whitelisted_xiaoji_spaced_single_cjk_pair():
+    # Whitelisted pair (小, 计) with gap = 18.0 pt should merge
+    atoms = [
+        _atom("小", 100.0, 110.0, 0, (7, 0, 0), font_size=10.0, y=50.0),
+        _atom("计", 128.0, 138.0, 1, (7, 0, 1), font_size=10.0, y=50.0),
+    ]
+    result = build_text_runs(atoms)
+    assert [item["text"] for item in result] == ["小计"]
