@@ -38,15 +38,26 @@ def _name(node: ast.AST) -> Optional[str]:
     return None
 
 
-def _args(node: Union[ast.FunctionDef, ast.AsyncFunctionDef]) -> str:
-    # ``posonlyargs`` was added in Python 3.8; the audit itself supports 3.7.
-    positional_only = getattr(node.args, "posonlyargs", ())
-    values = [item.arg for item in (*positional_only, *node.args.args, *node.args.kwonlyargs)]
-    if node.args.vararg:
-        values.append("*" + node.args.vararg.arg)
-    if node.args.kwarg:
-        values.append("**" + node.args.kwarg.arg)
+def _argument_fields(args: ast.arguments) -> str:
+    """Render every argument kind, including fields introduced after Python 3.7."""
+    # ``posonlyargs`` was added in Python 3.8; getattr keeps the audit runnable on 3.7.
+    positional_only = getattr(args, "posonlyargs", ())
+    values = [item.arg for item in positional_only]
+    if positional_only:
+        values.append("/")
+    values.extend(item.arg for item in args.args)
+    if args.vararg:
+        values.append("*" + args.vararg.arg)
+    elif args.kwonlyargs:
+        values.append("*")
+    values.extend(item.arg for item in args.kwonlyargs)
+    if args.kwarg:
+        values.append("**" + args.kwarg.arg)
     return ", ".join(values) or "无显式参数"
+
+
+def _args(node: Union[ast.FunctionDef, ast.AsyncFunctionDef]) -> str:
+    return _argument_fields(node.args)
 
 
 def _node_text(node: ast.AST) -> str:
@@ -122,8 +133,16 @@ def _walk(tree: ast.AST, module: str) -> Iterable[Tuple[ast.AST, str, str, str]]
 
 def _direct_scope_calls(node: ast.AST) -> Iterable[ast.Call]:
     """Yield calls in this lexical scope, excluding nested function scopes."""
-    for child in ast.iter_child_nodes(node):
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+        children = node.body if isinstance(node.body, list) else (node.body,)
+    else:
+        children = ast.iter_child_nodes(node)
+    for child in children:
+        # Decorators, defaults, annotations and nested callable/class bodies are
+        # outside the current function/method body scope.
         if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            continue
+        if isinstance(child, ast.ClassDef):
             continue
         if isinstance(child, ast.Call):
             yield child
@@ -178,7 +197,7 @@ def collect(roots: Sequence[Path]) -> List[Record]:
             for node, qualified, parent, kind in nodes:
                 dependency, classification, retention = _classification(node, path_text)
                 if isinstance(node, ast.Lambda):
-                    inputs, outputs = ", ".join(item.arg for item in node.args.args) or "无显式参数", "表达式结果"
+                    inputs, outputs = _argument_fields(node.args), "表达式结果"
                 else:
                     inputs = _args(node)
                     outputs = (ast.unparse(node.returns) if hasattr(ast, "unparse") else ast.dump(node.returns)) if node.returns else "未标注"

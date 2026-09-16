@@ -9,12 +9,14 @@ Generator 提供只读 worktree、允许文件清单、feature-dev 完整 SHA、
 git status --short --branch
 git diff --check
 git diff --name-only feature-dev...HEAD
-python scripts/audit_rust_migration_capability.py --root src/hexai_pdf_parser/tables --root src/hexai_pdf_parser/tables/normalizers --output temporary-matrix.md
+python scripts/audit_rust_migration_capability.py --root src/hexai_pdf_parser/tables --root src/hexai_pdf_parser/tables/normalizers --output docs/superpowers/rust-migration/capability-matrix.md
 python -m py_compile scripts/audit_rust_migration_capability.py
 `$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'`
-`& 'C:\Users\23662\AppData\Local\Programs\Python\Python312\Scripts\pytest.exe' -q tests/test_rust_migration_benchmark.py tests/test_wired_table_extractor.py tests/test_wireless_structure_columns.py tests/test_wireless_structure_grid.py tests/test_wireless_structure_header_topology.py tests/test_wireless_structure_merges.py tests/test_wireless_structure_recoverer.py tests/test_wireless_structure_span_chain.py tests/test_wireless_structure_text_runs.py tests/test_financial_header_normalizer.py`
+`PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q tests/test_rust_migration_benchmark.py tests/test_wired_table_extractor.py tests/test_wireless_structure_columns.py tests/test_wireless_structure_grid.py tests/test_wireless_structure_header_topology.py tests/test_wireless_structure_merges.py tests/test_wireless_structure_recoverer.py tests/test_wireless_structure_span_chain.py tests/test_wireless_structure_text_runs.py tests/test_financial_header_normalizer.py`
 
 评审者还要核对 DTO 是否注册、Python/Rust 边界、中文 native-span 是否禁止 words/zebra/legacy 回退、输出 equality、P95/no-regression 证据和 Sprint 范围。
+
+Windows PowerShell 等价写法为 `$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest -q ...`。PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 用于避免本机 pytest 插件自动加载造成环境漂移；不得把解释器或 pytest 绑定到任何本机绝对路径。
 
 ## 输出与门禁
 
