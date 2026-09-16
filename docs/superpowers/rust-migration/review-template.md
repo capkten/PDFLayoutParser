@@ -11,7 +11,8 @@ git diff --check
 git diff --name-only feature-dev...HEAD
 python scripts/audit_rust_migration_capability.py --root src/hexai_pdf_parser/tables --root src/hexai_pdf_parser/tables/normalizers --output temporary-matrix.md
 python -m py_compile scripts/audit_rust_migration_capability.py
-pytest -q focused-checks
+`$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'`
+`& 'C:\Users\23662\AppData\Local\Programs\Python\Python312\Scripts\pytest.exe' -q tests/test_rust_migration_benchmark.py tests/test_wired_table_extractor.py tests/test_wireless_structure_columns.py tests/test_wireless_structure_grid.py tests/test_wireless_structure_header_topology.py tests/test_wireless_structure_merges.py tests/test_wireless_structure_recoverer.py tests/test_wireless_structure_span_chain.py tests/test_wireless_structure_text_runs.py tests/test_financial_header_normalizer.py`
 
 评审者还要核对 DTO 是否注册、Python/Rust 边界、中文 native-span 是否禁止 words/zebra/legacy 回退、输出 equality、P95/no-regression 证据和 Sprint 范围。
 

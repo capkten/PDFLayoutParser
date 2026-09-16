@@ -4,7 +4,7 @@
 |---|---|---|
 | 2026-09-17 | Sprint 000 核验 feature-dev 与 detached baseline worktree 均为 dc00211fe0cf95bc8c3412c883311fe86f8d8357；若 feature-dev 前进，先同步并重建 manifest。 | 生效 |
 | 2026-09-16 | 基线事实：普通 setuptools 动态版本元数据来自仓库 `version` 文件，当前为 `1.1.0`；该事实不代表本 sprint 的 Rust 扩展版本决策 | 基线记录 |
-| 2026-09-16 | 以 `feature-dev@dc00211fe0cf95bc8c3412c883311fe86f8d835b` 为行为基线 | 用户确认 |
+| 2026-09-16 | 以 `feature-dev@dc00211fe0cf95bc8c3412c883311fe86f8d8357` 为行为基线 | 用户确认 |
 | 2026-09-16 | Python/PyMuPDF 保留 PDF 读取与公开 API；Rust 只接 owned DTO 并执行纯算法 | 用户确认 |
 | 2026-09-16 | 有线、中文/混合无线、英文无线按函数级逐步迁移，输入输出等价测试先行 | 用户确认 |
 | 2026-09-16 | benchmark 是每个迁移单元的强制验收项；必须同时记录 feature-dev Python baseline、迁移 Python、shadow/Rust 的输出与分段性能。只有输出等价、无回归且 P95 满足门槛时才允许切换 Rust primary | 用户后续确认，取代早期“不做独立 benchmark”记录 |

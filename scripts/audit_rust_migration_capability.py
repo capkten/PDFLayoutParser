@@ -39,7 +39,9 @@ def _name(node: ast.AST) -> Optional[str]:
 
 
 def _args(node: Union[ast.FunctionDef, ast.AsyncFunctionDef]) -> str:
-    values = [item.arg for item in (*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs)]
+    # ``posonlyargs`` was added in Python 3.8; the audit itself supports 3.7.
+    positional_only = getattr(node.args, "posonlyargs", ())
+    values = [item.arg for item in (*positional_only, *node.args.args, *node.args.kwonlyargs)]
     if node.args.vararg:
         values.append("*" + node.args.vararg.arg)
     if node.args.kwarg:
@@ -101,41 +103,78 @@ def _test(path: str) -> str:
 
 
 def _walk(tree: ast.AST, module: str) -> Iterable[Tuple[ast.AST, str, str, str]]:
-    def visit(node: ast.AST, scope: List[str], caller: str) -> Iterable[Tuple[ast.AST, str, str, str]]:
+    def visit(node: ast.AST, scope: List[str], caller: str, in_class: bool = False) -> Iterable[Tuple[ast.AST, str, str, str]]:
         for child in ast.iter_child_nodes(node):
-            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if isinstance(child, ast.ClassDef):
+                yield from visit(child, [*scope, child.name], caller, True)
+            elif isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 qualified = ".".join((*scope, child.name))
-                yield child, qualified, caller or "模块入口", "method" if scope else "function"
-                yield from visit(child, [*scope, child.name], qualified)
+                yield child, qualified, caller or "模块入口", "method" if in_class else "function"
+                yield from visit(child, [*scope, child.name], qualified, False)
             elif isinstance(child, ast.Lambda):
                 qualified = ".".join((*scope, f"<lambda>@{child.lineno}:{child.col_offset}"))
                 yield child, qualified, caller or "模块入口", "lambda"
-                yield from visit(child, [*scope, qualified], qualified)
+                yield from visit(child, [*scope, f"<lambda>@{child.lineno}:{child.col_offset}"], qualified, False)
             else:
-                yield from visit(child, scope, caller)
+                yield from visit(child, scope, caller, in_class)
     yield from visit(tree, [module], "")
+
+
+def _direct_scope_calls(node: ast.AST) -> Iterable[ast.Call]:
+    """Yield calls in this lexical scope, excluding nested function scopes."""
+    for child in ast.iter_child_nodes(node):
+        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            continue
+        if isinstance(child, ast.Call):
+            yield child
+        yield from _direct_scope_calls(child)
+
+
+def _resolve_callee(callee: str, qualified_names: set, qualified: str, module: str) -> Optional[str]:
+    """Resolve only names that identify a definition in this module.
+
+    Short names are never matched against arbitrary definitions: dynamic dispatch,
+    imports, and calls outside this module remain intentionally unresolved.
+    """
+    if callee in qualified_names:
+        return callee
+    if callee.startswith(module + ".") and callee in qualified_names:
+        return callee
+    owner = qualified.rsplit(".", 1)[0]
+    if callee.startswith(("self.", "cls.")):
+        candidate = owner + "." + callee.split(".", 1)[1]
+        return candidate if candidate in qualified_names else None
+    if "." not in callee:
+        candidates = [owner + "." + callee, module + "." + callee]
+        matches = [candidate for candidate in candidates if candidate in qualified_names]
+        return matches[0] if len(matches) == 1 else None
+    return None
+
+
+def _stable_path(path: Path) -> str:
+    resolved = path.resolve()
+    cwd = Path.cwd().resolve()
+    try:
+        return resolved.relative_to(cwd).as_posix()
+    except ValueError:
+        return resolved.as_posix()
 
 
 def collect(roots: Sequence[Path]) -> List[Record]:
     records: List[Record] = []
     for root in sorted({item.resolve() for item in roots}, key=lambda item: item.as_posix()):
         for path in sorted(root.rglob("*.py")) if root.is_dir() else [root]:
-            if path.name == "__init__.py":
-                continue
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
             nodes = list(_walk(tree, path.stem))
             qualified_names = {qualified for _, qualified, _, _ in nodes}
             calls: Dict[str, List[str]] = {qualified: [] for qualified in qualified_names}
             for node, qualified, _, _ in nodes:
-                for call in ast.walk(node):
-                    if isinstance(call, ast.Call):
-                        callee = _name(call.func)
-                        if callee:
-                            short = callee.rsplit(".", 1)[-1]
-                            for target in qualified_names:
-                                if target.rsplit(".", 1)[-1] == short and target != qualified and qualified not in calls[target]:
-                                    calls[target].append(qualified)
-            path_text = path.as_posix()
+                for call in _direct_scope_calls(node):
+                    callee = _name(call.func)
+                    target = _resolve_callee(callee, qualified_names, qualified, path.stem) if callee else None
+                    if target and target != qualified and qualified not in calls[target]:
+                        calls[target].append(qualified)
+            path_text = _stable_path(path)
             for node, qualified, parent, kind in nodes:
                 dependency, classification, retention = _classification(node, path_text)
                 if isinstance(node, ast.Lambda):
@@ -152,13 +191,13 @@ def render(records: Sequence[Record], roots: Sequence[Path]) -> str:
         "# Rust 迁移能力矩阵（AST 审计）", "",
         "> 本文件由 `scripts/audit_rust_migration_capability.py` 生成，是静态能力盘点，不是性能报告。",
         "> 分类仅允许 `exact`、`semantic`、`redesign`、`out_of_scope`；未测量性能统一标记未来 benchmark。",
-        f"> 输入根目录：{'、'.join(item.as_posix() for item in roots)}；登记 {len(records)} 个 AST 函数/方法/嵌套函数/lambda 节点。", "",
+        f"> 输入根目录：{'、'.join(_stable_path(item) for item in roots)}；登记 {len(records)} 个 AST 函数/方法/嵌套函数/lambda 节点。", "",
         "| 符号 | 调用者 | 位置/类型 | 依赖边界 | 输入字段 | 输出字段 | 分类 | Rust 目标 | 测试 | benchmark suite | 状态 | Python 保留理由 |",
         "|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for item in records:
         lines.append("| " + " | ".join((f"`{item.symbol}`", item.caller, item.location, item.dependency, item.inputs, item.outputs, item.classification, f"`{item.rust_target}`", f"`{item.tests}`", item.benchmark, item.status, item.retention)) + " |")
-    lines += ["", "## 审计规则", "", "- `out_of_scope`：页面/绘图/文字采集、公开对象装配、I/O 和调试边界，明确保留 Python。", "- `semantic`：在 Python 已采集快照上可重现，但需适配公开对象并通过输出 equality。", "- `redesign`：当前依赖动态字段，先落实固定 DTO；`exact` 也不表示已经实现或已经测得加速。"]
+    lines += ["", "## 审计规则", "", "- `out_of_scope`：页面/绘图/文字采集、公开对象装配、I/O 和调试边界，明确保留 Python。", "- `semantic`：在 Python 已采集快照上可重现，但需适配公开对象并通过输出 equality。", "- `redesign`：当前依赖动态字段，先落实固定 DTO；`exact` 也不表示已经实现或已经测得加速。", "- 调用者只遍历当前函数/方法的直接 lexical body scope；遇到 nested function/lambda 即停止，因此不会把嵌套调用归入外层。仅解析本模块内可确定的完整限定名（含 `self.`/`cls.` 的当前类方法）；动态调用、导入调用和无法唯一解析的短名不作断言。"]
     return "\n".join(lines) + "\n"
 
 
