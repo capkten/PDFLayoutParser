@@ -32,7 +32,15 @@ include = [
     "src/hexai_pdf_parser/tables/table_templates/*.json",
     "src/hexai_pdf_parser/ml/table_detector_model/*.onnx",
 ]
-exclude = ["output/**", "src/hexai_pdf_parser.egg-info/**"]
+exclude = [
+    "output/**",
+    "src/hexai_pdf_parser.egg-info/**",
+    ".codegraph/**",
+    ".cursor/**",
+    ".gemini/**",
+    ".superpowers/**",
+    ".devops/**",
+]
 
 [tool.pytest.ini_options]
 addopts = "-p no:cacheprovider"

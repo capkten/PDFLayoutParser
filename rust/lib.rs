@@ -5,14 +5,14 @@ pub type Line4 = (f64, f64, f64, f64);
 
 pub fn merge_h_lines(mut lines: Vec<Line4>, merge_group_tol: f64) -> Vec<Line4> {
     lines.sort_by(|left, right| {
-        round_one_decimal(left.1)
-            .partial_cmp(&round_one_decimal(right.1))
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| {
-                left.0
-                    .partial_cmp(&right.0)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
+        match round_one_decimal(left.1).partial_cmp(&round_one_decimal(right.1)) {
+            Some(std::cmp::Ordering::Equal) => left
+                .0
+                .partial_cmp(&right.0)
+                .unwrap_or(std::cmp::Ordering::Equal),
+            Some(ordering) => ordering,
+            None => std::cmp::Ordering::Equal,
+        }
     });
 
     let mut groups: Vec<Vec<Line4>> = Vec::new();
@@ -30,10 +30,7 @@ pub fn merge_h_lines(mut lines: Vec<Line4>, merge_group_tol: f64) -> Vec<Line4> 
     let mut merged = Vec::new();
     for group in groups {
         let avg_y = group.iter().map(|line| line.1).sum::<f64>() / group.len() as f64;
-        let mut segments: Vec<(f64, f64)> = group
-            .iter()
-            .map(|line| (line.0, line.2))
-            .collect();
+        let mut segments: Vec<(f64, f64)> = group.iter().map(|line| (line.0, line.2)).collect();
         segments.sort_by(|left, right| {
             left.0
                 .partial_cmp(&right.0)
@@ -62,11 +59,7 @@ fn round_one_decimal(value: f64) -> f64 {
 }
 
 #[pyfunction(name = "merge_h_lines")]
-fn merge_h_lines_binding(
-    py: Python<'_>,
-    lines: Vec<Line4>,
-    merge_group_tol: f64,
-) -> Vec<Line4> {
+fn merge_h_lines_binding(py: Python<'_>, lines: Vec<Line4>, merge_group_tol: f64) -> Vec<Line4> {
     py.allow_threads(move || merge_h_lines(lines, merge_group_tol))
 }
 

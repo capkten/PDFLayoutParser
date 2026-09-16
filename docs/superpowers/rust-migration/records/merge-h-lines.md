@@ -18,21 +18,22 @@
 ## 分类
 
 - 分类：精确复现（已批准并实测的 DTO 向量范围内）。
-- 理由：函数只计算确定性的数值 DTO；5 组 Python/Rust 输入输出完全相同，包括 1.15 和 2.25 的 round/sort 边界。
-- 未支持或未穷举：尚未对全部 IEEE-754 值、NaN/无穷值及任意极端坐标做性质/模糊测试；不据此声称对所有可能 `f64` 输入已形式化证明等价。Python 3.7 运行时未直接测试，验证的是 cp37-abi3 构建标签和元数据。
+- 理由：函数只计算确定性的数值 DTO；当前六个边界/行为向量的 Python/Rust 输出一致，包括 1.15、2.25 舍入键及 NaN 稳定排序。
+- 未支持或未穷举：尚未对全部 IEEE-754 值、正负无穷和任意极端坐标做性质/模糊测试；不据此声称对所有可能 `f64` 输入已形式化证明等价。Python 3.7 运行时未直接测试，验证的是 cp37-abi3 构建标签和元数据。
 - 接受差异：无已观察差异；无容差放宽。
 
 ## 验证
 
-- 固定向量：近邻线段归并；间隔超过 3.0 时分段；空输入；`round(1.15, 1)` 排序边界；`round(2.25, 1) == 2.2` 排序边界。
-- TDD RED：原始三组向量先写入 Rust/pytest 测试，再实现函数；实现缺失时 Rust 测试不能通过、扩展不可导入。其后 `1.15` 排序回归先以缩放后整数舍入实现验证，目标断言 RED：该算法把 1.15 排序键算成 1.2，令 x0 较小的另一条线排到前面。
-- TDD GREEN：改用一位小数格式化生成排序键后，`cargo test` 原有 4 项通过；本次新增的 2.25 边界在修改前直接调用现有 binding 已输出 Python 期望顺序，随后将该向量固化到 Rust 与 pytest。
-- Python/Rust 差分：以 `WiredTableExtractor._merge_h_lines` 对照 Rust adapter，5/5 向量逐项完全相同；`2.25` 案例中 Python `round(2.25, 1)` 为 `2.2`，2.25 线段保持在 2.3 线段之前。
-- 最终 Rust：`cargo test`，5 passed、0 failed；doc-tests 0。
-- 最终 Python：Python 3.12，`PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q tests/test_pdf_fast_binding.py tests/test_wired_table_extractor.py`，68 passed、5 warnings。警告为既有 PyMuPDF SWIG `SwigPyPacked`、`SwigPyObject`、`swigvarlink` 的 `__module__` 弃用警告；pytest 结束另有一条同类 `swigvarlink` 进程退出警告。
-- 构建/打包：Wheel `cp37-abi3-win_amd64`、Version `1.1.1`、Requires-Python `>=3.7`、规范化入口 `hexai_pdf_parser=hexai_pdf_parser.cli:main`；3 个 JSON 模板及 1 个 ONNX 模型均在 wheel 内。最终 sdist 含 Cargo manifest/lock、Rust/Python 源码及同一组包数据；无 `output/`、`target/`、`.venv/`、本机 PDF 或旧 egg-info 元数据。
-- 差异分类：5 组核验向量均为精确匹配；未观察到迁移差异。
-- 回归测试：`tests/test_pdf_fast_binding.py` 固化以上 5 组函数/binding 测试，`tests/test_wired_table_extractor.py` 保持生产 Python 路径回归。
+- 固定向量：近邻线段归并；间隔超过 3.0 时分段；空输入；`round(1.15, 1)` 排序边界；`round(2.25, 1) == 2.2` 排序边界；NaN 排序键稳定性。
+- 初始实现 TDD 记录：先前 Generator 报告称原始测试先于实现并观察到 RED，但当时没有把原始失败输出保存到迁移记录；初始实现与测试同在 `a58d04e`，因此目前无法仅凭提交历史独立证明其先后顺序。不得将该历史说明冒充为本次可复核的 RED 证据。
+- NaN 修复 TDD RED：仅含新 Rust/pytest 测试的提交 `eb45b5618704ea531aba1ed5b911a8074e14cc36` 先于比较器修复。该提交的隔离 worktree 上 `cargo test` 为 5 passed、1 failed；`preserves_input_order_when_rounded_y_comparison_is_nan` 失败，实际首项 `x0=0.0`、期望 `x0=10.0`。在同一未修复实现上，焦点 pytest 为 1 failed，断言实际 `0.0`、期望 `10.0`。两次失败均由 NaN 比较返回 unordered 后错误使用 `x0` 次级排序导致。
+- NaN 修复 TDD GREEN：比较器仅在舍入 y 明确相等时比较 `x0`；unordered 比较返回相等，使稳定排序保留输入顺序。修复后 `cargo test` 为 6 passed、0 failed；`maturin develop --release` 成功；binding 和有线回归为 69 passed、5 warnings。
+- Python/Rust 差分：原有五个固定向量逐项精确一致；新增 NaN 案例以 Python `WiredTableExtractor._merge_h_lines` 为 oracle，保持输入顺序，修复后的 Rust binding 输出相同顺序。未观察到容差放宽。
+- 既有弃用警告：5 条 PyMuPDF SWIG `SwigPyPacked`、`SwigPyObject`、`swigvarlink` `__module__` 弃用警告；pytest 退出时另有同类 `swigvarlink` 进程警告。
+- Wheel：`target/wheels-sprint001-repair/hexai_pdf_parser-1.1.1-cp37-abi3-win_amd64.whl`；Tag `cp37-abi3-win_amd64`、Version `1.1.1`、Requires-Python `>=3.7`、入口 `hexai_pdf_parser=hexai_pdf_parser.cli:main`；包含 3 个 JSON 模板和 1 个 ONNX 模型。
+- sdist：`target/sdist-sprint001-repair/hexai_pdf_parser-1.1.1.tar.gz`，278 个成员、未压缩 48,753,810 字节；包含 Cargo manifest/lock、Rust/Python 源码和 3 个 JSON 模板/1 个 ONNX。未包含 `output/`、`target/`、`.venv/`、`.codegraph/`、`.cursor/`、`.gemini/`、`.superpowers/`、`.devops/` 或本机 PDF。Cargo 对可选 crate 描述/license/homepage/repository 元数据发出警告，构建成功。
+- 差异分类：NaN 次级排序缺陷已修复；所有六个核验向量精确匹配。尚待独立 Evaluator 复核。
+- 回归测试：`tests/test_pdf_fast_binding.py` 固化以上六组函数/binding 测试，`tests/test_wired_table_extractor.py` 保持生产 Python 路径回归。
 
 ## 决策与后续
 
