@@ -28,3 +28,18 @@ def test_merge_h_lines_preserves_python_half_value_sort_order():
     assert merge_h_lines(
         [(10.0, 2.25, 11.0, 2.25), (0.0, 2.3, 1.0, 2.3)], 0.0
     ) == [(10.0, 2.25, 11.0, 2.25), (0.0, 2.3, 1.0, 2.3)]
+
+
+def test_merge_h_lines_preserves_input_order_when_rounded_y_is_nan():
+    import math
+
+    output = merge_h_lines(
+        [(10.0, float("nan"), 11.0, float("nan")), (0.0, 1.2, 1.0, 1.2)],
+        0.0,
+    )
+
+    assert len(output) == 2
+    assert output[0][0] == 10.0
+    assert math.isnan(output[0][1])
+    assert output[1][0] == 0.0
+    assert output[1][1] == 1.2

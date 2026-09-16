@@ -116,4 +116,18 @@ mod tests {
             vec![(10.0, 2.25, 11.0, 2.25), (0.0, 2.3, 1.0, 2.3)]
         );
     }
+
+    #[test]
+    fn preserves_input_order_when_rounded_y_comparison_is_nan() {
+        let output = merge_h_lines(
+            vec![(10.0, f64::NAN, 11.0, f64::NAN), (0.0, 1.2, 1.0, 1.2)],
+            0.0,
+        );
+
+        assert_eq!(output.len(), 2);
+        assert_eq!(output[0].0, 10.0);
+        assert!(output[0].1.is_nan());
+        assert_eq!(output[1].0, 0.0);
+        assert_eq!(output[1].1, 1.2);
+    }
 }
