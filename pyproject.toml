@@ -1,10 +1,10 @@
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]
-build-backend = "setuptools.build_meta"
+requires = ["maturin==1.8.7"]
+build-backend = "maturin"
 
 [project]
 name = "hexai_pdf_parser"
-dynamic = ["version"]
+version = "1.1.1"
 description = "A Python library for parsing PDF layouts"
 requires-python = ">=3.7"
 dependencies = [
@@ -24,15 +24,15 @@ dev = [
 [project.scripts]
 hexai_pdf_parser = "hexai_pdf_parser.cli:main"
 
-[tool.setuptools.packages.find]
-where = ["src"]
-
-[tool.setuptools.dynamic]
-version = {file = "version"}
-
-[tool.setuptools.package-data]
-"hexai_pdf_parser.tables" = ["table_templates/*.json"]
-"hexai_pdf_parser.ml" = ["table_detector_model/*.onnx"]
+[tool.maturin]
+python-source = "src"
+module-name = "hexai_pdf_parser._pdf_fast"
+bindings = "pyo3"
+include = [
+    "src/hexai_pdf_parser/tables/table_templates/*.json",
+    "src/hexai_pdf_parser/ml/table_detector_model/*.onnx",
+]
+exclude = ["output/**", "src/hexai_pdf_parser.egg-info/**"]
 
 [tool.pytest.ini_options]
 addopts = "-p no:cacheprovider"

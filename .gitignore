@@ -15,9 +15,13 @@ __pycache__/
 # Build artifacts
 build/
 dist/
+/target/
 version
 *.egg-info/
 *.whl
+/src/hexai_pdf_parser/_pdf_fast*.pyd
+/src/hexai_pdf_parser/_pdf_fast*.so
+/src/hexai_pdf_parser/_pdf_fast*.dylib
 
 # Pipeline output directories
 out_*/

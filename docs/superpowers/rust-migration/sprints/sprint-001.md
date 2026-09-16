@@ -2,7 +2,7 @@
 
 ## 状态
 
-计划待执行。行为基线已由用户确认；本 sprint 不修改有线生产路由。
+已实现，待独立评估。行为基线已由用户确认；本 sprint 不修改有线生产路由。
 
 ## 范围与所有权
 
@@ -17,6 +17,7 @@
 - PyO3 暴露一个批量 `merge_h_lines(lines, merge_group_tol)`；Python adapter 只负责转换类型。
 - 兼容当前 Python 规则：先按 `(round(y, 1), x0)` 排序；按组首线的 y 与容差归组；组内 y 求算术平均；x 线段按起点排序，间隙 `<=3.0` 合并，较大间隙另起一段；返回顺序保持当前分组/线段顺序。
 - ABI feature 必须令生成 wheel 声明 Python 3.7 abi3；若当前 toolchain 无法构建该目标，本 sprint 停在依赖决策，不修改 `requires-python`。
+- Maturin/Cargo 包版本固定为 `1.1.1`，与当前 `build.sh` release `VER` 一致；保留 `Requires-Python >=3.7` 和有效 console entry point `hexai_pdf_parser.cli:main`。
 
 ## 测试先行向量
 
@@ -45,7 +46,7 @@ maturin sdist
 git diff --check
 ```
 
-验收还须检查 wheel 文件名不再是 `py3-none-any`，metadata 仍声明 `Requires-Python: >=3.7`，且 PyO3 使用的 abi3 下限为 `cp37`。只有此检查通过，才将 Sprint 001 标为完成。
+验收还须检查 wheel 文件名不再是 `py3-none-any` 且含 `cp37-abi3` tag；wheel metadata 的 `Version` 为 `1.1.1`、`Requires-Python` 为 `>=3.7`，并保留有效 console entry point `hexai_pdf_parser.cli:main`。同时确认 PyO3 使用的 abi3 下限为 `cp37`。上述 metadata、ABI 和入口检查全部通过，才将 Sprint 001 标为完成。原普通 setuptools metadata 版本 `1.1.0` 仅作基线记录，不作为此次 wheel 版本验收值。
 还须检查 sdist 包含 `Cargo.toml`、`rust/` 源码和 Python `src/` 包，使源码分发能够重建同一扩展。
 
 ## 后续阶段输入

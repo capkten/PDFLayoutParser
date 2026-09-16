@@ -1,0 +1,12 @@
+[package]
+name = "hexai_pdf_parser"
+version = "1.1.1"
+edition = "2021"
+
+[lib]
+name = "_pdf_fast"
+path = "rust/lib.rs"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+pyo3 = { version = "=0.22.6", features = ["extension-module", "abi3-py37"] }

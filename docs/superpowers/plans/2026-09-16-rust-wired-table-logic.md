@@ -47,11 +47,12 @@
 
 **接口：** Rust `merge_h_lines(Vec<Line4>, f64) -> Vec<Line4>`；PyO3 同名批量入口；Python adapter 输入/输出 `list[tuple[float,float,float,float]]`。首个提交保持生产路由不变。
 
-- [ ] 在 `tests/test_pdf_fast_binding.py` 增加 sprint-001 列出的三组精确输入/输出测试，并确认扩展缺失时失败。
-- [ ] 在 Rust `#[cfg(test)]` 中使用同一三组向量，先确认 `cargo test` 因函数缺失失败。
-- [ ] 创建 PyO3 abi3 模块和 `merge_h_lines`，保留 Python 侧类型适配；在 Maturin mixed-project 构建中将模块安装到 `hexai_pdf_parser._pdf_fast`。
-- [ ] 将 `pyproject.toml` 构建后端切到 maturin，保留 Python package/data、console entry point 和 `requires-python >=3.7`；调整 `build.sh` 通过实际生成的 abi3 平台 wheel 选取发布文件。
-- [ ] 运行 `cargo test`、`maturin develop --release`、`python -m pytest -q tests/test_pdf_fast_binding.py`、`maturin build --release`；检查 wheel tag 与 metadata。
+- [x] 在 `tests/test_pdf_fast_binding.py` 增加 sprint-001 列出的三组精确输入/输出测试，并确认扩展缺失时失败。
+- [x] 在 Rust `#[cfg(test)]` 中使用同一三组向量，先确认 `cargo test` 因函数缺失失败。
+- [x] 创建 PyO3 abi3 模块和 `merge_h_lines`，保留 Python 侧类型适配；在 Maturin mixed-project 构建中将模块安装到 `hexai_pdf_parser._pdf_fast`。
+- [x] 将 `pyproject.toml` 构建后端切到 maturin，保留 Python package/data、console entry point 和 `requires-python >=3.7`；调整 `build.sh` 通过实际生成的 abi3 平台 wheel 选取发布文件。
+- [x] Sprint 001 的 Maturin/Cargo package metadata version 固定为 `1.1.1`（与当前 `build.sh` release `VER` 一致）；验证生成 wheel metadata `Version: 1.1.1`、`Requires-Python: >=3.7`、`cp37-abi3` tag，以及有效 entry point `hexai_pdf_parser.cli:main`。旧 setuptools 动态版本基线 `1.1.0` 不作为新 wheel 版本。
+- [x] 运行 `cargo test`、`maturin develop --release`、`python -m pytest -q tests/test_pdf_fast_binding.py`、`maturin build --release`；检查 wheel tag 与 metadata。
 
 ## Task 2：逐函数迁移线段归并和区域发现
 
