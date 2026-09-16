@@ -63,6 +63,25 @@ def test_migration_summary_is_percentile_aware():
     assert summary["p99"] == 3.97
 
 
+def test_run_suite_calls_explicit_percentile_api(monkeypatch, tmp_path):
+    calls = []
+
+    def summarize(values):
+        calls.append(list(values))
+        return {"count": len(values), "p50": 0.0, "p95": 0.0, "p99": 0.0}
+
+    monkeypatch.setattr(
+        benchmark_rust_migration,
+        "summarize_timings_with_percentiles",
+        summarize,
+    )
+    monkeypatch.setattr(benchmark_rust_migration, "_extract_python", lambda *_: [])
+
+    run_suite("python", "fixture", "tests/fixtures/page_000_vector.pdf", [0], 0, 1, str(tmp_path))
+
+    assert calls and len(calls[0]) == 1
+
+
 def test_run_suite_commit_is_resolved_from_script_repository(monkeypatch, tmp_path):
     fixture = Path(__file__).parent / "fixtures" / "page_000_vector.pdf"
     expected_commit = subprocess.check_output(

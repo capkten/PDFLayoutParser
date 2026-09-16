@@ -13,6 +13,8 @@
 - `tests/test_rust_migration_benchmark.py`
 - `docs/superpowers/rust-migration/sprints/sprint-001-benchmark-baseline.md`
 - `.superpowers/sdd/sprint-001-report.md`
+- `docs/superpowers/plans/2026-09-16-rust-extreme-migration.md`
+- `docs/superpowers/specs/2026-09-16-rust-extreme-migration-design.md`
 
 ## RED command/output
 

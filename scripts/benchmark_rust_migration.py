@@ -14,9 +14,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from hexai_pdf_parser import PDFParser
 from hexai_pdf_parser.debug.benchmark_utils import resolve_rust_mode
+from hexai_pdf_parser.debug.benchmark_utils import summarize_timings_with_percentiles
 from hexai_pdf_parser.debug.rust_migration_benchmark import (
     canonicalize_tables,
-    summarize_timings,
     write_benchmark_run,
 )
 
@@ -73,7 +73,7 @@ def run_suite(mode: str, suite: str, input_path: str, pages: Sequence[int],
         "input_sha256": _sha256(input_path),
         "warmups": warmups,
         "runs": runs,
-        "timings": summarize_timings(timings),
+        "timings": summarize_timings_with_percentiles(timings),
         "output_manifest": {
             "tables": len(tables),
             "pages": list(pages),
