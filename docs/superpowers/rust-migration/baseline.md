@@ -14,7 +14,7 @@
 - Rust 接收 owned DTO，完成有线、中文/混合无线、英文无线的纯算法；Python 保留公开 API、语言路由、服务编排、`Table`/`Cell` 构造和序列化。
 - 逐函数迁移，以相同输入的精确输出测试锁定兼容性；顺序、文本、坐标、source、置信度、跨度、空槽位、错误与空结果均按 Python 基线复现。不得通过增加浮点容差隐藏差异。
 - 每个 Rust 入口按页或表格区域批量接收数据；无 Python 回调的计算段释放 GIL。
-- 本阶段不做独立 benchmark，不设未经用户确认的性能门槛，也不宣称性能收益。
+- Benchmark 是本迁移的强制验收项：函数、FFI、区域、页面和全量 PDF 都必须记录 Python/Rust 前后数据；基线测量前不假设收益，目标热点建议达到 1.5x，Rust 路径不得造成明显端到端回退。
 - 保留现有 Python API、JSON 结构和调用方可观察行为；一个路径验证通过前不得切换该路径的生产路由。
 - 保持 `requires-python >=3.7`。使用 PyO3/maturin 的 abi3 方案时，wheel 仍须按操作系统、CPU 架构和 native runtime 构建；不得再假设 `py3-none-any`。
 

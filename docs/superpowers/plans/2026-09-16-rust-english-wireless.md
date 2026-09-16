@@ -15,7 +15,7 @@
 - `extract_zebra`、`extract_general_wireless`、text alignment 和 legacy callback 的优先级及异常/空结果回退必须与基线一致。
 - 精确保持排序、几何、financial token、header row、currency 独立列合并、rowspan/colspan 与 empty-cell 规则；不增业务文字特例或放宽浮点比较。
 - `zh`/`mixed` 仍只走 native-span，不可因本计划启用 zebra 或 legacy words 路径。
-- 按页/区域批量调用并在 Rust 纯计算阶段释放 GIL；本阶段不跑独立 benchmark。
+- 按页/区域批量调用并在 Rust 纯计算阶段释放 GIL；本阶段必须跑函数、区域和页面级 Python/Rust benchmark。
 - 每个纯函数单独按 RED→GREEN→逐字段差分推进；共享入口通过不替代叶子函数输入/输出测试。
 
 ## 文件边界

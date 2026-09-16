@@ -15,7 +15,7 @@
 - `zh`/`mixed` 只走 native-span；span 到 atom/text run 阶段完成同字段文字组合并保留来源连续性；结构阶段不调用 `page.get_text("words")`，不回退 `extract_zebra()`、legacy `_rebuild_text_aligned_table()` 或 page words 二次重建。
 - 列带/网格保留独立叶子列；span/atom 位于同槽位不构成合并证据。多层标题只按已有几何/拓扑规则推导，不硬编码业务文本。
 - `rowspan` 在物理行到逻辑网格之后、空槽位物化之前判定；跨度变化后重跑 occupancy；每个未覆盖槽位单独物化空 `1x1` Cell。
-- 每个 FFI 调用按页/region 批量传值并在纯计算时释放 GIL；不做独立 benchmark。
+- 每个 FFI 调用按页/region 批量传值并在纯计算时释放 GIL；每个迁移函数和完整 native-span 路径都必须执行独立 benchmark。
 - 每个迁移函数单独写 Python 与 Rust 精确向量，确认 RED 后实现 GREEN；对该函数所有返回字段做精确差分后才进入下一函数。组合入口测试不能代替 helper 的直接合同测试。
 
 ## 文件边界

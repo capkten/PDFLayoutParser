@@ -1,6 +1,6 @@
-# PDF 表格逻辑 Rust 渐进迁移设计
+# PDF 表格逻辑 Rust 渐进迁移设计（已被极限迁移方案取代）
 
-状态：已确认（2026-09-16）
+状态：已确认但被 [极限迁移设计](2026-09-16-rust-extreme-migration-design.md) 取代（2026-09-16）
 
 Python 行为基线：`feature-dev@dc00211fe0cf95bc8c3412c883311fe86f8d8357`
 
@@ -10,7 +10,7 @@ Python 行为基线：`feature-dev@dc00211fe0cf95bc8c3412c883311fe86f8d8357`
 
 将有线、英文无线、中文/混合无线表格的计算逻辑逐函数迁移到 Rust。Python/PyMuPDF 继续负责 PDF 打开、页面内容提取、语言分流、模型调用和现有公开接口；Rust 只接收普通的、自有所有权的数据结构，不接触 `fitz.Page` 或 PDF 对象。
 
-本次不做独立 microbenchmark。迁移验收以函数级输入输出等价、现有 Python API/JSON 输出不变，以及现有 `fix` 端到端测试通过为准。
+原方案不包含独立 microbenchmark；当前要求已改为以极限迁移、双引擎 differential test 和完整前后 benchmark 为主，执行细节以极限迁移设计和执行计划为准。
 
 ## 目标与非目标
 

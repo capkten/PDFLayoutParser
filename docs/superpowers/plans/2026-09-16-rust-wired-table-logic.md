@@ -13,7 +13,7 @@
 - Python 最低版本保持 `>=3.7`；wheel 采用 abi3 且按 OS、CPU 架构/native runtime 分别构建，不输出或假定通用 `py3-none-any` wheel。
 - Python/PyMuPDF 独占 PDF/Page/drawing/words 访问；Rust 只消费显式 owned DTO，不回调 Python。
 - 逐函数等价；不改算法策略、容差、排序、舍入、异常/空结果、表格来源或公开 API。
-- 批量 FFI 以页或表格区域为边界；Rust 长计算期间释放 GIL；不做 benchmark 或性能门槛。
+- 批量 FFI 以页或表格区域为边界；Rust 长计算期间释放 GIL；每个函数、区域、页面和完整路径都必须执行 Python/Rust benchmark。
 - 保留 page 415 chart 过滤、矩形边去重、clip、type3 glyph 和 open-boundary cell 等 feature-dev 基线行为。
 - 先写失败的精确输入/输出测试，再实现函数；生产调用只有阶段验收后才接 Rust。
 - 每个下面列出的纯函数单独执行 RED（pytest 与 cargo test 至少一侧按预期失败）→ GREEN（两侧同向量精确通过）→ Python/Rust 逐字段对照；通过后再开始下一个函数，不将整文件重写作为一个任务。
