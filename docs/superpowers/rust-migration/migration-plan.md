@@ -1,4 +1,6 @@
-# PDF 表格逻辑 Rust 迁移总计划（极限迁移执行版）
+# PDF 表格逻辑 Rust 迁移总计划（历史索引）
+
+> 状态：superseded。执行入口是 [2026-09-16-rust-extreme-migration.md](../plans/2026-09-16-rust-extreme-migration.md)；本文件保留历史阶段索引，不再作为独立执行计划。
 
 完整执行计划见：[2026-09-16-rust-extreme-migration.md](../plans/2026-09-16-rust-extreme-migration.md)。本文件保留能力矩阵入口和阶段索引。
 
@@ -29,7 +31,7 @@
 
 ## 交付顺序
 
-- Sprint 001：建立最小 abi3 PyO3 扩展并迁移一个纯函数 `_merge_h_lines`；验证 cargo、pytest、wheel 元数据与 Python 3.7 下限。
+- Sprint 001：建立可复现 benchmark harness；当前迁移分支的 benchmark 基础设施已实现，但生产路由仍为 Python。Rust DTO/算法迁移以极限执行计划的 Sprint 002 起步。
 - Sprint 002 及后续：逐函数完成有线与 Python words 适配；每个函数单独有输入/输出合同。
 - 下一阶段：完成 native-span 采集边界及共享候选内核，再完成中文/混合 `wireless_structure`。
 - 最后一阶段：迁移英文专属 zebra/general/legacy 规则并完成路由回归。

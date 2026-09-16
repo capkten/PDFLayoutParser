@@ -6,7 +6,7 @@
 | 2026-09-16 | 以 `feature-dev@dc00211fe0cf95bc8c3412c883311fe86f8d835b` 为行为基线 | 用户确认 |
 | 2026-09-16 | Python/PyMuPDF 保留 PDF 读取与公开 API；Rust 只接 owned DTO 并执行纯算法 | 用户确认 |
 | 2026-09-16 | 有线、中文/混合无线、英文无线按函数级逐步迁移，输入输出等价测试先行 | 用户确认 |
-| 2026-09-16 | 不做独立 benchmark；现阶段不设时间性能门槛 | 用户确认 |
+| 2026-09-16 | benchmark 是每个迁移单元的强制验收项；必须同时记录 feature-dev Python baseline、迁移 Python、shadow/Rust 的输出与分段性能。只有输出等价、无回归且 P95 满足门槛时才允许切换 Rust primary | 用户后续确认，取代早期“不做独立 benchmark”记录 |
 | 2026-09-16 | 保持 API、JSON、source、顺序、bbox、cell 文本/跨度、错误/空结果及浮点规则一致 | 用户确认 |
 | 2026-09-16 | 保留 Python 最低版本 `>=3.7`；目标使用 PyO3/maturin 的 abi3 wheel，按平台分别构建 | 用户确认的约束 |
 | 2026-09-16 | Sprint 001 的 Maturin/Cargo 包版本设为 `1.1.1`，与当前 `build.sh` release `VER` 一致；保留 `Requires-Python >=3.7`、`abi3-py37` wheel tag 和有效 console entry point `hexai_pdf_parser.cli:main` | 用户确认 |
