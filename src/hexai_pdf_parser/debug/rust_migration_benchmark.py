@@ -6,35 +6,7 @@ import json
 from pathlib import Path
 from typing import Dict, List, Mapping, Sequence
 
-from .benchmark_utils import percentile
-
-
-def summarize_timings(values: Sequence[float]) -> Dict[str, float]:
-    """Return stable timing statistics, including interpolated percentiles."""
-
-    numbers = [float(value) for value in values]
-    if not numbers:
-        return {
-            "count": 0,
-            "total": 0.0,
-            "mean": 0.0,
-            "min": 0.0,
-            "max": 0.0,
-            "p50": 0.0,
-            "p95": 0.0,
-            "p99": 0.0,
-        }
-    return {
-        "count": len(numbers),
-        "total": float(sum(numbers)),
-        "mean": float(sum(numbers) / len(numbers)),
-        "min": min(numbers),
-        "max": max(numbers),
-        "p50": percentile(numbers, 50),
-        "p95": percentile(numbers, 95),
-        "p99": percentile(numbers, 99),
-    }
-
+from .benchmark_utils import summarize_timings
 
 def _value(value, name):
     if isinstance(value, Mapping):

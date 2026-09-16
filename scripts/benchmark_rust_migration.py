@@ -22,10 +22,16 @@ from hexai_pdf_parser.debug.rust_migration_benchmark import (
 
 
 def _commit():
+    repository = Path(__file__).resolve().parents[1]
     try:
-        return subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
-    except (OSError, subprocess.CalledProcessError):
-        return "unknown"
+        return subprocess.check_output(
+            ["git", "-C", str(repository), "rev-parse", "HEAD"],
+            text=True,
+        ).strip()
+    except (OSError, subprocess.CalledProcessError) as error:
+        raise RuntimeError(
+            "cannot resolve repository commit for {}".format(repository)
+        ) from error
 
 
 def _sha256(path):

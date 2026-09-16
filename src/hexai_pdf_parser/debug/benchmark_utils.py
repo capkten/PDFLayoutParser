@@ -33,8 +33,8 @@ def percentile(values: Sequence[float], percent: float) -> float:
     return ordered[lower] + (ordered[upper] - ordered[lower]) * fraction
 
 
-def summarize_timings(values):
-    """Return basic summary statistics for timing values."""
+def summarize_timings(values: Sequence[float]):
+    """Return stable timing statistics, including interpolated percentiles."""
 
     if not values:
         return {
@@ -43,12 +43,19 @@ def summarize_timings(values):
             "mean": 0.0,
             "min": 0.0,
             "max": 0.0,
+            "p50": 0.0,
+            "p95": 0.0,
+            "p99": 0.0,
         }
 
+    numbers = [float(value) for value in values]
     return {
-        "count": len(values),
-        "total": float(sum(values)),
-        "mean": float(mean(values)),
-        "min": float(min(values)),
-        "max": float(max(values)),
+        "count": len(numbers),
+        "total": float(sum(numbers)),
+        "mean": float(mean(numbers)),
+        "min": min(numbers),
+        "max": max(numbers),
+        "p50": percentile(numbers, 50),
+        "p95": percentile(numbers, 95),
+        "p99": percentile(numbers, 99),
     }

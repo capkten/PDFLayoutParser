@@ -1,4 +1,6 @@
 import json
+import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -10,6 +12,8 @@ from hexai_pdf_parser.debug.rust_migration_benchmark import (
     summarize_timings,
     write_benchmark_run,
 )
+from hexai_pdf_parser.debug import summarize_timings as public_summarize_timings
+from scripts import benchmark_rust_migration
 from scripts.benchmark_rust_migration import run_suite
 
 
@@ -36,6 +40,37 @@ def test_summarize_timings_includes_percentiles():
     assert summary["p50"] == 2.5
     assert summary["p95"] == 3.85
     assert summary["p99"] == 3.97
+
+
+def test_public_debug_summarize_timings_includes_percentiles():
+    summary = public_summarize_timings([1.0, 2.0, 3.0, 4.0])
+
+    assert summary["count"] == 4
+    assert summary["total"] == 10.0
+    assert summary["mean"] == 2.5
+    assert summary["min"] == 1.0
+    assert summary["max"] == 4.0
+    assert summary["p50"] == 2.5
+    assert summary["p95"] == 3.85
+    assert summary["p99"] == 3.97
+
+
+def test_run_suite_commit_is_resolved_from_script_repository(monkeypatch, tmp_path):
+    fixture = Path(__file__).parent / "fixtures" / "page_000_vector.pdf"
+    expected_commit = subprocess.check_output(
+        ["git", "-C", str(Path(__file__).parents[1]), "rev-parse", "HEAD"],
+        text=True,
+    ).strip()
+    monkeypatch.setattr(benchmark_rust_migration, "_extract_python", lambda *_: [])
+
+    original_cwd = Path.cwd()
+    os.chdir(tmp_path)
+    try:
+        result = run_suite("python", "fixture", str(fixture), [0], 0, 1, str(tmp_path / "out"))
+    finally:
+        os.chdir(original_cwd)
+
+    assert result["commit"] == expected_commit
 
 
 def test_canonicalize_tables_preserves_metadata_and_stable_cell_order():
