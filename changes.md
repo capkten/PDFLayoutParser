@@ -1,5 +1,13 @@
 # Changes
 
+## 2026-09-16
+
+- 修复中文无线表格中排版大字距常见单字词组（如“合 计”、“小 计”等）成词被拆分并引发伪列带的问题：
+  - **根因与调用链**：在 `src/hexai_pdf_parser/tables/wireless_structure/text_runs.py::_can_join()` 中，`spaced_single_cjk` 间隙上限原固定为 `1.25 * font_size`。当 PDF 排版中两个单字（如“合”与“计”）使用分散对齐或双全角空格时，实际间隙可达约 `2.0 * font_size`（本例中 21.06pt），导致成词失败被拆为两个独立的 Atom。随后的 `infer_column_bands()` 将“合”归入项目列带，而游离的“计”被 `header_topology.py::rescue_sparse_body_bands()` 错误抢救为独立列带（Band 2），造成物理网格裂为 6 列，并在合计行产生孤立的 `<td>合</td><td>计</td>`。
+  - **判定与修改**：在 `text_runs.py` 中引入常见两字排版词白名单 `_SPACED_CJK_WORD_WHITELIST`（包含“合计”、“小计”、“总计”、“类别”、“税种”、“项目”等核心表格骨架词）。在同一原生文本行且两端均为严格单字 CJK 时，白名单词对允许的最大字间距放宽至 `2.5 * min(font_size)`；非白名单或普通单字依然严格限制在 `1.25 * font_size`。
+  - **测试与验证**：在 `tests/test_wireless_structure_text_runs.py` 中新增白名单词对（“合计”、“小计”）大字距合并正例、非白名单单字（如“男”、“女”）大字距保持独立反例；无线结构测试集 222 项全部通过（`222 passed`），`git diff --check` 0 错误。
+  - **页面级验证**：在独立输出目录 `output/fix_spaced_cjk_page_185/` 重跑 `fix/zh_all_table_pages.pdf` 页面索引 185（`page-185`）。Table 1 由原本异常的 `5x6` 正确恢复为 `5x5`，末行单元格成功合并为 `'合计'`，多余的空列带完全消除，可视化 PNG 中“合 计”由单一完整单元格边界包围。
+
 ## 2026-09-15
 
 - 收紧有线候选的矩形边重复线去重：根因是部分 PDF 将同一条可见细线同时编码为描边 `l` 和窄填充 `re`，两条中心坐标相差约 `0.4pt`，在 `_merge_h_lines()`/`_merge_v_lines()` 前会形成重复网格坐标；但不能因为候选来自 `re` 就扩大所有线的合并容差。
