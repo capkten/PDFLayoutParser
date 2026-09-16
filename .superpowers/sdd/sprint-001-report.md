@@ -121,3 +121,68 @@ match=True
 ### repair commit hashes
 
 - repair implementation: `740f2fd98407bfeae5a0ecac69f9461c2c640e31`
+
+## Sprint 001 bounded repair 2
+
+### reviewer finding
+
+`hexai_pdf_parser.benchmark_utils.summarize_timings` is a legacy public alias whose result contract is exactly `count`, `total`, `mean`, `min`, and `max`. The prior repair widened that result with percentiles for migration reporting, so the benchmark-specific percentile requirement had to move to an explicit separate API.
+
+### RED command/output
+
+命令：
+
+```powershell
+$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'
+& 'C:\Users\23662\AppData\Local\Programs\Python\Python312\python.exe' -m pytest -q tests/test_rust_migration_benchmark.py
+```
+
+输出：收集阶段失败，`ImportError: cannot import name 'summarize_timings_with_percentiles'`；这是新增失败测试在实现前对缺失 API 的预期 RED。
+
+### GREEN command/output
+
+聚焦 benchmark 测试：
+
+```powershell
+$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'
+& 'C:\Users\23662\AppData\Local\Programs\Python\Python312\python.exe' -m pytest -q tests/test_rust_migration_benchmark.py
+```
+
+输出：`12 passed, 5 warnings`。警告为现有 PyMuPDF SWIG 类型弃用警告。
+
+完整契约测试命令：
+
+```powershell
+$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'
+& 'C:\Users\23662\AppData\Local\Programs\Python\Python312\python.exe' -m pytest -q tests/test_rust_migration_benchmark.py tests/test_benchmark_utils.py
+```
+
+输出：benchmark 测试通过，但 `tests/test_benchmark_utils.py` 收集阶段仍因既有的 `extract_model_profile` 导入错误失败；未扩大本修复范围处理该问题。
+
+### fixture benchmark verification
+
+命令：
+
+```powershell
+& 'C:\Users\23662\AppData\Local\Programs\Python\Python312\python.exe' scripts/benchmark_rust_migration.py --mode python --suite fixture --pdf tests/fixtures/page_000_vector.pdf --pages 0 --warmups 1 --runs 2 --output-dir output/rust_migration_benchmark/sprint-001-repair-2
+```
+
+输出：`output/rust_migration_benchmark/sprint-001-repair-2/fixture-python.json`；JSON 的 `timings` 包含 `p50`、`p95`、`p99`，且 `route` 为 `python_baseline`。
+
+源代码 API 检查结果：legacy keys 为 `['count', 'max', 'mean', 'min', 'total']`；percentile-aware keys 额外包含 `p50`、`p95`、`p99`。
+
+### compatibility notes
+
+- `summarize_timings` 保持五键 legacy 结果不变。
+- 新增 `summarize_timings_with_percentiles`；migration benchmark 通过该实现提供百分位统计，未重复实现统计逻辑。
+- 更新 migration plan/spec，明确 legacy API 与 enriched migration report API 的边界。
+- `git diff --check` 通过；未修改生产解析、Rust 算法、路由默认值或非本修复范围代码。
+
+### unresolved concerns
+
+- 完整 Sprint 测试仍受既有 `tests/test_benchmark_utils.py` 收集错误影响。
+- 聚焦测试保留 5 个现有 PyMuPDF SWIG 弃用警告。
+
+### repair commit hashes
+
+- repair implementation: to be filled after commit
