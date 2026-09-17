@@ -2,6 +2,22 @@
 
 ## 2026-09-17
 
+- Sprint 011：构建统一差分路由、异常回退降级、路径特征门禁与端到端代表页验收。
+  - **根因与调用位置**：在全量算法完成 Rust 迁移后，需要建立严格的生产路由仲裁、灰度切换与高可用容灾机制，确保无环境变量时稳定保持 Python，支持通过环境变量（`PDF_RUST_MODE` 与路径级 `PDF_RUST_MODE_<PATH>`）进行灵活灰度与回退，且任何运行期 Rust 异常均能优雅降级回退至 Python 并输出诊断信息。
+  - **设计与修复判定**：
+    - **统一路由函数体系**：在 `src/hexai_pdf_parser/rust_adapter.py` 实现了 `get_rust_mode`、`run_python_or_rust`、`assert_equivalent`、`get_diagnostics`、`clear_diagnostics`。
+    - **模式合同严格遵守**：
+      - `python`：纯 Python 路径，不调用 Rust；
+      - `rust`：调用 Rust 算子，异常时自动捕获并记录 `rust_fallback` 诊断，安全回退 Python，保障服务不中断；
+      - `shadow`：双路并发运行，对比结果并在出现差异时记录 `rust_output_mismatch` 诊断，向外始终返回 Python 权威结果；
+      - 非法模式严格阻断并抛出 `ValueError`。
+    - **端到端代表页全量验收**：升级 `scripts/export_rust_migration_e2e.py`，完整调用 `PDFParser` 全流水线，对 `zh_all_table_pages.pdf` 的 7 个核心代表页（185, 196, 347, 415, 437, 1002, 1014）进行 Python、Shadow、Rust 三路独立导出与严格比对。
+  - **测试与基准测试结果**：
+    - 新增 `tests/test_rust_migration_routing.py`，9 个针对各模式、异常 fallback、mismatch 诊断记录及特征门禁的单元测试全部通过（`9 passed`）。
+    - 全链路核心回归测试套件（9 个文件）：95 passed, 0 failed。
+    - `git diff --check`: 0 警告。
+    - **端到端对比报告 (sprint-011-fix-e2e)**：在 7 个代表页上对比确认 `equal: true, differences_count: 0`；所有表格无槽位占用冲突（`occupancy_conflicts: 0`），结构化指标与单元格完全对齐。
+
 - Sprint 010：迁移可 DTO 化的表头与结构后处理纯算法至 Rust (PyO3) 并释放 GIL。
   - **根因与调用位置**：`src/hexai_pdf_parser/tables/normalizers/table_header_normalizer.py` 中的 `_promote_grouped_header` 以及相关财务大表头文本规范化逻辑，原先在 Python 层面通过循环、正则和对象属性反复判定，需要与 Rust 表格结构生成流水线衔接，支持直接在 DTO 层面进行结构推断与清洗。
   - **设计与修复判定**：

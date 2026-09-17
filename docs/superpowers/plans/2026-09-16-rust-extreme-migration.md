@@ -831,10 +831,10 @@ def run_python_or_rust(mode: str, python_fn, rust_fn, input_dto): ...
 def assert_equivalent(path: str, python_value, rust_value) -> None: ...
 ~~~
 
-- [ ] Step 1: 为 python、shadow、rust、Rust exception 和 invalid mode 增加 routing tests。无环境变量时必须为 python；`shadow` 比较后永远返回 Python；`rust` 成功时返回 Rust；Rust exception 记录 `rust_fallback` 后返回 Python；invalid mode 抛出清晰配置错误。
-- [ ] Step 2: 写明并测试 output-difference policy。生产 `rust` 路由不隐式运行第二次 Python，也不把不一致静默降级；任何不一致必须由 shadow/differential comparator 报告并阻断 primary 切换。只有运行期 Rust exception 可以按诊断字段回退 Python。
-- [ ] Step 3: 添加 path-specific feature gates。已验证 wired 可独立启用，native-span/English 可保持 Python；不改变公开 API 或 CLI flags。
-- [ ] Step 4: 对代表页运行 shadow。
+- [x] Step 1: 为 python、shadow、rust、Rust exception 和 invalid mode 增加 routing tests。无环境变量时必须为 python；`shadow` 比较后永远返回 Python；`rust` 成功时返回 Rust；Rust exception 记录 `rust_fallback` 后返回 Python；invalid mode 抛出清晰配置错误。
+- [x] Step 2: 写明并测试 output-difference policy。生产 `rust` 路由不隐式运行第二次 Python，也不把不一致静默降级；任何不一致必须由 shadow/differential comparator 报告并阻断 primary 切换。只有运行期 Rust exception 可以按诊断字段回退 Python。
+- [x] Step 3: 添加 path-specific feature gates。已验证 wired 可独立启用，native-span/English 可保持 Python；不改变公开 API 或 CLI flags。
+- [x] Step 4: 对代表页运行 shadow。
 
 ~~~powershell
 $env:PDF_RUST_MODE='shadow'
@@ -842,8 +842,8 @@ python scripts/export_rust_migration_e2e.py --mode shadow --pdf D:\codes\PDFLayo
 ~~~
 
 Expected: no unclassified difference；没有 Chinese/mixed words access；没有 chart/table boundary regression；输出目录包含 JSON、PNG、manifest、segments 和 peak RSS。
-- [ ] Step 5: 按 wired → shared geometry → native-span → Chinese/mixed → English → normalization 的顺序逐路径切换，每次复跑该路径测试和 benchmark；每一路径都必须比较 feature-dev Python、迁移分支 Python 和 Rust 三份结果。
-- [ ] Step 6: 运行 fix 端到端验收。
+- [x] Step 5: 按 wired → shared geometry → native-span → Chinese/mixed → English → normalization 的顺序逐路径切换，每次复跑该路径测试和 benchmark；每一路径都必须比较 feature-dev Python、迁移分支 Python 和 Rust 三份结果。
+- [x] Step 6: 运行 fix 端到端验收。
 
 ~~~powershell
 $env:PDF_RUST_MODE='python'
@@ -856,7 +856,7 @@ python scripts/compare_rust_migration.py --manifests output/fix_rust_migration_e
 ~~~
 
 `export_rust_migration_e2e.py` 必须调用现有 `PDFParser`，对每个 page index 写 `pages/page-<index>.json`（使用 `JSONWriter.write_page`）、`tables/page-<index>.png`（固定 `dpi`、`alpha=False`）和根目录 `manifest.json`。manifest schema 固定为 `{schema_version: 1, mode, commit, input_sha256, pages, dpi, model, environment, segment_samples: {extract: [], dto: [], ffi: [], algorithm: [], adapt: [], total: []}, segments: {extract: {count, p50, p95, p99}, dto: {count, p50, p95, p99}, ffi: {count, p50, p95, p99}, algorithm: {count, p50, p95, p99}, adapt: {count, p50, p95, p99}, total: {count, p50, p95, p99}}, memory: {peak_rss_samples_bytes: [], peak_rss_p50_bytes, peak_rss_p95_bytes}, page_results: [{page_index, status, table_count, json, png, table_sources, rows, cols, bbox, occupancy_conflicts, segments, memory, error}]}`；时间单位统一为秒、RSS 单位统一为 bytes，`page_results[].segments` 使用同样的六阶段结构，失败页仍写 `status=failed` 和 error，不得让单页失败被静默跳过。逐页断言 table count、source、rows/cols、bbox、text、Cell 顺序、rowspan/colspan、empty slots、occupancy、chart masking、相邻表格边界和失败页列表；若仓库端测服务入口已在 Sprint 000 发现，则用同一 PDF/页集重复请求并把 HTTP/响应 manifest 附在同一报告中。
-- [ ] Step 7: 通过独立 Evaluator 后提交。
+- [x] Step 7: 通过独立 Evaluator 后提交。
 
 ~~~powershell
 $env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'

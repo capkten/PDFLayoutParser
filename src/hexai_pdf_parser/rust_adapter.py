@@ -1,8 +1,115 @@
+import os
+import traceback
 from typing import Any, Dict, List, Optional, Tuple
 
 from . import _pdf_fast
 
 Line4 = Tuple[float, float, float, float]
+
+VALID_MODES = {"python", "shadow", "rust"}
+_ROUTING_DIAGNOSTICS: List[Dict[str, Any]] = []
+
+
+def get_diagnostics() -> List[Dict[str, Any]]:
+    """Return a copy of the current routing diagnostics."""
+    return list(_ROUTING_DIAGNOSTICS)
+
+
+def clear_diagnostics() -> None:
+    """Clear collected routing diagnostics."""
+    _ROUTING_DIAGNOSTICS.clear()
+
+
+def get_rust_mode(path: str = "") -> str:
+    """Get the active rust execution mode for the given path or globally."""
+    mode = None
+    if path:
+        env_key = f"PDF_RUST_MODE_{path.upper().replace('/', '_').replace('-', '_')}"
+        mode = os.environ.get(env_key)
+    if not mode:
+        mode = os.environ.get("PDF_RUST_MODE", "python")
+    mode = mode.strip().lower()
+    if mode not in VALID_MODES:
+        raise ValueError(
+            f"Invalid PDF_RUST_MODE '{mode}'. Allowed modes are: {sorted(list(VALID_MODES))}"
+        )
+    return mode
+
+
+def assert_equivalent(path: str, python_value: Any, rust_value: Any) -> None:
+    """Assert that python and rust outputs are equivalent, recording mismatch diagnostic on difference."""
+    if python_value != rust_value:
+        diag = {
+            "schema_version": 1,
+            "status": "rust_output_mismatch",
+            "path": path,
+            "field": "__root__",
+            "python_value": {"str_val": str(python_value)},
+            "rust_value": {"str_val": str(rust_value)},
+            "classification": "defect",
+        }
+        _ROUTING_DIAGNOSTICS.append(diag)
+        raise AssertionError(f"Output mismatch on path '{path}': Python={python_value!r} != Rust={rust_value!r}")
+
+
+def run_python_or_rust(mode: str, python_fn, rust_fn, input_dto: Any = None, path: str = ""):
+    """Execute Python or Rust according to mode contract."""
+    m = mode.strip().lower()
+    if m not in VALID_MODES:
+        raise ValueError(f"Invalid mode '{mode}'. Allowed modes are: {sorted(list(VALID_MODES))}")
+
+    if m == "python":
+        return python_fn()
+
+    if m == "rust":
+        try:
+            if input_dto is not None:
+                return rust_fn(input_dto)
+            return rust_fn()
+        except Exception as exc:
+            tb_str = traceback.format_exc()
+            diag = {
+                "schema_version": 1,
+                "status": "rust_fallback",
+                "path": path or "unknown",
+                "error_type": type(exc).__name__,
+                "message": str(exc),
+                "traceback_id": tb_str[-200:],
+            }
+            _ROUTING_DIAGNOSTICS.append(diag)
+            return python_fn()
+
+    if m == "shadow":
+        py_res = python_fn()
+        try:
+            if input_dto is not None:
+                r_res = rust_fn(input_dto)
+            else:
+                r_res = rust_fn()
+            if py_res != r_res:
+                diag = {
+                    "schema_version": 1,
+                    "status": "rust_output_mismatch",
+                    "path": path or "unknown",
+                    "field": "__root__",
+                    "python_value": {"str_val": str(py_res)},
+                    "rust_value": {"str_val": str(r_res)},
+                    "classification": "defect",
+                }
+                _ROUTING_DIAGNOSTICS.append(diag)
+        except Exception as exc:
+            tb_str = traceback.format_exc()
+            diag = {
+                "schema_version": 1,
+                "status": "rust_fallback",
+                "path": path or "unknown",
+                "error_type": type(exc).__name__,
+                "message": str(exc),
+                "traceback_id": tb_str[-200:],
+            }
+            _ROUTING_DIAGNOSTICS.append(diag)
+        return py_res
+
 
 
 def merge_h_lines(lines: List[Line4], merge_group_tol: float) -> List[Line4]:
