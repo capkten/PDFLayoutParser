@@ -269,11 +269,11 @@ def compare_manifests(migration_python_manifest: str, rust_manifest: str,
 
 Modes are exactly python、shadow、rust；unknown modes raise ValueError；default mode remains python。`both` 永远不是合法 mode；比较由两个独立 runner invocation 和 `compare_runs()` 完成。
 
-- [ ] Step 1: Write failing percentile and canonicalization tests。
+- [x] Step 1: Write failing percentile and canonicalization tests。
 
 测试空 timings、单值、奇偶数量、稳定表格顺序、稳定 Cell 顺序、float 序列化、empty slots 和 deliberate missing-key、extra-key、list-length、text、bbox、span、order、value differences。断言每个 difference 都包含按路径规则提取的 `field`、`python_value`、`rust_value`、`difference_kind` 和映射后的 `classification`；所有已知输出差异的 classification 必须为 `defect`。
 
-- [ ] Step 2: Run the new tests and confirm RED。
+- [x] Step 2: Run the new tests and confirm RED。
 
 ~~~powershell
 $env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'
@@ -282,7 +282,7 @@ python -m pytest -q tests/test_rust_migration_benchmark.py
 
 Expected: collection 或 assertion failure 明确指出 benchmark functions 尚未实现，而不是环境失败。
 
-- [ ] Step 3: Implement deterministic statistics and output manifests。
+- [x] Step 3: Implement deterministic statistics and output manifests。
 
 实现 percentile interpolation、Table/Cell canonicalize 和 sorted-key JSON。canonicalizer 必须保留 Python 输出的 Table 顺序和每个 Table 内原始 Cell 顺序；不得按 `(row, col, text)` 重排来掩盖顺序差异。每次运行至少写入以下字段；`segment_samples` 保存每次 measured run 的原始样本，`segments` 对每个阶段分别计算 `count/p50/p95/p99`，不得只保存一个平均值：
 
@@ -304,7 +304,7 @@ Expected: collection 或 assertion failure 明确指出 benchmark functions 尚�
 }
 ~~~
 
-- [ ] Step 4: Add runner CLI and mode routing without changing the default。
+- [x] Step 4: Add runner CLI and mode routing without changing the default。
 
 Runner 接受 `--mode`、`--suite`、`--pdf` 或 `--fixture`（二选一）、`--pages`（fixture 可不传）、`--warmups`、`--runs`、`--output-dir`、`--source-root` 和可选 `--baseline-id`。它通过隔离子进程从 `source-root/src` 导入目标 Python 代码，工具代码与目标源代码分别记录 SHA；`--mode python` 下绝不导入或调用 Rust binding。它记录命令、环境、PDF/fixture hash、模型 hash（可用时）和现有 pipeline stage timings，并在每次 measured run 记录以下互不重叠的阶段样本：`extract` 从第一次 PyMuPDF 页面/ drawing/word/span 读取前到 Python primitive extraction 完成；`dto` 从 primitive 数据转换成 FFI 输入前到完成；`ffi` 为 PyO3 调用 wall time 减去 Rust 内部 `algorithm` timer（含入参解码、跨边界传递和返回值编码）；`algorithm` 在 Python baseline 中是被迁移纯函数集合的包围计时，在 Rust 中只计 owned DTO 内核；`adapt` 为 Rust 返回后至 Python Table/Cell/output DTO 完成；`total` 为 `PDFParser.parse()` 的完整 wall time（含打开文件、pipeline 与序列化，不含进程启动）。Python 模式的 `ffi` 固定为 0；Rust 模式的 `algorithm`、`ffi` 和 `adapt` 由同一调用边界产生。`memory.peak_rss_samples_bytes` 以独立子进程的 OS high-water mark 采集（Windows `PeakWorkingSetSize`，Linux `ru_maxrss` 归一化为 bytes），并计算 `memory.peak_rss_p50_bytes` 与 `memory.peak_rss_p95_bytes`。每个阶段都保存原始样本并分别产生 `count/p50/p95/p99`。migration Python、shadow 和 Rust 必须使用相同 source commit、PDF hash、pages、机器、DPI、模型和 run 参数。Rust algorithm speedup 使用 `feature-dev baseline segments.algorithm.p95 / rust segments.algorithm.p95`；端到端 speedup 使用 `feature-dev baseline segments.total.p95 / rust segments.total.p95`；若 Python baseline 的迁移纯函数包围计时不可插入，Sprint 001 直接判定为失败，不得用 total 代替 algorithm。PDF_RUST_MODE 只由迁移 facade 读取，默认 python。
 
@@ -312,7 +312,7 @@ Runner 接受 `--mode`、`--suite`、`--pdf` 或 `--fixture`（二选一）、`-
 
 `--pages` 的解析合同是：`all` 展开为输入 PDF 中所有 0-based 页索引；显式列表按输入顺序保留。Runner 产物固定写入 `<output-dir>/<suite>-<mode>.json`，同一个 suite/mode 的重复运行须先使用独立目录，禁止覆盖原始测量。
 
-- [ ] Step 5: Verify RED → GREEN and capture the feature-dev pre-migration baseline。
+- [x] Step 5: Verify RED → GREEN and capture the feature-dev pre-migration baseline。
 
 必须先完成 runner 的 `--fixture`、`--source-root`、`--baseline-id`、`--pages all`、独立 worker、分段计时、peak RSS 和 mode routing，以及 comparator 的 `--baseline/--python/--rust/--shadow/--report` 和 `--manifests` CLI；这些合同对应的测试全部 GREEN 后，才允许执行下面的 feature-dev baseline 命令。
 
@@ -327,7 +327,7 @@ git diff --check
 
 Expected: source commit 在 baseline JSON 中是 `dc00211fe0cf95bc8c3412c883311fe86f8d8357`；输入 hash、1023 页列表、分段原始样本、P50/P95/P99、peak RSS、输出结构 manifest 均保存。baseline 原始 JSON 留在 ignored `output/`；只把小型摘要、命令、环境和 SHA256 写入 Sprint record。
 
-- [ ] Step 6: Commit Sprint 001 implementation and report。
+- [x] Step 6: Commit Sprint 001 implementation and report。
 
 ~~~powershell
 git diff --check
@@ -337,7 +337,7 @@ git commit -m "feat: add Rust migration benchmark harness"
 
 Expected: tests pass；summary JSON 写入；output/ 保持 ignored；python 模式不调用 Rust 路径。
 
-- [ ] Step 7: 生成 Sprint 001 review package 并通过独立评审。
+- [x] Step 7: 生成 Sprint 001 review package 并通过独立评审。
 
 将 commit SHA、测试输出、baseline JSON 小型摘要、source/input hash、sample benchmark JSON、`git diff --check` 和 compatibility notes 写入 `docs/superpowers/rust-migration/evaluations/sprint-001.md`，按 `review-template.md` 交给只读的 `gpt-5.6-luna` reviewer。reviewer 必须确认 legacy 五键 API、显式 percentile API、cwd-independent provenance、默认 Python route、true feature-dev baseline 复现和 no-production-route-change；输出 `pass`/`repair`/`blocked`。若为 `repair`，只修复报告或实现中明确的问题并重新评审，未 `pass` 不得进入 Sprint 002。
 
