@@ -2,6 +2,11 @@
 
 ## 2026-09-17
 
+- 修复 `glossary_ec.pdf` 第 4 页（解析索引 `3`）无线 glossary 的 `see` 引用被拆成伪列问题：
+  - **根因与调用位置**：`src/hexai_pdf_parser/tables/wireless_structure/text_runs.py::build_text_runs()` 原先将 `see` 与右侧释义拆成独立 atom；`infer_column_bands()` 随后把两个稀疏的 `see` x 轨道当成独立列，空槽位物化后结果从目标 `26x2` 膨胀为 `26x4`、`101 cells`。其中 AUM 还会被拼成 `seeassets under management`。
+  - **修复判定**：在 native span 到 atom 阶段合并严格为 `see` 的标记与流序相邻、同一 source block、同一视觉行、位于右侧且间距不超过 `2.0 * font_size` 的拉丁释义；候选区间存在其他 atom、数值或过大间距时拒绝合并。合并保留 `span_refs`、flow、source provenance，并以单个空格规范文本。恢复过程继续只消费 native span/atom/列带/Cell，不回读 `page.get_text("words")`，不回退 legacy 路径或修改 ML bbox。
+  - **测试与页面验证**：新增目标正例、数值邻接拒绝反例、空间中间 atom 拒绝反例及真实页面回归；`tests/test_wireless_structure_text_runs.py tests/test_wireless_structure_recoverer.py tests/test_wireless_structure_columns.py` 结果为 `72 passed`，有 5 条既有 PyMuPDF/SWIG 弃用警告。完整管线重跑到 `D:\codes\PDFLayoutParser\output\needs_human_glossary_ec_page4_fix_20260917\`：页面 1 张 `wireless_span_recovery` 表，`26x2`、`52 cells`、bbox `[51.7,45.4,598.0,707.7]`；52/52 槽位唯一覆盖，occupancy conflict 为 `0`。结构化结果为 `pages\page-003.json`，最终 PNG 为 `tables\page-003.png`（另有 `glossary_ec_page_003_visualized.png`），视觉检查确认伪中间列消失且相邻行、表格边界无误并。
+
 - 修复阅读顺序解析中同行动态文本碎片因微小垂直坐标浮点误差引发先右后左严重颠倒的问题，并严格保持双栏/多栏排版不横穿：
   - **根因与调用链**：在 `src/hexai_pdf_parser/extractors/reading_order.py::_recursive_xy_cut()` 的 Fallback 分支中，原先直接使用 `sorted(items, key=lambda: (item.y0, item.x0))`。当中文财报附注页面中某一行因中英混排、标点或字体切换被拆分成两个 TextBlock（如左侧中文机构名与右侧英文证书编号）时，右半段因字体基线微差导致 `y0` 稍微偏高（如 `349.1` 对比 `349.4`，差值仅 0.3pt），排序器直接将右半段排在前面、左半段排在后面，造成严重的同行先右后左逆跳颠倒。
   - **判定与修改**：

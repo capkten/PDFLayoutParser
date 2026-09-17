@@ -674,3 +674,49 @@ def test_build_text_runs_merges_whitelisted_xiaoji_spaced_single_cjk_pair():
     ]
     result = build_text_runs(atoms)
     assert [item["text"] for item in result] == ["小计"]
+
+
+def test_build_text_runs_merges_glossary_see_marker_with_following_definition():
+    atoms = [
+        _atom("see", 263.8, 283.2, 0, (3, 1, 0), y=10.0),
+        _atom(
+            "automated screen trading system",
+            299.1,
+            480.0,
+            1,
+            (3, 2, 0),
+            y=10.0,
+        ),
+    ]
+
+    result = build_text_runs(atoms)
+
+    assert [item["text"] for item in result] == [
+        "see automated screen trading system"
+    ]
+    assert result[0]["span_refs"] == ["S0", "S1"]
+    assert result[0]["flow_start"] == 1
+    assert result[0]["flow_end"] == 2
+
+
+def test_build_text_runs_does_not_merge_see_marker_with_numeric_value():
+    atoms = [
+        _atom("see", 100.0, 120.0, 0, (3, 1, 0), y=10.0),
+        _atom("100", 140.0, 160.0, 1, (3, 1, 1), y=10.0),
+    ]
+
+    result = build_text_runs(atoms)
+
+    assert [item["text"] for item in result] == ["see", "100"]
+
+
+def test_build_text_runs_does_not_merge_see_across_spatially_intermediate_atom():
+    atoms = [
+        _atom("see", 100.0, 120.0, 0, (3, 1, 0), y=10.0),
+        _atom("middle", 140.0, 180.0, 2, (3, 1, 1), y=10.0),
+        _atom("definition", 200.0, 260.0, 1, (3, 1, 2), y=10.0),
+    ]
+
+    result = build_text_runs(atoms)
+
+    assert "see definition" not in [item["text"] for item in result]
