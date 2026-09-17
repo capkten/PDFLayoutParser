@@ -341,3 +341,136 @@ def stable_output_order(
         d["cells"] = owned_cells
         owned_tables.append(d)
     return _pdf_fast.stable_output_order(owned_tables)
+
+
+def build_text_runs(
+    spans: List[Dict[str, Any]],
+    region: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    owned_region = dict(region)
+    if "schema_version" not in owned_region:
+        owned_region["schema_version"] = 1
+    owned_spans = []
+    for s in spans:
+        d = dict(s)
+        if "schema_version" not in d:
+            d["schema_version"] = 1
+        rect = d.get("rect")
+        if isinstance(rect, dict) and "schema_version" not in rect:
+            d["rect"] = {"schema_version": 1, **rect}
+        sp = d.get("source_position")
+        if isinstance(sp, dict) and "schema_version" not in sp:
+            d["source_position"] = {"schema_version": 1, **sp}
+        chars = d.get("characters", [])
+        owned_chars = []
+        for ch in chars:
+            ch_d = dict(ch)
+            if "schema_version" not in ch_d:
+                ch_d["schema_version"] = 1
+            ch_rect = ch_d.get("rect")
+            if isinstance(ch_rect, dict) and "schema_version" not in ch_rect:
+                ch_d["rect"] = {"schema_version": 1, **ch_rect}
+            owned_chars.append(ch_d)
+        d["characters"] = owned_chars
+        owned_spans.append(d)
+    return _pdf_fast.build_text_runs(owned_spans, owned_region)
+
+
+def build_atoms(
+    runs: List[Dict[str, Any]],
+    region: Optional[Dict[str, Any]] = None,
+) -> List[Dict[str, Any]]:
+    owned_runs = []
+    for r in runs:
+        d = dict(r)
+        if "schema_version" not in d:
+            d["schema_version"] = 1
+        rect = d.get("rect")
+        if isinstance(rect, dict) and "schema_version" not in rect:
+            d["rect"] = {"schema_version": 1, **rect}
+        owned_runs.append(d)
+    owned_region = None
+    if region is not None:
+        owned_region = dict(region)
+        if "schema_version" not in owned_region:
+            owned_region["schema_version"] = 1
+    return _pdf_fast.build_atoms(owned_runs, owned_region)
+
+
+def merge_wrapped_rows(
+    atoms: List[Dict[str, Any]],
+    tolerance: float = 5.0,
+) -> List[Dict[str, Any]]:
+    owned_atoms = []
+    for a in atoms:
+        d = dict(a)
+        if "schema_version" not in d:
+            d["schema_version"] = 1
+        rect = d.get("rect")
+        if isinstance(rect, dict) and "schema_version" not in rect:
+            d["rect"] = {"schema_version": 1, **rect}
+        owned_atoms.append(d)
+    return _pdf_fast.merge_wrapped_rows(owned_atoms, float(tolerance))
+
+
+def infer_output_order_mode(
+    items: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    owned_items = []
+    for it in items:
+        d = dict(it)
+        if "schema_version" not in d:
+            d["schema_version"] = 1
+        rect = d.get("rect")
+        if isinstance(rect, dict) and "schema_version" not in rect:
+            d["rect"] = {"schema_version": 1, **rect}
+        owned_items.append(d)
+    return _pdf_fast.infer_output_order_mode(owned_items)
+
+
+def recover_native_candidates(
+    input_dto: Dict[str, Any],
+) -> Dict[str, Any]:
+    d = dict(input_dto)
+    if "schema_version" not in d:
+        d["schema_version"] = 1
+    page = dict(d["page"])
+    if "schema_version" not in page:
+        page["schema_version"] = 1
+    d["page"] = page
+    region = dict(d["region"])
+    if "schema_version" not in region:
+        region["schema_version"] = 1
+    r_rect = region.get("rect")
+    if isinstance(r_rect, dict) and "schema_version" not in r_rect:
+        region["rect"] = {"schema_version": 1, **r_rect}
+    d["region"] = region
+    config = dict(d["config"])
+    if "schema_version" not in config:
+        config["schema_version"] = 1
+    d["config"] = config
+    owned_spans = []
+    for s in d.get("spans", []):
+        sd = dict(s)
+        if "schema_version" not in sd:
+            sd["schema_version"] = 1
+        rect = sd.get("rect")
+        if isinstance(rect, dict) and "schema_version" not in rect:
+            sd["rect"] = {"schema_version": 1, **rect}
+        sp = sd.get("source_position")
+        if isinstance(sp, dict) and "schema_version" not in sp:
+            sd["source_position"] = {"schema_version": 1, **sp}
+        chars = sd.get("characters", [])
+        owned_chars = []
+        for ch in chars:
+            ch_d = dict(ch)
+            if "schema_version" not in ch_d:
+                ch_d["schema_version"] = 1
+            ch_rect = ch_d.get("rect")
+            if isinstance(ch_rect, dict) and "schema_version" not in ch_rect:
+                ch_d["rect"] = {"schema_version": 1, **ch_rect}
+            owned_chars.append(ch_d)
+        sd["characters"] = owned_chars
+        owned_spans.append(sd)
+    d["spans"] = owned_spans
+    return _pdf_fast.recover_native_candidates(d)

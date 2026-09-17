@@ -2,6 +2,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PyModule, PyTuple};
 
 pub mod geometry;
+pub mod native_span;
 pub mod types;
 pub mod wired;
 
@@ -345,6 +346,105 @@ fn stable_output_order_binding<'py>(
     Ok(list)
 }
 
+#[pyfunction(name = "build_text_runs")]
+fn build_text_runs_binding<'py>(
+    py: Python<'py>,
+    spans: &Bound<'py, PyList>,
+    region: &Bound<'py, PyDict>,
+) -> PyResult<Bound<'py, PyList>> {
+    let mut rust_spans = Vec::with_capacity(spans.len());
+    for s in spans.iter() {
+        rust_spans.push(types::NativeSpanDto::from_py(
+            &s.downcast::<PyDict>()?.clone(),
+        )?);
+    }
+    let rust_region = Rect4::from_py(region)?;
+    let runs = py.allow_threads(move || native_span::build_text_runs(rust_spans, rust_region));
+    let list = PyList::empty_bound(py);
+    for r in runs {
+        list.append(r.to_py(py)?)?;
+    }
+    Ok(list)
+}
+
+#[pyfunction(name = "build_atoms")]
+#[pyo3(signature = (runs, region=None))]
+fn build_atoms_binding<'py>(
+    py: Python<'py>,
+    runs: &Bound<'py, PyList>,
+    region: Option<&Bound<'py, PyDict>>,
+) -> PyResult<Bound<'py, PyList>> {
+    let mut rust_runs = Vec::with_capacity(runs.len());
+    for r in runs.iter() {
+        rust_runs.push(types::TextRunDto::from_py(
+            &r.downcast::<PyDict>()?.clone(),
+        )?);
+    }
+    let rust_region = match region {
+        Some(dict) => Some(Rect4::from_py(dict)?),
+        None => None,
+    };
+    let atoms = py.allow_threads(move || native_span::build_atoms(rust_runs, rust_region));
+    let list = PyList::empty_bound(py);
+    for a in atoms {
+        list.append(a.to_py(py)?)?;
+    }
+    Ok(list)
+}
+
+#[pyfunction(name = "merge_wrapped_rows")]
+#[pyo3(signature = (atoms, tolerance=5.0))]
+fn merge_wrapped_rows_binding<'py>(
+    py: Python<'py>,
+    atoms: &Bound<'py, PyList>,
+    tolerance: f64,
+) -> PyResult<Bound<'py, PyList>> {
+    let mut rust_atoms = Vec::with_capacity(atoms.len());
+    for a in atoms.iter() {
+        rust_atoms.push(types::AtomDto::from_py(&a.downcast::<PyDict>()?.clone())?);
+    }
+    let merged = py.allow_threads(move || native_span::merge_wrapped_rows(rust_atoms, tolerance));
+    let list = PyList::empty_bound(py);
+    for a in merged {
+        list.append(a.to_py(py)?)?;
+    }
+    Ok(list)
+}
+
+#[pyfunction(name = "infer_output_order_mode")]
+fn infer_output_order_mode_binding<'py>(
+    py: Python<'py>,
+    items: &Bound<'py, PyList>,
+) -> PyResult<Bound<'py, PyDict>> {
+    let mut rust_atoms = Vec::with_capacity(items.len());
+    for item in items.iter() {
+        let dict = item.downcast::<PyDict>()?;
+        let rect = Rect4::from_py(&types::get_req(dict, "rect")?.downcast::<PyDict>()?.clone())?;
+        let order: i64 = types::get_req(dict, "order")?.extract()?;
+        rust_atoms.push(types::AtomDto {
+            schema_version: 1,
+            text: String::new(),
+            rect,
+            run_refs: Vec::new(),
+            row_hint: None,
+            col_hint: None,
+            order,
+        });
+    }
+    let mode = py.allow_threads(move || native_span::infer_output_order_mode(rust_atoms));
+    mode.to_py(py)
+}
+
+#[pyfunction(name = "recover_native_candidates")]
+fn recover_native_candidates_binding<'py>(
+    py: Python<'py>,
+    input_dict: &Bound<'py, PyDict>,
+) -> PyResult<Bound<'py, PyDict>> {
+    let input = types::NativeRecoveryInput::from_py(input_dict)?;
+    let output = py.allow_threads(move || native_span::recover_native_candidates(input));
+    output.to_py(py)
+}
+
 #[pymodule]
 fn _pdf_fast(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(rect_overlap_binding, module)?)?;
@@ -352,6 +452,11 @@ fn _pdf_fast(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(cluster_rows_binding, module)?)?;
     module.add_function(wrap_pyfunction!(cluster_columns_binding, module)?)?;
     module.add_function(wrap_pyfunction!(stable_output_order_binding, module)?)?;
+    module.add_function(wrap_pyfunction!(build_text_runs_binding, module)?)?;
+    module.add_function(wrap_pyfunction!(build_atoms_binding, module)?)?;
+    module.add_function(wrap_pyfunction!(merge_wrapped_rows_binding, module)?)?;
+    module.add_function(wrap_pyfunction!(infer_output_order_mode_binding, module)?)?;
+    module.add_function(wrap_pyfunction!(recover_native_candidates_binding, module)?)?;
     module.add_function(wrap_pyfunction!(merge_h_lines_binding, module)?)?;
     module.add_function(wrap_pyfunction!(merge_v_lines_binding, module)?)?;
     module.add_function(wrap_pyfunction!(

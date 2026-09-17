@@ -2,6 +2,18 @@
 
 ## 2026-09-17
 
+- Sprint 006：迁移无线表格 Native Span、Atom 和 Text Run 数据流至 Rust (PyO3) 并释放 GIL。
+  - **根因与调用位置**：`src/hexai_pdf_parser/tables/wireless_structure/text_runs.py` 中的 `build_text_runs()`、`infer_output_order_mode()`、以及原子聚合与换行续写合并等算法，原先在 Python 解释器中通过 Python 循环、正则匹配与字典拆装处理，在无线大表格上产生显著的解释执行与内存开销。
+  - **设计与修复判定**：
+    - **Rust 内核实现**：在 `rust/native_span.rs` 实现了 `build_text_runs`、`build_atoms`、`merge_wrapped_rows`、`infer_output_order_mode` 与 `recover_native_candidates`，在 Rust 内部完成基于 20 组 CJK 大字距白名单词对（最大放宽至 2.5 倍字距）与普通单字 CJK（严格 1.25 倍字距，杜绝误并）的高效文本聚类，密集计算通过 `py.allow_threads` 释放 GIL。
+    - **中文无线表格不变量**：纯消费 `NativeSpanDto`，进入 atom、列带和网格拓扑计算后严格不回读 `page.get_text("words")`，新增 `test_page_spy_no_get_text_words` 进行拦截验证。
+    - **DTO 与导出路由**：在 `rust/types.rs` 新增 `NativeRecoveryInput` 与 `NativeRecoveryOutput` DTO 结构，登记到 `roundtrip_dto`；在 `rust/lib.rs` 导出 5 个算子并在 `src/hexai_pdf_parser/rust_adapter.py` 暴露强类型 Python 签名。
+  - **测试与基准测试结果**：
+    - 新增 `tests/test_pdf_fast_wireless.py`，8 个针对白名单合并、反例不合并、混合成词、换行合并、阅读顺序推断及 PageSpy 的单元测试 100% 通过（`8 passed`）。
+    - `cargo test`: 8 passed, 0 failed.
+    - 核心 fast 单元测试集：69 passed in 0.60s.
+    - **基准测试 (native-span)**：四路对比（baseline, python, shadow, rust）确认 `equal: true, differences_count: 0`；Rust 相比 Python baseline 算法 P95 加速比达到 **1.32x**，端到端 P95 加速比达到 **1.46x**。
+
 - Sprint 005：抽取共享基础几何、区域过滤、行列聚类与稳定排序算法至 Rust (PyO3) 并释放 GIL。
   - **根因与调用位置**：`src/hexai_pdf_parser/tables/table_extractor.py` 中的 `_bbox_overlaps()`、`wireless_table_recovery.py` 中的 `_row_cluster()`、以及多处候选区域过滤和表格候选稳定排序，原先在 Python 解释器中通过 Python list、dict、lambda 进行循环与排序计算，随着跨页和复杂表格候选增多，带来额外的调度和解释执行耗时。
   - **设计与修复**：

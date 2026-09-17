@@ -390,6 +390,155 @@ def _worker_execute(
                                 "source": t["source"],
                                 "cells": [],
                             })
+                elif "wireless_native_span" in p:
+                    wns = p["wireless_native_span"]
+                    spans = wns.get("spans", [])
+                    region = wns.get("region", {})
+                    config = wns.get("config", {})
+                    region_rect = region.get("rect", {"schema_version": 1, "x0": 0.0, "y0": 0.0, "x1": 595.0, "y1": 842.0})
+
+                    if mode in ("shadow", "rust"):
+                        from hexai_pdf_parser import rust_adapter
+
+                        cand_input = {
+                            "schema_version": 1,
+                            "page": p.get("page", {"schema_version": 1, "width": 595.0, "height": 842.0, "rotation": 0}),
+                            "spans": spans,
+                            "region": region,
+                            "config": config,
+                        }
+                        t_alg_start = time.perf_counter()
+                        out = rust_adapter.recover_native_candidates(cand_input)
+                        t_alg = max(time.perf_counter() - t_alg_start, 1e-6)
+
+                        for cand in out.get("candidates", []):
+                            r = cand["rect"]
+                            tables.append({
+                                "bbox": [r["x0"], r["y0"], r["x1"], r["y1"]],
+                                "rows": cand["rows"],
+                                "cols": cand["cols"],
+                                "source": cand["source"],
+                                "cells": [],
+                            })
+                    else:
+                        t_alg_start = time.perf_counter()
+                        def _is_cjk(c):
+                            return '\u3400' <= c <= '\u9fff'
+
+                        whitelist = {
+                            ("合", "计"), ("小", "计"), ("总", "计"), ("共", "计"),
+                            ("类", "别"), ("税", "种"), ("项", "目"), ("名", "称"),
+                            ("金", "额"), ("单", "位"), ("备", "注"), ("比", "例"),
+                            ("期", "初"), ("期", "末"), ("年", "初"), ("年", "末"),
+                            ("本", "年"), ("上", "年"), ("折", "旧"), ("残", "值"),
+                        }
+                        valid_spans = [
+                            s for s in spans
+                            if s["text"].strip()
+                            and region_rect["x0"] <= (s["rect"]["x0"] + s["rect"]["x1"])/2.0 <= region_rect["x1"]
+                            and region_rect["y0"] <= (s["rect"]["y0"] + s["rect"]["y1"])/2.0 <= region_rect["y1"]
+                        ]
+                        valid_spans.sort(key=lambda s: ((s["rect"]["y0"] + s["rect"]["y1"])/2.0, s["rect"]["x0"]))
+                        rows = []
+                        centers = []
+                        for s in valid_spans:
+                            cy = (s["rect"]["y0"] + s["rect"]["y1"])/2.0
+                            if not rows or abs(cy - centers[-1]) > 2.0:
+                                rows.append([s])
+                                centers.append(cy)
+                            else:
+                                rows[-1].append(s)
+                                centers[-1] = sum((x["rect"]["y0"] + x["rect"]["y1"])/2.0 for x in rows[-1])/len(rows[-1])
+
+                        py_runs = []
+                        for r_spans in rows:
+                            r_spans.sort(key=lambda s: s["rect"]["x0"])
+                            groups = []
+                            for s in r_spans:
+                                if groups:
+                                    prev = groups[-1][-1]
+                                    gap = s["rect"]["x0"] - prev["rect"]["x1"]
+                                    sz = max(s.get("size", 10.0), prev.get("size", 10.0))
+                                    p_txt = prev["text"].strip()
+                                    c_txt = s["text"].strip()
+                                    can_join = False
+                                    if (p_txt, c_txt) in whitelist:
+                                        can_join = gap >= -1.0 and gap <= sz * 2.5
+                                    elif len(p_txt) == 1 and len(c_txt) == 1 and _is_cjk(p_txt) and _is_cjk(c_txt):
+                                        can_join = gap >= -0.5 and gap <= sz * 1.25
+                                    elif gap >= -0.5 and gap <= sz * 0.8:
+                                        can_join = True
+                                    if can_join:
+                                        groups[-1].append(s)
+                                        continue
+                                groups.append([s])
+                            for g in groups:
+                                joined = "".join(x["text"] for x in g)
+                                x0 = min(x["rect"]["x0"] for x in g)
+                                y0 = min(x["rect"]["y0"] for x in g)
+                                x1 = max(x["rect"]["x1"] for x in g)
+                                y1 = max(x["rect"]["y1"] for x in g)
+                                py_runs.append({
+                                    "schema_version": 1,
+                                    "text": joined,
+                                    "rect": {"schema_version": 1, "x0": x0, "y0": y0, "x1": x1, "y1": y1},
+                                    "span_refs": [x["order"] for x in g],
+                                    "source_start": min(x["order"] for x in g),
+                                    "source_end": max(x["order"] for x in g),
+                                    "order": len(py_runs),
+                                })
+
+                        py_atoms = [
+                            {
+                                "schema_version": 1,
+                                "text": r["text"],
+                                "rect": r["rect"],
+                                "run_refs": [r["order"]],
+                                "row_hint": None,
+                                "col_hint": None,
+                                "order": r["order"],
+                            }
+                            for r in py_runs
+                        ]
+                        merged_atoms = []
+                        for a in py_atoms:
+                            if merged_atoms:
+                                prev = merged_atoms[-1]
+                                v_gap = a["rect"]["y0"] - prev["rect"]["y1"]
+                                prev_w = prev["rect"]["x1"] - prev["rect"]["x0"]
+                                ol_x = min(prev["rect"]["x1"], a["rect"]["x1"]) - max(prev["rect"]["x0"], a["rect"]["x0"])
+                                if 0.0 <= v_gap <= 5.0 and ol_x >= prev_w * 0.4:
+                                    prev["text"] += a["text"]
+                                    prev["rect"]["y1"] = max(prev["rect"]["y1"], a["rect"]["y1"])
+                                    prev["rect"]["x0"] = min(prev["rect"]["x0"], a["rect"]["x0"])
+                                    prev["rect"]["x1"] = max(prev["rect"]["x1"], a["rect"]["x1"])
+                                    continue
+                            merged_atoms.append(dict(a))
+
+                        y_coords = sorted((a["rect"]["y0"] + a["rect"]["y1"])/2.0 for a in py_atoms)
+                        n_rows = 1
+                        for i in range(1, len(y_coords)):
+                            if y_coords[i] - y_coords[i-1] > 2.0:
+                                n_rows += 1
+                        x_coords = sorted((a["rect"]["x0"] + a["rect"]["x1"])/2.0 for a in py_atoms)
+                        n_cols = 1
+                        for i in range(1, len(x_coords)):
+                            if x_coords[i] - x_coords[i-1] > 10.0:
+                                n_cols += 1
+
+                        if n_rows >= 2 and n_cols >= 2:
+                            x0 = min(a["rect"]["x0"] for a in py_atoms)
+                            y0 = min(a["rect"]["y0"] for a in py_atoms)
+                            x1 = max(a["rect"]["x1"] for a in py_atoms)
+                            y1 = max(a["rect"]["y1"] for a in py_atoms)
+                            tables.append({
+                                "bbox": [x0, y0, x1, y1],
+                                "rows": n_rows,
+                                "cols": n_cols,
+                                "source": "wireless_native_recovery",
+                                "cells": [],
+                            })
+                        t_alg = max(time.perf_counter() - t_alg_start, 1e-6)
                 elif "tables" in p:
                     tables.extend(p.get("tables", []))
                 elif "words" in p and "h_lines" in p and "v_lines" in p:
