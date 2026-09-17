@@ -2,6 +2,19 @@
 
 ## 2026-09-17
 
+- Sprint 010：迁移可 DTO 化的表头与结构后处理纯算法至 Rust (PyO3) 并释放 GIL。
+  - **根因与调用位置**：`src/hexai_pdf_parser/tables/normalizers/table_header_normalizer.py` 中的 `_promote_grouped_header` 以及相关财务大表头文本规范化逻辑，原先在 Python 层面通过循环、正则和对象属性反复判定，需要与 Rust 表格结构生成流水线衔接，支持直接在 DTO 层面进行结构推断与清洗。
+  - **设计与修复判定**：
+    - **Rust 内核实现**：在 `rust/table_normalization.rs` 实现了 3 个纯计算算子：`infer_header_structure`（锚点向下合并与分组标题跨列合并）、`merge_header_spans`（表头坐标排序与跨度规范化）、`normalize_financial_header_tokens`（表头尾随数值/货币代码剥离清洗）。密集计算通过 `py.allow_threads` 释放 GIL。
+    - **DTO 与导出路由**：在 `rust/types.rs` 新增 `HeaderGridInput`、`HeaderGridOutput`、`HeaderTokenInput`、`HeaderTokenOutput` 结构并注册到 `roundtrip_dto`；在 `rust/lib.rs` 导出 3 个算子并在 `src/hexai_pdf_parser/rust_adapter.py` 暴露强类型 Python 签名；在 `table_header_normalizer.py` 接入 `PDF_RUST_MODE` 路由（生产默认 `python`，支持 `shadow` 和 `rust`）。
+  - **测试与基准测试结果**：
+    - 新增 `tests/test_pdf_fast_table_normalization.py`，5 个单元测试全部通过（`5 passed`）。
+    - 表头全量回归套件：20 passed, 3 skipped。
+    - `cargo test`: 2 passed, 0 failed.
+    - `cargo fmt --check`: 0 警告。
+    - `git diff --check`: 0 警告。
+    - **基准测试 (table-normalization)**：四路对比（baseline, python, shadow, rust）确认 `equal: true, differences_count: 0`；结构化结果完全一致，无冲突、无遗漏。
+
 - Sprint 009：迁移英文 Zebra、General Wireless 和 Legacy 纯算法至 Rust (PyO3) 并释放 GIL。
   - **根因与调用位置**：`src/hexai_pdf_parser/tables/extractors/english_table_extractor.py` 中的 `_group_into_tables`、`_assign_words_to_zebra_rows`、英文列推断与单元格恢复，以及 `src/hexai_pdf_parser/tables/normalizers/table_header_normalizer.py` 中的 `_rebuild_text_aligned_table` 原先在 Python 层面通过反复的几何间距遍历、词列表排序、正则和拓扑跨列比较进行处理，在英文无线与斑马表格上带来解释执行开销。
   - **设计与修复判定**：

@@ -883,3 +883,74 @@ def build_legacy_text_alignment(input_dto: Dict[str, Any]) -> List[Dict[str, Any
     d["words"] = [_ensure_word_dto(w, idx) for idx, w in enumerate(d.get("words", []))]
     d["config"] = _ensure_config_dto(d.get("config"))
     return _pdf_fast.build_legacy_text_alignment(d)
+
+
+def _ensure_cell_dto(c: Dict[str, Any]) -> Dict[str, Any]:
+    cd = dict(c)
+    if "schema_version" not in cd:
+        cd["schema_version"] = 1
+    rect = cd.get("rect")
+    if isinstance(rect, (list, tuple)) and len(rect) >= 4:
+        cd["rect"] = {"schema_version": 1, "x0": float(rect[0]), "y0": float(rect[1]), "x1": float(rect[2]), "y1": float(rect[3])}
+    elif isinstance(rect, dict) and "schema_version" not in rect:
+        cd["rect"] = {"schema_version": 1, **rect}
+    cd.setdefault("text", "")
+    cd.setdefault("row", 0)
+    cd.setdefault("col", 0)
+    cd.setdefault("rowspan", 1)
+    cd.setdefault("colspan", 1)
+    cd.setdefault("source", None)
+    return cd
+
+
+def _ensure_inner_grid_dto(g: Dict[str, Any]) -> Dict[str, Any]:
+    gd = dict(g)
+    if "schema_version" not in gd:
+        gd["schema_version"] = 1
+    gd.setdefault("rows", 0)
+    gd.setdefault("cols", 0)
+    gd.setdefault("row_edges", [])
+    gd.setdefault("col_edges", [])
+    gd.setdefault("occupancy", [])
+    return gd
+
+
+def infer_header_structure(input_dto: Dict[str, Any]) -> Dict[str, Any]:
+    d = dict(input_dto)
+    if "schema_version" not in d:
+        d["schema_version"] = 1
+    grid = dict(d.get("grid", {}))
+    if "schema_version" not in grid:
+        grid["schema_version"] = 1
+    inner_g = _ensure_inner_grid_dto(grid.get("grid", {}))
+    grid["grid"] = inner_g
+    grid["cells"] = [_ensure_cell_dto(c) for c in grid.get("cells", [])]
+    grid.setdefault("empty_slots", [])
+    d["grid"] = grid
+    d["config"] = _ensure_config_dto(d.get("config"))
+    return _pdf_fast.infer_header_structure(d)
+
+
+def merge_header_spans(input_dto: Dict[str, Any]) -> Dict[str, Any]:
+    d = dict(input_dto)
+    if "schema_version" not in d:
+        d["schema_version"] = 1
+    grid = dict(d.get("grid", {}))
+    if "schema_version" not in grid:
+        grid["schema_version"] = 1
+    inner_g = _ensure_inner_grid_dto(grid.get("grid", {}))
+    grid["grid"] = inner_g
+    grid["cells"] = [_ensure_cell_dto(c) for c in grid.get("cells", [])]
+    grid.setdefault("empty_slots", [])
+    d["grid"] = grid
+    d["config"] = _ensure_config_dto(d.get("config"))
+    return _pdf_fast.merge_header_spans(d)
+
+
+def normalize_financial_header_tokens(input_dto: Dict[str, Any]) -> Dict[str, Any]:
+    d = dict(input_dto)
+    if "schema_version" not in d:
+        d["schema_version"] = 1
+    d["cells"] = [_ensure_cell_dto(c) for c in d.get("cells", [])]
+    d["config"] = _ensure_config_dto(d.get("config"))
+    return _pdf_fast.normalize_financial_header_tokens(d)

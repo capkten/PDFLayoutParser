@@ -101,6 +101,8 @@ def test_normalize_headers_rejects_upward_merge_with_horizontal_line():
 def test_page_075_table_headers_upward_merge():
     """集成测试：Page 075 Table 1 和 Table 2 中的单列表头应整齐向上合并，消除空白槽位。"""
     pdf_path = r"C:\Users\92410\Desktop\git\hexai_pdf_parser\src\hexai_pdf_parser\data\en_all_pages\problem\en_all_table_pages_page_075.pdf"
+    if not os.path.exists(pdf_path):
+        pytest.skip(f"Test PDF not found: {pdf_path}")
     doc = fitz.open(pdf_path)
     page = doc[0]
     extractor = EnglishTableExtractor()

@@ -24,6 +24,7 @@ from hexai_pdf_parser.core.models import BBox, Cell, Table
 from hexai_pdf_parser.tables.normalizers.financial_header_handler import (
     normalize_complex_financial_header,
 )
+from hexai_pdf_parser import rust_adapter
 
 _LEFT_ANCHOR_VARIANTS = {"椤圭洰", "项目"}
 
@@ -572,6 +573,86 @@ def _promote_grouped_header(table: Table, page: fitz.Page) -> Table:
 
     promoted_cells: list[Cell] = []
 
+    mode = os.environ.get("PDF_RUST_MODE", "python").lower()
+    rust_table: Table | None = None
+    if mode in ("rust", "shadow"):
+        try:
+            input_dto = {
+                "schema_version": 1,
+                "grid": {
+                    "schema_version": 1,
+                    "grid": {
+                        "schema_version": 1,
+                        "rows": table.rows,
+                        "cols": table.cols,
+                        "rect": {
+                            "schema_version": 1,
+                            "x0": table.bbox.x0,
+                            "y0": table.bbox.y0,
+                            "x1": table.bbox.x1,
+                            "y1": table.bbox.y1,
+                        },
+                    },
+                    "cells": [
+                        {
+                            "schema_version": 1,
+                            "rect": {
+                                "schema_version": 1,
+                                "x0": c.bbox.x0,
+                                "y0": c.bbox.y0,
+                                "x1": c.bbox.x1,
+                                "y1": c.bbox.y1,
+                            },
+                            "text": c.text,
+                            "row": c.row_index,
+                            "col": c.col_index,
+                            "rowspan": c.rowspan,
+                            "colspan": c.colspan,
+                            "source": None,
+                        }
+                        for c in table.cells
+                    ],
+                    "empty_slots": [],
+                },
+                "config": {
+                    "schema_version": 1,
+                    "line_tolerance": 2.0,
+                    "row_tolerance": 2.0,
+                    "column_tolerance": 2.0,
+                    "span_tolerance": 2.0,
+                    "numeric_tolerance": 2.0,
+                },
+            }
+            out_dto = rust_adapter.infer_header_structure(input_dto)
+            r_cells = [
+                Cell(
+                    text=c["text"],
+                    row_index=c["row"],
+                    col_index=c["col"],
+                    bbox=BBox(
+                        c["rect"]["x0"],
+                        c["rect"]["y0"],
+                        c["rect"]["x1"],
+                        c["rect"]["y1"],
+                    ),
+                    rowspan=c["rowspan"],
+                    colspan=c["colspan"],
+                )
+                for c in out_dto.get("cells", [])
+            ]
+            rust_table = Table(
+                bbox=table.bbox,
+                rows=table.rows,
+                cols=table.cols,
+                cells=r_cells,
+                confidence=table.confidence,
+                source=table.source,
+            )
+            if mode == "rust":
+                return rust_table
+        except Exception:
+            pass
+
     for cell in table.cells:
         text = cell.text.strip()
 
@@ -606,7 +687,7 @@ def _promote_grouped_header(table: Table, page: fitz.Page) -> Table:
 
         promoted_cells.append(cell)
 
-    return Table(
+    py_table = Table(
         bbox=table.bbox,
         rows=table.rows,
         cols=table.cols,
@@ -614,6 +695,15 @@ def _promote_grouped_header(table: Table, page: fitz.Page) -> Table:
         confidence=table.confidence,
         source=table.source,
     )
+
+    if mode == "shadow" and rust_table is not None:
+        if len(py_table.cells) != len(rust_table.cells) or any(
+            p.rowspan != r.rowspan or p.colspan != r.colspan or p.text != r.text
+            for p, r in zip(py_table.cells, rust_table.cells)
+        ):
+            print(f"[SHADOW_DIFF] _promote_grouped_header diff detected")
+
+    return py_table
 
 
 def _promote_grouped_header_in_place(

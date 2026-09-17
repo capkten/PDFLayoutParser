@@ -287,6 +287,30 @@ def _worker_execute(
                                 "numeric_tolerance": 2.0,
                             }),
                         })
+                    elif suite == "table-normalization":
+                        roundtrip_dto("header_token_input", {
+                            "schema_version": 1,
+                            "cells": [
+                                {
+                                    "schema_version": 1,
+                                    "text": "项目 123",
+                                    "row": 0,
+                                    "col": 0,
+                                    "rect": {"schema_version": 1, "x0": 0.0, "y0": 0.0, "x1": 50.0, "y1": 20.0},
+                                    "rowspan": 1,
+                                    "colspan": 1,
+                                    "source": None,
+                                }
+                            ],
+                            "config": {
+                                "schema_version": 1,
+                                "line_tolerance": 2.0,
+                                "row_tolerance": 2.0,
+                                "column_tolerance": 2.0,
+                                "span_tolerance": 2.0,
+                                "numeric_tolerance": 2.0,
+                            },
+                        })
                 t_ffi = max(time.perf_counter() - t_ffi_start, 1e-6)
 
             for p in fixture_pages:
@@ -742,6 +766,155 @@ def _worker_execute(
                             "cols": num_cols,
                             "source": "english_color_based",
                             "cells": py_cells,
+                        })
+                elif suite == "table-normalization" and "wireless_native_span" in p:
+                    wns = p["wireless_native_span"]
+                    spans = wns.get("spans", [])
+                    config = wns.get("config", {
+                        "schema_version": 1,
+                        "line_tolerance": 2.0,
+                        "row_tolerance": 2.0,
+                        "column_tolerance": 2.0,
+                        "span_tolerance": 2.0,
+                        "numeric_tolerance": 2.0,
+                    })
+
+                    header_cells = [
+                        {
+                            "schema_version": 1,
+                            "text": "项目",
+                            "row": 0,
+                            "col": 0,
+                            "rect": {"schema_version": 1, "x0": 0.0, "y0": 0.0, "x1": 50.0, "y1": 20.0},
+                            "rowspan": 1,
+                            "colspan": 1,
+                            "source": None,
+                        },
+                        {
+                            "schema_version": 1,
+                            "text": "本年金额",
+                            "row": 0,
+                            "col": 1,
+                            "rect": {"schema_version": 1, "x0": 50.0, "y0": 0.0, "x1": 150.0, "y1": 20.0},
+                            "rowspan": 1,
+                            "colspan": 1,
+                            "source": None,
+                        },
+                        {
+                            "schema_version": 1,
+                            "text": "收入",
+                            "row": 1,
+                            "col": 1,
+                            "rect": {"schema_version": 1, "x0": 50.0, "y0": 20.0, "x1": 100.0, "y1": 40.0},
+                            "rowspan": 1,
+                            "colspan": 1,
+                            "source": None,
+                        },
+                        {
+                            "schema_version": 1,
+                            "text": "支出",
+                            "row": 1,
+                            "col": 2,
+                            "rect": {"schema_version": 1, "x0": 100.0, "y0": 20.0, "x1": 150.0, "y1": 40.0},
+                            "rowspan": 1,
+                            "colspan": 1,
+                            "source": None,
+                        },
+                    ]
+                    grid_dto = {
+                        "schema_version": 1,
+                        "grid": {
+                            "schema_version": 1,
+                            "rows": 2,
+                            "cols": 3,
+                            "row_edges": [0.0, 20.0, 40.0],
+                            "col_edges": [0.0, 50.0, 100.0, 150.0],
+                            "occupancy": [[0, 1, None], [None, 2, 3]],
+                        },
+                        "cells": header_cells,
+                        "empty_slots": [],
+                    }
+                    input_dto = {
+                        "schema_version": 1,
+                        "grid": grid_dto,
+                        "config": config,
+                    }
+
+                    if mode in ("shadow", "rust"):
+                        from hexai_pdf_parser import rust_adapter
+
+                        t_alg_start = time.perf_counter()
+                        out_dto = rust_adapter.infer_header_structure(input_dto)
+                        t_alg = max(time.perf_counter() - t_alg_start, 1e-6)
+
+                        r_cells = out_dto.get("cells", [])
+                        tables.append({
+                            "bbox": [0.0, 0.0, 150.0, 40.0],
+                            "rows": 2,
+                            "cols": 3,
+                            "source": "table_header_normalizer",
+                            "cells": [
+                                {
+                                    "text": c["text"],
+                                    "row_index": c["row"],
+                                    "col_index": c["col"],
+                                    "bbox": [c["rect"]["x0"], c["rect"]["y0"], c["rect"]["x1"], c["rect"]["y1"]],
+                                    "rowspan": c.get("rowspan", 1),
+                                    "colspan": c.get("colspan", 1),
+                                }
+                                for c in r_cells
+                            ],
+                        })
+                    else:
+                        from hexai_pdf_parser.core.models import BBox, Cell, Table
+                        from hexai_pdf_parser.tables.normalizers.table_header_normalizer import _promote_grouped_header
+
+                        py_cells = [
+                            Cell(
+                                text=c["text"],
+                                row_index=c["row"],
+                                col_index=c["col"],
+                                bbox=BBox(c["rect"]["x0"], c["rect"]["y0"], c["rect"]["x1"], c["rect"]["y1"]),
+                                rowspan=c["rowspan"],
+                                colspan=c["colspan"],
+                            )
+                            for c in header_cells
+                        ]
+                        py_table = Table(
+                            bbox=BBox(0.0, 0.0, 150.0, 40.0),
+                            rows=2,
+                            cols=3,
+                            cells=py_cells,
+                            confidence=1.0,
+                            source="table_header_normalizer",
+                        )
+
+                        class DummyPage:
+                            def get_text(self, kind, *args, **kwargs):
+                                if kind == "dict":
+                                    return {"blocks": []}
+                                return []
+
+                        t_alg_start = time.perf_counter()
+                        res_table = _promote_grouped_header(py_table, DummyPage())
+                        t_alg = max(time.perf_counter() - t_alg_start, 1e-6)
+
+                        tables.append({
+                            "bbox": [res_table.bbox.x0, res_table.bbox.y0, res_table.bbox.x1, res_table.bbox.y1],
+                            "rows": res_table.rows,
+                            "cols": res_table.cols,
+                            "source": "table_header_normalizer",
+                            "cells": [
+                                {
+                                    "text": c.text,
+                                    "row_index": c.row_index,
+                                    "col_index": c.col_index,
+                                    "bbox": [c.bbox.x0, c.bbox.y0, c.bbox.x1, c.bbox.y1],
+                                    "rowspan": c.rowspan,
+                                    "colspan": c.colspan,
+                                }
+                                for c in res_table.cells
+                            ],
                         })
                 elif "wireless_native_span" in p:
                     wns = p["wireless_native_span"]

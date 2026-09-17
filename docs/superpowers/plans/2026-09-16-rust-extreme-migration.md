@@ -784,10 +784,10 @@ pub fn merge_header_spans(input: HeaderGridInput) -> HeaderGridOutput;
 pub fn normalize_financial_header_tokens(input: HeaderTokenInput) -> HeaderTokenOutput;
 ~~~
 
-- [ ] Step 1: 审计每个 normalizer function 并写入 capability matrix。只消费 DTO 的函数必须排入 Rust；构造公开 Python object、调用外部服务或编码未批准 domain policy 的函数保留 Python 并记录理由。
-- [ ] Step 2: 为 header topology、wrapped labels、witness、financial tokens 和 rejection cases 增加 RED vectors。
-- [ ] Step 3: 实现已分类纯 kernel，Python 保留公开对象装配。
-- [ ] Step 4: 运行 normalizer tests 和 benchmark。
+- [x] Step 1: 审计每个 normalizer function 并写入 capability matrix。只消费 DTO 的函数必须排入 Rust；构造公开 Python object、调用外部服务或编码未批准 domain policy 的函数保留 Python 并记录理由。
+- [x] Step 2: 为 header topology、wrapped labels、witness、financial tokens 和 rejection cases 增加 RED vectors。
+- [x] Step 3: 实现已分类纯 kernel，Python 保留公开对象装配。
+- [x] Step 4: 运行 normalizer tests 和 benchmark。
 
 ~~~powershell
 $env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'
@@ -803,7 +803,7 @@ python scripts/benchmark_rust_migration.py --mode rust --source-root $migrationR
 python scripts/compare_rust_migration.py --baseline output/rust_migration_benchmark/sprint-010/baseline/table-normalization-python.json --python output/rust_migration_benchmark/sprint-010/python/table-normalization-python.json --rust output/rust_migration_benchmark/sprint-010/rust/table-normalization-rust.json --shadow output/rust_migration_benchmark/sprint-010/shadow/table-normalization-shadow.json --report docs/superpowers/rust-migration/evaluations/sprint-010-benchmark.md
 ~~~
 
-- [ ] Step 5: 提交时附上 Python-retained functions 清单。
+- [x] Step 5: 提交时附上 Python-retained functions 清单。
 
 ~~~powershell
 git diff --check

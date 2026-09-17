@@ -2002,6 +2002,168 @@ impl WiredRegionOutput {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct HeaderGridInput {
+    pub schema_version: i64,
+    pub grid: LogicalGridDto,
+    pub config: StructureConfig,
+}
+
+impl HeaderGridInput {
+    pub fn from_py(dict: &Bound<'_, PyDict>) -> PyResult<Self> {
+        let sv: i64 = get_req(dict, "schema_version")?.extract()?;
+        check_schema_version(sv)?;
+        let grid = LogicalGridDto::from_py(&get_req(dict, "grid")?.downcast::<PyDict>()?.clone())?;
+        let config =
+            StructureConfig::from_py(&get_req(dict, "config")?.downcast::<PyDict>()?.clone())?;
+        Ok(Self {
+            schema_version: sv,
+            grid,
+            config,
+        })
+    }
+
+    pub fn to_py<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let d = PyDict::new_bound(py);
+        d.set_item("schema_version", self.schema_version)?;
+        d.set_item("grid", self.grid.to_py(py)?)?;
+        d.set_item("config", self.config.to_py(py)?)?;
+        Ok(d)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct HeaderGridOutput {
+    pub schema_version: i64,
+    pub grid: LogicalGridDto,
+    pub cells: Vec<CellDto>,
+    pub diagnostics: Vec<DiagnosticDto>,
+}
+
+impl HeaderGridOutput {
+    pub fn from_py(dict: &Bound<'_, PyDict>) -> PyResult<Self> {
+        let sv: i64 = get_req(dict, "schema_version")?.extract()?;
+        check_schema_version(sv)?;
+        let grid = LogicalGridDto::from_py(&get_req(dict, "grid")?.downcast::<PyDict>()?.clone())?;
+        let cells_list: Bound<'_, PyList> = get_req(dict, "cells")?.extract()?;
+        let mut cells = Vec::with_capacity(cells_list.len());
+        for c in cells_list.iter() {
+            cells.push(CellDto::from_py(&c.downcast::<PyDict>()?.clone())?);
+        }
+        let d_list: Bound<'_, PyList> = get_req(dict, "diagnostics")?.extract()?;
+        let mut diagnostics = Vec::with_capacity(d_list.len());
+        for d in d_list.iter() {
+            diagnostics.push(DiagnosticDto::from_py(&d.downcast::<PyDict>()?.clone())?);
+        }
+        Ok(Self {
+            schema_version: sv,
+            grid,
+            cells,
+            diagnostics,
+        })
+    }
+
+    pub fn to_py<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let d = PyDict::new_bound(py);
+        d.set_item("schema_version", self.schema_version)?;
+        d.set_item("grid", self.grid.to_py(py)?)?;
+        let cl = PyList::empty_bound(py);
+        for c in &self.cells {
+            cl.append(c.to_py(py)?)?;
+        }
+        d.set_item("cells", cl)?;
+        let dl = PyList::empty_bound(py);
+        for diag in &self.diagnostics {
+            dl.append(diag.to_py(py)?)?;
+        }
+        d.set_item("diagnostics", dl)?;
+        Ok(d)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct HeaderTokenInput {
+    pub schema_version: i64,
+    pub cells: Vec<CellDto>,
+    pub config: StructureConfig,
+}
+
+impl HeaderTokenInput {
+    pub fn from_py(dict: &Bound<'_, PyDict>) -> PyResult<Self> {
+        let sv: i64 = get_req(dict, "schema_version")?.extract()?;
+        check_schema_version(sv)?;
+        let cells_list: Bound<'_, PyList> = get_req(dict, "cells")?.extract()?;
+        let mut cells = Vec::with_capacity(cells_list.len());
+        for c in cells_list.iter() {
+            cells.push(CellDto::from_py(&c.downcast::<PyDict>()?.clone())?);
+        }
+        let config =
+            StructureConfig::from_py(&get_req(dict, "config")?.downcast::<PyDict>()?.clone())?;
+        Ok(Self {
+            schema_version: sv,
+            cells,
+            config,
+        })
+    }
+
+    pub fn to_py<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let d = PyDict::new_bound(py);
+        d.set_item("schema_version", self.schema_version)?;
+        let cl = PyList::empty_bound(py);
+        for c in &self.cells {
+            cl.append(c.to_py(py)?)?;
+        }
+        d.set_item("cells", cl)?;
+        d.set_item("config", self.config.to_py(py)?)?;
+        Ok(d)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct HeaderTokenOutput {
+    pub schema_version: i64,
+    pub cells: Vec<CellDto>,
+    pub diagnostics: Vec<DiagnosticDto>,
+}
+
+impl HeaderTokenOutput {
+    pub fn from_py(dict: &Bound<'_, PyDict>) -> PyResult<Self> {
+        let sv: i64 = get_req(dict, "schema_version")?.extract()?;
+        check_schema_version(sv)?;
+        let cells_list: Bound<'_, PyList> = get_req(dict, "cells")?.extract()?;
+        let mut cells = Vec::with_capacity(cells_list.len());
+        for c in cells_list.iter() {
+            cells.push(CellDto::from_py(&c.downcast::<PyDict>()?.clone())?);
+        }
+        let d_list: Bound<'_, PyList> = get_req(dict, "diagnostics")?.extract()?;
+        let mut diagnostics = Vec::with_capacity(d_list.len());
+        for d in d_list.iter() {
+            diagnostics.push(DiagnosticDto::from_py(&d.downcast::<PyDict>()?.clone())?);
+        }
+        Ok(Self {
+            schema_version: sv,
+            cells,
+            diagnostics,
+        })
+    }
+
+    pub fn to_py<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let d = PyDict::new_bound(py);
+        d.set_item("schema_version", self.schema_version)?;
+        let cl = PyList::empty_bound(py);
+        for c in &self.cells {
+            cl.append(c.to_py(py)?)?;
+        }
+        d.set_item("cells", cl)?;
+        let dl = PyList::empty_bound(py);
+        for diag in &self.diagnostics {
+            dl.append(diag.to_py(py)?)?;
+        }
+        d.set_item("diagnostics", dl)?;
+        Ok(d)
+    }
+}
+
 pub fn roundtrip_dto_py<'py>(
     py: Python<'py>,
     dto_type: &str,
@@ -2166,6 +2328,22 @@ pub fn roundtrip_dto_py<'py>(
         }
         "legacy_alignment_input" => {
             let dto = LegacyAlignmentInput::from_py(data)?;
+            dto.to_py(py)
+        }
+        "header_grid_input" => {
+            let dto = HeaderGridInput::from_py(data)?;
+            dto.to_py(py)
+        }
+        "header_grid_output" => {
+            let dto = HeaderGridOutput::from_py(data)?;
+            dto.to_py(py)
+        }
+        "header_token_input" => {
+            let dto = HeaderTokenInput::from_py(data)?;
+            dto.to_py(py)
+        }
+        "header_token_output" => {
+            let dto = HeaderTokenOutput::from_py(data)?;
             dto.to_py(py)
         }
         other => Err(PyValueError::new_err(format!(

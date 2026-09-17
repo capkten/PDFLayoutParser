@@ -4,6 +4,7 @@ use pyo3::types::{PyDict, PyList, PyModule, PyTuple};
 pub mod english_wireless;
 pub mod geometry;
 pub mod native_span;
+pub mod table_normalization;
 pub mod types;
 pub mod wired;
 pub mod wireless_structure;
@@ -729,6 +730,37 @@ fn build_legacy_text_alignment_binding<'py>(
     Ok(list)
 }
 
+#[pyfunction(name = "infer_header_structure")]
+fn infer_header_structure_binding<'py>(
+    py: Python<'py>,
+    input_dict: &Bound<'py, PyDict>,
+) -> PyResult<Bound<'py, PyDict>> {
+    let input = types::HeaderGridInput::from_py(input_dict)?;
+    let output = py.allow_threads(move || table_normalization::infer_header_structure(input));
+    output.to_py(py)
+}
+
+#[pyfunction(name = "merge_header_spans")]
+fn merge_header_spans_binding<'py>(
+    py: Python<'py>,
+    input_dict: &Bound<'py, PyDict>,
+) -> PyResult<Bound<'py, PyDict>> {
+    let input = types::HeaderGridInput::from_py(input_dict)?;
+    let output = py.allow_threads(move || table_normalization::merge_header_spans(input));
+    output.to_py(py)
+}
+
+#[pyfunction(name = "normalize_financial_header_tokens")]
+fn normalize_financial_header_tokens_binding<'py>(
+    py: Python<'py>,
+    input_dict: &Bound<'py, PyDict>,
+) -> PyResult<Bound<'py, PyDict>> {
+    let input = types::HeaderTokenInput::from_py(input_dict)?;
+    let output =
+        py.allow_threads(move || table_normalization::normalize_financial_header_tokens(input));
+    output.to_py(py)
+}
+
 #[pymodule]
 fn _pdf_fast(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(rect_overlap_binding, module)?)?;
@@ -788,6 +820,12 @@ fn _pdf_fast(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(assign_text_to_line_cells_binding, module)?)?;
     module.add_function(wrap_pyfunction!(extract_wired_region_binding, module)?)?;
     module.add_function(wrap_pyfunction!(roundtrip_dto_binding, module)?)?;
+    module.add_function(wrap_pyfunction!(infer_header_structure_binding, module)?)?;
+    module.add_function(wrap_pyfunction!(merge_header_spans_binding, module)?)?;
+    module.add_function(wrap_pyfunction!(
+        normalize_financial_header_tokens_binding,
+        module
+    )?)?;
     Ok(())
 }
 
