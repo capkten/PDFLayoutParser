@@ -1,68 +1,132 @@
 use pyo3::prelude::*;
-use pyo3::types::PyModule;
+use pyo3::types::{PyDict, PyList, PyModule, PyTuple};
 
-pub type Line4 = (f64, f64, f64, f64);
-
-pub fn merge_h_lines(mut lines: Vec<Line4>, merge_group_tol: f64) -> Vec<Line4> {
-    lines.sort_by(|left, right| {
-        match round_one_decimal(left.1).partial_cmp(&round_one_decimal(right.1)) {
-            Some(std::cmp::Ordering::Equal) => left
-                .0
-                .partial_cmp(&right.0)
-                .unwrap_or(std::cmp::Ordering::Equal),
-            Some(ordering) => ordering,
-            None => std::cmp::Ordering::Equal,
-        }
-    });
-
-    let mut groups: Vec<Vec<Line4>> = Vec::new();
-    for line in lines {
-        if let Some(group) = groups
-            .iter_mut()
-            .find(|group| (group[0].1 - line.1).abs() <= merge_group_tol)
-        {
-            group.push(line);
-        } else {
-            groups.push(vec![line]);
-        }
-    }
-
-    let mut merged = Vec::new();
-    for group in groups {
-        let avg_y = group.iter().map(|line| line.1).sum::<f64>() / group.len() as f64;
-        let mut segments: Vec<(f64, f64)> = group.iter().map(|line| (line.0, line.2)).collect();
-        segments.sort_by(|left, right| {
-            left.0
-                .partial_cmp(&right.0)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-
-        let mut segments = segments.into_iter();
-        let (mut cur_x0, mut cur_x1) = segments.next().unwrap();
-        for (seg_x0, seg_x1) in segments {
-            if seg_x0 <= cur_x1 + 3.0 {
-                cur_x1 = cur_x1.max(seg_x1);
-            } else {
-                merged.push((cur_x0, avg_y, cur_x1, avg_y));
-                cur_x0 = seg_x0;
-                cur_x1 = seg_x1;
-            }
-        }
-        merged.push((cur_x0, avg_y, cur_x1, avg_y));
-    }
-
-    merged
-}
-
-fn round_one_decimal(value: f64) -> f64 {
-    format!("{value:.1}").parse().unwrap_or(value)
-}
-
+pub mod geometry;
 pub mod types;
+pub mod wired;
+
+pub use geometry::Line4;
+pub use types::Rect4;
 
 #[pyfunction(name = "merge_h_lines")]
 fn merge_h_lines_binding(py: Python<'_>, lines: Vec<Line4>, merge_group_tol: f64) -> Vec<Line4> {
-    py.allow_threads(move || merge_h_lines(lines, merge_group_tol))
+    py.allow_threads(move || geometry::merge_h_lines(lines, merge_group_tol))
+}
+
+#[pyfunction(name = "merge_v_lines")]
+fn merge_v_lines_binding(
+    py: Python<'_>,
+    lines: Vec<Line4>,
+    h_lines: Vec<Line4>,
+    merge_group_tol: f64,
+    line_tolerance: f64,
+) -> Vec<Line4> {
+    py.allow_threads(move || {
+        geometry::merge_v_lines(lines, &h_lines, merge_group_tol, line_tolerance)
+    })
+}
+
+#[pyfunction(name = "merge_region_line_coordinates")]
+fn merge_region_line_coordinates_binding(
+    py: Python<'_>,
+    lines: Vec<Line4>,
+    horizontal: bool,
+    line_tolerance: f64,
+) -> Vec<Line4> {
+    py.allow_threads(move || {
+        geometry::merge_region_line_coordinates(lines, horizontal, line_tolerance)
+    })
+}
+
+#[pyfunction(name = "lines_intersect")]
+fn lines_intersect_binding(_py: Python<'_>, h_line: Line4, v_line: Line4, tolerance: f64) -> bool {
+    geometry::lines_intersect(h_line, v_line, tolerance)
+}
+
+#[pyfunction(name = "find_table_regions")]
+fn find_table_regions_binding<'py>(
+    py: Python<'py>,
+    h_lines: Vec<Line4>,
+    v_lines: Vec<Line4>,
+    tolerance: f64,
+) -> PyResult<Bound<'py, PyList>> {
+    let regions = py.allow_threads(move || wired::find_table_regions(h_lines, v_lines, tolerance));
+    let list = PyList::empty_bound(py);
+    for (bbox, comp_h, comp_v) in regions {
+        let bbox_dict = bbox.to_py(py)?;
+        let tuple = PyTuple::new_bound(
+            py,
+            &[
+                bbox_dict.into_any(),
+                comp_h.into_py(py).into_bound(py),
+                comp_v.into_py(py).into_bound(py),
+            ],
+        );
+        list.append(tuple)?;
+    }
+    Ok(list)
+}
+
+#[pyfunction(name = "snap_coordinates")]
+fn snap_coordinates_binding(
+    py: Python<'_>,
+    coords: Vec<f64>,
+    anchor_coords: Vec<f64>,
+    tol: f64,
+) -> Vec<f64> {
+    py.allow_threads(move || geometry::snap_coordinates(coords, &anchor_coords, tol))
+}
+
+#[pyfunction(name = "snap_grid_coordinates")]
+fn snap_grid_coordinates_binding(
+    py: Python<'_>,
+    start: f64,
+    end: f64,
+    orthogonal_start: f64,
+    orthogonal_end: f64,
+    lines: Vec<Line4>,
+    horizontal: bool,
+    tolerance: f64,
+    merge_group_tol: f64,
+) -> Vec<f64> {
+    py.allow_threads(move || {
+        geometry::snap_grid_coordinates(
+            start,
+            end,
+            orthogonal_start,
+            orthogonal_end,
+            &lines,
+            horizontal,
+            tolerance,
+            merge_group_tol,
+        )
+    })
+}
+
+#[pyfunction(name = "complete_partial_outer_boundaries")]
+fn complete_partial_outer_boundaries_binding<'py>(
+    py: Python<'py>,
+    bbox: &Bound<'py, PyDict>,
+    h_lines: Vec<Line4>,
+    v_lines: Vec<Line4>,
+    h_ys: Vec<f64>,
+    v_xs: Vec<f64>,
+    line_tolerance: f64,
+    merge_group_tol: f64,
+) -> PyResult<(Vec<Line4>, Vec<Line4>)> {
+    let rect = Rect4::from_py(bbox)?;
+    let res = py.allow_threads(move || {
+        wired::complete_partial_outer_boundaries(
+            rect,
+            h_lines,
+            v_lines,
+            h_ys,
+            v_xs,
+            line_tolerance,
+            merge_group_tol,
+        )
+    });
+    Ok(res)
 }
 
 #[pyfunction(name = "roundtrip_dto")]
@@ -77,13 +141,26 @@ fn roundtrip_dto_binding<'py>(
 #[pymodule]
 fn _pdf_fast(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(merge_h_lines_binding, module)?)?;
+    module.add_function(wrap_pyfunction!(merge_v_lines_binding, module)?)?;
+    module.add_function(wrap_pyfunction!(
+        merge_region_line_coordinates_binding,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(lines_intersect_binding, module)?)?;
+    module.add_function(wrap_pyfunction!(find_table_regions_binding, module)?)?;
+    module.add_function(wrap_pyfunction!(snap_coordinates_binding, module)?)?;
+    module.add_function(wrap_pyfunction!(snap_grid_coordinates_binding, module)?)?;
+    module.add_function(wrap_pyfunction!(
+        complete_partial_outer_boundaries_binding,
+        module
+    )?)?;
     module.add_function(wrap_pyfunction!(roundtrip_dto_binding, module)?)?;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::merge_h_lines;
+    use super::geometry::merge_h_lines;
 
     #[test]
     fn groups_nearby_lines_and_merges_segments() {

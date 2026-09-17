@@ -193,7 +193,7 @@ def _run_single_worker(
         "--internal-worker",
         "--mode", mode,
         "--input-path", input_path,
-        "--pages", ",".join(str(p) for p in pages),
+        f"--pages={','.join(str(p) for p in pages)}",
         "--warmups", str(warmups),
     ]
     if source_root:
@@ -236,10 +236,14 @@ def _worker_execute(
             t_extract = max(time.perf_counter() - t0, 1e-6)
             fixture_pages = data.get("pages", [])
             tables = []
-            t_ffi_start = time.perf_counter()
+            t_dto = 1e-6
+            t_ffi = 0.0
+            t_alg = 1e-6
+            t_adapt = 1e-6
             if mode in ("shadow", "rust"):
                 from hexai_pdf_parser.rust_adapter import roundtrip_dto
 
+                t_ffi_start = time.perf_counter()
                 for p in fixture_pages:
                     if "page" in p:
                         roundtrip_dto("page", p["page"])
@@ -247,12 +251,44 @@ def _worker_execute(
                         roundtrip_dto("table_candidate", t)
                     for s in p.get("spans", []):
                         roundtrip_dto("native_span", s)
-            t_ffi = max(time.perf_counter() - t_ffi_start, 1e-6) if mode in ("shadow", "rust") else 0.0
+                t_ffi = max(time.perf_counter() - t_ffi_start, 1e-6)
+
             for p in fixture_pages:
-                tables.extend(p.get("tables", []))
-            t_dto = 1e-6
-            t_alg = 1e-6
-            t_adapt = 1e-6
+                if "tables" in p:
+                    tables.extend(p.get("tables", []))
+                elif "h_lines" in p and "v_lines" in p:
+                    h_lines = p["h_lines"]
+                    v_lines = p["v_lines"]
+                    if mode in ("shadow", "rust"):
+                        from hexai_pdf_parser import rust_adapter
+
+                        t_alg_start = time.perf_counter()
+                        mh = rust_adapter.merge_h_lines(h_lines, 0.3)
+                        mv = rust_adapter.merge_v_lines(v_lines, mh, 0.3, 2.3)
+                        regs = rust_adapter.find_table_regions(mh, mv, 2.3)
+                        t_alg = max(time.perf_counter() - t_alg_start, 1e-6)
+                        for reg in regs:
+                            bbox = reg[0]
+                            tables.append({
+                                "bbox": [bbox["x0"], bbox["y0"], bbox["x1"], bbox["y1"]],
+                                "cells": [],
+                            })
+                    else:
+                        from hexai_pdf_parser.tables.extractors.wired_table_extractor import WiredTableExtractor
+
+                        ext = WiredTableExtractor()
+                        t_alg_start = time.perf_counter()
+                        mh = ext._merge_h_lines(h_lines)
+                        mv = ext._merge_v_lines(v_lines, mh)
+                        regs = ext._find_table_regions(mh, mv)
+                        t_alg = max(time.perf_counter() - t_alg_start, 1e-6)
+                        for reg in regs:
+                            bbox = reg[0]
+                            tables.append({
+                                "bbox": [bbox.x0, bbox.y0, bbox.x1, bbox.y1],
+                                "cells": [],
+                            })
+
             t_tot = max(time.perf_counter() - t0, 1e-6)
             return tables, len(fixture_pages), {
                 "extract": t_extract,

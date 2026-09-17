@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import bisect
 from collections import defaultdict
+import os
 from typing import Dict, List, Optional, Tuple
 
 import fitz
 
+from hexai_pdf_parser import rust_adapter
 from hexai_pdf_parser.core.models import BBox, Cell, Table
 from hexai_pdf_parser.tables.base_table_extractor import BaseTableExtractor
 
@@ -939,6 +941,12 @@ class WiredTableExtractor(BaseTableExtractor):
         if not lines:
             return []
 
+        mode = os.environ.get("PDF_RUST_MODE", "python").lower()
+        if mode == "rust":
+            return rust_adapter.merge_region_line_coordinates(
+                lines, horizontal=horizontal, tolerance=self.line_tolerance
+            )
+
         coordinate_index = 1 if horizontal else 0
         start_index = 0 if horizontal else 1
         end_index = 2 if horizontal else 3
@@ -1016,6 +1024,10 @@ class WiredTableExtractor(BaseTableExtractor):
         if not lines:
             return []
 
+        mode = os.environ.get("PDF_RUST_MODE", "python").lower()
+        if mode == "rust":
+            return rust_adapter.merge_h_lines(lines, self.merge_group_tol)
+
         sorted_lines = sorted(lines, key=lambda l: (round(l[1], 1), l[0]))
         groups: List[List[Tuple[float, float, float, float]]] = []
 
@@ -1053,6 +1065,15 @@ class WiredTableExtractor(BaseTableExtractor):
     ) -> List[Tuple[float, float, float, float]]:
         if not lines:
             return []
+
+        mode = os.environ.get("PDF_RUST_MODE", "python").lower()
+        if mode == "rust":
+            return rust_adapter.merge_v_lines(
+                lines,
+                h_lines=h_lines,
+                merge_group_tol=self.merge_group_tol,
+                line_tolerance=self.line_tolerance,
+            )
 
         sorted_lines = sorted(lines, key=lambda l: (round(l[0], 1), l[1]))
         groups: List[List[Tuple[float, float, float, float]]] = []
@@ -1092,6 +1113,16 @@ class WiredTableExtractor(BaseTableExtractor):
     ) -> List[Tuple[BBox, List[Tuple[float, float, float, float]], List[Tuple[float, float, float, float]]]]:
         if len(h_lines) < 2 or not v_lines:
             return []
+
+        mode = os.environ.get("PDF_RUST_MODE", "python").lower()
+        if mode == "rust":
+            raw_regions = rust_adapter.find_table_regions(
+                h_lines, v_lines, tolerance=self.line_tolerance
+            )
+            return [
+                (BBox(b["x0"], b["y0"], b["x1"], b["y1"]), h, v)
+                for b, h, v in raw_regions
+            ]
 
         # Ignore page rules, footer lines, and text underlines that do not
         # participate in the same connected line network as the table.
@@ -1189,6 +1220,10 @@ class WiredTableExtractor(BaseTableExtractor):
         v_line: Tuple[float, float, float, float],
     ) -> bool:
         """Return whether a horizontal and vertical line touch within tolerance."""
+        mode = os.environ.get("PDF_RUST_MODE", "python").lower()
+        if mode == "rust":
+            return rust_adapter.lines_intersect(h_line, v_line, self.line_tolerance)
+
         hx0, hy, hx1, _ = h_line
         vx, vy0, _, vy1 = v_line
         tolerance = self.line_tolerance
@@ -1204,6 +1239,9 @@ class WiredTableExtractor(BaseTableExtractor):
         tol: float = 1.5,
     ) -> List[float]:
         """Snap close coordinates to actual line anchors and merge duplicates within tol."""
+        mode = os.environ.get("PDF_RUST_MODE", "python").lower()
+        if mode == "rust":
+            return rust_adapter.snap_coordinates(coords, anchor_coords, tol)
         snapped = []
         for c in coords:
             matched = [a for a in anchor_coords if abs(a - c) <= tol]
@@ -1244,6 +1282,19 @@ class WiredTableExtractor(BaseTableExtractor):
         bound remains a separate coordinate, so it cannot become a boundary
         for unrelated rows or columns.
         """
+        mode = os.environ.get("PDF_RUST_MODE", "python").lower()
+        if mode == "rust":
+            return rust_adapter.snap_grid_coordinates(
+                start=start,
+                end=end,
+                orthogonal_start=orthogonal_start,
+                orthogonal_end=orthogonal_end,
+                lines=lines,
+                horizontal=horizontal,
+                tolerance=self.line_tolerance,
+                merge_group_tol=self.merge_group_tol,
+            )
+
         tol = self.line_tolerance
         coordinate_spans = []
         for line in lines:
@@ -1336,6 +1387,17 @@ class WiredTableExtractor(BaseTableExtractor):
         List[Tuple[float, float, float, float]],
     ]:
         """Complete only well-supported partial lines on the outer boundary."""
+        mode = os.environ.get("PDF_RUST_MODE", "python").lower()
+        if mode == "rust":
+            return rust_adapter.complete_partial_outer_boundaries(
+                bbox={"x0": bbox.x0, "y0": bbox.y0, "x1": bbox.x1, "y1": bbox.y1},
+                h_lines=h_lines,
+                v_lines=v_lines,
+                h_ys=h_ys,
+                v_xs=v_xs,
+                tolerance=self.line_tolerance,
+                merge_group_tol=self.merge_group_tol,
+            )
         tol = self.line_tolerance
         effective_h = list(h_lines)
         effective_v = list(v_lines)

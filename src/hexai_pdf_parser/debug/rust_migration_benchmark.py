@@ -22,6 +22,8 @@ def _value(value: Any, name: str, default: Any = None) -> Any:
 def _bbox(value: Any) -> Any:
     if value is None:
         return None
+    if isinstance(value, (list, tuple)):
+        return [float(v) for v in value]
     if isinstance(value, Mapping):
         return [float(value[key]) for key in ("x0", "y0", "x1", "y1")]
     return [float(getattr(value, key)) for key in ("x0", "y0", "x1", "y1")]
