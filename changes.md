@@ -1,5 +1,13 @@
 # Changes
 
+## 2026-09-18
+
+- **OpenVINO CPU 后端接入**：为表格检测模型增加 `backend="auto"`、`backend="cpu"` 和 `backend="openvino"` 选择。`auto` 仅在检测到 Intel CPU 且 OpenVINO provider 可用时尝试 OpenVINO；provider 初始化失败或未实际激活时自动回退到 CPU，避免部署环境因缺少可选依赖而中断。
+  - **根因与调用位置**：`src/hexai_pdf_parser/ml/ml_table_detector.py` 原先固定创建 `CPUExecutionProvider` session，无法利用 Intel CPU 上已安装的 OpenVINO Execution Provider；Windows pip 安装的 OpenVINO DLL 也不会自动被 provider bridge 找到，导致 provider 发现成功但 session 实际退回 CPU。
+  - **判定条件与实现**：使用 `platform.processor()`/`platform.uname().processor` 识别 Intel CPU；在 OpenVINO 路径先注册 `openvino/libs` DLL 目录并显式加载 `openvino.dll`，再创建 ORT session；OpenVINO session 使用 `ORT_DISABLE_ALL`，由 OpenVINO 执行图优化。session 缓存 key 包含模型路径、provider 和 provider options，避免不同后端或设备配置复用错误 session。
+  - **依赖安装**：`pyproject.toml` 和 `setup.py` 新增独立 `ml-openvino` extra，对应 `onnxruntime-openvino==1.24.1` 与 Windows 所需 `openvino==2025.4.1`；不与普通 `onnxruntime` extra 同时安装。
+  - **测试与验证**：新增自动选择、非 Intel 回退、OpenVINO 不可用回退、强制 OpenVINO 报错、缓存隔离和 session 初始化失败回退测试；当前环境为 Intel Core i5-10200H，OpenVINO 实际模型 session 返回 `OpenVINOExecutionProvider` 并完成 `1x3x640x640` 推理，输出形状为 `1x300x6`。
+
 ## 2026-09-17
 
 - Sprint 012：完成端到端前后 Benchmark、页面视觉检验、全量 Rust 解析验证和发布物构建。
