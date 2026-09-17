@@ -542,11 +542,11 @@ pub fn cluster_columns(items: Vec<OrderedRectDto>, tolerance: f64) -> Vec<Column
 pub fn stable_output_order(tables: Vec<TableCandidateDto>) -> Vec<TableCandidateDto>;
 ~~~
 
-- [ ] Step 1: 为 overlap、region exclusion、row/column clustering 和 output order 增加直接 vectors。
-- [ ] Step 2: 运行 focused tests RED。
-- [ ] Step 3: 实现共享 kernels；wired 和 wireless 不再保留重复实现。
-- [ ] Step 4: 在 TableExtractor 和 wireless candidate boundary 做 shadow compare。
-- [ ] Step 5: 运行回归、benchmark 和提交。
+- [x] Step 1: 为 overlap、region exclusion、row/column clustering 和 output order 增加直接 vectors。
+- [x] Step 2: 运行 focused tests RED。
+- [x] Step 3: 实现共享 kernels；wired 和 wireless 不再保留重复实现。
+- [x] Step 4: 在 TableExtractor 和 wireless candidate boundary 做 shadow compare。
+- [x] Step 5: 运行回归、benchmark 和提交。
 
 ~~~powershell
 cargo test
