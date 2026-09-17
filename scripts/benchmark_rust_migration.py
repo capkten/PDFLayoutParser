@@ -539,6 +539,132 @@ def _worker_execute(
                                 "cells": [],
                             })
                         t_alg = max(time.perf_counter() - t_alg_start, 1e-6)
+                elif "chinese_wireless_structure" in p:
+                    cws = p["chinese_wireless_structure"]
+                    atoms = cws["atoms"]
+                    bands = cws.get("bands", [])
+                    region = cws["region"]
+                    config = cws.get("config", {
+                        "schema_version": 1,
+                        "line_tolerance": 2.0,
+                        "row_tolerance": 2.0,
+                        "column_tolerance": 2.0,
+                        "span_tolerance": 2.0,
+                        "numeric_tolerance": 2.0,
+                    })
+                    if mode in ("shadow", "rust"):
+                        from hexai_pdf_parser import rust_adapter
+
+                        input_dto = {
+                            "schema_version": 1,
+                            "region": region,
+                            "atoms": atoms,
+                            "bands": bands,
+                            "config": config,
+                        }
+                        t_alg_start = time.perf_counter()
+                        out = rust_adapter.recover_native_region(input_dto)
+                        t_alg = max(time.perf_counter() - t_alg_start, 1e-6)
+
+                        r_cells = out.get("cells", [])
+                        row_cnt = out.get("grid", {}).get("grid", {}).get("rows", 0)
+                        col_cnt = out.get("grid", {}).get("grid", {}).get("cols", 0)
+                        r_rect = region["rect"]
+                        tables.append({
+                            "bbox": [r_rect["x0"], r_rect["y0"], r_rect["x1"], r_rect["y1"]],
+                            "rows": row_cnt,
+                            "cols": col_cnt,
+                            "source": "wireless_chinese_structure",
+                            "cells": [
+                                {
+                                    "text": c["text"],
+                                    "row_index": c["row"],
+                                    "col_index": c["col"],
+                                    "bbox": [c["rect"]["x0"], c["rect"]["y0"], c["rect"]["x1"], c["rect"]["y1"]],
+                                    "rowspan": c.get("rowspan", 1),
+                                    "colspan": c.get("colspan", 1),
+                                }
+                                for c in r_cells
+                            ],
+                        })
+                    else:
+                        t_alg_start = time.perf_counter()
+                        sorted_atoms = sorted(atoms, key=lambda a: (a["rect"]["y0"] + a["rect"]["y1"]) / 2.0)
+                        rows = []
+                        row_centers = []
+                        for a in sorted_atoms:
+                            cy = (a["rect"]["y0"] + a["rect"]["y1"]) / 2.0
+                            if row_centers and abs(cy - row_centers[-1]) <= 3.5:
+                                rows[-1].append(a)
+                                row_centers[-1] = sum((x["rect"]["y0"] + x["rect"]["y1"]) / 2.0 for x in rows[-1]) / len(rows[-1])
+                            else:
+                                row_centers.append(cy)
+                                rows.append([a])
+
+                        num_rows = max(1, len(rows))
+                        num_cols = max(1, len(bands))
+                        occupancy = [[None for _ in range(num_cols)] for _ in range(num_rows)]
+                        phys_cells = []
+                        for r_idx, r_atoms in enumerate(rows):
+                            for a in r_atoms:
+                                best_col = 0
+                                max_ov = -1.0
+                                for c_idx, b in enumerate(bands):
+                                    ov = max(0.0, min(a["rect"]["x1"], b["x1"]) - max(a["rect"]["x0"], b["x0"]))
+                                    if ov > max_ov:
+                                        max_ov = ov
+                                        best_col = c_idx
+                                phys_cells.append({
+                                    "text": a["text"],
+                                    "row": r_idx,
+                                    "col": best_col,
+                                    "rect": a["rect"],
+                                })
+
+                        cells = []
+                        for pc in phys_cells:
+                            r, c = pc["row"], pc["col"]
+                            if r < num_rows and c < num_cols:
+                                occupancy[r][c] = len(cells)
+                            cells.append({
+                                "text": pc["text"],
+                                "row_index": r,
+                                "col_index": c,
+                                "bbox": [pc["rect"]["x0"], pc["rect"]["y0"], pc["rect"]["x1"], pc["rect"]["y1"]],
+                                "rowspan": 1,
+                                "colspan": 1,
+                            })
+
+                        row_edges = [min(a["rect"]["y0"] for a in r) for r in rows]
+                        row_edges.append(max(a["rect"]["y1"] for a in rows[-1]) if rows else region["rect"]["y1"])
+                        col_edges = [b["x0"] for b in bands]
+                        col_edges.append(bands[-1]["x1"] if bands else region["rect"]["x1"])
+
+                        for r in range(num_rows):
+                            for c in range(num_cols):
+                                if occupancy[r][c] is None:
+                                    x0 = col_edges[c] if c < len(col_edges) else 0.0
+                                    x1 = col_edges[c + 1] if c + 1 < len(col_edges) else x0 + 10.0
+                                    y0 = row_edges[r] if r < len(row_edges) else 0.0
+                                    y1 = row_edges[r + 1] if r + 1 < len(row_edges) else y0 + 10.0
+                                    cells.append({
+                                        "text": "",
+                                        "row_index": r,
+                                        "col_index": c,
+                                        "bbox": [x0, y0, x1, y1],
+                                        "rowspan": 1,
+                                        "colspan": 1,
+                                    })
+                        cells.sort(key=lambda item: (item["row_index"], item["col_index"]))
+                        t_alg = max(time.perf_counter() - t_alg_start, 1e-6)
+                        r_rect = region["rect"]
+                        tables.append({
+                            "bbox": [r_rect["x0"], r_rect["y0"], r_rect["x1"], r_rect["y1"]],
+                            "rows": num_rows,
+                            "cols": num_cols,
+                            "source": "wireless_chinese_structure",
+                            "cells": cells,
+                        })
                 elif "tables" in p:
                     tables.extend(p.get("tables", []))
                 elif "words" in p and "h_lines" in p and "v_lines" in p:

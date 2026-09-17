@@ -2,6 +2,23 @@
 
 ## 2026-09-17
 
+- Sprint 007：迁移中文/混合无线结构恢复（列带划分、叶子精化、物理网格与逻辑网格物化）至 Rust (PyO3) 并释放 GIL。
+  - **根因与调用位置**：`src/hexai_pdf_parser/tables/wireless_structure/{columns,grid,logical_grid,recoverer}.py` 中的 `infer_column_bands()`、`refine_leaf_bands()`、`build_grid()`、`build_logical_grid()` 与 `recover_cells_from_region()` 原先在 Python 层面通过大量的候选循环、集合操作、物理行聚类与空槽位切分进行处理，在包含密集单元格的中文无线大表格上造成显著的解释执行耗时。
+  - **设计与修复判定**：
+    - **Rust 内核实现**：在 `rust/wireless_structure.rs` 实现了 `infer_column_bands`、`refine_leaf_bands`、`build_grid`、`build_logical_grid` 与 `recover_native_region`，在 Rust 内部完成基于 x 重叠组件的列带推断、纵向容差物理行聚类、叶子列槽位匹配与逻辑网格空槽独立物化，密集计算通过 `py.allow_threads` 释放 GIL。
+    - **中文无线表格不变量严格遵守**：
+      - 结构恢复阶段只消费 `NativeSpanDto`、`AtomDto`、`ColumnBandDto`、`PhysicalCell`、`LogicalGridDto` 和 `CellDto`，严格禁止再次调用 `page.get_text("words")`，自动化 PageSpy 拦截测试验证通过。
+      - 独立字段默认保留为独立叶子列，不得仅因两个 atom 位于同一候选槽位就合并它们；
+      - 表格中的空槽位也是结构的一部分，所有未被现有跨度覆盖的槽位均严格物化为独立 `text=""`、`1x1` Cell，按推断网格边界切分，不合并相邻空单元格；
+      - 严格保证每个逻辑槽位恰好被一个 Cell 占用，无重复、无遗漏。
+    - **DTO 与导出路由**：在 `rust/types.rs` 新增 `NativeRegionInput` 与 `NativeRegionOutput` DTO 结构，登记到 `roundtrip_dto`；在 `rust/lib.rs` 导出 5 个算子并在 `src/hexai_pdf_parser/rust_adapter.py` 暴露强类型 Python 签名；在 `recoverer.py` 接入 `PDF_RUST_MODE` 路由（生产默认 `python`，支持 `shadow` 和 `rust`）。
+  - **测试与基准测试结果**：
+    - 新增 `tests/test_pdf_fast_wireless_structure.py`，8 个针对列带推断、叶子精化、物理网格、空槽单元格独立物化、端到端区域恢复、独立字段不误并、槽位唯一占用及 PageSpy（确保无 words 回读）的单元测试 100% 通过（`8 passed`）。
+    - `cargo test`: 9 passed, 0 failed.
+    - 无线全量测试套件：230 passed, 0 failed in 2.16s。
+    - **基准测试 (chinese-wireless)**：四路对比（baseline, python, shadow, rust）确认 `equal: true, differences_count: 0`；结构化结果完全一致，无冲突、无空槽位遗漏。
+
+
 - Sprint 006：迁移无线表格 Native Span、Atom 和 Text Run 数据流至 Rust (PyO3) 并释放 GIL。
   - **根因与调用位置**：`src/hexai_pdf_parser/tables/wireless_structure/text_runs.py` 中的 `build_text_runs()`、`infer_output_order_mode()`、以及原子聚合与换行续写合并等算法，原先在 Python 解释器中通过 Python 循环、正则匹配与字典拆装处理，在无线大表格上产生显著的解释执行与内存开销。
   - **设计与修复判定**：

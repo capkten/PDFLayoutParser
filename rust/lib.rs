@@ -5,6 +5,7 @@ pub mod geometry;
 pub mod native_span;
 pub mod types;
 pub mod wired;
+pub mod wireless_structure;
 
 pub use geometry::Line4;
 pub use types::Rect4;
@@ -445,6 +446,119 @@ fn recover_native_candidates_binding<'py>(
     output.to_py(py)
 }
 
+#[pyfunction(name = "infer_column_bands")]
+fn infer_column_bands_binding<'py>(
+    py: Python<'py>,
+    atoms: &Bound<'py, PyList>,
+    region: &Bound<'py, PyDict>,
+) -> PyResult<Bound<'py, PyList>> {
+    let mut rust_atoms = Vec::with_capacity(atoms.len());
+    for a in atoms.iter() {
+        rust_atoms.push(types::AtomDto::from_py(&a.downcast::<PyDict>()?.clone())?);
+    }
+    let rust_region = Rect4::from_py(region)?;
+    let bands =
+        py.allow_threads(move || wireless_structure::infer_column_bands(rust_atoms, rust_region));
+    let list = PyList::empty_bound(py);
+    for b in bands {
+        list.append(b.to_py(py)?)?;
+    }
+    Ok(list)
+}
+
+#[pyfunction(name = "refine_leaf_bands")]
+fn refine_leaf_bands_binding<'py>(
+    py: Python<'py>,
+    atoms: &Bound<'py, PyList>,
+    bands: &Bound<'py, PyList>,
+) -> PyResult<(Bound<'py, PyList>, Option<f64>)> {
+    let mut rust_atoms = Vec::with_capacity(atoms.len());
+    for a in atoms.iter() {
+        rust_atoms.push(types::AtomDto::from_py(&a.downcast::<PyDict>()?.clone())?);
+    }
+    let mut rust_bands = Vec::with_capacity(bands.len());
+    for b in bands.iter() {
+        rust_bands.push(types::ColumnBandDto::from_py(
+            &b.downcast::<PyDict>()?.clone(),
+        )?);
+    }
+    let (refined, cutoff) =
+        py.allow_threads(move || wireless_structure::refine_leaf_bands(rust_atoms, rust_bands));
+    let list = PyList::empty_bound(py);
+    for b in refined {
+        list.append(b.to_py(py)?)?;
+    }
+    Ok((list, cutoff))
+}
+
+#[pyfunction(name = "build_grid")]
+fn build_grid_binding<'py>(
+    py: Python<'py>,
+    atoms: &Bound<'py, PyList>,
+    bands: &Bound<'py, PyList>,
+) -> PyResult<(
+    Bound<'py, PyList>,
+    Bound<'py, PyList>,
+    Bound<'py, PyList>,
+    Bound<'py, PyList>,
+)> {
+    let mut rust_atoms = Vec::with_capacity(atoms.len());
+    for a in atoms.iter() {
+        rust_atoms.push(types::AtomDto::from_py(&a.downcast::<PyDict>()?.clone())?);
+    }
+    let mut rust_bands = Vec::with_capacity(bands.len());
+    for b in bands.iter() {
+        rust_bands.push(types::ColumnBandDto::from_py(
+            &b.downcast::<PyDict>()?.clone(),
+        )?);
+    }
+    let (rows, bands_out, cells, diags) =
+        py.allow_threads(move || wireless_structure::build_grid(rust_atoms, rust_bands));
+    let rows_list = PyList::empty_bound(py);
+    for r in rows {
+        rows_list.append(r.to_py(py)?)?;
+    }
+    let bands_list = PyList::empty_bound(py);
+    for b in bands_out {
+        bands_list.append(b.to_py(py)?)?;
+    }
+    let cells_list = PyList::empty_bound(py);
+    for c in cells {
+        cells_list.append(c.to_py(py)?)?;
+    }
+    let diags_list = PyList::empty_bound(py);
+    for d in diags {
+        diags_list.append(d.to_py(py)?)?;
+    }
+    Ok((rows_list, bands_list, cells_list, diags_list))
+}
+
+#[pyfunction(name = "build_logical_grid")]
+fn build_logical_grid_binding<'py>(
+    py: Python<'py>,
+    atoms: &Bound<'py, PyList>,
+    grid: &Bound<'py, PyDict>,
+) -> PyResult<Bound<'py, PyDict>> {
+    let mut rust_atoms = Vec::with_capacity(atoms.len());
+    for a in atoms.iter() {
+        rust_atoms.push(types::AtomDto::from_py(&a.downcast::<PyDict>()?.clone())?);
+    }
+    let rust_grid = types::GridDto::from_py(grid)?;
+    let logical =
+        py.allow_threads(move || wireless_structure::build_logical_grid(rust_atoms, rust_grid));
+    logical.to_py(py)
+}
+
+#[pyfunction(name = "recover_native_region")]
+fn recover_native_region_binding<'py>(
+    py: Python<'py>,
+    input_dict: &Bound<'py, PyDict>,
+) -> PyResult<Bound<'py, PyDict>> {
+    let input = types::NativeRegionInput::from_py(input_dict)?;
+    let output = py.allow_threads(move || wireless_structure::recover_native_region(input));
+    output.to_py(py)
+}
+
 #[pymodule]
 fn _pdf_fast(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(rect_overlap_binding, module)?)?;
@@ -457,6 +571,11 @@ fn _pdf_fast(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(merge_wrapped_rows_binding, module)?)?;
     module.add_function(wrap_pyfunction!(infer_output_order_mode_binding, module)?)?;
     module.add_function(wrap_pyfunction!(recover_native_candidates_binding, module)?)?;
+    module.add_function(wrap_pyfunction!(infer_column_bands_binding, module)?)?;
+    module.add_function(wrap_pyfunction!(refine_leaf_bands_binding, module)?)?;
+    module.add_function(wrap_pyfunction!(build_grid_binding, module)?)?;
+    module.add_function(wrap_pyfunction!(build_logical_grid_binding, module)?)?;
+    module.add_function(wrap_pyfunction!(recover_native_region_binding, module)?)?;
     module.add_function(wrap_pyfunction!(merge_h_lines_binding, module)?)?;
     module.add_function(wrap_pyfunction!(merge_v_lines_binding, module)?)?;
     module.add_function(wrap_pyfunction!(

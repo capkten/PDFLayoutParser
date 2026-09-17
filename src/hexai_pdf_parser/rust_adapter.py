@@ -474,3 +474,122 @@ def recover_native_candidates(
         owned_spans.append(sd)
     d["spans"] = owned_spans
     return _pdf_fast.recover_native_candidates(d)
+
+
+def infer_column_bands(
+    atoms: List[Dict[str, Any]],
+    region: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    owned_atoms = []
+    for a in atoms:
+        d = dict(a)
+        if "schema_version" not in d:
+            d["schema_version"] = 1
+        rect = d.get("rect")
+        if isinstance(rect, dict) and "schema_version" not in rect:
+            d["rect"] = {"schema_version": 1, **rect}
+        owned_atoms.append(d)
+    r = dict(region)
+    if "schema_version" not in r:
+        r["schema_version"] = 1
+    return _pdf_fast.infer_column_bands(owned_atoms, r)
+
+
+def refine_leaf_bands(
+    atoms: List[Dict[str, Any]],
+    bands: List[Dict[str, Any]],
+) -> Tuple[List[Dict[str, Any]], Optional[float]]:
+    owned_atoms = []
+    for a in atoms:
+        d = dict(a)
+        if "schema_version" not in d:
+            d["schema_version"] = 1
+        rect = d.get("rect")
+        if isinstance(rect, dict) and "schema_version" not in rect:
+            d["rect"] = {"schema_version": 1, **rect}
+        owned_atoms.append(d)
+    owned_bands = []
+    for b in bands:
+        bd = dict(b)
+        if "schema_version" not in bd:
+            bd["schema_version"] = 1
+        owned_bands.append(bd)
+    return _pdf_fast.refine_leaf_bands(owned_atoms, owned_bands)
+
+
+def build_grid(
+    atoms: List[Dict[str, Any]],
+    bands: List[Dict[str, Any]],
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
+    owned_atoms = []
+    for a in atoms:
+        d = dict(a)
+        if "schema_version" not in d:
+            d["schema_version"] = 1
+        rect = d.get("rect")
+        if isinstance(rect, dict) and "schema_version" not in rect:
+            d["rect"] = {"schema_version": 1, **rect}
+        owned_atoms.append(d)
+    owned_bands = []
+    for b in bands:
+        bd = dict(b)
+        if "schema_version" not in bd:
+            bd["schema_version"] = 1
+        owned_bands.append(bd)
+    return _pdf_fast.build_grid(owned_atoms, owned_bands)
+
+
+def build_logical_grid(
+    atoms: List[Dict[str, Any]],
+    grid: Dict[str, Any],
+) -> Dict[str, Any]:
+    owned_atoms = []
+    for a in atoms:
+        d = dict(a)
+        if "schema_version" not in d:
+            d["schema_version"] = 1
+        rect = d.get("rect")
+        if isinstance(rect, dict) and "schema_version" not in rect:
+            d["rect"] = {"schema_version": 1, **rect}
+        owned_atoms.append(d)
+    g = dict(grid)
+    if "schema_version" not in g:
+        g["schema_version"] = 1
+    return _pdf_fast.build_logical_grid(owned_atoms, g)
+
+
+def recover_native_region(
+    input_dto: Dict[str, Any],
+) -> Dict[str, Any]:
+    d = dict(input_dto)
+    if "schema_version" not in d:
+        d["schema_version"] = 1
+    region = dict(d["region"])
+    if "schema_version" not in region:
+        region["schema_version"] = 1
+    r_rect = region.get("rect")
+    if isinstance(r_rect, dict) and "schema_version" not in r_rect:
+        region["rect"] = {"schema_version": 1, **r_rect}
+    d["region"] = region
+    config = dict(d["config"])
+    if "schema_version" not in config:
+        config["schema_version"] = 1
+    d["config"] = config
+    owned_atoms = []
+    for a in d.get("atoms", []):
+        ad = dict(a)
+        if "schema_version" not in ad:
+            ad["schema_version"] = 1
+        rect = ad.get("rect")
+        if isinstance(rect, dict) and "schema_version" not in rect:
+            ad["rect"] = {"schema_version": 1, **rect}
+        owned_atoms.append(ad)
+    d["atoms"] = owned_atoms
+    owned_bands = []
+    for b in d.get("bands", []):
+        bd = dict(b)
+        if "schema_version" not in bd:
+            bd["schema_version"] = 1
+        owned_bands.append(bd)
+    d["bands"] = owned_bands
+    return _pdf_fast.recover_native_region(d)

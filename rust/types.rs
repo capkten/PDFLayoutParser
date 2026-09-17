@@ -1321,6 +1321,109 @@ impl NativeRecoveryOutput {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct NativeRegionInput {
+    pub schema_version: i64,
+    pub region: RegionDto,
+    pub atoms: Vec<AtomDto>,
+    pub bands: Vec<ColumnBandDto>,
+    pub config: StructureConfig,
+}
+
+impl NativeRegionInput {
+    pub fn from_py(dict: &Bound<'_, PyDict>) -> PyResult<Self> {
+        let sv: i64 = get_req(dict, "schema_version")?.extract()?;
+        check_schema_version(sv)?;
+        let region = RegionDto::from_py(&get_req(dict, "region")?.downcast::<PyDict>()?.clone())?;
+        let atoms_list: Bound<'_, PyList> = get_req(dict, "atoms")?.extract()?;
+        let mut atoms = Vec::with_capacity(atoms_list.len());
+        for a in atoms_list.iter() {
+            atoms.push(AtomDto::from_py(&a.downcast::<PyDict>()?.clone())?);
+        }
+        let bands_list: Bound<'_, PyList> = get_req(dict, "bands")?.extract()?;
+        let mut bands = Vec::with_capacity(bands_list.len());
+        for b in bands_list.iter() {
+            bands.push(ColumnBandDto::from_py(&b.downcast::<PyDict>()?.clone())?);
+        }
+        let config =
+            StructureConfig::from_py(&get_req(dict, "config")?.downcast::<PyDict>()?.clone())?;
+        Ok(Self {
+            schema_version: sv,
+            region,
+            atoms,
+            bands,
+            config,
+        })
+    }
+
+    pub fn to_py<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let d = PyDict::new_bound(py);
+        d.set_item("schema_version", self.schema_version)?;
+        d.set_item("region", self.region.to_py(py)?)?;
+        let al = PyList::empty_bound(py);
+        for a in &self.atoms {
+            al.append(a.to_py(py)?)?;
+        }
+        d.set_item("atoms", al)?;
+        let bl = PyList::empty_bound(py);
+        for b in &self.bands {
+            bl.append(b.to_py(py)?)?;
+        }
+        d.set_item("bands", bl)?;
+        d.set_item("config", self.config.to_py(py)?)?;
+        Ok(d)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct NativeRegionOutput {
+    pub schema_version: i64,
+    pub grid: LogicalGridDto,
+    pub cells: Vec<CellDto>,
+    pub diagnostics: Vec<DiagnosticDto>,
+}
+
+impl NativeRegionOutput {
+    pub fn from_py(dict: &Bound<'_, PyDict>) -> PyResult<Self> {
+        let sv: i64 = get_req(dict, "schema_version")?.extract()?;
+        check_schema_version(sv)?;
+        let grid = LogicalGridDto::from_py(&get_req(dict, "grid")?.downcast::<PyDict>()?.clone())?;
+        let cells_list: Bound<'_, PyList> = get_req(dict, "cells")?.extract()?;
+        let mut cells = Vec::with_capacity(cells_list.len());
+        for c in cells_list.iter() {
+            cells.push(CellDto::from_py(&c.downcast::<PyDict>()?.clone())?);
+        }
+        let d_list: Bound<'_, PyList> = get_req(dict, "diagnostics")?.extract()?;
+        let mut diagnostics = Vec::with_capacity(d_list.len());
+        for d in d_list.iter() {
+            diagnostics.push(DiagnosticDto::from_py(&d.downcast::<PyDict>()?.clone())?);
+        }
+        Ok(Self {
+            schema_version: sv,
+            grid,
+            cells,
+            diagnostics,
+        })
+    }
+
+    pub fn to_py<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let d = PyDict::new_bound(py);
+        d.set_item("schema_version", self.schema_version)?;
+        d.set_item("grid", self.grid.to_py(py)?)?;
+        let cl = PyList::empty_bound(py);
+        for c in &self.cells {
+            cl.append(c.to_py(py)?)?;
+        }
+        d.set_item("cells", cl)?;
+        let dl = PyList::empty_bound(py);
+        for diag in &self.diagnostics {
+            dl.append(diag.to_py(py)?)?;
+        }
+        d.set_item("diagnostics", dl)?;
+        Ok(d)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct DiagnosticValueDto {
     pub schema_version: i64,
     pub kind: String,
@@ -1722,6 +1825,14 @@ pub fn roundtrip_dto_py<'py>(
         }
         "native_recovery_output" => {
             let dto = NativeRecoveryOutput::from_py(data)?;
+            dto.to_py(py)
+        }
+        "native_region_input" => {
+            let dto = NativeRegionInput::from_py(data)?;
+            dto.to_py(py)
+        }
+        "native_region_output" => {
+            let dto = NativeRegionOutput::from_py(data)?;
             dto.to_py(py)
         }
         other => Err(PyValueError::new_err(format!(

@@ -638,12 +638,12 @@ pub fn materialize_empty_cells(grid: LogicalGridDto) -> Vec<CellDto>;
 pub fn recover_cells_from_region(input: NativeRegionInput) -> NativeRegionOutput;
 ~~~
 
-- [ ] Step 1: 增加 independent leaf columns、incomplete 1:2 header pairs、non-empty rowspan blockers、exact slot conflicts、empty slots、wrapped leaf headers、paired CJK artifacts、sparse alignment artifacts 和 continuation rows 的 RED vectors。
-- [ ] Step 2: 运行完整 structure tests，确认 Rust entry points 尚未实现时按预期失败。
-- [ ] Step 3: 按 columns → rows → logical grid → header topology → spans → empty slots 的顺序实现；进入结构层后只允许 Atom、ColumnBand、PhysicalCell 和 LogicalGrid DTO。
-- [ ] Step 4: 每次 colspan/rowspan 调整后重算 occupancy；冲突 span 拒绝；未覆盖槽位生成独立空 1x1 Cell。
-- [ ] Step 5: 增加 Chinese facade shadow/rust；测试 get_text("words")、zebra 和 legacy 在 zh/mixed 路径中一旦被请求就失败。
-- [ ] Step 6: 测试、benchmark 和提交。
+- [x] Step 1: 增加 independent leaf columns、incomplete 1:2 header pairs、non-empty rowspan blockers、exact slot conflicts、empty slots、wrapped leaf headers、paired CJK artifacts、sparse alignment artifacts 和 continuation rows 的 RED vectors。
+- [x] Step 2: 运行完整 structure tests，确认 Rust entry points 尚未实现时按预期失败。
+- [x] Step 3: 按 columns → rows → logical grid → header topology → spans → empty slots 的顺序实现；进入结构层后只允许 Atom、ColumnBand、PhysicalCell 和 LogicalGrid DTO。
+- [x] Step 4: 每次 colspan/rowspan 调整后重算 occupancy；冲突 span 拒绝；未覆盖槽位生成独立空 1x1 Cell。
+- [x] Step 5: 增加 Chinese facade shadow/rust；测试 get_text("words")、zebra 和 legacy 在 zh/mixed 路径中一旦被请求就失败。
+- [x] Step 6: 测试、benchmark 和提交。
 
 ~~~powershell
 cargo test
