@@ -435,8 +435,8 @@ pub fn snap_grid_coordinates(region: RegionDto, tolerance: f64) -> GridDto;
 pub fn complete_partial_outer_boundaries(grid: GridDto, tolerance: f64) -> GridDto;
 ~~~
 
-- [ ] Step 1: 从 Python oracle 复制测试向量。覆盖空输入、equal coordinates、Python rounding/NaN ordering、tolerance 边界、端点接触、断开组件、相邻表格 gap、partial lines 和 open boundaries。
-- [ ] Step 2: 确认 RED。
+- [x] Step 1: 从 Python oracle 复制测试向量。覆盖空输入、equal coordinates、Python rounding/NaN ordering、tolerance 边界、端点接触、断开组件、相邻表格 gap、partial lines 和 open boundaries。
+- [x] Step 2: 确认 RED。
 
 ~~~powershell
 cargo test wired
@@ -444,9 +444,9 @@ $env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'
 python -m pytest -q tests/test_pdf_fast_wired.py
 ~~~
 
-- [ ] Step 3: 先实现 shared geometry，再实现 wired region。保留 comparison ordering、arithmetic order、tolerance inclusivity 和输出顺序。
-- [ ] Step 4: 在 wired adapter 增加 shadow 比较；同一 extracted drawing DTO 同时执行 Python 和 Rust，差异必须生成诊断。
-- [ ] Step 5: 验证和提交。
+- [x] Step 3: 先实现 shared geometry，再实现 wired region。保留 comparison ordering、arithmetic order、tolerance inclusivity 和输出顺序。
+- [x] Step 4: 在 wired adapter 增加 shadow 比较；同一 extracted drawing DTO 同时执行 Python 和 Rust，差异必须生成诊断。
+- [x] Step 5: 验证和提交。
 
 ~~~powershell
 cargo fmt --check
