@@ -1,3 +1,5 @@
+use crate::types::{ColumnClusterDto, OrderedRectDto, Rect4, RowClusterDto, TableCandidateDto};
+
 pub type Line4 = (f64, f64, f64, f64);
 
 pub fn round_one_decimal(value: f64) -> f64 {
@@ -417,4 +419,188 @@ pub fn snap_grid_coordinates(
     result_coords.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     result_coords.dedup();
     result_coords
+}
+
+pub fn rect_overlap(a: &Rect4, b: &Rect4, strict: bool) -> bool {
+    if strict {
+        a.x0.max(b.x0) < a.x1.min(b.x1) && a.y0.max(b.y0) < a.y1.min(b.y1)
+    } else {
+        a.x0.max(b.x0) <= a.x1.min(b.x1) && a.y0.max(b.y0) <= a.y1.min(b.y1)
+    }
+}
+
+pub fn filter_regions(
+    regions: Vec<Rect4>,
+    excluded: Vec<Rect4>,
+    allowed: Vec<Rect4>,
+) -> Vec<Rect4> {
+    regions
+        .into_iter()
+        .filter(|r| {
+            if excluded.iter().any(|ex| rect_overlap(r, ex, true)) {
+                return false;
+            }
+            if !allowed.is_empty() && !allowed.iter().any(|al| rect_overlap(r, al, true)) {
+                return false;
+            }
+            true
+        })
+        .collect()
+}
+
+pub fn cluster_rows(items: Vec<OrderedRectDto>, tolerance: f64) -> Vec<RowClusterDto> {
+    if items.is_empty() {
+        return Vec::new();
+    }
+
+    let mut sorted_items = items;
+    sorted_items.sort_by(|a, b| {
+        let a_cy = (a.rect.y0 + a.rect.y1) / 2.0;
+        let b_cy = (b.rect.y0 + b.rect.y1) / 2.0;
+        match a_cy.partial_cmp(&b_cy) {
+            Some(std::cmp::Ordering::Equal) => match a.rect.x0.partial_cmp(&b.rect.x0) {
+                Some(std::cmp::Ordering::Equal) => a.order.cmp(&b.order),
+                Some(ord) => ord,
+                None => std::cmp::Ordering::Equal,
+            },
+            Some(ord) => ord,
+            None => std::cmp::Ordering::Equal,
+        }
+    });
+
+    let mut clusters: Vec<Vec<OrderedRectDto>> = Vec::new();
+    let mut centers: Vec<f64> = Vec::new();
+
+    for item in sorted_items {
+        let cy = (item.rect.y0 + item.rect.y1) / 2.0;
+        if clusters.is_empty() || (cy - centers.last().unwrap()).abs() > tolerance {
+            clusters.push(vec![item]);
+            centers.push(cy);
+        } else {
+            let last_cluster = clusters.last_mut().unwrap();
+            last_cluster.push(item);
+            let sum_cy: f64 = last_cluster
+                .iter()
+                .map(|it| (it.rect.y0 + it.rect.y1) / 2.0)
+                .sum();
+            *centers.last_mut().unwrap() = sum_cy / last_cluster.len() as f64;
+        }
+    }
+
+    clusters
+        .into_iter()
+        .enumerate()
+        .map(|(row_idx, mut cluster)| {
+            cluster.sort_by(|a, b| match a.rect.x0.partial_cmp(&b.rect.x0) {
+                Some(std::cmp::Ordering::Equal) => a.order.cmp(&b.order),
+                Some(ord) => ord,
+                None => std::cmp::Ordering::Equal,
+            });
+            let y0 = cluster
+                .iter()
+                .map(|it| it.rect.y0)
+                .fold(f64::INFINITY, f64::min);
+            let y1 = cluster
+                .iter()
+                .map(|it| it.rect.y1)
+                .fold(f64::NEG_INFINITY, f64::max);
+            let item_indices = cluster.iter().map(|it| it.id).collect();
+            RowClusterDto {
+                schema_version: 1,
+                row_index: row_idx as i64,
+                y0,
+                y1,
+                item_indices,
+            }
+        })
+        .collect()
+}
+
+pub fn cluster_columns(items: Vec<OrderedRectDto>, tolerance: f64) -> Vec<ColumnClusterDto> {
+    if items.is_empty() {
+        return Vec::new();
+    }
+
+    let mut sorted_items = items;
+    sorted_items.sort_by(|a, b| {
+        let a_cx = (a.rect.x0 + a.rect.x1) / 2.0;
+        let b_cx = (b.rect.x0 + b.rect.x1) / 2.0;
+        match a_cx.partial_cmp(&b_cx) {
+            Some(std::cmp::Ordering::Equal) => match a.rect.y0.partial_cmp(&b.rect.y0) {
+                Some(std::cmp::Ordering::Equal) => a.order.cmp(&b.order),
+                Some(ord) => ord,
+                None => std::cmp::Ordering::Equal,
+            },
+            Some(ord) => ord,
+            None => std::cmp::Ordering::Equal,
+        }
+    });
+
+    let mut clusters: Vec<Vec<OrderedRectDto>> = Vec::new();
+    let mut centers: Vec<f64> = Vec::new();
+
+    for item in sorted_items {
+        let cx = (item.rect.x0 + item.rect.x1) / 2.0;
+        if clusters.is_empty() || (cx - centers.last().unwrap()).abs() > tolerance {
+            clusters.push(vec![item]);
+            centers.push(cx);
+        } else {
+            let last_cluster = clusters.last_mut().unwrap();
+            last_cluster.push(item);
+            let sum_cx: f64 = last_cluster
+                .iter()
+                .map(|it| (it.rect.x0 + it.rect.x1) / 2.0)
+                .sum();
+            *centers.last_mut().unwrap() = sum_cx / last_cluster.len() as f64;
+        }
+    }
+
+    clusters
+        .into_iter()
+        .enumerate()
+        .map(|(col_idx, mut cluster)| {
+            cluster.sort_by(|a, b| match a.rect.y0.partial_cmp(&b.rect.y0) {
+                Some(std::cmp::Ordering::Equal) => a.order.cmp(&b.order),
+                Some(ord) => ord,
+                None => std::cmp::Ordering::Equal,
+            });
+            let x0 = cluster
+                .iter()
+                .map(|it| it.rect.x0)
+                .fold(f64::INFINITY, f64::min);
+            let x1 = cluster
+                .iter()
+                .map(|it| it.rect.x1)
+                .fold(f64::NEG_INFINITY, f64::max);
+            let item_indices = cluster.iter().map(|it| it.id).collect();
+            ColumnClusterDto {
+                schema_version: 1,
+                col_index: col_idx as i64,
+                x0,
+                x1,
+                item_indices,
+            }
+        })
+        .collect()
+}
+
+pub fn stable_output_order(mut tables: Vec<TableCandidateDto>) -> Vec<TableCandidateDto> {
+    tables.sort_by(|a, b| match a.rect.y0.partial_cmp(&b.rect.y0) {
+        Some(std::cmp::Ordering::Equal) => match a.rect.x0.partial_cmp(&b.rect.x0) {
+            Some(std::cmp::Ordering::Equal) => match a.rect.y1.partial_cmp(&b.rect.y1) {
+                Some(std::cmp::Ordering::Equal) => match a.rect.x1.partial_cmp(&b.rect.x1) {
+                    Some(std::cmp::Ordering::Equal) => a.source.cmp(&b.source),
+                    Some(ord) => ord,
+                    None => std::cmp::Ordering::Equal,
+                },
+                Some(ord) => ord,
+                None => std::cmp::Ordering::Equal,
+            },
+            Some(ord) => ord,
+            None => std::cmp::Ordering::Equal,
+        },
+        Some(ord) => ord,
+        None => std::cmp::Ordering::Equal,
+    });
+    tables
 }

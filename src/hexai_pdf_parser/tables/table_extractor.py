@@ -34,11 +34,13 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
+import os
 import fitz
 import copy
 
 from hexai_pdf_parser.core.models import BBox, Cell, CellStructure, Table, TableStructure, TextBlock
 from hexai_pdf_parser.page_normalizer import normalize_page_rotation
+from hexai_pdf_parser.rust_adapter import rect_overlap
 
 # Pre-compiled regex for numeric token classification (used per-word)
 _NUMERIC_RE = re.compile(
@@ -322,10 +324,25 @@ class TableExtractor:
     @staticmethod
     def _bbox_overlaps(left: BBox, right: BBox) -> bool:
         """Return whether two regions overlap with positive area."""
-        return (
+        mode = os.environ.get("PDF_RUST_MODE", "python").lower()
+        if mode == "rust":
+            return rect_overlap(
+                {"schema_version": 1, "x0": left.x0, "y0": left.y0, "x1": left.x1, "y1": left.y1},
+                {"schema_version": 1, "x0": right.x0, "y0": right.y0, "x1": right.x1, "y1": right.y1},
+                strict=True,
+            )
+        py_res = (
             min(left.x1, right.x1) > max(left.x0, right.x0)
             and min(left.y1, right.y1) > max(left.y0, right.y0)
         )
+        if mode == "shadow":
+            rust_res = rect_overlap(
+                {"schema_version": 1, "x0": left.x0, "y0": left.y0, "x1": left.x1, "y1": left.y1},
+                {"schema_version": 1, "x0": right.x0, "y0": right.y0, "x1": right.x1, "y1": right.y1},
+                strict=True,
+            )
+            assert rust_res == py_res, f"rect_overlap mismatch: py={py_res} rust={rust_res}"
+        return py_res
 
     @staticmethod
     def _bbox_overlap_ratio(left: BBox, right: BBox) -> float:

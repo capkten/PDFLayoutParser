@@ -247,8 +247,111 @@ fn roundtrip_dto_binding<'py>(
     types::roundtrip_dto_py(py, dto_type, data)
 }
 
+#[pyfunction(name = "rect_overlap")]
+fn rect_overlap_binding<'py>(
+    _py: Python<'py>,
+    a: &Bound<'py, PyDict>,
+    b: &Bound<'py, PyDict>,
+    strict: bool,
+) -> PyResult<bool> {
+    let ra = Rect4::from_py(a)?;
+    let rb = Rect4::from_py(b)?;
+    Ok(geometry::rect_overlap(&ra, &rb, strict))
+}
+
+#[pyfunction(name = "filter_regions")]
+fn filter_regions_binding<'py>(
+    py: Python<'py>,
+    regions: &Bound<'py, PyList>,
+    excluded: &Bound<'py, PyList>,
+    allowed: &Bound<'py, PyList>,
+) -> PyResult<Bound<'py, PyList>> {
+    let mut reg_vec = Vec::with_capacity(regions.len());
+    for item in regions.iter() {
+        reg_vec.push(Rect4::from_py(&item.downcast::<PyDict>()?.clone())?);
+    }
+    let mut ex_vec = Vec::with_capacity(excluded.len());
+    for item in excluded.iter() {
+        ex_vec.push(Rect4::from_py(&item.downcast::<PyDict>()?.clone())?);
+    }
+    let mut al_vec = Vec::with_capacity(allowed.len());
+    for item in allowed.iter() {
+        al_vec.push(Rect4::from_py(&item.downcast::<PyDict>()?.clone())?);
+    }
+    let res = py.allow_threads(move || geometry::filter_regions(reg_vec, ex_vec, al_vec));
+    let list = PyList::empty_bound(py);
+    for r in res {
+        list.append(r.to_py(py)?)?;
+    }
+    Ok(list)
+}
+
+#[pyfunction(name = "cluster_rows")]
+fn cluster_rows_binding<'py>(
+    py: Python<'py>,
+    items: &Bound<'py, PyList>,
+    tolerance: f64,
+) -> PyResult<Bound<'py, PyList>> {
+    let mut item_vec = Vec::with_capacity(items.len());
+    for item in items.iter() {
+        item_vec.push(types::OrderedRectDto::from_py(
+            &item.downcast::<PyDict>()?.clone(),
+        )?);
+    }
+    let clusters = py.allow_threads(move || geometry::cluster_rows(item_vec, tolerance));
+    let list = PyList::empty_bound(py);
+    for c in clusters {
+        list.append(c.to_py(py)?)?;
+    }
+    Ok(list)
+}
+
+#[pyfunction(name = "cluster_columns")]
+fn cluster_columns_binding<'py>(
+    py: Python<'py>,
+    items: &Bound<'py, PyList>,
+    tolerance: f64,
+) -> PyResult<Bound<'py, PyList>> {
+    let mut item_vec = Vec::with_capacity(items.len());
+    for item in items.iter() {
+        item_vec.push(types::OrderedRectDto::from_py(
+            &item.downcast::<PyDict>()?.clone(),
+        )?);
+    }
+    let clusters = py.allow_threads(move || geometry::cluster_columns(item_vec, tolerance));
+    let list = PyList::empty_bound(py);
+    for c in clusters {
+        list.append(c.to_py(py)?)?;
+    }
+    Ok(list)
+}
+
+#[pyfunction(name = "stable_output_order")]
+fn stable_output_order_binding<'py>(
+    py: Python<'py>,
+    tables: &Bound<'py, PyList>,
+) -> PyResult<Bound<'py, PyList>> {
+    let mut table_vec = Vec::with_capacity(tables.len());
+    for item in tables.iter() {
+        table_vec.push(types::TableCandidateDto::from_py(
+            &item.downcast::<PyDict>()?.clone(),
+        )?);
+    }
+    let ordered = py.allow_threads(move || geometry::stable_output_order(table_vec));
+    let list = PyList::empty_bound(py);
+    for t in ordered {
+        list.append(t.to_py(py)?)?;
+    }
+    Ok(list)
+}
+
 #[pymodule]
 fn _pdf_fast(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    module.add_function(wrap_pyfunction!(rect_overlap_binding, module)?)?;
+    module.add_function(wrap_pyfunction!(filter_regions_binding, module)?)?;
+    module.add_function(wrap_pyfunction!(cluster_rows_binding, module)?)?;
+    module.add_function(wrap_pyfunction!(cluster_columns_binding, module)?)?;
+    module.add_function(wrap_pyfunction!(stable_output_order_binding, module)?)?;
     module.add_function(wrap_pyfunction!(merge_h_lines_binding, module)?)?;
     module.add_function(wrap_pyfunction!(merge_v_lines_binding, module)?)?;
     module.add_function(wrap_pyfunction!(

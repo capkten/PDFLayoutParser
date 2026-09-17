@@ -254,7 +254,143 @@ def _worker_execute(
                 t_ffi = max(time.perf_counter() - t_ffi_start, 1e-6)
 
             for p in fixture_pages:
-                if "tables" in p:
+                if "shared_geometry" in p:
+                    sg = p["shared_geometry"]
+                    rects_a = sg.get("rects_a", [])
+                    rects_b = sg.get("rects_b", [])
+                    regions = sg.get("regions", [])
+                    excluded = sg.get("excluded", [])
+                    allowed = sg.get("allowed", [])
+                    items = sg.get("items", [])
+                    tol = float(sg.get("tolerance", 5.0))
+                    tables_in = sg.get("tables", [])
+
+                    if mode in ("shadow", "rust"):
+                        from hexai_pdf_parser import rust_adapter
+
+                        t_alg_start = time.perf_counter()
+                        overlaps = [
+                            rust_adapter.rect_overlap(a, b, strict=True)
+                            for a, b in zip(rects_a, rects_b)
+                        ]
+                        filtered = rust_adapter.filter_regions(regions, excluded, allowed)
+                        row_clusters = rust_adapter.cluster_rows(items, tol)
+                        col_clusters = rust_adapter.cluster_columns(items, tol)
+                        ordered = rust_adapter.stable_output_order(tables_in)
+                        t_alg = max(time.perf_counter() - t_alg_start, 1e-6)
+
+                        for t in ordered:
+                            r = t["rect"]
+                            tables.append({
+                                "bbox": [r["x0"], r["y0"], r["x1"], r["y1"]],
+                                "rows": t["rows"],
+                                "cols": t["cols"],
+                                "source": t["source"],
+                                "cells": [],
+                            })
+                    else:
+                        def _py_overlap(a, b):
+                            return (
+                                min(a["x1"], b["x1"]) > max(a["x0"], b["x0"])
+                                and min(a["y1"], b["y1"]) > max(a["y0"], b["y0"])
+                            )
+
+                        def _py_filter_regions(regs, ex, al):
+                            res = []
+                            for r in regs:
+                                if any(_py_overlap(r, e) for e in ex):
+                                    continue
+                                if al and not any(_py_overlap(r, a) for a in al):
+                                    continue
+                                res.append(r)
+                            return res
+
+                        def _py_cluster_rows(itms, tolerance):
+                            if not itms:
+                                return []
+                            sorted_it = sorted(
+                                itms,
+                                key=lambda x: (
+                                    (x["rect"]["y0"] + x["rect"]["y1"]) / 2.0,
+                                    x["rect"]["x0"],
+                                    x.get("order", 0),
+                                ),
+                            )
+                            clusters = []
+                            centers = []
+                            for it in sorted_it:
+                                cy = (it["rect"]["y0"] + it["rect"]["y1"]) / 2.0
+                                if not clusters or abs(cy - centers[-1]) > tolerance:
+                                    clusters.append([it])
+                                    centers.append(cy)
+                                else:
+                                    clusters[-1].append(it)
+                                    centers[-1] = sum(
+                                        (i["rect"]["y0"] + i["rect"]["y1"]) / 2.0
+                                        for i in clusters[-1]
+                                    ) / len(clusters[-1])
+                            for c in clusters:
+                                c.sort(key=lambda x: (x["rect"]["x0"], x.get("order", 0)))
+                            return clusters
+
+                        def _py_cluster_columns(itms, tolerance):
+                            if not itms:
+                                return []
+                            sorted_it = sorted(
+                                itms,
+                                key=lambda x: (
+                                    (x["rect"]["x0"] + x["rect"]["x1"]) / 2.0,
+                                    x["rect"]["y0"],
+                                    x.get("order", 0),
+                                ),
+                            )
+                            clusters = []
+                            centers = []
+                            for it in sorted_it:
+                                cx = (it["rect"]["x0"] + it["rect"]["x1"]) / 2.0
+                                if not clusters or abs(cx - centers[-1]) > tolerance:
+                                    clusters.append([it])
+                                    centers.append(cx)
+                                else:
+                                    clusters[-1].append(it)
+                                    centers[-1] = sum(
+                                        (i["rect"]["x0"] + i["rect"]["x1"]) / 2.0
+                                        for i in clusters[-1]
+                                    ) / len(clusters[-1])
+                            for c in clusters:
+                                c.sort(key=lambda x: (x["rect"]["y0"], x.get("order", 0)))
+                            return clusters
+
+                        def _py_stable_output_order(tbls):
+                            return sorted(
+                                tbls,
+                                key=lambda t: (
+                                    t["rect"]["y0"],
+                                    t["rect"]["x0"],
+                                    t["rect"]["y1"],
+                                    t["rect"]["x1"],
+                                    t["source"],
+                                ),
+                            )
+
+                        t_alg_start = time.perf_counter()
+                        overlaps = [_py_overlap(a, b) for a, b in zip(rects_a, rects_b)]
+                        filtered = _py_filter_regions(regions, excluded, allowed)
+                        row_clusters = _py_cluster_rows(items, tol)
+                        col_clusters = _py_cluster_columns(items, tol)
+                        ordered = _py_stable_output_order(tables_in)
+                        t_alg = max(time.perf_counter() - t_alg_start, 1e-6)
+
+                        for t in ordered:
+                            r = t["rect"]
+                            tables.append({
+                                "bbox": [r["x0"], r["y0"], r["x1"], r["y1"]],
+                                "rows": t["rows"],
+                                "cols": t["cols"],
+                                "source": t["source"],
+                                "cells": [],
+                            })
+                elif "tables" in p:
                     tables.extend(p.get("tables", []))
                 elif "words" in p and "h_lines" in p and "v_lines" in p:
                     h_lines_dtos = p["h_lines"]

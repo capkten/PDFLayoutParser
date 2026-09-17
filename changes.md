@@ -2,6 +2,16 @@
 
 ## 2026-09-17
 
+- Sprint 005：抽取共享基础几何、区域过滤、行列聚类与稳定排序算法至 Rust (PyO3) 并释放 GIL。
+  - **根因与调用位置**：`src/hexai_pdf_parser/tables/table_extractor.py` 中的 `_bbox_overlaps()`、`wireless_table_recovery.py` 中的 `_row_cluster()`、以及多处候选区域过滤和表格候选稳定排序，原先在 Python 解释器中通过 Python list、dict、lambda 进行循环与排序计算，随着跨页和复杂表格候选增多，带来额外的调度和解释执行耗时。
+  - **设计与修复**：
+    - **Rust 内核实现**：在 `rust/geometry.rs` 实现 `rect_overlap`（支持严格正面积与接触重叠）、`filter_regions`（支持排除区域与允许区域双重过滤）、`cluster_rows`（纵向中心线容差聚类、行内横向+次序稳定排序）、`cluster_columns`（横向中心线容差聚类、列内纵向+次序稳定排序）及 `stable_output_order`（基于 `(y0, x0, y1, x1, source)` 的确定性稳定排序），并在密集计算处使用 `py.allow_threads` 释放 GIL。
+    - **DTO 与导出路由**：在 `rust/types.rs` 补充 `OutputOrderMode` DTO 并注册至 `roundtrip_dto`；在 `rust/lib.rs` 导出 5 个算子；在 `src/hexai_pdf_parser/rust_adapter.py` 暴露强类型接口；在 `TableExtractor._bbox_overlaps` 与 `wireless_table_recovery.py::_row_cluster` 接入 `PDF_RUST_MODE`。
+  - **测试与基准测试结果**：
+    - 新增 `tests/test_pdf_fast_shared_geometry.py`，17 个单元测试 100% 通过（`17 passed`）。
+    - 全量回归测试：在 `python`、`shadow`、`rust` 三种模式下均 154 passed 100% 通过。
+    - **基准测试 (shared-geometry)**：四路对比（baseline, python, shadow, rust）确认 `equal: true, differences_count: 0`；Rust 相比 Python baseline 算法 P95 加速比达到 **2.74x**，端到端 P95 加速比达到 **2.50x**。
+
 - 优化 PDF 加载器按需分类机制，彻底消除多页 PDF 局部提取时的全量扫描开销（端到端提速超 20 倍）：
   - **根因与调用位置**：`src/hexai_pdf_parser/core/loader.py::Loader.load()` 原先无条件遍历 PDF 的所有页面，并在循环体内对每一页无差别调用 `classify_page_type(page)` 进行字符失真、字体和文本扫描。当处理 1000+ 页的超大 PDF（如 `zh_all_table_pages.pdf`）并指定仅提取少量页面（如 `pages=[196, 415]`）时，上层 `PDFParser` 与 `Pipeline` 虽然跳过了非目标页的处理，但 `Loader.load()` 仍盲目耗费约 19.6 秒扫描整本 1023 页，使原本只需 1 秒的局部提取严重劣化至 21 秒。
   - **设计与修复**：

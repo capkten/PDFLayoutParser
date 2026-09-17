@@ -36,6 +36,7 @@ from typing import Any, Dict, Iterable, List, Sequence, Tuple
 import fitz
 
 from hexai_pdf_parser.core.models import BBox, Cell, Table
+from hexai_pdf_parser.rust_adapter import cluster_rows
 
 
 _CURRENCY = {"$", "¥", "￥", "€", "£", "₹"}
@@ -408,6 +409,32 @@ def _row_cluster(strips: Sequence[TextStrip]) -> List[List[TextStrip]]:
     sizes = [span.size for strip in strips for span in strip.spans if span.size]
     median_size = statistics.median(sizes) if sizes else 10.0
     tolerance = max(3.5, median_size * 0.48)
+
+    mode = os.environ.get("PDF_RUST_MODE", "python").lower()
+    if mode in ("shadow", "rust"):
+        items_dto = [
+            {
+                "schema_version": 1,
+                "id": idx,
+                "rect": {
+                    "schema_version": 1,
+                    "x0": strip.bbox.x0,
+                    "y0": strip.bbox.y0,
+                    "x1": strip.bbox.x1,
+                    "y1": strip.bbox.y1,
+                },
+                "order": getattr(strip, "order", idx),
+            }
+            for idx, strip in enumerate(strips)
+        ]
+        rust_clusters = cluster_rows(items_dto, tolerance=tolerance)
+        rust_rows = [
+            [strips[item_idx] for item_idx in c["item_indices"]]
+            for c in rust_clusters
+        ]
+        if mode == "rust":
+            return rust_rows
+
     rows: List[List[TextStrip]] = []
     centers: List[float] = []
     for strip in sorted(strips, key=lambda item: (item.center_y, item.bbox.x0, item.order)):

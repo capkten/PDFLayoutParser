@@ -1013,6 +1013,31 @@ impl ColumnClusterDto {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct OutputOrderMode {
+    pub schema_version: i64,
+    pub value: String,
+}
+
+impl OutputOrderMode {
+    pub fn from_py(dict: &Bound<'_, PyDict>) -> PyResult<Self> {
+        let sv: i64 = get_req(dict, "schema_version")?.extract()?;
+        check_schema_version(sv)?;
+        let value: String = get_req(dict, "value")?.extract()?;
+        Ok(Self {
+            schema_version: sv,
+            value,
+        })
+    }
+
+    pub fn to_py<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let d = PyDict::new_bound(py);
+        d.set_item("schema_version", self.schema_version)?;
+        d.set_item("value", &self.value)?;
+        Ok(d)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct StructureConfig {
     pub schema_version: i64,
     pub line_tolerance: f64,
@@ -1548,6 +1573,10 @@ pub fn roundtrip_dto_py<'py>(
         }
         "column_cluster" => {
             let dto = ColumnClusterDto::from_py(data)?;
+            dto.to_py(py)
+        }
+        "output_order_mode" => {
+            let dto = OutputOrderMode::from_py(data)?;
             dto.to_py(py)
         }
         "structure_config" => {

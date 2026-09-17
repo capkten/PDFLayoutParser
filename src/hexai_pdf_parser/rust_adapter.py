@@ -243,3 +243,101 @@ def extract_wired_region(input_data: Dict[str, Any]) -> Dict[str, Any]:
 
 def roundtrip_dto(dto_type: str, data: Dict[str, Any]) -> Dict[str, Any]:
     return _pdf_fast.roundtrip_dto(str(dto_type), data)
+
+
+def rect_overlap(
+    a: Dict[str, Any],
+    b: Dict[str, Any],
+    strict: bool = True,
+) -> bool:
+    a_dict = dict(a)
+    if "schema_version" not in a_dict:
+        a_dict["schema_version"] = 1
+    b_dict = dict(b)
+    if "schema_version" not in b_dict:
+        b_dict["schema_version"] = 1
+    return _pdf_fast.rect_overlap(a_dict, b_dict, bool(strict))
+
+
+def filter_regions(
+    regions: List[Dict[str, Any]],
+    excluded: Optional[List[Dict[str, Any]]] = None,
+    allowed: Optional[List[Dict[str, Any]]] = None,
+) -> List[Dict[str, Any]]:
+    owned_regions = []
+    for r in regions:
+        d = dict(r)
+        if "schema_version" not in d:
+            d["schema_version"] = 1
+        owned_regions.append(d)
+    owned_excluded = []
+    for r in (excluded or []):
+        d = dict(r)
+        if "schema_version" not in d:
+            d["schema_version"] = 1
+        owned_excluded.append(d)
+    owned_allowed = []
+    for r in (allowed or []):
+        d = dict(r)
+        if "schema_version" not in d:
+            d["schema_version"] = 1
+        owned_allowed.append(d)
+    return _pdf_fast.filter_regions(owned_regions, owned_excluded, owned_allowed)
+
+
+def cluster_rows(
+    items: List[Dict[str, Any]],
+    tolerance: float,
+) -> List[Dict[str, Any]]:
+    owned_items = []
+    for it in items:
+        d = dict(it)
+        if "schema_version" not in d:
+            d["schema_version"] = 1
+        rect = d.get("rect")
+        if isinstance(rect, dict) and "schema_version" not in rect:
+            d["rect"] = {"schema_version": 1, **rect}
+        owned_items.append(d)
+    return _pdf_fast.cluster_rows(owned_items, float(tolerance))
+
+
+def cluster_columns(
+    items: List[Dict[str, Any]],
+    tolerance: float,
+) -> List[Dict[str, Any]]:
+    owned_items = []
+    for it in items:
+        d = dict(it)
+        if "schema_version" not in d:
+            d["schema_version"] = 1
+        rect = d.get("rect")
+        if isinstance(rect, dict) and "schema_version" not in rect:
+            d["rect"] = {"schema_version": 1, **rect}
+        owned_items.append(d)
+    return _pdf_fast.cluster_columns(owned_items, float(tolerance))
+
+
+def stable_output_order(
+    tables: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    owned_tables = []
+    for t in tables:
+        d = dict(t)
+        if "schema_version" not in d:
+            d["schema_version"] = 1
+        rect = d.get("rect")
+        if isinstance(rect, dict) and "schema_version" not in rect:
+            d["rect"] = {"schema_version": 1, **rect}
+        cells = d.get("cells", [])
+        owned_cells = []
+        for c in cells:
+            cd = dict(c)
+            if "schema_version" not in cd:
+                cd["schema_version"] = 1
+            cr = cd.get("rect")
+            if isinstance(cr, dict) and "schema_version" not in cr:
+                cd["rect"] = {"schema_version": 1, **cr}
+            owned_cells.append(cd)
+        d["cells"] = owned_cells
+        owned_tables.append(d)
+    return _pdf_fast.stable_output_order(owned_tables)
