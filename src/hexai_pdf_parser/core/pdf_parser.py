@@ -29,13 +29,14 @@ class PDFParser:
         self,
         source,
         *,
-        render_dpi: int = 200,
+        render_dpi: int = 72,
         seal_coords: Optional[List[dict]] = None,
         ml_model_path: Optional[str] = None,
         ml_confidence: float = 0.40,
         num_workers: Optional[int] = None,
         backend: str = "thread",
         debug_pipeline: bool = False,
+        visualize_tables: bool = False,
     ) -> None:
         if isinstance(source, Document):
             self._pdf_path = None
@@ -54,6 +55,7 @@ class PDFParser:
         self._num_workers = num_workers
         self._backend = backend
         self._debug_pipeline = debug_pipeline
+        self._visualize_tables = visualize_tables
 
     def __enter__(self) -> PDFParser:
         return self
@@ -103,6 +105,7 @@ class PDFParser:
         *,
         page_indices: Optional[List[int]] = None,
         output_dir: Optional[str] = None,
+        visualize_tables: Optional[bool] = None,
     ) -> ApiResult:
         """Run the full parsing pipeline and return an ApiResult wrapping a Document.
 
@@ -115,6 +118,12 @@ class PDFParser:
 
             from hexai_pdf_parser.core.pipeline import Pipeline
 
+            eff_visualize_tables = (
+                visualize_tables
+                if visualize_tables is not None
+                else self._visualize_tables
+            )
+
             pipeline = Pipeline(
                 pdf_path=self._pdf_path,
                 output_dir=output_dir,
@@ -126,6 +135,7 @@ class PDFParser:
                 num_workers=self._num_workers,
                 backend=self._backend,
                 debug_pipeline=self._debug_pipeline,
+                visualize_tables=eff_visualize_tables,
             )
             self._document = pipeline.run()
             self._text_ready = True
