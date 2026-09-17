@@ -99,9 +99,9 @@ class WiredTableExtractor(BaseTableExtractor):
             if not cells:
                 continue
 
-            mode = os.environ.get("PDF_RUST_MODE", "python").lower()
+            mode = rust_adapter.get_rust_mode("wired")
             if mode == "shadow":
-                try:
+                def _run_rust_shadow_probe():
                     rust_cells_dto = rust_adapter.build_cells_for_region(
                         bbox={"x0": region_bbox.x0, "y0": region_bbox.y0, "x1": region_bbox.x1, "y1": region_bbox.y1},
                         h_lines=region_h_lines,
@@ -126,8 +126,14 @@ class WiredTableExtractor(BaseTableExtractor):
                     rust_cells_dto = rust_adapter.trim_ghost_edge_rows(
                         rust_cells_dto, region_h_lines, tol=self.line_tolerance
                     )
-                except Exception:
-                    pass
+                    return None
+
+                rust_adapter.run_python_or_rust(
+                    mode=mode,
+                    python_fn=lambda: None,
+                    rust_fn=_run_rust_shadow_probe,
+                    path="wired.shadow_probe",
+                )
 
             if (
                 len(cells) == 1

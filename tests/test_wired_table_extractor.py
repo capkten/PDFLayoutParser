@@ -6,6 +6,7 @@ import fitz
 import pytest
 
 from hexai_pdf_parser.core.models import BBox, Cell
+from hexai_pdf_parser import rust_adapter
 from hexai_pdf_parser.tables.extractors.wired_table_extractor import WiredTableExtractor
 
 
@@ -24,6 +25,44 @@ def test_extract_lines_ignores_white_fill_only_page_border():
 
     assert h_lines == []
     assert v_lines == []
+
+
+def test_extract_shadow_probe_uses_wired_route_and_records_rust_error(monkeypatch):
+    extractor = WiredTableExtractor()
+    region_bbox = BBox(0.0, 0.0, 20.0, 10.0)
+    h_lines = [(0.0, 0.0, 20.0, 0.0), (0.0, 10.0, 20.0, 10.0)]
+    v_lines = [(0.0, 0.0, 0.0, 10.0), (10.0, 0.0, 10.0, 10.0), (20.0, 0.0, 20.0, 10.0)]
+    cells = [
+        Cell("left", 0, 0, BBox(0.0, 0.0, 10.0, 10.0)),
+        Cell("right", 0, 1, BBox(10.0, 0.0, 20.0, 10.0)),
+    ]
+
+    monkeypatch.setenv("PDF_RUST_MODE", "python")
+    monkeypatch.setenv("PDF_RUST_MODE_WIRED", "shadow")
+    monkeypatch.setattr(extractor, "_extract_lines_from_drawings", lambda page, clip_bbox=None: (h_lines, v_lines))
+    monkeypatch.setattr(extractor, "_merge_h_lines", lambda lines: lines)
+    monkeypatch.setattr(extractor, "_merge_v_lines", lambda lines, h_lines=None: lines)
+    monkeypatch.setattr(extractor, "_find_table_regions", lambda h, v: [(region_bbox, h, v)])
+    monkeypatch.setattr(extractor, "_merge_region_line_coordinates", lambda lines, horizontal: lines)
+    monkeypatch.setattr(extractor, "_build_cells_for_region", lambda bbox, h, v: list(cells))
+    monkeypatch.setattr(extractor, "_assign_text_to_line_cells", lambda cells, page, words, raw_chars: cells)
+    monkeypatch.setattr(extractor, "_merge_oversegmented_line_columns", lambda cells: cells)
+    monkeypatch.setattr(extractor, "_trim_ghost_edge_rows", lambda cells, h_lines, tol: cells)
+
+    def rust_probe_failure(*args, **kwargs):
+        raise RuntimeError("wired shadow probe failed")
+
+    monkeypatch.setattr(rust_adapter, "build_cells_for_region", rust_probe_failure)
+    rust_adapter.clear_diagnostics()
+
+    tables = extractor.extract(SimpleNamespace(get_text=lambda mode: [] if mode == "words" else {"blocks": []}))
+
+    assert len(tables) == 1
+    assert tables[0].cells == cells
+    diagnostics = rust_adapter.get_diagnostics()
+    assert len(diagnostics) == 1
+    assert diagnostics[0]["status"] == "rust_fallback"
+    assert diagnostics[0]["path"] == "wired.shadow_probe"
 
 
 def test_extract_lines_accepts_visible_fill_only_rules():
