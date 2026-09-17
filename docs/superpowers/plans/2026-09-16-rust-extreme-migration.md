@@ -588,11 +588,11 @@ pub fn infer_output_order_mode(atoms: Vec<AtomDto>) -> OutputOrderMode;
 pub fn recover_native_candidates(input: NativeRecoveryInput) -> NativeRecoveryOutput;
 ~~~
 
-- [ ] Step 1: 增加 source continuity 和 text composition failing vectors。覆盖 ASCII、CJK、mixed text、missing font/size、character bboxes、source positions、wrapped fields、currency separators、whitelisted spaced CJK words 及男/女不合并反例。
-- [ ] Step 2: 用 page spy 确认 native-span adapter 不调用 get_text("words")。
-- [ ] Step 3: 实现 span → run → atom；保留 source refs、text order、bbox witness、flow range 和 merge kind。
-- [ ] Step 4: 添加 text、bbox、source position、span refs、order mode 和 field boundary 的 differential report。
-- [ ] Step 5: 测试、benchmark 和提交。
+- [x] Step 1: 增加 source continuity 和 text composition failing vectors。覆盖 ASCII、CJK、mixed text、missing font/size、character bboxes、source positions、wrapped fields、currency separators、whitelisted spaced CJK words 及男/女不合并反例。
+- [x] Step 2: 用 page spy 确认 native-span adapter 不调用 get_text("words")。
+- [x] Step 3: 实现 span → run → atom；保留 source refs、text order、bbox witness、flow range 和 merge kind。
+- [x] Step 4: 添加 text、bbox、source position、span refs、order mode 和 field boundary 的 differential report。
+- [x] Step 5: 测试、benchmark 和提交。
 
 ~~~powershell
 cargo test
