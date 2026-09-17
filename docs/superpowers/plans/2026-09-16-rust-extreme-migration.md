@@ -374,8 +374,8 @@ pub struct LogicalGridDto { pub schema_version: u16, pub grid: GridDto, pub cell
 pub struct CellDto { pub schema_version: u16, pub text: String, pub row: usize, pub col: usize, pub rect: Rect4, pub rowspan: usize, pub colspan: usize, pub source: Option<String> }
 ~~~
 
-- [ ] Step 1: 按 `dto-schema.md` 添加 round-trip fixtures 和 failing binding tests。覆盖 normal、empty、非 ASCII、缺失 font/size、字符框、NaN、Inf、负坐标、页面旋转、颜色/clip、source order、空 span、empty slots 和 malformed values；任何 NaN/Inf 必须返回可断言的 `PyValueError`，不得静默转换。
-- [ ] Step 2: Run DTO tests RED。
+- [x] Step 1: 按 `dto-schema.md` 添加 round-trip fixtures 和 failing binding tests。覆盖 normal、empty、非 ASCII、缺失 font/size、字符框、NaN、Inf、负坐标、页面旋转、颜色/clip、source order、空 span、empty slots 和 malformed values；任何 NaN/Inf 必须返回可断言的 `PyValueError`，不得静默转换。
+- [x] Step 2: Run DTO tests RED。
 
 ~~~powershell
 cargo test
@@ -384,9 +384,9 @@ python -m pytest -q tests/test_pdf_fast_dto.py
 ~~~
 
 Expected: 新 DTO binding tests 失败；已有 Sprint 001 测试仍可区分。
-- [ ] Step 3: Implement DTO structs and conversion errors。使用显式字段提取和 `PyResult`；禁止 `unwrap`、静默默认值和 Python object 引用。Python 只在页面级一次性构造 DTO，Rust 只消费 owned DTO；所有 field mapping 必须与 `dto-schema.md` 一致。
-- [ ] Step 4: Release the GIL only around owned Rust computation。Python extraction 和 result adaptation 在 allow_threads 外部执行。
-- [ ] Step 5: Verify package and commit。
+- [x] Step 3: Implement DTO structs and conversion errors。使用显式字段提取和 `PyResult`；禁止 `unwrap`、静默默认值和 Python object 引用。Python 只在页面级一次性构造 DTO，Rust 只消费 owned DTO；所有 field mapping 必须与 `dto-schema.md` 一致。
+- [x] Step 4: Release the GIL only around owned Rust computation。Python extraction 和 result adaptation 在 allow_threads 外部执行。
+- [x] Step 5: Verify package and commit。
 
 ~~~powershell
 cargo fmt --check
