@@ -236,10 +236,21 @@ def _worker_execute(
             t_extract = max(time.perf_counter() - t0, 1e-6)
             fixture_pages = data.get("pages", [])
             tables = []
+            t_ffi_start = time.perf_counter()
+            if mode in ("shadow", "rust"):
+                from hexai_pdf_parser.rust_adapter import roundtrip_dto
+
+                for p in fixture_pages:
+                    if "page" in p:
+                        roundtrip_dto("page", p["page"])
+                    for t in p.get("tables", []):
+                        roundtrip_dto("table_candidate", t)
+                    for s in p.get("spans", []):
+                        roundtrip_dto("native_span", s)
+            t_ffi = max(time.perf_counter() - t_ffi_start, 1e-6) if mode in ("shadow", "rust") else 0.0
             for p in fixture_pages:
                 tables.extend(p.get("tables", []))
             t_dto = 1e-6
-            t_ffi = 0.0
             t_alg = 1e-6
             t_adapt = 1e-6
             t_tot = max(time.perf_counter() - t0, 1e-6)

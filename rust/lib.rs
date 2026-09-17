@@ -58,14 +58,26 @@ fn round_one_decimal(value: f64) -> f64 {
     format!("{value:.1}").parse().unwrap_or(value)
 }
 
+pub mod types;
+
 #[pyfunction(name = "merge_h_lines")]
 fn merge_h_lines_binding(py: Python<'_>, lines: Vec<Line4>, merge_group_tol: f64) -> Vec<Line4> {
     py.allow_threads(move || merge_h_lines(lines, merge_group_tol))
 }
 
+#[pyfunction(name = "roundtrip_dto")]
+fn roundtrip_dto_binding<'py>(
+    py: Python<'py>,
+    dto_type: &str,
+    data: &Bound<'py, pyo3::types::PyDict>,
+) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+    types::roundtrip_dto_py(py, dto_type, data)
+}
+
 #[pymodule]
 fn _pdf_fast(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(merge_h_lines_binding, module)?)?;
+    module.add_function(wrap_pyfunction!(roundtrip_dto_binding, module)?)?;
     Ok(())
 }
 
