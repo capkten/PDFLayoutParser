@@ -10,6 +10,8 @@ from pathlib import Path
 
 import fitz
 
+from typing import Optional, Sequence
+
 from hexai_pdf_parser.core.models import Document, Page
 from hexai_pdf_parser.extractors.page_classifier import classify_page_type
 
@@ -26,9 +28,10 @@ class Loader:
     def __init__(self, file_path: str):
         self.file_path = file_path
 
-    def load(self) -> Document:
+    def load(self, page_indices: Optional[Sequence[int]] = None) -> Document:
         """Open the PDF and return a :class:`Document`."""
         file_name = Path(self.file_path).name
+        target_indices = set(page_indices) if page_indices is not None else None
 
         with fitz.open(self.file_path) as pdf:
             page_count = len(pdf)
@@ -36,12 +39,14 @@ class Loader:
 
             for idx, page in enumerate(pdf):
                 rect = page.rect
+                should_classify = target_indices is None or idx in target_indices
+                page_type = classify_page_type(page) if should_classify else "vector"
                 pages.append(
                     Page(
                         index=idx,
                         size={"width": rect.width, "height": rect.height},
                         rotation=page.rotation,
-                        page_type=classify_page_type(page),
+                        page_type=page_type,
                     )
                 )
 
