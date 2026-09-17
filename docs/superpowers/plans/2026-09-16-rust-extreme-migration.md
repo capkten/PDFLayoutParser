@@ -491,11 +491,11 @@ pub fn assign_text_to_line_cells(cells: Vec<CellDto>, words: Vec<WordDto>, toler
 pub fn extract_wired_region(input: WiredRegionInput) -> WiredRegionOutput;
 ~~~
 
-- [ ] Step 1: 添加 Cell topology failing tests。覆盖 partial line、non-rectangular component、open boundary、physical empty row、ghost row、独立 empty column、colspan recompute、word crossing boundary、Cell order 和 line metadata。
-- [ ] Step 2: 使用 page spy 验证 words 只在 Python 获取一次，Rust 只收到 WordDto。
-- [ ] Step 3: 实现 Cell DTO 和 occupancy checks。每个槽位恰好被占用一次；任何 span 调整都重新检查冲突。
-- [ ] Step 4: 仅在 rust 模式接入 wired extraction；shadow 模式比较完整 region result；保留 drawing、chart mask、clip、type3 glyph 和 Python Table/Cell。
-- [ ] Step 5: 运行页面对比并提交。
+- [x] Step 1: 添加 Cell topology failing tests。覆盖 partial line、non-rectangular component、open boundary、physical empty row、ghost row、独立 empty column、colspan recompute、word crossing boundary、Cell order 和 line metadata。
+- [x] Step 2: 使用 page spy 验证 words 只在 Python 获取一次，Rust 只收到 WordDto。
+- [x] Step 3: 实现 Cell DTO 和 occupancy checks。每个槽位恰好被占用一次；任何 span 调整都重新检查冲突。
+- [x] Step 4: 仅在 rust 模式接入 wired extraction；shadow 模式比较完整 region result；保留 drawing、chart mask、clip、type3 glyph 和 Python Table/Cell。
+- [x] Step 5: 运行页面对比并提交。
 
 ~~~powershell
 $env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'
