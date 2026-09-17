@@ -814,7 +814,7 @@ def _is_glossary_reference_pair(
         return False
     gap = candidate["bbox"][0] - marker["bbox"][2]
     if not -0.8 <= gap <= max(
-        6.0, min(marker["font_size"], candidate["font_size"]) * 2.0
+        6.0, min(marker["font_size"], candidate["font_size"]) * 2.5
     ):
         return False
     return not any(

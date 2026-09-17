@@ -104,6 +104,32 @@ def test_glossary_page_4_merges_see_references_without_pseudo_columns():
     )
 
 
+@pytest.mark.skipif(not GLOSSARY_PDF.exists(), reason="glossary PDF is unavailable")
+def test_glossary_page_53_merges_see_references_without_pseudo_columns():
+    document = fitz.open(str(GLOSSARY_PDF))
+    try:
+        rows, columns, cells = recover_cells_from_region(
+            document[52],
+            BBox(49.9, 47.9, 560.4, 691.8),
+        )
+    finally:
+        document.close()
+
+    assert (rows, columns, len(cells)) == (23, 2, 46)
+    assert any(
+        cell.row_index == 0
+        and cell.col_index == 1
+        and cell.text == "see exchange traded note"
+        for cell in cells
+    )
+    assert any(
+        cell.row_index == 1
+        and cell.col_index == 1
+        and cell.text == "see exchange traded product"
+        for cell in cells
+    )
+
+
 def test_table_header_gap_above_normal_gap_is_not_joined():
     def atom(text, x0, x1, order, line):
         return {

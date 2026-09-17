@@ -699,6 +699,27 @@ def test_build_text_runs_merges_glossary_see_marker_with_following_definition():
     assert result[0]["flow_end"] == 2
 
 
+def test_build_text_runs_merges_wider_glossary_see_reference_gap():
+    atoms = [
+        _atom("see", 269.9, 292.6, 0, (3, 1, 0), y=10.0, font_size=12.0),
+        _atom(
+            "exchange traded note",
+            319.0,
+            438.5,
+            1,
+            (3, 2, 0),
+            y=10.0,
+            font_size=12.0,
+        ),
+    ]
+
+    result = build_text_runs(atoms)
+
+    assert [item["text"] for item in result] == [
+        "see exchange traded note"
+    ]
+
+
 def test_build_text_runs_does_not_merge_see_marker_with_numeric_value():
     atoms = [
         _atom("see", 100.0, 120.0, 0, (3, 1, 0), y=10.0),
