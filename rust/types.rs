@@ -1307,6 +1307,159 @@ impl DiagnosticDto {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct WiredRegionInput {
+    pub schema_version: i64,
+    pub page: PageDto,
+    pub h_lines: Vec<LineDto>,
+    pub v_lines: Vec<LineDto>,
+    pub words: Vec<WordDto>,
+    pub tolerance: f64,
+}
+
+impl WiredRegionInput {
+    pub fn from_py(dict: &Bound<'_, PyDict>) -> PyResult<Self> {
+        let sv: i64 = get_req(dict, "schema_version")?.extract()?;
+        check_schema_version(sv)?;
+        let page_dict = get_req(dict, "page")?.downcast::<PyDict>()?.clone();
+        let page = PageDto::from_py(&page_dict)?;
+
+        let hl_list = get_req(dict, "h_lines")?.downcast::<PyList>()?.clone();
+        let mut h_lines = Vec::new();
+        for item in hl_list.iter() {
+            h_lines.push(LineDto::from_py(&item.downcast::<PyDict>()?.clone())?);
+        }
+
+        let vl_list = get_req(dict, "v_lines")?.downcast::<PyList>()?.clone();
+        let mut v_lines = Vec::new();
+        for item in vl_list.iter() {
+            v_lines.push(LineDto::from_py(&item.downcast::<PyDict>()?.clone())?);
+        }
+
+        let w_list = get_req(dict, "words")?.downcast::<PyList>()?.clone();
+        let mut words = Vec::new();
+        for item in w_list.iter() {
+            words.push(WordDto::from_py(&item.downcast::<PyDict>()?.clone())?);
+        }
+
+        let tolerance = extract_finite_f64(&get_req(dict, "tolerance")?, "tolerance")?;
+        Ok(Self {
+            schema_version: sv,
+            page,
+            h_lines,
+            v_lines,
+            words,
+            tolerance,
+        })
+    }
+
+    pub fn to_py<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let d = PyDict::new_bound(py);
+        d.set_item("schema_version", self.schema_version)?;
+        d.set_item("page", self.page.to_py(py)?)?;
+
+        let hl_list = PyList::empty_bound(py);
+        for l in &self.h_lines {
+            hl_list.append(l.to_py(py)?)?;
+        }
+        d.set_item("h_lines", hl_list)?;
+
+        let vl_list = PyList::empty_bound(py);
+        for l in &self.v_lines {
+            vl_list.append(l.to_py(py)?)?;
+        }
+        d.set_item("v_lines", vl_list)?;
+
+        let w_list = PyList::empty_bound(py);
+        for w in &self.words {
+            w_list.append(w.to_py(py)?)?;
+        }
+        d.set_item("words", w_list)?;
+
+        d.set_item("tolerance", self.tolerance)?;
+        Ok(d)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct WiredRegionOutput {
+    pub schema_version: i64,
+    pub regions: Vec<RegionDto>,
+    pub grids: Vec<GridDto>,
+    pub cells: Vec<CellDto>,
+    pub diagnostics: Vec<DiagnosticDto>,
+}
+
+impl WiredRegionOutput {
+    pub fn from_py(dict: &Bound<'_, PyDict>) -> PyResult<Self> {
+        let sv: i64 = get_req(dict, "schema_version")?.extract()?;
+        check_schema_version(sv)?;
+
+        let r_list = get_req(dict, "regions")?.downcast::<PyList>()?.clone();
+        let mut regions = Vec::new();
+        for item in r_list.iter() {
+            regions.push(RegionDto::from_py(&item.downcast::<PyDict>()?.clone())?);
+        }
+
+        let g_list = get_req(dict, "grids")?.downcast::<PyList>()?.clone();
+        let mut grids = Vec::new();
+        for item in g_list.iter() {
+            grids.push(GridDto::from_py(&item.downcast::<PyDict>()?.clone())?);
+        }
+
+        let c_list = get_req(dict, "cells")?.downcast::<PyList>()?.clone();
+        let mut cells = Vec::new();
+        for item in c_list.iter() {
+            cells.push(CellDto::from_py(&item.downcast::<PyDict>()?.clone())?);
+        }
+
+        let d_list = get_req(dict, "diagnostics")?.downcast::<PyList>()?.clone();
+        let mut diagnostics = Vec::new();
+        for item in d_list.iter() {
+            diagnostics.push(DiagnosticDto::from_py(&item.downcast::<PyDict>()?.clone())?);
+        }
+
+        Ok(Self {
+            schema_version: sv,
+            regions,
+            grids,
+            cells,
+            diagnostics,
+        })
+    }
+
+    pub fn to_py<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let d = PyDict::new_bound(py);
+        d.set_item("schema_version", self.schema_version)?;
+
+        let r_list = PyList::empty_bound(py);
+        for r in &self.regions {
+            r_list.append(r.to_py(py)?)?;
+        }
+        d.set_item("regions", r_list)?;
+
+        let g_list = PyList::empty_bound(py);
+        for g in &self.grids {
+            g_list.append(g.to_py(py)?)?;
+        }
+        d.set_item("grids", g_list)?;
+
+        let c_list = PyList::empty_bound(py);
+        for c in &self.cells {
+            c_list.append(c.to_py(py)?)?;
+        }
+        d.set_item("cells", c_list)?;
+
+        let d_list = PyList::empty_bound(py);
+        for diag in &self.diagnostics {
+            d_list.append(diag.to_py(py)?)?;
+        }
+        d.set_item("diagnostics", d_list)?;
+
+        Ok(d)
+    }
+}
+
 pub fn roundtrip_dto_py<'py>(
     py: Python<'py>,
     dto_type: &str,
@@ -1419,6 +1572,14 @@ pub fn roundtrip_dto_py<'py>(
         }
         "diagnostic" => {
             let dto = DiagnosticDto::from_py(data)?;
+            dto.to_py(py)
+        }
+        "wired_region_input" => {
+            let dto = WiredRegionInput::from_py(data)?;
+            dto.to_py(py)
+        }
+        "wired_region_output" => {
+            let dto = WiredRegionOutput::from_py(data)?;
             dto.to_py(py)
         }
         other => Err(PyValueError::new_err(format!(

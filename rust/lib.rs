@@ -129,6 +129,115 @@ fn complete_partial_outer_boundaries_binding<'py>(
     Ok(res)
 }
 
+#[pyfunction(name = "build_cells_for_region")]
+fn build_cells_for_region_binding<'py>(
+    py: Python<'py>,
+    bbox: &Bound<'py, PyDict>,
+    h_lines: Vec<Line4>,
+    v_lines: Vec<Line4>,
+    line_tolerance: f64,
+    merge_group_tol: f64,
+) -> PyResult<Bound<'py, PyList>> {
+    let rect = Rect4::from_py(bbox)?;
+    let cells = py.allow_threads(move || {
+        wired::build_cells_for_region(rect, h_lines, v_lines, line_tolerance, merge_group_tol)
+    });
+    let list = PyList::empty_bound(py);
+    for cell in cells {
+        list.append(cell.to_py(py)?)?;
+    }
+    Ok(list)
+}
+
+#[pyfunction(name = "trim_ghost_edge_rows")]
+fn trim_ghost_edge_rows_binding<'py>(
+    py: Python<'py>,
+    cells: &Bound<'py, PyList>,
+    h_lines: Vec<Line4>,
+    tol: f64,
+) -> PyResult<Bound<'py, PyList>> {
+    let mut rust_cells = Vec::new();
+    for item in cells.iter() {
+        rust_cells.push(types::CellDto::from_py(
+            &item.downcast::<PyDict>()?.clone(),
+        )?);
+    }
+    let trimmed = py.allow_threads(move || wired::trim_ghost_edge_rows(rust_cells, &h_lines, tol));
+    let list = PyList::empty_bound(py);
+    for cell in trimmed {
+        list.append(cell.to_py(py)?)?;
+    }
+    Ok(list)
+}
+
+#[pyfunction(name = "merge_oversegmented_line_columns")]
+fn merge_oversegmented_line_columns_binding<'py>(
+    py: Python<'py>,
+    cells: &Bound<'py, PyList>,
+    line_tolerance: f64,
+) -> PyResult<Bound<'py, PyList>> {
+    let mut rust_cells = Vec::new();
+    for item in cells.iter() {
+        rust_cells.push(types::CellDto::from_py(
+            &item.downcast::<PyDict>()?.clone(),
+        )?);
+    }
+    let merged = py
+        .allow_threads(move || wired::merge_oversegmented_line_columns(rust_cells, line_tolerance));
+    let list = PyList::empty_bound(py);
+    for cell in merged {
+        list.append(cell.to_py(py)?)?;
+    }
+    Ok(list)
+}
+
+#[pyfunction(name = "assign_text_to_line_cells")]
+fn assign_text_to_line_cells_binding<'py>(
+    py: Python<'py>,
+    cells: &Bound<'py, PyList>,
+    words: &Bound<'py, PyList>,
+    chars: &Bound<'py, PyList>,
+    tolerance: f64,
+) -> PyResult<Bound<'py, PyList>> {
+    let mut rust_cells = Vec::new();
+    for item in cells.iter() {
+        rust_cells.push(types::CellDto::from_py(
+            &item.downcast::<PyDict>()?.clone(),
+        )?);
+    }
+    let mut rust_words = Vec::new();
+    for item in words.iter() {
+        rust_words.push(types::WordDto::from_py(
+            &item.downcast::<PyDict>()?.clone(),
+        )?);
+    }
+    let mut rust_chars = Vec::new();
+    for item in chars.iter() {
+        rust_chars.push(types::CharacterDto::from_py(
+            &item.downcast::<PyDict>()?.clone(),
+        )?);
+    }
+
+    let assigned = py.allow_threads(move || {
+        wired::assign_text_to_line_cells(rust_cells, &rust_words, &rust_chars, tolerance)
+    });
+    let list = PyList::empty_bound(py);
+    for cell in assigned {
+        list.append(cell.to_py(py)?)?;
+    }
+    Ok(list)
+}
+
+#[pyfunction(name = "extract_wired_region")]
+fn extract_wired_region_binding<'py>(
+    py: Python<'py>,
+    input: &Bound<'py, PyDict>,
+) -> PyResult<Bound<'py, PyDict>> {
+    let input_dto = types::WiredRegionInput::from_py(input)?;
+    let output_dto = py.allow_threads(move || wired::extract_wired_region(input_dto));
+    output_dto.to_py(py)
+}
+
 #[pyfunction(name = "roundtrip_dto")]
 fn roundtrip_dto_binding<'py>(
     py: Python<'py>,
@@ -154,6 +263,14 @@ fn _pdf_fast(module: &Bound<'_, PyModule>) -> PyResult<()> {
         complete_partial_outer_boundaries_binding,
         module
     )?)?;
+    module.add_function(wrap_pyfunction!(build_cells_for_region_binding, module)?)?;
+    module.add_function(wrap_pyfunction!(trim_ghost_edge_rows_binding, module)?)?;
+    module.add_function(wrap_pyfunction!(
+        merge_oversegmented_line_columns_binding,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(assign_text_to_line_cells_binding, module)?)?;
+    module.add_function(wrap_pyfunction!(extract_wired_region_binding, module)?)?;
     module.add_function(wrap_pyfunction!(roundtrip_dto_binding, module)?)?;
     Ok(())
 }

@@ -130,5 +130,116 @@ def complete_partial_outer_boundaries(
     )
 
 
+def build_cells_for_region(
+    bbox: Dict[str, Any],
+    h_lines: List[Line4],
+    v_lines: List[Line4],
+    tolerance: float = 2.3,
+    merge_group_tol: float = 0.3,
+) -> List[Dict[str, Any]]:
+    if "schema_version" not in bbox:
+        bbox = {"schema_version": 1, **bbox}
+    owned_h = [tuple(float(v) for v in line) for line in h_lines]
+    owned_v = [tuple(float(v) for v in line) for line in v_lines]
+    return _pdf_fast.build_cells_for_region(
+        bbox,
+        owned_h,
+        owned_v,
+        float(tolerance),
+        float(merge_group_tol),
+    )
+
+
+def trim_ghost_edge_rows(
+    cells: List[Dict[str, Any]],
+    h_lines: List[Line4],
+    tol: float = 2.0,
+) -> List[Dict[str, Any]]:
+    owned_cells = []
+    for c in cells:
+        cell_dict = dict(c)
+        if "schema_version" not in cell_dict:
+            cell_dict["schema_version"] = 1
+        if "source" not in cell_dict:
+            cell_dict["source"] = None
+        rect = cell_dict["rect"]
+        if isinstance(rect, dict) and "schema_version" not in rect:
+            cell_dict["rect"] = {"schema_version": 1, **rect}
+        owned_cells.append(cell_dict)
+    owned_h = [tuple(float(v) for v in line) for line in h_lines]
+    return _pdf_fast.trim_ghost_edge_rows(owned_cells, owned_h, float(tol))
+
+
+def merge_oversegmented_line_columns(
+    cells: List[Dict[str, Any]],
+    tolerance: float = 2.3,
+) -> List[Dict[str, Any]]:
+    owned_cells = []
+    for c in cells:
+        cell_dict = dict(c)
+        if "schema_version" not in cell_dict:
+            cell_dict["schema_version"] = 1
+        if "source" not in cell_dict:
+            cell_dict["source"] = None
+        rect = cell_dict["rect"]
+        if isinstance(rect, dict) and "schema_version" not in rect:
+            cell_dict["rect"] = {"schema_version": 1, **rect}
+        owned_cells.append(cell_dict)
+    return _pdf_fast.merge_oversegmented_line_columns(owned_cells, float(tolerance))
+
+
+def assign_text_to_line_cells(
+    cells: List[Dict[str, Any]],
+    words: List[Dict[str, Any]],
+    chars: Optional[List[Dict[str, Any]]] = None,
+    tolerance: float = 2.3,
+) -> List[Dict[str, Any]]:
+    owned_cells = []
+    for c in cells:
+        cell_dict = dict(c)
+        if "schema_version" not in cell_dict:
+            cell_dict["schema_version"] = 1
+        if "source" not in cell_dict:
+            cell_dict["source"] = None
+        rect = cell_dict["rect"]
+        if isinstance(rect, dict) and "schema_version" not in rect:
+            cell_dict["rect"] = {"schema_version": 1, **rect}
+        owned_cells.append(cell_dict)
+
+    owned_words = []
+    for w in words:
+        w_dict = dict(w)
+        if "schema_version" not in w_dict:
+            w_dict["schema_version"] = 1
+        rect = w_dict["rect"]
+        if isinstance(rect, dict) and "schema_version" not in rect:
+            w_dict["rect"] = {"schema_version": 1, **rect}
+        owned_words.append(w_dict)
+
+    owned_chars = []
+    if chars:
+        for ch in chars:
+            ch_dict = dict(ch)
+            if "schema_version" not in ch_dict:
+                ch_dict["schema_version"] = 1
+            rect = ch_dict["rect"]
+            if isinstance(rect, dict) and "schema_version" not in rect:
+                ch_dict["rect"] = {"schema_version": 1, **rect}
+            owned_chars.append(ch_dict)
+
+    return _pdf_fast.assign_text_to_line_cells(
+        owned_cells,
+        owned_words,
+        owned_chars,
+        float(tolerance),
+    )
+
+
+def extract_wired_region(input_data: Dict[str, Any]) -> Dict[str, Any]:
+    if "schema_version" not in input_data:
+        input_data = {"schema_version": 1, **input_data}
+    return _pdf_fast.extract_wired_region(input_data)
+
+
 def roundtrip_dto(dto_type: str, data: Dict[str, Any]) -> Dict[str, Any]:
     return _pdf_fast.roundtrip_dto(str(dto_type), data)

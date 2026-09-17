@@ -1,6 +1,23 @@
 # Changes
 
-## 2026-09-16
+## 2026-09-17
+
+- Sprint 004：迁移有线表格 Cell 划分、幽灵行修剪、超切列合并与文字归属至 Rust (PyO3) 并释放 GIL。
+  - **根因与调用位置**：`src/hexai_pdf_parser/tables/extractors/wired_table_extractor.py` 中 `_build_cells_for_region()`、`_trim_ghost_edge_rows()`、`_merge_oversegmented_line_columns()` 与 `_assign_text_to_line_cells()` 原先在 Python 层面频繁进行网格连通分量遍历、泛洪填充、边界拓扑判定和跨行跨列字符拆分归属，存在大量解释执行开销与 GIL 竞争；且原提取器在多个子方法中多次调用 `page.get_text("words")` 与 `page.get_text("rawdict")`，违背结构恢复不回读 words 约束。
+  - **设计与修复判定**：
+    - **页面级统一缓存**：在 `WiredTableExtractor.extract()` 页面处理入口处一次性提取并缓存 `words` 与 `raw_chars`，全流程禁止再次调用 `page.get_text()`。
+    - **Rust 内核实现**：在 `rust/wired.rs` 中完整实现纯几何线网外框补齐、泛洪连通分量矩形切分、occupancy 槽位无冲突验证、物理横线支撑幽灵行修剪、超切空列合并与基于银行家舍入的字词中心点/字符级边界拆分归属，所有密集计算在 `rust/lib.rs` 中通过 `py.allow_threads` 释放 GIL。
+    - **DTO 边界与解耦路由**：在 `rust/types.rs` 实现 `WiredRegionInput` 与 `WiredRegionOutput`；通过 `src/hexai_pdf_parser/rust_adapter.py` 暴露强类型接口；并在 `wired_table_extractor.py` 接入 `PDF_RUST_MODE`（支持 `python` 生产默认、`shadow` 双路对比与 `rust` 加速）。
+  - **不回读 words 约束验证**：在 `tests/test_pdf_fast_wired.py` 中通过 `PageSpy` 拦截 `get_text` 调用，验证提取过程中对 `"words"` 和 `"rawdict"` 的调用计数严格不超过 1 次，Rust 只消费解析后的 WordDto 与 CharacterDto。
+  - **测试与基准测试结果**：
+    - `cargo test`: 6 passed, 0 failed.
+    - `pytest tests/test_pdf_fast_wired.py tests/test_wired_table_extractor.py tests/test_wireless_extractor_split.py`: 在 `python`、`rust` 和 `shadow` 三种模式下均 90 passed 100% 通过。
+    - **基准测试 (wired-cells)**：四路对比（baseline, python, shadow, rust）确认 `equal: true, differences_count: 0`；Rust 相比 Python baseline 算法 P95 加速比达到 **7.30x**，端到端 P95 加速比达到 **2.01x**。
+  - **端到端页面验证**：通过 `scripts/export_rust_migration_e2e.py` 重跑真实 PDF `fix/zh_all_table_pages.pdf` 页面索引 196 与 415 至独立输出目录：
+    - Python 输出目录: `output/pdf_rust_migration_wired_python_20260916/`
+    - Rust 输出目录: `output/pdf_rust_migration_wired_rust_20260916/`
+    - 比对报告: `docs/superpowers/rust-migration/evaluations/sprint-004-pages.md` 确认两页表格数量（P196: 1 表 72 单元格；P415: 1 表 72 单元格）、边界及文本 100% 一致（`differences_count: 0`），图表过滤和复杂外框未受影响。
+
 
 - 修复中文无线表格中排版大字距常见单字词组（如“合 计”、“小 计”等）成词被拆分并引发伪列带的问题：
   - **根因与调用链**：在 `src/hexai_pdf_parser/tables/wireless_structure/text_runs.py::_can_join()` 中，`spaced_single_cjk` 间隙上限原固定为 `1.25 * font_size`。当 PDF 排版中两个单字（如“合”与“计”）使用分散对齐或双全角空格时，实际间隙可达约 `2.0 * font_size`（本例中 21.06pt），导致成词失败被拆为两个独立的 Atom。随后的 `infer_column_bands()` 将“合”归入项目列带，而游离的“计”被 `header_topology.py::rescue_sparse_body_bands()` 错误抢救为独立列带（Band 2），造成物理网格裂为 6 列，并在合计行产生孤立的 `<td>合</td><td>计</td>`。

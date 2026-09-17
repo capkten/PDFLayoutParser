@@ -256,6 +256,153 @@ def _worker_execute(
             for p in fixture_pages:
                 if "tables" in p:
                     tables.extend(p.get("tables", []))
+                elif "words" in p and "h_lines" in p and "v_lines" in p:
+                    h_lines_dtos = p["h_lines"]
+                    v_lines_dtos = p["v_lines"]
+                    words_dtos = p["words"]
+                    page_dto = p.get("page", {
+                        "schema_version": 1,
+                        "width": 595.0,
+                        "height": 842.0,
+                        "rotation": 0,
+                    })
+
+                    def _line_tuple(l):
+                        if isinstance(l, dict) and "rect" in l:
+                            r = l["rect"]
+                            return (float(r["x0"]), float(r["y0"]), float(r["x1"]), float(r["y1"]))
+                        elif isinstance(l, (list, tuple)):
+                            return tuple(float(v) for v in l)
+                        return (0.0, 0.0, 0.0, 0.0)
+
+                    py_h = [_line_tuple(l) for l in h_lines_dtos]
+                    py_v = [_line_tuple(l) for l in v_lines_dtos]
+
+                    class _MockPage:
+                        def get_text(self, kind):
+                            if kind == "words":
+                                res = []
+                                for idx, w in enumerate(words_dtos):
+                                    if isinstance(w, dict):
+                                        r = w.get("rect", {})
+                                        if isinstance(r, dict):
+                                            x0, y0, x1, y1 = float(r.get("x0", 0)), float(r.get("y0", 0)), float(r.get("x1", 0)), float(r.get("y1", 0))
+                                        else:
+                                            x0, y0, x1, y1 = (float(v) for v in r)
+                                        text = str(w.get("text", ""))
+                                        order = int(w.get("order", idx))
+                                        res.append((x0, y0, x1, y1, text, 0, 0, order))
+                                    elif isinstance(w, (list, tuple)):
+                                        res.append(w)
+                                return res
+                            return {}
+
+                    bbox_info = p.get("bbox", None)
+                    if bbox_info:
+                        if isinstance(bbox_info, dict):
+                            x0, y0, x1, y1 = float(bbox_info["x0"]), float(bbox_info["y0"]), float(bbox_info["x1"]), float(bbox_info["y1"])
+                        else:
+                            x0, y0, x1, y1 = (float(v) for v in bbox_info)
+                    else:
+                        all_x = [l[0] for l in py_h + py_v] + [l[2] for l in py_h + py_v]
+                        all_y = [l[1] for l in py_h + py_v] + [l[3] for l in py_h + py_v]
+                        x0, y0, x1, y1 = min(all_x), min(all_y), max(all_x), max(all_y)
+
+                    if mode in ("shadow", "rust"):
+                        from hexai_pdf_parser import rust_adapter
+
+                        def _make_line_dto(l, idx):
+                            if isinstance(l, dict) and "rect" in l:
+                                return dict(l)
+                            return {
+                                "schema_version": 1,
+                                "rect": {"schema_version": 1, "x0": float(l[0]), "y0": float(l[1]), "x1": float(l[2]), "y1": float(l[3])},
+                                "width": None,
+                                "color": None,
+                                "source_order": idx,
+                            }
+
+                        def _make_word_dto(w, idx):
+                            if isinstance(w, dict) and "rect" in w:
+                                return dict(w)
+                            return {
+                                "schema_version": 1,
+                                "text": str(w[4]),
+                                "rect": {"schema_version": 1, "x0": float(w[0]), "y0": float(w[1]), "x1": float(w[2]), "y1": float(w[3])},
+                                "order": idx,
+                                "block": None,
+                                "line": None,
+                            }
+
+                        rust_input = {
+                            "schema_version": 1,
+                            "page": page_dto,
+                            "h_lines": [_make_line_dto(l, i) for i, l in enumerate(h_lines_dtos)],
+                            "v_lines": [_make_line_dto(l, i) for i, l in enumerate(v_lines_dtos)],
+                            "words": [_make_word_dto(w, i) for i, w in enumerate(words_dtos)],
+                            "tolerance": 2.3,
+                        }
+
+                        t_alg_start = time.perf_counter()
+                        rust_out = rust_adapter.extract_wired_region(rust_input)
+                        t_alg = max(time.perf_counter() - t_alg_start, 1e-6)
+
+                        for r_idx, reg in enumerate(rust_out.get("regions", [])):
+                            reg_rect = reg["rect"]
+                            grid = rust_out.get("grids", [])[r_idx] if r_idx < len(rust_out.get("grids", [])) else None
+                            tables.append({
+                                "bbox": [reg_rect["x0"], reg_rect["y0"], reg_rect["x1"], reg_rect["y1"]],
+                                "rows": grid["rows"] if grid else None,
+                                "cols": grid["cols"] if grid else None,
+                                "source": "line_projection",
+                                "cells": [
+                                    {
+                                        "text": c["text"],
+                                        "row_index": c["row"],
+                                        "col_index": c["col"],
+                                        "bbox": [c["rect"]["x0"], c["rect"]["y0"], c["rect"]["x1"], c["rect"]["y1"]],
+                                        "rowspan": c["rowspan"],
+                                        "colspan": c["colspan"],
+                                    }
+                                    for c in rust_out.get("cells", [])
+                                ],
+                            })
+                    else:
+                        from hexai_pdf_parser.tables.extractors.wired_table_extractor import WiredTableExtractor
+                        from hexai_pdf_parser.core.models import BBox
+
+                        ext = WiredTableExtractor()
+                        py_region_bbox = BBox(x0, y0, x1, y1)
+
+                        t_alg_start = time.perf_counter()
+                        cells = ext._build_cells_for_region(py_region_bbox, py_h, py_v)
+                        cells = ext._assign_text_to_line_cells(cells, _MockPage())
+                        cells = ext._merge_oversegmented_line_columns(cells)
+                        cells = ext._trim_ghost_edge_rows(cells, py_h, tol=ext.line_tolerance)
+                        t_alg = max(time.perf_counter() - t_alg_start, 1e-6)
+
+                        row_count = max((c.row_index for c in cells), default=-1) + 1
+                        col_count = max((c.col_index for c in cells), default=-1) + 1
+                        actual_y0 = min(c.bbox.y0 for c in cells) if cells else y0
+                        actual_y1 = max(c.bbox.y1 for c in cells) if cells else y1
+
+                        tables.append({
+                            "bbox": [x0, actual_y0, x1, actual_y1],
+                            "rows": row_count,
+                            "cols": col_count,
+                            "source": "line_projection",
+                            "cells": [
+                                {
+                                    "text": c.text,
+                                    "row_index": c.row_index,
+                                    "col_index": c.col_index,
+                                    "bbox": [c.bbox.x0, c.bbox.y0, c.bbox.x1, c.bbox.y1],
+                                    "rowspan": c.rowspan,
+                                    "colspan": c.colspan,
+                                }
+                                for c in cells
+                            ],
+                        })
                 elif "h_lines" in p and "v_lines" in p:
                     h_lines = p["h_lines"]
                     v_lines = p["v_lines"]

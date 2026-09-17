@@ -51,6 +51,32 @@ class WiredTableExtractor(BaseTableExtractor):
         if not table_regions:
             return []
 
+        # 页面级一次性获取 words 和 raw_chars，避免在每个 table region 重复读取 page words
+        try:
+            cached_words = page.get_text("words")
+        except Exception:
+            cached_words = []
+
+        cached_raw_chars: List[Tuple[float, float, float, float, str]] = []
+        try:
+            rawdict = page.get_text("rawdict")
+        except Exception:
+            rawdict = {}
+        if isinstance(rawdict, dict):
+            for block in rawdict.get("blocks", []):
+                for line in block.get("lines", []):
+                    for span in line.get("spans", []):
+                        for char in span.get("chars", []):
+                            value = char.get("c")
+                            bbox = char.get("bbox")
+                            if not isinstance(value, str) or not bbox or len(bbox) < 4:
+                                continue
+                            try:
+                                x0, y0, x1, y1 = (float(value) for value in bbox[:4])
+                            except (TypeError, ValueError):
+                                continue
+                            cached_raw_chars.append((x0, y0, x1, y1, value))
+
         tables: List[Table] = []
         for region_bbox, region_h_lines, region_v_lines in table_regions:
             region_h_lines = self._merge_region_line_coordinates(
@@ -65,11 +91,43 @@ class WiredTableExtractor(BaseTableExtractor):
             if not cells:
                 continue
 
-            cells = self._assign_text_to_line_cells(cells, page)
+            cells = self._assign_text_to_line_cells(
+                cells, page, words=cached_words, raw_chars=cached_raw_chars
+            )
             cells = self._merge_oversegmented_line_columns(cells)
             cells = self._trim_ghost_edge_rows(cells, region_h_lines, tol=self.line_tolerance)
             if not cells:
                 continue
+
+            mode = os.environ.get("PDF_RUST_MODE", "python").lower()
+            if mode == "shadow":
+                try:
+                    rust_cells_dto = rust_adapter.build_cells_for_region(
+                        bbox={"x0": region_bbox.x0, "y0": region_bbox.y0, "x1": region_bbox.x1, "y1": region_bbox.y1},
+                        h_lines=region_h_lines,
+                        v_lines=region_v_lines,
+                        tolerance=self.line_tolerance,
+                        merge_group_tol=self.merge_group_tol,
+                    )
+                    words_dto = [
+                        {"text": str(w[4]), "rect": {"x0": float(w[0]), "y0": float(w[1]), "x1": float(w[2]), "y1": float(w[3])}, "order": idx}
+                        for idx, w in enumerate(cached_words)
+                    ]
+                    chars_dto = [
+                        {"text": ch[4], "rect": {"x0": float(ch[0]), "y0": float(ch[1]), "x1": float(ch[2]), "y1": float(ch[3])}, "order": idx}
+                        for idx, ch in enumerate(cached_raw_chars)
+                    ]
+                    rust_cells_dto = rust_adapter.assign_text_to_line_cells(
+                        rust_cells_dto, words_dto, chars=chars_dto, tolerance=self.line_tolerance
+                    )
+                    rust_cells_dto = rust_adapter.merge_oversegmented_line_columns(
+                        rust_cells_dto, tolerance=self.line_tolerance
+                    )
+                    rust_cells_dto = rust_adapter.trim_ghost_edge_rows(
+                        rust_cells_dto, region_h_lines, tol=self.line_tolerance
+                    )
+                except Exception:
+                    pass
 
             if (
                 len(cells) == 1
@@ -1543,6 +1601,32 @@ class WiredTableExtractor(BaseTableExtractor):
         if not cells:
             return cells
 
+        mode = os.environ.get("PDF_RUST_MODE", "python").lower()
+        if mode == "rust":
+            cells_dto = [
+                {
+                    "text": c.text,
+                    "row": c.row_index,
+                    "col": c.col_index,
+                    "rect": {"x0": c.bbox.x0, "y0": c.bbox.y0, "x1": c.bbox.x1, "y1": c.bbox.y1},
+                    "rowspan": c.rowspan,
+                    "colspan": c.colspan,
+                }
+                for c in cells
+            ]
+            trimmed_dto = rust_adapter.trim_ghost_edge_rows(cells_dto, h_lines, tol=tol)
+            return [
+                Cell(
+                    text=c["text"],
+                    row_index=c["row"],
+                    col_index=c["col"],
+                    bbox=BBox(c["rect"]["x0"], c["rect"]["y0"], c["rect"]["x1"], c["rect"]["y1"]),
+                    rowspan=c["rowspan"],
+                    colspan=c["colspan"],
+                )
+                for c in trimmed_dto
+            ]
+
         row_indices = sorted({c.row_index for c in cells})
         if not row_indices:
             return cells
@@ -1607,6 +1691,27 @@ class WiredTableExtractor(BaseTableExtractor):
         h_lines: List[Tuple[float, float, float, float]],
         v_lines: List[Tuple[float, float, float, float]],
     ) -> List[Cell]:
+        mode = os.environ.get("PDF_RUST_MODE", "python").lower()
+        if mode == "rust":
+            cells_dto = rust_adapter.build_cells_for_region(
+                bbox={"x0": bbox.x0, "y0": bbox.y0, "x1": bbox.x1, "y1": bbox.y1},
+                h_lines=h_lines,
+                v_lines=v_lines,
+                tolerance=self.line_tolerance,
+                merge_group_tol=self.merge_group_tol,
+            )
+            return [
+                Cell(
+                    text=c["text"],
+                    row_index=c["row"],
+                    col_index=c["col"],
+                    bbox=BBox(c["rect"]["x0"], c["rect"]["y0"], c["rect"]["x1"], c["rect"]["y1"]),
+                    rowspan=c["rowspan"],
+                    colspan=c["colspan"],
+                )
+                for c in cells_dto
+            ]
+
         existing_v_xs = [line[0] for line in v_lines]
         if existing_v_xs:
             left_v_x = min(existing_v_xs)
@@ -1895,31 +2000,80 @@ class WiredTableExtractor(BaseTableExtractor):
         cells.sort(key=lambda cell: (cell.row_index, cell.col_index))
         return cells
 
-    def _assign_text_to_line_cells(self, cells: List[Cell], page: fitz.Page) -> List[Cell]:
-        try:
-            words = page.get_text("words")
-        except Exception:
-            return cells
+    def _assign_text_to_line_cells(
+        self,
+        cells: List[Cell],
+        page: fitz.Page,
+        words: Optional[List[Tuple]] = None,
+        raw_chars: Optional[List[Tuple[float, float, float, float, str]]] = None,
+    ) -> List[Cell]:
+        if words is None:
+            try:
+                words = page.get_text("words")
+            except Exception:
+                return cells
 
-        raw_chars: List[Tuple[float, float, float, float, str]] = []
-        try:
-            rawdict = page.get_text("rawdict")
-        except Exception:
-            rawdict = {}
-        if isinstance(rawdict, dict):
-            for block in rawdict.get("blocks", []):
-                for line in block.get("lines", []):
-                    for span in line.get("spans", []):
-                        for char in span.get("chars", []):
-                            value = char.get("c")
-                            bbox = char.get("bbox")
-                            if not isinstance(value, str) or not bbox or len(bbox) < 4:
-                                continue
-                            try:
-                                x0, y0, x1, y1 = (float(value) for value in bbox[:4])
-                            except (TypeError, ValueError):
-                                continue
-                            raw_chars.append((x0, y0, x1, y1, value))
+        if raw_chars is None:
+            raw_chars = []
+            try:
+                rawdict = page.get_text("rawdict")
+            except Exception:
+                rawdict = {}
+            if isinstance(rawdict, dict):
+                for block in rawdict.get("blocks", []):
+                    for line in block.get("lines", []):
+                        for span in line.get("spans", []):
+                            for char in span.get("chars", []):
+                                value = char.get("c")
+                                bbox = char.get("bbox")
+                                if not isinstance(value, str) or not bbox or len(bbox) < 4:
+                                    continue
+                                try:
+                                    x0, y0, x1, y1 = (float(value) for value in bbox[:4])
+                                except (TypeError, ValueError):
+                                    continue
+                                raw_chars.append((x0, y0, x1, y1, value))
+
+        mode = os.environ.get("PDF_RUST_MODE", "python").lower()
+        if mode == "rust":
+            cells_dto = [
+                {
+                    "text": c.text,
+                    "row": c.row_index,
+                    "col": c.col_index,
+                    "rect": {"x0": c.bbox.x0, "y0": c.bbox.y0, "x1": c.bbox.x1, "y1": c.bbox.y1},
+                    "rowspan": c.rowspan,
+                    "colspan": c.colspan,
+                }
+                for c in cells
+            ]
+            words_dto = [
+                {
+                    "text": str(w[4]),
+                    "rect": {"x0": float(w[0]), "y0": float(w[1]), "x1": float(w[2]), "y1": float(w[3])},
+                    "order": idx,
+                    "block": int(w[5]) if len(w) > 5 else None,
+                    "line": int(w[6]) if len(w) > 6 else None,
+                }
+                for idx, w in enumerate(words)
+            ]
+            chars_dto = [
+                {
+                    "text": ch[4],
+                    "rect": {"x0": float(ch[0]), "y0": float(ch[1]), "x1": float(ch[2]), "y1": float(ch[3])},
+                    "order": idx,
+                }
+                for idx, ch in enumerate(raw_chars)
+            ]
+            assigned_dto = rust_adapter.assign_text_to_line_cells(
+                cells_dto,
+                words_dto,
+                chars=chars_dto,
+                tolerance=self.line_tolerance,
+            )
+            for idx, c in enumerate(assigned_dto):
+                cells[idx].text = c["text"]
+            return cells
 
         def overlapping_cells(word: Tuple) -> List[int]:
             wx0, wy0, wx1, wy1 = (float(value) for value in word[:4])
@@ -2002,6 +2156,32 @@ class WiredTableExtractor(BaseTableExtractor):
     def _merge_oversegmented_line_columns(self, cells: List[Cell]) -> List[Cell]:
         if not cells:
             return cells
+
+        mode = os.environ.get("PDF_RUST_MODE", "python").lower()
+        if mode == "rust":
+            cells_dto = [
+                {
+                    "text": c.text,
+                    "row": c.row_index,
+                    "col": c.col_index,
+                    "rect": {"x0": c.bbox.x0, "y0": c.bbox.y0, "x1": c.bbox.x1, "y1": c.bbox.y1},
+                    "rowspan": c.rowspan,
+                    "colspan": c.colspan,
+                }
+                for c in cells
+            ]
+            merged_dto = rust_adapter.merge_oversegmented_line_columns(cells_dto, tolerance=self.line_tolerance)
+            return [
+                Cell(
+                    text=c["text"],
+                    row_index=c["row"],
+                    col_index=c["col"],
+                    bbox=BBox(c["rect"]["x0"], c["rect"]["y0"], c["rect"]["x1"], c["rect"]["y1"]),
+                    rowspan=c["rowspan"],
+                    colspan=c["colspan"],
+                )
+                for c in merged_dto
+            ]
 
         cols: Dict[int, List[Cell]] = defaultdict(list)
         for c in cells:
