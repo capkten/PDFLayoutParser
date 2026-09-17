@@ -708,3 +708,178 @@ def recover_wireless_tables(input_dto: Dict[str, Any]) -> Dict[str, Any]:
     d["config"] = config
 
     return _pdf_fast.recover_wireless_tables(d)
+def _ensure_background_dto(bg: Dict[str, Any], default_order: int = 0) -> Dict[str, Any]:
+    b = dict(bg)
+    if "schema_version" not in b:
+        b["schema_version"] = 1
+    rect = b.get("rect")
+    if isinstance(rect, (list, tuple)) and len(rect) >= 4:
+        b["rect"] = {"schema_version": 1, "x0": float(rect[0]), "y0": float(rect[1]), "x1": float(rect[2]), "y1": float(rect[3])}
+    elif isinstance(rect, dict) and "schema_version" not in rect:
+        b["rect"] = {"schema_version": 1, **rect}
+    if "source_order" not in b:
+        b["source_order"] = default_order
+    if "color" not in b:
+        b["color"] = None
+    if "opacity" not in b:
+        b["opacity"] = None
+    return b
+
+
+def _ensure_word_dto(word: Dict[str, Any], default_order: int = 0) -> Dict[str, Any]:
+    w = dict(word)
+    if "schema_version" not in w:
+        w["schema_version"] = 1
+    rect = w.get("rect")
+    if isinstance(rect, (list, tuple)) and len(rect) >= 4:
+        w["rect"] = {"schema_version": 1, "x0": float(rect[0]), "y0": float(rect[1]), "x1": float(rect[2]), "y1": float(rect[3])}
+    elif isinstance(rect, dict) and "schema_version" not in rect:
+        w["rect"] = {"schema_version": 1, **rect}
+    if "order" not in w:
+        w["order"] = default_order
+    if "block" not in w:
+        w["block"] = None
+    if "line" not in w:
+        w["line"] = None
+    return w
+
+
+def _ensure_region_dto(reg: Dict[str, Any]) -> Dict[str, Any]:
+    r = dict(reg)
+    if "schema_version" not in r:
+        r["schema_version"] = 1
+    rect = r.get("rect")
+    if isinstance(rect, (list, tuple)) and len(rect) >= 4:
+        r["rect"] = {"schema_version": 1, "x0": float(rect[0]), "y0": float(rect[1]), "x1": float(rect[2]), "y1": float(rect[3])}
+    elif isinstance(rect, dict) and "schema_version" not in rect:
+        r["rect"] = {"schema_version": 1, **rect}
+    if "source_order" not in r:
+        r["source_order"] = 0
+    if "allowed" not in r:
+        r["allowed"] = True
+    return r
+
+
+def _ensure_config_dto(cfg: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    c = dict(cfg or {})
+    if "schema_version" not in c:
+        c["schema_version"] = 1
+    c.setdefault("line_tolerance", 2.0)
+    c.setdefault("row_tolerance", 2.0)
+    c.setdefault("column_tolerance", 2.0)
+    c.setdefault("span_tolerance", 2.0)
+    c.setdefault("numeric_tolerance", 2.0)
+    return c
+
+
+def group_backgrounds(
+    backgrounds: List[Dict[str, Any]],
+    gap_threshold: float = 30.0,
+) -> List[List[Dict[str, Any]]]:
+    owned = [_ensure_background_dto(b, idx) for idx, b in enumerate(backgrounds)]
+    return _pdf_fast.group_backgrounds(owned, float(gap_threshold))
+
+
+def detect_zebra_rows(input_dto: Dict[str, Any]) -> List[Dict[str, Any]]:
+    d = dict(input_dto)
+    if "schema_version" not in d:
+        d["schema_version"] = 1
+    page = dict(d.get("page", {}))
+    if "schema_version" not in page:
+        page["schema_version"] = 1
+    d["page"] = page
+    d["backgrounds"] = [_ensure_background_dto(b, idx) for idx, b in enumerate(d.get("backgrounds", []))]
+    d["words"] = [_ensure_word_dto(w, idx) for idx, w in enumerate(d.get("words", []))]
+    d["region"] = _ensure_region_dto(d.get("region", {}))
+    d["config"] = _ensure_config_dto(d.get("config"))
+    return _pdf_fast.detect_zebra_rows(d)
+
+
+def assign_words_to_zebra_rows(
+    words: List[Dict[str, Any]],
+    rows: List[Dict[str, Any]],
+    row_tol: float = 2.0,
+) -> List[Dict[str, Any]]:
+    owned_words = [_ensure_word_dto(w, idx) for idx, w in enumerate(words)]
+    owned_rows = []
+    for idx, r in enumerate(rows):
+        rd = dict(r)
+        if "schema_version" not in rd:
+            rd["schema_version"] = 1
+        rect = rd.get("rect")
+        if isinstance(rect, dict) and "schema_version" not in rect:
+            rd["rect"] = {"schema_version": 1, **rect}
+        elif isinstance(rect, (list, tuple)) and len(rect) >= 4:
+            rd["rect"] = {"schema_version": 1, "x0": float(rect[0]), "y0": float(rect[1]), "x1": float(rect[2]), "y1": float(rect[3])}
+        rd.setdefault("row_index", idx)
+        rd.setdefault("source_backgrounds", [])
+        rd.setdefault("words", [])
+        rd.setdefault("cells", [])
+        owned_rows.append(rd)
+    return _pdf_fast.assign_words_to_zebra_rows(owned_words, owned_rows, float(row_tol))
+
+
+def infer_english_columns(input_dto: Dict[str, Any]) -> List[Dict[str, Any]]:
+    d = dict(input_dto)
+    if "schema_version" not in d:
+        d["schema_version"] = 1
+    d["region"] = _ensure_region_dto(d.get("region", {}))
+    d["words"] = [_ensure_word_dto(w, idx) for idx, w in enumerate(d.get("words", []))]
+    d["backgrounds"] = [_ensure_background_dto(b, idx) for idx, b in enumerate(d.get("backgrounds", []))]
+    d["config"] = _ensure_config_dto(d.get("config"))
+    return _pdf_fast.infer_english_columns(d)
+
+
+def build_english_cells(input_dto: Dict[str, Any]) -> List[Dict[str, Any]]:
+    d = dict(input_dto)
+    if "schema_version" not in d:
+        d["schema_version"] = 1
+    d["region"] = _ensure_region_dto(d.get("region", {}))
+    d["words"] = [_ensure_word_dto(w, idx) for idx, w in enumerate(d.get("words", []))]
+    d["backgrounds"] = [_ensure_background_dto(b, idx) for idx, b in enumerate(d.get("backgrounds", []))]
+    d["config"] = _ensure_config_dto(d.get("config"))
+    return _pdf_fast.build_english_cells(d)
+
+
+def build_general_wireless_cells(input_dto: Dict[str, Any]) -> List[Dict[str, Any]]:
+    d = dict(input_dto)
+    if "schema_version" not in d:
+        d["schema_version"] = 1
+    d["region"] = _ensure_region_dto(d.get("region", {}))
+    owned_atoms = []
+    for idx, a in enumerate(d.get("atoms", [])):
+        ad = dict(a)
+        if "schema_version" not in ad:
+            ad["schema_version"] = 1
+        rect = ad.get("rect")
+        if isinstance(rect, dict) and "schema_version" not in rect:
+            ad["rect"] = {"schema_version": 1, **rect}
+        elif isinstance(rect, (list, tuple)) and len(rect) >= 4:
+            ad["rect"] = {"schema_version": 1, "x0": float(rect[0]), "y0": float(rect[1]), "x1": float(rect[2]), "y1": float(rect[3])}
+        ad.setdefault("run_refs", [idx])
+        ad.setdefault("row_hint", None)
+        ad.setdefault("col_hint", None)
+        ad.setdefault("order", idx)
+        owned_atoms.append(ad)
+    d["atoms"] = owned_atoms
+    owned_bands = []
+    for idx, b in enumerate(d.get("bands", [])):
+        bd = dict(b)
+        if "schema_version" not in bd:
+            bd["schema_version"] = 1
+        bd.setdefault("source_atoms", [])
+        bd.setdefault("order", idx)
+        owned_bands.append(bd)
+    d["bands"] = owned_bands
+    d["config"] = _ensure_config_dto(d.get("config"))
+    return _pdf_fast.build_general_wireless_cells(d)
+
+
+def build_legacy_text_alignment(input_dto: Dict[str, Any]) -> List[Dict[str, Any]]:
+    d = dict(input_dto)
+    if "schema_version" not in d:
+        d["schema_version"] = 1
+    d["region"] = _ensure_region_dto(d.get("region", {}))
+    d["words"] = [_ensure_word_dto(w, idx) for idx, w in enumerate(d.get("words", []))]
+    d["config"] = _ensure_config_dto(d.get("config"))
+    return _pdf_fast.build_legacy_text_alignment(d)

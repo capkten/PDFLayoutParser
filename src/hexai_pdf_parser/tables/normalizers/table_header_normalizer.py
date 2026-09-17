@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
+import os
 import re
 
 import fitz
@@ -154,6 +155,91 @@ def _rebuild_text_aligned_table(
     words = _collect_words_in_bbox(page, table.bbox)
     if len(words) < 8:
         return None
+
+    mode = os.environ.get("PDF_RUST_MODE", "python").lower()
+    if mode in ("rust", "shadow"):
+        try:
+            from hexai_pdf_parser import rust_adapter
+
+            rust_input = {
+                "schema_version": 1,
+                "region": {
+                    "schema_version": 1,
+                    "rect": {
+                        "schema_version": 1,
+                        "x0": float(table.bbox.x0),
+                        "y0": float(table.bbox.y0),
+                        "x1": float(table.bbox.x1),
+                        "y1": float(table.bbox.y1),
+                    },
+                    "source_order": 0,
+                    "allowed": True,
+                },
+                "words": [
+                    {
+                        "schema_version": 1,
+                        "rect": {
+                            "schema_version": 1,
+                            "x0": float(w.bbox.x0),
+                            "y0": float(w.bbox.y0),
+                            "x1": float(w.bbox.x1),
+                            "y1": float(w.bbox.y1),
+                        },
+                        "text": str(w.text),
+                        "order": i,
+                        "block": None,
+                        "line": None,
+                    }
+                    for i, w in enumerate(words)
+                ],
+                "config": {
+                    "schema_version": 1,
+                    "line_tolerance": 2.0,
+                    "row_tolerance": 2.0,
+                    "column_tolerance": 2.0,
+                    "span_tolerance": 2.0,
+                    "numeric_tolerance": 2.0,
+                },
+            }
+            res_cells = rust_adapter.build_legacy_text_alignment(rust_input)
+            if res_cells:
+                c_objs = [
+                    Cell(
+                        text=c["text"],
+                        row_index=c["row"],
+                        col_index=c["col"],
+                        bbox=BBox(
+                            c["rect"]["x0"],
+                            c["rect"]["y0"],
+                            c["rect"]["x1"],
+                            c["rect"]["y1"],
+                        ),
+                        rowspan=c["rowspan"],
+                        colspan=c["colspan"],
+                    )
+                    for c in res_cells
+                ]
+                max_r = max(c.row_index for c in c_objs)
+                max_c = max(
+                    c.col_index + max(1, c.colspan) - 1 for c in c_objs
+                )
+                reconstructed = Table(
+                    bbox=BBox(
+                        min(word.bbox.x0 for word in words),
+                        min(word.bbox.y0 for word in words),
+                        max(word.bbox.x1 for word in words),
+                        max(word.bbox.y1 for word in words),
+                    ),
+                    rows=max_r + 1,
+                    cols=max_c + 1,
+                    cells=c_objs,
+                    confidence=table.confidence,
+                    source=table.source,
+                )
+                if mode == "rust":
+                    return reconstructed
+        except Exception:
+            pass
 
     row_clusters = _cluster_tokens(words, axis="y", tolerance=17.0)
     if len(row_clusters) < 2:

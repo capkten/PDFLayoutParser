@@ -1,0 +1,424 @@
+{
+  "version": "1.0",
+  "description": "English wireless table extraction and recovery fixture",
+  "pages": [
+    {
+      "page_id": "page_english_zebra_sample",
+      "page": {
+        "schema_version": 1,
+        "width": 600.0,
+        "height": 800.0,
+        "rotation": 0
+      },
+      "backgrounds": [
+        {
+          "schema_version": 1,
+          "rect": {
+            "schema_version": 1,
+            "x0": 50.0,
+            "y0": 100.0,
+            "x1": 550.0,
+            "y1": 120.0
+          },
+          "color": 0.85,
+          "opacity": 1.0,
+          "source_order": 0
+        },
+        {
+          "schema_version": 1,
+          "rect": {
+            "schema_version": 1,
+            "x0": 50.0,
+            "y0": 125.0,
+            "x1": 550.0,
+            "y1": 145.0
+          },
+          "color": 1.0,
+          "opacity": 1.0,
+          "source_order": 1
+        },
+        {
+          "schema_version": 1,
+          "rect": {
+            "schema_version": 1,
+            "x0": 50.0,
+            "y0": 150.0,
+            "x1": 550.0,
+            "y1": 170.0
+          },
+          "color": 0.85,
+          "opacity": 1.0,
+          "source_order": 2
+        },
+        {
+          "schema_version": 1,
+          "rect": {
+            "schema_version": 1,
+            "x0": 50.0,
+            "y0": 175.0,
+            "x1": 550.0,
+            "y1": 195.0
+          },
+          "color": 1.0,
+          "opacity": 1.0,
+          "source_order": 3
+        },
+        {
+          "schema_version": 1,
+          "rect": {
+            "schema_version": 1,
+            "x0": 50.0,
+            "y0": 200.0,
+            "x1": 550.0,
+            "y1": 220.0
+          },
+          "color": 0.85,
+          "opacity": 1.0,
+          "source_order": 4
+        },
+        {
+          "schema_version": 1,
+          "rect": {
+            "schema_version": 1,
+            "x0": 50.0,
+            "y0": 300.0,
+            "x1": 550.0,
+            "y1": 320.0
+          },
+          "color": 0.85,
+          "opacity": 1.0,
+          "source_order": 5
+        },
+        {
+          "schema_version": 1,
+          "rect": {
+            "schema_version": 1,
+            "x0": 50.0,
+            "y0": 325.0,
+            "x1": 550.0,
+            "y1": 345.0
+          },
+          "color": 1.0,
+          "opacity": 1.0,
+          "source_order": 6
+        }
+      ],
+      "words": [
+        {
+          "schema_version": 1,
+          "text": "Operating",
+          "rect": {
+            "schema_version": 1,
+            "x0": 55.0,
+            "y0": 102.0,
+            "x1": 110.0,
+            "y1": 118.0
+          },
+          "order": 0,
+          "block": 0,
+          "line": 0
+        },
+        {
+          "schema_version": 1,
+          "text": "Expenses",
+          "rect": {
+            "schema_version": 1,
+            "x0": 115.0,
+            "y0": 102.0,
+            "x1": 170.0,
+            "y1": 118.0
+          },
+          "order": 1,
+          "block": 0,
+          "line": 0
+        },
+        {
+          "schema_version": 1,
+          "text": "2023",
+          "rect": {
+            "schema_version": 1,
+            "x0": 350.0,
+            "y0": 102.0,
+            "x1": 380.0,
+            "y1": 118.0
+          },
+          "order": 2,
+          "block": 0,
+          "line": 0
+        },
+        {
+          "schema_version": 1,
+          "text": "2024",
+          "rect": {
+            "schema_version": 1,
+            "x0": 480.0,
+            "y0": 102.0,
+            "x1": 510.0,
+            "y1": 118.0
+          },
+          "order": 3,
+          "block": 0,
+          "line": 0
+        },
+        {
+          "schema_version": 1,
+          "text": "Research",
+          "rect": {
+            "schema_version": 1,
+            "x0": 55.0,
+            "y0": 127.0,
+            "x1": 110.0,
+            "y1": 143.0
+          },
+          "order": 4,
+          "block": 0,
+          "line": 1
+        },
+        {
+          "schema_version": 1,
+          "text": "and",
+          "rect": {
+            "schema_version": 1,
+            "x0": 115.0,
+            "y0": 127.0,
+            "x1": 135.0,
+            "y1": 143.0
+          },
+          "order": 5,
+          "block": 0,
+          "line": 1
+        },
+        {
+          "schema_version": 1,
+          "text": "Development",
+          "rect": {
+            "schema_version": 1,
+            "x0": 140.0,
+            "y0": 127.0,
+            "x1": 220.0,
+            "y1": 143.0
+          },
+          "order": 6,
+          "block": 0,
+          "line": 1
+        },
+        {
+          "schema_version": 1,
+          "text": "$",
+          "rect": {
+            "schema_version": 1,
+            "x0": 330.0,
+            "y0": 127.0,
+            "x1": 338.0,
+            "y1": 143.0
+          },
+          "order": 7,
+          "block": 0,
+          "line": 1
+        },
+        {
+          "schema_version": 1,
+          "text": "1,200",
+          "rect": {
+            "schema_version": 1,
+            "x0": 345.0,
+            "y0": 127.0,
+            "x1": 380.0,
+            "y1": 143.0
+          },
+          "order": 8,
+          "block": 0,
+          "line": 1
+        },
+        {
+          "schema_version": 1,
+          "text": "$",
+          "rect": {
+            "schema_version": 1,
+            "x0": 460.0,
+            "y0": 127.0,
+            "x1": 468.0,
+            "y1": 143.0
+          },
+          "order": 9,
+          "block": 0,
+          "line": 1
+        },
+        {
+          "schema_version": 1,
+          "text": "1,450",
+          "rect": {
+            "schema_version": 1,
+            "x0": 475.0,
+            "y0": 127.0,
+            "x1": 510.0,
+            "y1": 143.0
+          },
+          "order": 10,
+          "block": 0,
+          "line": 1
+        },
+        {
+          "schema_version": 1,
+          "text": "General",
+          "rect": {
+            "schema_version": 1,
+            "x0": 55.0,
+            "y0": 152.0,
+            "x1": 100.0,
+            "y1": 168.0
+          },
+          "order": 11,
+          "block": 0,
+          "line": 2
+        },
+        {
+          "schema_version": 1,
+          "text": "Administrative",
+          "rect": {
+            "schema_version": 1,
+            "x0": 105.0,
+            "y0": 152.0,
+            "x1": 190.0,
+            "y1": 168.0
+          },
+          "order": 12,
+          "block": 0,
+          "line": 2
+        },
+        {
+          "schema_version": 1,
+          "text": "850",
+          "rect": {
+            "schema_version": 1,
+            "x0": 350.0,
+            "y0": 152.0,
+            "x1": 380.0,
+            "y1": 168.0
+          },
+          "order": 13,
+          "block": 0,
+          "line": 2
+        },
+        {
+          "schema_version": 1,
+          "text": "920",
+          "rect": {
+            "schema_version": 1,
+            "x0": 480.0,
+            "y0": 152.0,
+            "x1": 510.0,
+            "y1": 168.0
+          },
+          "order": 14,
+          "block": 0,
+          "line": 2
+        },
+        {
+          "schema_version": 1,
+          "text": "Total",
+          "rect": {
+            "schema_version": 1,
+            "x0": 55.0,
+            "y0": 230.0,
+            "x1": 90.0,
+            "y1": 246.0
+          },
+          "order": 15,
+          "block": 0,
+          "line": 3
+        },
+        {
+          "schema_version": 1,
+          "text": "Expenses",
+          "rect": {
+            "schema_version": 1,
+            "x0": 95.0,
+            "y0": 230.0,
+            "x1": 150.0,
+            "y1": 246.0
+          },
+          "order": 16,
+          "block": 0,
+          "line": 3
+        },
+        {
+          "schema_version": 1,
+          "text": "$",
+          "rect": {
+            "schema_version": 1,
+            "x0": 330.0,
+            "y0": 230.0,
+            "x1": 338.0,
+            "y1": 246.0
+          },
+          "order": 17,
+          "block": 0,
+          "line": 3
+        },
+        {
+          "schema_version": 1,
+          "text": "2,050",
+          "rect": {
+            "schema_version": 1,
+            "x0": 345.0,
+            "y0": 230.0,
+            "x1": 380.0,
+            "y1": 246.0
+          },
+          "order": 18,
+          "block": 0,
+          "line": 3
+        },
+        {
+          "schema_version": 1,
+          "text": "$",
+          "rect": {
+            "schema_version": 1,
+            "x0": 460.0,
+            "y0": 230.0,
+            "x1": 468.0,
+            "y1": 246.0
+          },
+          "order": 19,
+          "block": 0,
+          "line": 3
+        },
+        {
+          "schema_version": 1,
+          "text": "2,370",
+          "rect": {
+            "schema_version": 1,
+            "x0": 475.0,
+            "y0": 230.0,
+            "x1": 510.0,
+            "y1": 246.0
+          },
+          "order": 20,
+          "block": 0,
+          "line": 3
+        }
+      ],
+      "region": {
+        "schema_version": 1,
+        "rect": {
+          "schema_version": 1,
+          "x0": 50.0,
+          "y0": 95.0,
+          "x1": 550.0,
+          "y1": 255.0
+        },
+        "source_order": 0,
+        "allowed": true
+      },
+      "config": {
+        "schema_version": 1,
+        "line_tolerance": 2.0,
+        "row_tolerance": 2.0,
+        "column_tolerance": 2.0,
+        "span_tolerance": 2.0,
+        "numeric_tolerance": 2.0
+      }
+    }
+  ]
+}

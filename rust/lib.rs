@@ -1,6 +1,7 @@
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PyModule, PyTuple};
 
+pub mod english_wireless;
 pub mod geometry;
 pub mod native_span;
 pub mod types;
@@ -606,6 +607,128 @@ fn recover_wireless_tables_binding<'py>(
     output.to_py(py)
 }
 
+#[pyfunction(name = "group_backgrounds")]
+fn group_backgrounds_binding<'py>(
+    py: Python<'py>,
+    backgrounds: &Bound<'py, PyList>,
+    gap_threshold: f64,
+) -> PyResult<Bound<'py, PyList>> {
+    let mut rust_bgs = Vec::with_capacity(backgrounds.len());
+    for b in backgrounds.iter() {
+        rust_bgs.push(types::BackgroundDto::from_py(
+            &b.downcast::<PyDict>()?.clone(),
+        )?);
+    }
+    let groups =
+        py.allow_threads(move || english_wireless::group_backgrounds(rust_bgs, gap_threshold));
+    let outer_list = PyList::empty_bound(py);
+    for group in groups {
+        let inner_list = PyList::empty_bound(py);
+        for bg in group {
+            inner_list.append(bg.to_py(py)?)?;
+        }
+        outer_list.append(inner_list)?;
+    }
+    Ok(outer_list)
+}
+
+#[pyfunction(name = "detect_zebra_rows")]
+fn detect_zebra_rows_binding<'py>(
+    py: Python<'py>,
+    input_dict: &Bound<'py, PyDict>,
+) -> PyResult<Bound<'py, PyList>> {
+    let input = types::ZebraInput::from_py(input_dict)?;
+    let rows = py.allow_threads(move || english_wireless::detect_zebra_rows(&input));
+    let list = PyList::empty_bound(py);
+    for r in rows {
+        list.append(r.to_py(py)?)?;
+    }
+    Ok(list)
+}
+
+#[pyfunction(name = "assign_words_to_zebra_rows")]
+fn assign_words_to_zebra_rows_binding<'py>(
+    py: Python<'py>,
+    words: &Bound<'py, PyList>,
+    rows: &Bound<'py, PyList>,
+    row_tol: f64,
+) -> PyResult<Bound<'py, PyList>> {
+    let mut rust_words = Vec::with_capacity(words.len());
+    for w in words.iter() {
+        rust_words.push(types::WordDto::from_py(&w.downcast::<PyDict>()?.clone())?);
+    }
+    let mut rust_rows = Vec::with_capacity(rows.len());
+    for r in rows.iter() {
+        rust_rows.push(types::RowBandDto::from_py(
+            &r.downcast::<PyDict>()?.clone(),
+        )?);
+    }
+    let assigned = py.allow_threads(move || {
+        english_wireless::assign_words_to_zebra_rows(rust_words, rust_rows, row_tol)
+    });
+    let list = PyList::empty_bound(py);
+    for r in assigned {
+        list.append(r.to_py(py)?)?;
+    }
+    Ok(list)
+}
+
+#[pyfunction(name = "infer_english_columns")]
+fn infer_english_columns_binding<'py>(
+    py: Python<'py>,
+    input_dict: &Bound<'py, PyDict>,
+) -> PyResult<Bound<'py, PyList>> {
+    let input = types::EnglishGridInput::from_py(input_dict)?;
+    let cols = py.allow_threads(move || english_wireless::infer_english_columns(&input));
+    let list = PyList::empty_bound(py);
+    for c in cols {
+        list.append(c.to_py(py)?)?;
+    }
+    Ok(list)
+}
+
+#[pyfunction(name = "build_english_cells")]
+fn build_english_cells_binding<'py>(
+    py: Python<'py>,
+    input_dict: &Bound<'py, PyDict>,
+) -> PyResult<Bound<'py, PyList>> {
+    let input = types::EnglishGridInput::from_py(input_dict)?;
+    let cells = py.allow_threads(move || english_wireless::build_english_cells(&input));
+    let list = PyList::empty_bound(py);
+    for c in cells {
+        list.append(c.to_py(py)?)?;
+    }
+    Ok(list)
+}
+
+#[pyfunction(name = "build_general_wireless_cells")]
+fn build_general_wireless_cells_binding<'py>(
+    py: Python<'py>,
+    input_dict: &Bound<'py, PyDict>,
+) -> PyResult<Bound<'py, PyList>> {
+    let input = types::GeneralWirelessInput::from_py(input_dict)?;
+    let cells = py.allow_threads(move || english_wireless::build_general_wireless_cells(&input));
+    let list = PyList::empty_bound(py);
+    for c in cells {
+        list.append(c.to_py(py)?)?;
+    }
+    Ok(list)
+}
+
+#[pyfunction(name = "build_legacy_text_alignment")]
+fn build_legacy_text_alignment_binding<'py>(
+    py: Python<'py>,
+    input_dict: &Bound<'py, PyDict>,
+) -> PyResult<Bound<'py, PyList>> {
+    let input = types::LegacyAlignmentInput::from_py(input_dict)?;
+    let cells = py.allow_threads(move || english_wireless::build_legacy_text_alignment(&input));
+    let list = PyList::empty_bound(py);
+    for c in cells {
+        list.append(c.to_py(py)?)?;
+    }
+    Ok(list)
+}
+
 #[pymodule]
 fn _pdf_fast(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(rect_overlap_binding, module)?)?;
@@ -626,6 +749,22 @@ fn _pdf_fast(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(table_quality_binding, module)?)?;
     module.add_function(wrap_pyfunction!(select_candidates_binding, module)?)?;
     module.add_function(wrap_pyfunction!(recover_wireless_tables_binding, module)?)?;
+    module.add_function(wrap_pyfunction!(group_backgrounds_binding, module)?)?;
+    module.add_function(wrap_pyfunction!(detect_zebra_rows_binding, module)?)?;
+    module.add_function(wrap_pyfunction!(
+        assign_words_to_zebra_rows_binding,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(infer_english_columns_binding, module)?)?;
+    module.add_function(wrap_pyfunction!(build_english_cells_binding, module)?)?;
+    module.add_function(wrap_pyfunction!(
+        build_general_wireless_cells_binding,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        build_legacy_text_alignment_binding,
+        module
+    )?)?;
     module.add_function(wrap_pyfunction!(merge_h_lines_binding, module)?)?;
     module.add_function(wrap_pyfunction!(merge_v_lines_binding, module)?)?;
     module.add_function(wrap_pyfunction!(

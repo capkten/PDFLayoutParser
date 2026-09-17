@@ -1525,6 +1525,214 @@ impl WirelessRecoveryOutput {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct ZebraInput {
+    pub schema_version: i64,
+    pub page: PageDto,
+    pub backgrounds: Vec<BackgroundDto>,
+    pub words: Vec<WordDto>,
+    pub region: RegionDto,
+    pub config: StructureConfig,
+}
+
+impl ZebraInput {
+    pub fn from_py(dict: &Bound<'_, PyDict>) -> PyResult<Self> {
+        let sv: i64 = get_req(dict, "schema_version")?.extract()?;
+        check_schema_version(sv)?;
+        let page = PageDto::from_py(&get_req(dict, "page")?.downcast::<PyDict>()?.clone())?;
+        let bg_list: Bound<'_, PyList> = get_req(dict, "backgrounds")?.extract()?;
+        let mut backgrounds = Vec::with_capacity(bg_list.len());
+        for b in bg_list.iter() {
+            backgrounds.push(BackgroundDto::from_py(&b.downcast::<PyDict>()?.clone())?);
+        }
+        let w_list: Bound<'_, PyList> = get_req(dict, "words")?.extract()?;
+        let mut words = Vec::with_capacity(w_list.len());
+        for w in w_list.iter() {
+            words.push(WordDto::from_py(&w.downcast::<PyDict>()?.clone())?);
+        }
+        let region = RegionDto::from_py(&get_req(dict, "region")?.downcast::<PyDict>()?.clone())?;
+        let config =
+            StructureConfig::from_py(&get_req(dict, "config")?.downcast::<PyDict>()?.clone())?;
+        Ok(Self {
+            schema_version: sv,
+            page,
+            backgrounds,
+            words,
+            region,
+            config,
+        })
+    }
+
+    pub fn to_py<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let d = PyDict::new_bound(py);
+        d.set_item("schema_version", self.schema_version)?;
+        d.set_item("page", self.page.to_py(py)?)?;
+        let bl = PyList::empty_bound(py);
+        for b in &self.backgrounds {
+            bl.append(b.to_py(py)?)?;
+        }
+        d.set_item("backgrounds", bl)?;
+        let wl = PyList::empty_bound(py);
+        for w in &self.words {
+            wl.append(w.to_py(py)?)?;
+        }
+        d.set_item("words", wl)?;
+        d.set_item("region", self.region.to_py(py)?)?;
+        d.set_item("config", self.config.to_py(py)?)?;
+        Ok(d)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnglishGridInput {
+    pub schema_version: i64,
+    pub region: RegionDto,
+    pub words: Vec<WordDto>,
+    pub backgrounds: Vec<BackgroundDto>,
+    pub config: StructureConfig,
+}
+
+impl EnglishGridInput {
+    pub fn from_py(dict: &Bound<'_, PyDict>) -> PyResult<Self> {
+        let sv: i64 = get_req(dict, "schema_version")?.extract()?;
+        check_schema_version(sv)?;
+        let region = RegionDto::from_py(&get_req(dict, "region")?.downcast::<PyDict>()?.clone())?;
+        let w_list: Bound<'_, PyList> = get_req(dict, "words")?.extract()?;
+        let mut words = Vec::with_capacity(w_list.len());
+        for w in w_list.iter() {
+            words.push(WordDto::from_py(&w.downcast::<PyDict>()?.clone())?);
+        }
+        let bg_list: Bound<'_, PyList> = get_req(dict, "backgrounds")?.extract()?;
+        let mut backgrounds = Vec::with_capacity(bg_list.len());
+        for b in bg_list.iter() {
+            backgrounds.push(BackgroundDto::from_py(&b.downcast::<PyDict>()?.clone())?);
+        }
+        let config =
+            StructureConfig::from_py(&get_req(dict, "config")?.downcast::<PyDict>()?.clone())?;
+        Ok(Self {
+            schema_version: sv,
+            region,
+            words,
+            backgrounds,
+            config,
+        })
+    }
+
+    pub fn to_py<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let d = PyDict::new_bound(py);
+        d.set_item("schema_version", self.schema_version)?;
+        d.set_item("region", self.region.to_py(py)?)?;
+        let wl = PyList::empty_bound(py);
+        for w in &self.words {
+            wl.append(w.to_py(py)?)?;
+        }
+        d.set_item("words", wl)?;
+        let bl = PyList::empty_bound(py);
+        for b in &self.backgrounds {
+            bl.append(b.to_py(py)?)?;
+        }
+        d.set_item("backgrounds", bl)?;
+        d.set_item("config", self.config.to_py(py)?)?;
+        Ok(d)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct GeneralWirelessInput {
+    pub schema_version: i64,
+    pub region: RegionDto,
+    pub atoms: Vec<AtomDto>,
+    pub bands: Vec<ColumnBandDto>,
+    pub config: StructureConfig,
+}
+
+impl GeneralWirelessInput {
+    pub fn from_py(dict: &Bound<'_, PyDict>) -> PyResult<Self> {
+        let sv: i64 = get_req(dict, "schema_version")?.extract()?;
+        check_schema_version(sv)?;
+        let region = RegionDto::from_py(&get_req(dict, "region")?.downcast::<PyDict>()?.clone())?;
+        let a_list: Bound<'_, PyList> = get_req(dict, "atoms")?.extract()?;
+        let mut atoms = Vec::with_capacity(a_list.len());
+        for a in a_list.iter() {
+            atoms.push(AtomDto::from_py(&a.downcast::<PyDict>()?.clone())?);
+        }
+        let b_list: Bound<'_, PyList> = get_req(dict, "bands")?.extract()?;
+        let mut bands = Vec::with_capacity(b_list.len());
+        for b in b_list.iter() {
+            bands.push(ColumnBandDto::from_py(&b.downcast::<PyDict>()?.clone())?);
+        }
+        let config =
+            StructureConfig::from_py(&get_req(dict, "config")?.downcast::<PyDict>()?.clone())?;
+        Ok(Self {
+            schema_version: sv,
+            region,
+            atoms,
+            bands,
+            config,
+        })
+    }
+
+    pub fn to_py<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let d = PyDict::new_bound(py);
+        d.set_item("schema_version", self.schema_version)?;
+        d.set_item("region", self.region.to_py(py)?)?;
+        let al = PyList::empty_bound(py);
+        for a in &self.atoms {
+            al.append(a.to_py(py)?)?;
+        }
+        d.set_item("atoms", al)?;
+        let bl = PyList::empty_bound(py);
+        for b in &self.bands {
+            bl.append(b.to_py(py)?)?;
+        }
+        d.set_item("bands", bl)?;
+        d.set_item("config", self.config.to_py(py)?)?;
+        Ok(d)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct LegacyAlignmentInput {
+    pub schema_version: i64,
+    pub region: RegionDto,
+    pub words: Vec<WordDto>,
+    pub config: StructureConfig,
+}
+
+impl LegacyAlignmentInput {
+    pub fn from_py(dict: &Bound<'_, PyDict>) -> PyResult<Self> {
+        let sv: i64 = get_req(dict, "schema_version")?.extract()?;
+        check_schema_version(sv)?;
+        let region = RegionDto::from_py(&get_req(dict, "region")?.downcast::<PyDict>()?.clone())?;
+        let w_list: Bound<'_, PyList> = get_req(dict, "words")?.extract()?;
+        let mut words = Vec::with_capacity(w_list.len());
+        for w in w_list.iter() {
+            words.push(WordDto::from_py(&w.downcast::<PyDict>()?.clone())?);
+        }
+        let config =
+            StructureConfig::from_py(&get_req(dict, "config")?.downcast::<PyDict>()?.clone())?;
+        Ok(Self {
+            schema_version: sv,
+            region,
+            words,
+            config,
+        })
+    }
+
+    pub fn to_py<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let d = PyDict::new_bound(py);
+        d.set_item("schema_version", self.schema_version)?;
+        d.set_item("region", self.region.to_py(py)?)?;
+        let wl = PyList::empty_bound(py);
+        for w in &self.words {
+            wl.append(w.to_py(py)?)?;
+        }
+        d.set_item("words", wl)?;
+        d.set_item("config", self.config.to_py(py)?)?;
+        Ok(d)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct DiagnosticValueDto {
     pub schema_version: i64,
     pub kind: String,
@@ -1942,6 +2150,22 @@ pub fn roundtrip_dto_py<'py>(
         }
         "wireless_recovery_output" => {
             let dto = WirelessRecoveryOutput::from_py(data)?;
+            dto.to_py(py)
+        }
+        "zebra_input" => {
+            let dto = ZebraInput::from_py(data)?;
+            dto.to_py(py)
+        }
+        "english_grid_input" => {
+            let dto = EnglishGridInput::from_py(data)?;
+            dto.to_py(py)
+        }
+        "general_wireless_input" => {
+            let dto = GeneralWirelessInput::from_py(data)?;
+            dto.to_py(py)
+        }
+        "legacy_alignment_input" => {
+            let dto = LegacyAlignmentInput::from_py(data)?;
             dto.to_py(py)
         }
         other => Err(PyValueError::new_err(format!(

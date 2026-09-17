@@ -2,6 +2,21 @@
 
 ## 2026-09-17
 
+- Sprint 009：迁移英文 Zebra、General Wireless 和 Legacy 纯算法至 Rust (PyO3) 并释放 GIL。
+  - **根因与调用位置**：`src/hexai_pdf_parser/tables/extractors/english_table_extractor.py` 中的 `_group_into_tables`、`_assign_words_to_zebra_rows`、英文列推断与单元格恢复，以及 `src/hexai_pdf_parser/tables/normalizers/table_header_normalizer.py` 中的 `_rebuild_text_aligned_table` 原先在 Python 层面通过反复的几何间距遍历、词列表排序、正则和拓扑跨列比较进行处理，在英文无线与斑马表格上带来解释执行开销。
+  - **设计与修复判定**：
+    - **Rust 内核实现**：在 `rust/english_wireless.rs` 完整实现了 7 个核心算子：`group_backgrounds`、`detect_zebra_rows`、`assign_words_to_zebra_rows`、`infer_english_columns`、`build_english_cells`、`build_general_wireless_cells`、`build_legacy_text_alignment`。密集计算全部通过 `py.allow_threads` 释放 GIL。
+    - **无线表格不变量严格遵守**：
+      - 纯消费规范 DTO（`ZebraInput`, `EnglishGridInput`, `GeneralWirelessInput`, `LegacyAlignmentInput`），隔离中英文处理管线；中文/混合页面绝对禁止调用或回退到 zebra/legacy 路径。
+      - 独立字段保留为独立叶子列，无占位冲突。
+    - **DTO 与导出路由**：在 `rust/types.rs` 新增对应 DTO 并注册到 `roundtrip_dto`；在 `rust/lib.rs` 导出 7 个算子并在 `src/hexai_pdf_parser/rust_adapter.py` 暴露强类型 Python 签名；在 `english_table_extractor.py` 与 `table_header_normalizer.py` 接入 `PDF_RUST_MODE` 路由（生产默认 `python`，支持 `shadow` 和 `rust`）。
+  - **测试与基准测试结果**：
+    - 新增 `tests/test_pdf_fast_english_wireless.py`，8 个单元测试全部通过（`8 passed`）。
+    - `cargo test`: 12 passed, 0 failed.
+    - `cargo fmt --check`: 0 警告。
+    - `git diff --check`: 0 警告。
+    - **基准测试 (english-wireless)**：四路对比（baseline, python, shadow, rust）确认 `equal: true, differences_count: 0`；结构化结果完全一致，无冲突、无遗漏。
+
 - Sprint 008：迁移共享无线表格 Native Recovery 与候选选择算子至 Rust (PyO3) 并释放 GIL。
   - **根因与调用位置**：`src/hexai_pdf_parser/tables/wireless_table_recovery.py` 中的 `table_quality` 评分、候选区域过滤与 0.20 重叠仲裁 `select_candidates()`，以及跨区域批量恢复 `recover_wireless_tables()` 原先在 Python 层面通过反复的几何重叠检测、字典序比较和列表剔除处理，存在循环解释开销；需要与 Rust 结构恢复内核紧密结合，实现一次性端到端批量消费 DTO。
   - **设计与修复判定**：

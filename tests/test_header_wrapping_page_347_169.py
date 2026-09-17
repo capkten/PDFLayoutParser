@@ -16,6 +16,8 @@ def test_page_347_accumulated_deficit_merged():
     pdf_path = Path("src/hexai_pdf_parser/data/en_all_pages/problem/en_all_table_pages_page_347.pdf")
     if not pdf_path.exists():
         pdf_path = Path(r"c:\Users\92410\Desktop\git\hexai_pdf_parser\src\hexai_pdf_parser\data\en_all_pages\problem\en_all_table_pages_page_347.pdf")
+    if not pdf_path.exists():
+        pytest.skip(f"Test PDF not found: {pdf_path}")
     doc = fitz.open(str(pdf_path))
     page = doc[0]
     table_bbox = BBox(x0=30.5, y0=104.7, x1=576.6, y1=213.8)
@@ -43,6 +45,8 @@ def test_page_169_nine_months_ended_merged():
     pdf_path = Path("src/hexai_pdf_parser/data/en_all_pages/problem/en_all_table_pages_page_169.pdf")
     if not pdf_path.exists():
         pdf_path = Path(r"c:\Users\92410\Desktop\git\hexai_pdf_parser\src\hexai_pdf_parser\data\en_all_pages\problem\en_all_table_pages_page_169.pdf")
+    if not pdf_path.exists():
+        pytest.skip(f"Test PDF not found: {pdf_path}")
     doc = fitz.open(str(pdf_path))
     page = doc[0]
     table_bbox = BBox(x0=33.2, y0=317.7, x1=580.8, y1=375.4)

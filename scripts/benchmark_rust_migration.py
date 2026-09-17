@@ -271,6 +271,22 @@ def _worker_execute(
                                 "numeric_tolerance": 2.0,
                             }),
                         })
+                    elif suite == "english-wireless":
+                        roundtrip_dto("zebra_input", {
+                            "schema_version": 1,
+                            "page": p.get("page", {"schema_version": 1, "width": 595.0, "height": 842.0, "rotation": 0}),
+                            "backgrounds": p.get("backgrounds", []),
+                            "words": p.get("words", []),
+                            "region": p.get("region", {"schema_version": 1, "rect": {"schema_version": 1, "x0": 0.0, "y0": 0.0, "x1": 595.0, "y1": 842.0}, "source_order": 0, "allowed": True}),
+                            "config": p.get("config", {
+                                "schema_version": 1,
+                                "line_tolerance": 2.0,
+                                "row_tolerance": 2.0,
+                                "column_tolerance": 2.0,
+                                "span_tolerance": 2.0,
+                                "numeric_tolerance": 2.0,
+                            }),
+                        })
                 t_ffi = max(time.perf_counter() - t_ffi_start, 1e-6)
 
             for p in fixture_pages:
@@ -605,6 +621,128 @@ def _worker_execute(
                                     for cell in cand.get("cells", [])
                                 ],
                             })
+                elif suite == "english-wireless" and ("backgrounds" in p or "words" in p):
+                    words = p.get("words", [])
+                    backgrounds = p.get("backgrounds", [])
+                    region = p.get("region", {
+                        "schema_version": 1,
+                        "rect": {"schema_version": 1, "x0": 0.0, "y0": 0.0, "x1": 595.0, "y1": 842.0},
+                        "source_order": 0,
+                        "allowed": True,
+                    })
+                    config = p.get("config", {
+                        "schema_version": 1,
+                        "line_tolerance": 2.0,
+                        "row_tolerance": 2.0,
+                        "column_tolerance": 2.0,
+                        "span_tolerance": 2.0,
+                        "numeric_tolerance": 2.0,
+                    })
+                    input_dto = {
+                        "schema_version": 1,
+                        "region": region,
+                        "words": words,
+                        "backgrounds": backgrounds,
+                        "config": config,
+                    }
+
+                    if mode in ("shadow", "rust"):
+                        from hexai_pdf_parser import rust_adapter
+
+                        t_alg_start = time.perf_counter()
+                        r_cells = rust_adapter.build_english_cells(input_dto)
+                        t_alg = max(time.perf_counter() - t_alg_start, 1e-6)
+
+                        num_rows = max((c["row"] for c in r_cells), default=-1) + 1
+                        num_cols = max((c["col"] for c in r_cells), default=-1) + 1
+                        r_rect = region["rect"]
+                        tables.append({
+                            "bbox": [r_rect["x0"], r_rect["y0"], r_rect["x1"], r_rect["y1"]],
+                            "rows": num_rows,
+                            "cols": num_cols,
+                            "source": "english_color_based",
+                            "cells": [
+                                {
+                                    "text": c["text"],
+                                    "row_index": c["row"],
+                                    "col_index": c["col"],
+                                    "bbox": [c["rect"]["x0"], c["rect"]["y0"], c["rect"]["x1"], c["rect"]["y1"]],
+                                    "rowspan": c.get("rowspan", 1),
+                                    "colspan": c.get("colspan", 1),
+                                }
+                                for c in r_cells
+                            ],
+                        })
+                    else:
+                        from hexai_pdf_parser import rust_adapter
+
+                        t_alg_start = time.perf_counter()
+                        cols = rust_adapter.infer_english_columns(input_dto)
+                        columns = [(c["x0"], c["x1"]) for c in cols]
+                        num_cols = len(columns)
+
+                        words_by_y = []
+                        for w in sorted(words, key=lambda item: (item["rect"]["y0"] + item["rect"]["y1"]) / 2.0):
+                            cy = (w["rect"]["y0"] + w["rect"]["y1"]) / 2.0
+                            found = False
+                            for r in words_by_y:
+                                if abs(cy - r[0]) <= 4.0:
+                                    r[1].append(w)
+                                    found = True
+                                    break
+                            if not found:
+                                words_by_y.append([cy, [w]])
+
+                        py_cells = []
+                        for row_idx, (_, rwords) in enumerate(words_by_y):
+                            rwords.sort(key=lambda item: item["rect"]["x0"])
+                            phrases = []
+                            for w in rwords:
+                                if not phrases:
+                                    phrases.append([w])
+                                else:
+                                    prev = phrases[-1][-1]
+                                    gap = w["rect"]["x0"] - prev["rect"]["x1"]
+                                    if gap <= 10.0:
+                                        phrases[-1].append(w)
+                                    else:
+                                        phrases.append([w])
+                            col_words = [[] for _ in range(num_cols)]
+                            for phr in phrases:
+                                px_mid = sum((w["rect"]["x0"] + w["rect"]["x1"]) / 2.0 for w in phr) / len(phr)
+                                assigned_col = 0
+                                for ci, col in enumerate(columns):
+                                    if col[0] <= px_mid < col[1]:
+                                        assigned_col = ci
+                                        break
+                                    elif ci == len(columns) - 1 and px_mid >= col[0]:
+                                        assigned_col = ci
+                                col_words[assigned_col].extend(phr)
+                            all_cw = [w for cw in col_words for w in cw]
+                            y0 = min((w["rect"]["y0"] for w in all_cw), default=0.0)
+                            y1 = max((w["rect"]["y1"] for w in all_cw), default=y0 + 15.0)
+                            for col_idx in range(num_cols):
+                                ws = col_words[col_idx]
+                                txt = " ".join(w["text"] for w in ws) if ws else ""
+                                py_cells.append({
+                                    "text": txt,
+                                    "row_index": row_idx,
+                                    "col_index": col_idx,
+                                    "bbox": [columns[col_idx][0], y0, columns[col_idx][1], y1],
+                                    "rowspan": 1,
+                                    "colspan": 1,
+                                })
+                        t_alg = max(time.perf_counter() - t_alg_start, 1e-6)
+
+                        num_rows = len(words_by_y)
+                        r_rect = region["rect"]
+                        tables.append({
+                            "bbox": [r_rect["x0"], r_rect["y0"], r_rect["x1"], r_rect["y1"]],
+                            "rows": num_rows,
+                            "cols": num_cols,
+                            "source": "english_color_based",
+                            "cells": py_cells,
+                        })
                 elif "wireless_native_span" in p:
                     wns = p["wireless_native_span"]
                     spans = wns.get("spans", [])

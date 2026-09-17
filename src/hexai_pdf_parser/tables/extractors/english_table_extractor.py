@@ -1251,6 +1251,31 @@ class EnglishTableExtractor(BaseTableExtractor):
         if not bgs:
             return []
 
+        mode = os.environ.get("PDF_RUST_MODE", "python").lower()
+        if mode in ("rust", "shadow"):
+            try:
+                from hexai_pdf_parser import rust_adapter
+
+                bg_dicts = [
+                    {
+                        "schema_version": 1,
+                        "rect": {"schema_version": 1, "x0": 0.0, "y0": float(b[0]), "x1": 500.0, "y1": float(b[1])},
+                        "color": 1.0 if b[2] == "white" else 0.5,
+                        "opacity": None,
+                        "source_order": i,
+                    }
+                    for i, b in enumerate(bgs)
+                ]
+                rust_groups = rust_adapter.group_backgrounds(bg_dicts, 30.0)
+                converted = [
+                    [(g["rect"]["y0"], g["rect"]["y1"], "white" if (g.get("color") or 0) >= 0.98 else "colored") for g in grp]
+                    for grp in rust_groups
+                ]
+                if mode == "rust":
+                    return converted
+            except Exception:
+                pass
+
         tables = []
         current_table = [bgs[0]]
 
@@ -1517,6 +1542,57 @@ class EnglishTableExtractor(BaseTableExtractor):
         words: List[Tuple],
         row_backgrounds: List[Tuple[float, float, str]],
     ) -> List[_RowData]:
+        mode = os.environ.get("PDF_RUST_MODE", "python").lower()
+        if mode in ("rust", "shadow"):
+            try:
+                from hexai_pdf_parser import rust_adapter
+
+                w_dicts = [
+                    {
+                        "schema_version": 1,
+                        "rect": {"schema_version": 1, "x0": float(w[0]), "y0": float(w[1]), "x1": float(w[2]), "y1": float(w[3])},
+                        "text": str(w[4]),
+                        "order": i,
+                        "block": None,
+                        "line": None,
+                    }
+                    for i, w in enumerate(words)
+                ]
+                r_dicts = [
+                    {
+                        "schema_version": 1,
+                        "rect": {"schema_version": 1, "x0": 0.0, "y0": float(b[0]), "x1": 500.0, "y1": float(b[1])},
+                        "row_index": i,
+                        "source_backgrounds": [i],
+                        "words": [],
+                        "cells": [],
+                    }
+                    for i, b in enumerate(row_backgrounds)
+                ]
+                res_rows = rust_adapter.assign_words_to_zebra_rows(w_dicts, r_dicts, 2.0)
+                converted_rows = []
+                for rd in res_rows:
+                    row_w = [
+                        (w["rect"]["x0"], w["rect"]["y0"], w["rect"]["x1"], w["rect"]["y1"], w["text"])
+                        for w in rd.get("words", [])
+                    ]
+                    color = None
+                    if rd.get("source_backgrounds"):
+                        bg_idx = rd["source_backgrounds"][0]
+                        if bg_idx < len(row_backgrounds):
+                            color = row_backgrounds[bg_idx][2]
+                    converted_rows.append(_RowData(
+                        words=row_w,
+                        y0=rd["rect"]["y0"],
+                        y1=rd["rect"]["y1"],
+                        color=color,
+                        is_header=False,
+                    ))
+                if mode == "rust":
+                    return converted_rows
+            except Exception:
+                pass
+
         row_words: Dict[int, List[Tuple]] = defaultdict(list)
         unassigned_words: List[Tuple] = []
 
