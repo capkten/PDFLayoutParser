@@ -11,6 +11,9 @@ from hexai_pdf_parser.tables.wireless_structure.text_runs import build_text_runs
 
 
 PAGE_437_FIXTURE = Path(__file__).parent / "fixtures" / "page_437_wireless.pdf"
+GLOSSARY_PDF = Path(
+    r"C:\Users\23662\Downloads\needs_human_report_2026-09-17\needs_human_report_2026-09-17\pdfs\glossary_ec.pdf"
+)
 
 
 def test_recover_cells_from_region_converts_new_pipeline_to_project_cells(monkeypatch):
@@ -67,6 +70,38 @@ def test_page_437_fixture_bottom_table_preserves_first_column_and_record_rows():
     )
     assert any("1,637,322.45" in cell.text for cell in first_record)
     assert any("196,478.69" in cell.text for cell in first_record)
+
+
+@pytest.mark.skipif(not GLOSSARY_PDF.exists(), reason="glossary PDF is unavailable")
+def test_glossary_page_4_merges_see_references_without_pseudo_columns():
+    document = fitz.open(str(GLOSSARY_PDF))
+    try:
+        rows, columns, cells = recover_cells_from_region(
+            document[3],
+            BBox(51.7, 45.4, 598.0, 707.7),
+        )
+    finally:
+        document.close()
+
+    assert (rows, columns, len(cells)) == (26, 2, 52)
+    assert any(
+        cell.row_index == 0
+        and cell.col_index == 1
+        and cell.text == "see automated screen trading system"
+        for cell in cells
+    )
+    assert any(
+        cell.row_index == 2
+        and cell.col_index == 1
+        and cell.text == "see Account Transfer Instruction"
+        for cell in cells
+    )
+    assert any(
+        cell.row_index == 5
+        and cell.col_index == 1
+        and cell.text == "see assets under management"
+        for cell in cells
+    )
 
 
 def test_table_header_gap_above_normal_gap_is_not_joined():
