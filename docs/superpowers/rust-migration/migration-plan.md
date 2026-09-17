@@ -44,4 +44,4 @@ superseded by docs/superpowers/plans/2026-09-16-rust-extreme-migration.md
 - [x] 设计与行为基线经用户确认。
 - [x] 创建有线、共享 native-span、英文专属三个阶段计划。
 - [x] 用户确认极限迁移边界、完整 benchmark 方案和 Superpowers 执行流程。
-- [ ] 按极限迁移执行计划开始 Sprint 000，随后逐 Sprint 通过独立 Evaluator。
+- [x] 按极限迁移执行计划完成 Sprint 000~012，全部通过测试、基准对比与最终评估。

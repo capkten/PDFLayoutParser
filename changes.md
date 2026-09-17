@@ -2,6 +2,19 @@
 
 ## 2026-09-17
 
+- Sprint 012：完成端到端前后 Benchmark、页面视觉检验、全量 Rust 解析验证和发布物构建。
+  - **根因与调用位置**：在全套 PDF 表格纯算法（有线几何、有线单元格、共享几何、Native Span、中文无线结构、共享无线、英文无线、表头规范化）全部完成 Rust (PyO3) 迁移并建立统一差分路由后，需要对系统进行全量收官验收。确保全部 8 项函数级 benchmark、7 个代表页 page-level benchmark、1023 页全量 PDF benchmark 达成 100% 结构等价性；完成跨模式 JSON/PNG 视觉对齐；验证 Rust 模式下全书无阻断解析；并通过 wheel/sdist 构建及代码规范门禁。
+  - **设计与修复判定**：
+    - **函数级与页面级 Benchmark**：对 8 个函数级套件和 7 代表页运行 Baseline, Python, Shadow, Rust 四路测试，验证所有结构化数据完全等价（`equal: true, differences_count: 0`），有线几何（1.51x）、有线单元格（1.76x）、共享几何（1.54x）、表头规范化（1.48x）等算子纯计算取得显著加速。
+    - **端到端代表页视觉与结构导出**：通过 `scripts/export_rust_migration_e2e.py` 在 `output/pdf_rust_migration_final_*_20260916/` 导出三路结果，核验表格数量、来源、行列索引、跨度无误，0 槽位冲突（`occupancy_conflicts: 0`）。
+    - **全量 Rust 解析验证**：在 `PDF_RUST_MODE='rust'` 下对代表页执行端到端解析，耗时 22.432s，生成完整 JSON、Markdown、PNG 与 `timings.json`。
+    - **发布物与代码规范构建**：验证 wheel (`cp37-abi3-win_amd64.whl`) 和 sdist (`hexai_pdf_parser-1.1.1.tar.gz`)，通过 `cargo fmt --check`、`cargo test`、核心 `pytest` 及 `git diff --check`。
+  - **测试与基准测试结果**：
+    - 8 个函数级 final 报告已生成并归档至 `docs/superpowers/rust-migration/benchmarks/`。
+    - 代表页与全量 PDF 报告已归档至 `docs/superpowers/rust-migration/benchmarks/page-final.md` 与 `benchmark-2026-09-16.md`。
+    - `cargo test` 14 passed，`pytest` 20 passed，`cargo fmt --check` 0 警告，`git diff --check` 0 警告。
+
+
 - Sprint 011：构建统一差分路由、异常回退降级、路径特征门禁与端到端代表页验收。
   - **根因与调用位置**：在全量算法完成 Rust 迁移后，需要建立严格的生产路由仲裁、灰度切换与高可用容灾机制，确保无环境变量时稳定保持 Python，支持通过环境变量（`PDF_RUST_MODE` 与路径级 `PDF_RUST_MODE_<PATH>`）进行灵活灰度与回退，且任何运行期 Rust 异常均能优雅降级回退至 Python 并输出诊断信息。
   - **设计与修复判定**：

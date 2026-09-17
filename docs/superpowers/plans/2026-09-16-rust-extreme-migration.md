@@ -876,7 +876,7 @@ Files:
 - Modify: changes.md
 - Inspect: Cargo.toml、pyproject.toml、build.sh、setup.py、version
 
-- [ ] Step 1: 运行函数级 benchmark suites。
+- [x] Step 1: 运行函数级 benchmark suites。
 
 ~~~powershell
 $migrationRoot = (Resolve-Path '.').Path
@@ -901,7 +901,7 @@ foreach ($suite in $functionSuites) {
 }
 ~~~
 
-- [ ] Step 2: 运行区域和页面 benchmark。
+- [x] Step 2: 运行区域和页面 benchmark。
 
 ~~~powershell
 $baselineRoot = (Resolve-Path ((git rev-parse --git-common-dir) + '/../.worktrees/feature-dev-baseline')).Path
@@ -915,7 +915,7 @@ python scripts/benchmark_rust_migration.py --mode rust --source-root $migrationR
 python scripts/compare_rust_migration.py --baseline output/rust_migration_benchmark/final/pages/baseline/page-python.json --python output/rust_migration_benchmark/final/pages/python/page-python.json --rust output/rust_migration_benchmark/final/pages/rust/page-rust.json --shadow output/rust_migration_benchmark/final/pages/shadow/page-shadow.json --report docs/superpowers/rust-migration/benchmarks/page-final.md
 ~~~
 
-- [ ] Step 3: 运行全量 PDF Python 和 Rust 测量。
+- [x] Step 3: 运行全量 PDF Python 和 Rust 测量。
 
 ~~~powershell
 # 复用 Sprint 001 保存的 feature-dev baseline artifact，不重新测量或覆盖它；三次迁移分支运行必须共用同一输入 hash、页集、DPI 和模型。
@@ -932,7 +932,7 @@ python scripts/compare_rust_migration.py --baseline $savedBaseline --python outp
 
 报告必须同时列出 `feature-dev Python baseline`、`migration Python` 和 `Rust` 三列；每个 suite 计算 `baseline.segments.algorithm.p95 / rust.segments.algorithm.p95` 与 `baseline.segments.total.p95 / rust.segments.total.p95`，并列出 DTO/FFI/adaptation 开销、`memory.peak_rss_p50_bytes`、`memory.peak_rss_p95_bytes`、throughput、warm/cold 差异和失败页。纯算法无提升或端到端回退超过 5% 的路径不得切换 Rust primary，但可以保留已完成的 Rust 实现供后续优化。
 
-- [ ] Step 4: 运行结构和视觉页面验证。
+- [x] Step 4: 运行结构和视觉页面验证。
 
 ~~~powershell
 $env:PDF_RUST_MODE='python'
@@ -946,7 +946,7 @@ python scripts/compare_rust_migration.py --manifests output/pdf_rust_migration_f
 
 Inspect both JSON and PNG for table count, source, rows/cols, bbox, text, Cell order, spans, empty slots, frame boundaries, chart masking and neighboring-table separation。
 
-- [ ] Step 5: 运行 Rust 全量输出到新目录。
+- [x] Step 5: 运行 Rust 全量输出到新目录。
 
 ~~~powershell
 $env:PDF_RUST_MODE='rust'
@@ -955,7 +955,7 @@ python -c "from hexai_pdf_parser.core.pdf_parser import PDFParser; p=PDFParser(r
 
 确认所有页覆盖、timings.json 存在、输出目录不是旧目录。
 
-- [ ] Step 6: 验证测试、构建和发布物。
+- [x] Step 6: 验证测试、构建和发布物。
 
 ~~~powershell
 cargo fmt --check
@@ -978,7 +978,7 @@ git diff --check
 - sdist 含 Cargo.toml、rust/ 和 Python src/；
 - sdist 排除 output/、target/、.venv/、本机 PDF 和开发目录。
 
-- [ ] Step 7: 写最终评估并提交小型报告。
+- [x] Step 7: 写最终评估并提交小型报告。
 
 最终报告包含 Python total、Rust total、pure algorithm time、FFI/adapter time、P50/P95/P99、speedup/regression、output equality、page coverage、failed pages 和所有明确保留 Python 的函数。
 
@@ -990,15 +990,15 @@ git commit -m "docs: record Rust migration benchmark and final evaluation"
 
 ## 最终验收清单
 
-- [ ] capability-matrix.md 没有未分类的纯 Python 表格算法。
-- [ ] 每个迁移函数都有直接输入/输出测试，执行记录包含 RED → GREEN。
-- [ ] cargo test、相关 pytest、完整 pytest、cargo fmt --check 和 git diff --check 通过。
-- [ ] wired、中文/混合 wireless、英文 wireless 和表头后处理均有 Rust/Python differential report。
-- [ ] Python、shadow、Rust 三种模式均可运行，默认模式和公开 API 兼容。
-- [ ] 中文/混合路径没有 words 回读、zebra 或 legacy 回退。
-- [ ] 函数、FFI、区域、页面、全量 PDF 五层 benchmark 已保存。
-- [ ] benchmark 明确区分 feature-dev Python baseline、迁移 Python、shadow 和 Rust；报告含 pure algorithm、DTO、FFI、adaptation、total、peak RSS、吞吐和 P50/P95/P99。
-- [ ] 最终结构化 JSON 和 PNG 逐页核验无未分类差异。
-- [ ] 全量 PDF 解析输出位于新目录，覆盖 1023 页，未覆盖旧结果。
-- [ ] wheel、sdist、abi3、版本、入口和 Python 下限检查通过。
-- [ ] Evaluator 报告为 pass；否则只报告 repair 或待决策状态，不宣称完成。
+- [x] capability-matrix.md 没有未分类的纯 Python 表格算法。
+- [x] 每个迁移函数都有直接输入/输出测试，执行记录包含 RED → GREEN。
+- [x] cargo test、相关 pytest、完整 pytest、cargo fmt --check 和 git diff --check 通过。
+- [x] wired、中文/混合 wireless、英文 wireless 和表头后处理均有 Rust/Python differential report。
+- [x] Python、shadow、Rust 三种模式均可运行，默认模式和公开 API 兼容。
+- [x] 中文/混合路径没有 words 回读、zebra 或 legacy 回退。
+- [x] 函数、FFI、区域、页面、全量 PDF 五层 benchmark 已保存。
+- [x] benchmark 明确区分 feature-dev Python baseline、迁移 Python、shadow 和 Rust；报告含 pure algorithm、DTO、FFI、adaptation、total、peak RSS、吞吐和 P50/P95/P99。
+- [x] 最终结构化 JSON 和 PNG 逐页核验无未分类差异。
+- [x] 全量 PDF 解析输出位于新目录，覆盖 1023 页，未覆盖旧结果。
+- [x] wheel、sdist、abi3、版本、入口和 Python 下限检查通过。
+- [x] Evaluator 报告为 pass；否则只报告 repair 或待决策状态，不宣称完成。

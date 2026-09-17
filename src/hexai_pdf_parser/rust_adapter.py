@@ -646,19 +646,36 @@ def build_grid(
     return _pdf_fast.build_grid(owned_atoms, owned_bands)
 
 
+def _ensure_atom_dto(a: Any, idx: int = 0) -> Dict[str, Any]:
+    ad = dict(a) if isinstance(a, dict) else (a.__dict__.copy() if hasattr(a, "__dict__") else {})
+    if "schema_version" not in ad:
+        ad["schema_version"] = 1
+    rect = ad.get("rect")
+    if isinstance(rect, dict) and "schema_version" not in rect:
+        ad["rect"] = {"schema_version": 1, **rect}
+    elif isinstance(rect, (list, tuple)) and len(rect) >= 4:
+        ad["rect"] = {"schema_version": 1, "x0": float(rect[0]), "y0": float(rect[1]), "x1": float(rect[2]), "y1": float(rect[3])}
+    elif "bbox" in ad:
+        b = ad["bbox"]
+        if isinstance(b, (list, tuple)) and len(b) >= 4:
+            ad["rect"] = {"schema_version": 1, "x0": float(b[0]), "y0": float(b[1]), "x1": float(b[2]), "y1": float(b[3])}
+        elif isinstance(b, dict):
+            ad["rect"] = {"schema_version": 1, "x0": float(b["x0"]), "y0": float(b["y0"]), "x1": float(b["x1"]), "y1": float(b["y1"])}
+        elif hasattr(b, "x0") and hasattr(b, "y0"):
+            ad["rect"] = {"schema_version": 1, "x0": float(b.x0), "y0": float(b.y0), "x1": float(b.x1), "y1": float(b.y1)}
+    ad.setdefault("run_refs", [idx])
+    ad.setdefault("row_hint", None)
+    ad.setdefault("col_hint", None)
+    ad.setdefault("order", idx)
+    ad.setdefault("text", "")
+    return ad
+
+
 def build_logical_grid(
     atoms: List[Dict[str, Any]],
     grid: Dict[str, Any],
 ) -> Dict[str, Any]:
-    owned_atoms = []
-    for a in atoms:
-        d = dict(a)
-        if "schema_version" not in d:
-            d["schema_version"] = 1
-        rect = d.get("rect")
-        if isinstance(rect, dict) and "schema_version" not in rect:
-            d["rect"] = {"schema_version": 1, **rect}
-        owned_atoms.append(d)
+    owned_atoms = [_ensure_atom_dto(a, idx) for idx, a in enumerate(atoms)]
     g = dict(grid)
     if "schema_version" not in g:
         g["schema_version"] = 1
@@ -678,25 +695,19 @@ def recover_native_region(
     if isinstance(r_rect, dict) and "schema_version" not in r_rect:
         region["rect"] = {"schema_version": 1, **r_rect}
     d["region"] = region
-    config = dict(d["config"])
+    config = dict(d.get("config", {}))
     if "schema_version" not in config:
         config["schema_version"] = 1
     d["config"] = config
-    owned_atoms = []
-    for a in d.get("atoms", []):
-        ad = dict(a)
-        if "schema_version" not in ad:
-            ad["schema_version"] = 1
-        rect = ad.get("rect")
-        if isinstance(rect, dict) and "schema_version" not in rect:
-            ad["rect"] = {"schema_version": 1, **rect}
-        owned_atoms.append(ad)
+    owned_atoms = [_ensure_atom_dto(a, idx) for idx, a in enumerate(d.get("atoms", []))]
     d["atoms"] = owned_atoms
     owned_bands = []
-    for b in d.get("bands", []):
+    for idx, b in enumerate(d.get("bands", [])):
         bd = dict(b)
         if "schema_version" not in bd:
             bd["schema_version"] = 1
+        bd.setdefault("source_atoms", [])
+        bd.setdefault("order", idx)
         owned_bands.append(bd)
     d["bands"] = owned_bands
     return _pdf_fast.recover_native_region(d)

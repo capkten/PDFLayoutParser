@@ -219,6 +219,7 @@ def _worker_execute(
     source_root: Optional[str],
     suite: str = "",
 ) -> None:
+    os.environ["PDF_RUST_MODE"] = mode
     if source_root:
         src_path = Path(source_root) / "src"
         if src_path.exists():

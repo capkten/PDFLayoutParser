@@ -427,7 +427,7 @@ def _row_cluster(strips: Sequence[TextStrip]) -> List[List[TextStrip]]:
             }
             for idx, strip in enumerate(strips)
         ]
-        rust_clusters = cluster_rows(items_dto, tolerance=tolerance)
+        rust_clusters = rust_adapter.cluster_rows(items_dto, tolerance=tolerance)
         rust_rows = [
             [strips[item_idx] for item_idx in c["item_indices"]]
             for c in rust_clusters
@@ -1046,109 +1046,7 @@ def recover_wireless_tables(
 ) -> WirelessRecovery:
     """Recover borderless tables from a native PDF page with PDF_RUST_MODE support."""
     mode = os.environ.get("PDF_RUST_MODE", "python").lower()
-    if mode == "rust":
-        try:
-            spans = collect_native_spans(
-                page,
-                excluded_regions=excluded_regions,
-                allowed_regions=allowed_regions,
-            )
-            page_dto = {
-                "schema_version": 1,
-                "width": float(page.rect.width),
-                "height": float(page.rect.height),
-                "rotation": int(getattr(page, "rotation", 0)),
-            }
-            spans_dto = [
-                {
-                    "schema_version": 1,
-                    "text": s.text,
-                    "rect": {"schema_version": 1, "x0": s.bbox.x0, "y0": s.bbox.y0, "x1": s.bbox.x1, "y1": s.bbox.y1},
-                    "font": s.font,
-                    "size": s.size,
-                    "flags": 0,
-                    "order": s.order,
-                    "characters": [
-                        {
-                            "schema_version": 1,
-                            "text": ch[0],
-                            "rect": {"schema_version": 1, "x0": ch[1].x0, "y0": ch[1].y0, "x1": ch[1].x1, "y1": ch[1].y1},
-                            "order": idx,
-                        }
-                        for idx, ch in enumerate(s.characters)
-                    ],
-                    "source_position": {
-                        "schema_version": 1,
-                        "block": s.source_position[0] if s.source_position else 0,
-                        "line": s.source_position[1] if s.source_position else 0,
-                    },
-                    "block": s.source_position[0] if s.source_position else 0,
-                    "line": s.source_position[1] if s.source_position else 0,
-                }
-                for s in spans
-            ]
-            regions_dto = [
-                {
-                    "schema_version": 1,
-                    "rect": {"schema_version": 1, "x0": r.x0, "y0": r.y0, "x1": r.x1, "y1": r.y1},
-                    "source_order": idx,
-                    "allowed": True,
-                }
-                for idx, r in enumerate(allowed_regions or [])
-            ] + [
-                {
-                    "schema_version": 1,
-                    "rect": {"schema_version": 1, "x0": r.x0, "y0": r.y0, "x1": r.x1, "y1": r.y1},
-                    "source_order": idx,
-                    "allowed": False,
-                }
-                for idx, r in enumerate(excluded_regions or [])
-            ]
-            input_dto = {
-                "schema_version": 1,
-                "page": page_dto,
-                "spans": spans_dto,
-                "regions": regions_dto,
-                "config": {
-                    "schema_version": 1,
-                    "line_tolerance": 2.0,
-                    "row_tolerance": 2.0,
-                    "column_tolerance": 2.0,
-                    "span_tolerance": 2.0,
-                    "numeric_tolerance": 2.0,
-                },
-            }
-            output = rust_adapter.recover_wireless_tables(input_dto)
-            cands = output.get("candidates", [])
-            converted_tables = []
-            for c in cands:
-                r = c["rect"]
-                t_bbox = BBox(r["x0"], r["y0"], r["x1"], r["y1"])
-                t_cells = [
-                    Cell(
-                        text=str(cell.get("text", "")).strip(),
-                        row_index=int(cell["row"]),
-                        col_index=int(cell["col"]),
-                        rowspan=max(1, int(cell.get("rowspan", 1))),
-                        colspan=max(1, int(cell.get("colspan", 1))),
-                        bbox=BBox(cell["rect"]["x0"], cell["rect"]["y0"], cell["rect"]["x1"], cell["rect"]["y1"]),
-                    )
-                    for cell in c.get("cells", [])
-                ]
-                converted_tables.append(
-                    Table(
-                        bbox=t_bbox,
-                        rows=int(c["rows"]),
-                        cols=int(c["cols"]),
-                        cells=t_cells,
-                        confidence=float(c.get("confidence") or 0.9),
-                        source=str(c.get("source", "wireless_span_recovery")),
-                    )
-                )
-            return WirelessRecovery(tables=converted_tables, diagnostics={"regions": []})
-        except Exception:
-            return _recover_wireless_tables_python(page, excluded_regions, allowed_regions)
-    elif mode == "shadow":
+    if mode in ("rust", "shadow"):
         py_res = _recover_wireless_tables_python(page, excluded_regions, allowed_regions)
         try:
             spans = collect_native_spans(
