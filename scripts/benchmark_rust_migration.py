@@ -186,6 +186,7 @@ def _run_single_worker(
     pages: Sequence[int],
     warmups: int,
     source_root: Optional[str],
+    suite: str = "",
 ) -> Dict[str, Any]:
     cmd = [
         sys.executable,
@@ -196,6 +197,8 @@ def _run_single_worker(
         f"--pages={','.join(str(p) for p in pages)}",
         "--warmups", str(warmups),
     ]
+    if suite:
+        cmd.extend(["--suite", suite])
     if source_root:
         cmd.extend(["--source-root", source_root])
 
@@ -214,6 +217,7 @@ def _worker_execute(
     pages: Sequence[int],
     warmups: int,
     source_root: Optional[str],
+    suite: str = "",
 ) -> None:
     if source_root:
         src_path = Path(source_root) / "src"
@@ -251,6 +255,22 @@ def _worker_execute(
                         roundtrip_dto("table_candidate", t)
                     for s in p.get("spans", []):
                         roundtrip_dto("native_span", s)
+                    if suite == "shared-wireless" and "wireless_native_span" in p:
+                        wns = p["wireless_native_span"]
+                        roundtrip_dto("wireless_recovery_input", {
+                            "schema_version": 1,
+                            "page": p.get("page", {"schema_version": 1, "width": 595.0, "height": 842.0, "rotation": 0}),
+                            "spans": wns.get("spans", []),
+                            "regions": [{"schema_version": 1, "rect": wns.get("region", {}).get("rect", {"schema_version": 1, "x0": 0.0, "y0": 0.0, "x1": 595.0, "y1": 842.0}), "source_order": 0, "allowed": True}],
+                            "config": wns.get("config", {
+                                "schema_version": 1,
+                                "line_tolerance": 2.0,
+                                "row_tolerance": 2.0,
+                                "column_tolerance": 2.0,
+                                "span_tolerance": 2.0,
+                                "numeric_tolerance": 2.0,
+                            }),
+                        })
                 t_ffi = max(time.perf_counter() - t_ffi_start, 1e-6)
 
             for p in fixture_pages:
@@ -389,6 +409,201 @@ def _worker_execute(
                                 "cols": t["cols"],
                                 "source": t["source"],
                                 "cells": [],
+                            })
+                elif suite == "shared-wireless" and "wireless_native_span" in p:
+                    wns = p["wireless_native_span"]
+                    spans = wns.get("spans", [])
+                    region = wns.get("region", {})
+                    config = wns.get("config", {})
+
+                    if mode in ("shadow", "rust"):
+                        from hexai_pdf_parser import rust_adapter
+
+                        input_dto = {
+                            "schema_version": 1,
+                            "page": p.get("page", {"schema_version": 1, "width": 595.0, "height": 842.0, "rotation": 0}),
+                            "spans": spans,
+                            "regions": [
+                                {
+                                    "schema_version": 1,
+                                    "rect": region.get("rect", {"schema_version": 1, "x0": 0.0, "y0": 0.0, "x1": 595.0, "y1": 842.0}),
+                                    "source_order": 0,
+                                    "allowed": True,
+                                }
+                            ] if region else [],
+                            "config": config or {
+                                "schema_version": 1,
+                                "line_tolerance": 2.0,
+                                "row_tolerance": 2.0,
+                                "column_tolerance": 2.0,
+                                "span_tolerance": 2.0,
+                                "numeric_tolerance": 2.0,
+                            },
+                        }
+                        t_alg_start = time.perf_counter()
+                        out = rust_adapter.recover_wireless_tables(input_dto)
+                        t_alg = max(time.perf_counter() - t_alg_start, 1e-6)
+
+                        for cand in out.get("candidates", []):
+                            r = cand["rect"]
+                            tables.append({
+                                "bbox": [r["x0"], r["y0"], r["x1"], r["y1"]],
+                                "rows": cand["rows"],
+                                "cols": cand["cols"],
+                                "source": cand["source"],
+                                "confidence": cand.get("confidence"),
+                                "cells": [
+                                    {
+                                        "text": cell["text"],
+                                        "row_index": cell["row"],
+                                        "col_index": cell["col"],
+                                        "bbox": [cell["rect"]["x0"], cell["rect"]["y0"], cell["rect"]["x1"], cell["rect"]["y1"]],
+                                        "rowspan": cell.get("rowspan", 1),
+                                        "colspan": cell.get("colspan", 1),
+                                    }
+                                    for cell in cand.get("cells", [])
+                                ],
+                            })
+                    else:
+                        t_alg_start = time.perf_counter()
+                        reg_rect = region.get("rect", {"schema_version": 1, "x0": 0.0, "y0": 0.0, "x1": 595.0, "y1": 842.0})
+                        reg_x0, reg_y0, reg_x1, reg_y1 = reg_rect["x0"], reg_rect["y0"], reg_rect["x1"], reg_rect["y1"]
+                        reg_w = reg_x1 - reg_x0
+                        reg_atoms = []
+                        for s in spans:
+                            cx = (s["rect"]["x0"] + s["rect"]["x1"]) / 2.0
+                            cy = (s["rect"]["y0"] + s["rect"]["y1"]) / 2.0
+                            if reg_x0 <= cx <= reg_x1 and reg_y0 <= cy <= reg_y1:
+                                reg_atoms.append({
+                                    "schema_version": 1,
+                                    "text": s["text"],
+                                    "rect": s["rect"],
+                                    "run_refs": [s["order"]],
+                                    "row_hint": None,
+                                    "col_hint": None,
+                                    "order": s["order"],
+                                })
+                        cands = []
+                        if len(reg_atoms) >= 4:
+                            intervals = [(a["rect"]["x0"], a["rect"]["x1"]) for a in reg_atoms]
+                            intervals.sort(key=lambda x: x[0])
+                            clusters = []
+                            for intv in intervals:
+                                if not clusters:
+                                    clusters.append([intv[0], intv[1]])
+                                else:
+                                    prev = clusters[-1]
+                                    if intv[0] <= prev[1]:
+                                        prev[1] = max(prev[1], intv[1])
+                                    else:
+                                        clusters.append([intv[0], intv[1]])
+                            bands = [c for c in clusters if (c[1] - c[0]) < reg_w * 0.70]
+                            if len(bands) >= 2:
+                                sorted_atoms = sorted(reg_atoms, key=lambda a: (a["rect"]["y0"] + a["rect"]["y1"]) / 2.0)
+                                rows = []
+                                row_centers = []
+                                for a in sorted_atoms:
+                                    cy = (a["rect"]["y0"] + a["rect"]["y1"]) / 2.0
+                                    if row_centers and abs(cy - row_centers[-1]) <= 3.5:
+                                        rows[-1].append(a)
+                                        row_centers[-1] = sum((x["rect"]["y0"] + x["rect"]["y1"]) / 2.0 for x in rows[-1]) / len(rows[-1])
+                                    else:
+                                        row_centers.append(cy)
+                                        rows.append([a])
+                                if len(rows) >= 2:
+                                    num_rows = len(rows)
+                                    num_cols = len(bands)
+                                    phys_cells = []
+                                    for r_idx, r_atoms in enumerate(rows):
+                                        for a in r_atoms:
+                                            best_col = 0
+                                            max_ov = -1.0
+                                            for c_idx, b in enumerate(bands):
+                                                ov = max(0.0, min(a["rect"]["x1"], b[1]) - max(a["rect"]["x0"], b[0]))
+                                                if ov > max_ov:
+                                                    max_ov = ov
+                                                    best_col = c_idx
+                                            phys_cells.append({
+                                                "text": a["text"],
+                                                "row": r_idx,
+                                                "col": best_col,
+                                                "rect": a["rect"],
+                                            })
+                                    cells = []
+                                    for pc in phys_cells:
+                                        cells.append({
+                                            "schema_version": 1,
+                                            "text": pc["text"],
+                                            "row": pc["row"],
+                                            "col": pc["col"],
+                                            "rect": pc["rect"],
+                                            "rowspan": 1,
+                                            "colspan": 1,
+                                        })
+                                    x0 = min(b[0] for b in bands)
+                                    x1 = max(b[1] for b in bands)
+                                    y0 = min(r[0]["rect"]["y0"] for r in rows)
+                                    y1 = max(r[-1]["rect"]["y1"] for r in rows)
+                                    cands.append({
+                                        "schema_version": 1,
+                                        "rect": {"schema_version": 1, "x0": x0, "y0": y0, "x1": x1, "y1": y1},
+                                        "source": "wireless_span_recovery",
+                                        "confidence": 0.90,
+                                        "rows": num_rows,
+                                        "cols": num_cols,
+                                        "cells": cells,
+                                    })
+
+                        def _py_table_quality(c):
+                            conf = c.get("confidence") or 0.5
+                            pop = sum(1 for cell in c.get("cells", []) if str(cell.get("text", "")).strip())
+                            sz = c["rows"] * c["cols"]
+                            return conf * 1_000_000.0 + pop * 1000.0 + sz
+
+                        accepted = []
+                        for cand in cands:
+                            r = cand["rect"]
+                            a1 = (r["x1"] - r["x0"]) * (r["y1"] - r["y0"])
+                            overlapping = []
+                            for idx, old in enumerate(accepted):
+                                o_r = old["rect"]
+                                w = max(0.0, min(r["x1"], o_r["x1"]) - max(r["x0"], o_r["x0"]))
+                                h = max(0.0, min(r["y1"], o_r["y1"]) - max(r["y0"], o_r["y0"]))
+                                if w > 0.0 and h > 0.0:
+                                    ov = w * h
+                                    a2 = (o_r["x1"] - o_r["x0"]) * (o_r["y1"] - o_r["y0"])
+                                    if ov / max(1.0, min(a1, a2)) >= 0.20:
+                                        overlapping.append(idx)
+                            cand_q = _py_table_quality(cand)
+                            if overlapping:
+                                all_worse = all(cand_q > _py_table_quality(accepted[idx]) for idx in overlapping)
+                                if all_worse:
+                                    for idx in sorted(overlapping, reverse=True):
+                                        accepted.pop(idx)
+                                    accepted.append(cand)
+                            else:
+                                accepted.append(cand)
+
+                        t_alg = max(time.perf_counter() - t_alg_start, 1e-6)
+                        for cand in accepted:
+                            r = cand["rect"]
+                            tables.append({
+                                "bbox": [r["x0"], r["y0"], r["x1"], r["y1"]],
+                                "rows": cand["rows"],
+                                "cols": cand["cols"],
+                                "source": cand["source"],
+                                "confidence": cand.get("confidence"),
+                                "cells": [
+                                    {
+                                        "text": cell["text"],
+                                        "row_index": cell["row"],
+                                        "col_index": cell["col"],
+                                        "bbox": [cell["rect"]["x0"], cell["rect"]["y0"], cell["rect"]["x1"], cell["rect"]["y1"]],
+                                        "rowspan": cell.get("rowspan", 1),
+                                        "colspan": cell.get("colspan", 1),
+                                    }
+                                    for cell in cand.get("cells", [])
+                                ],
                             })
                 elif "wireless_native_span" in p:
                     wns = p["wireless_native_span"]
@@ -974,7 +1189,7 @@ def run_suite(
                 },
             }
         else:
-            w_res = _run_single_worker(resolved_mode, input_path, pages, warmups, source_root)
+            w_res = _run_single_worker(resolved_mode, input_path, pages, warmups, source_root, suite=suite)
 
         worker_pids.append(w_res["pid"])
         peak_rss_samples.append(w_res["peak_rss"])
@@ -1050,6 +1265,7 @@ def main():
         worker_parser.add_argument("--pages", default="")
         worker_parser.add_argument("--warmups", type=int, default=0)
         worker_parser.add_argument("--source-root", default=None)
+        worker_parser.add_argument("--suite", default="")
         w_args = worker_parser.parse_args()
         pages = [int(p) for p in w_args.pages.split(",") if p.strip()]
         _worker_execute(
@@ -1058,6 +1274,7 @@ def main():
             pages,
             w_args.warmups,
             w_args.source_root,
+            w_args.suite,
         )
         return
 

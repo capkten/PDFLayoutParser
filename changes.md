@@ -2,6 +2,22 @@
 
 ## 2026-09-17
 
+- Sprint 008：迁移共享无线表格 Native Recovery 与候选选择算子至 Rust (PyO3) 并释放 GIL。
+  - **根因与调用位置**：`src/hexai_pdf_parser/tables/wireless_table_recovery.py` 中的 `table_quality` 评分、候选区域过滤与 0.20 重叠仲裁 `select_candidates()`，以及跨区域批量恢复 `recover_wireless_tables()` 原先在 Python 层面通过反复的几何重叠检测、字典序比较和列表剔除处理，存在循环解释开销；需要与 Rust 结构恢复内核紧密结合，实现一次性端到端批量消费 DTO。
+  - **设计与修复判定**：
+    - **Rust 内核实现**：在 `rust/wireless_structure.rs` 实现了 `table_quality`、`select_candidates` 与 `recover_wireless_tables`，在 Rust 内部完成基于质量评分（confidence, populated cell 计数, size 行列乘积）的确定性排序与重叠解决，密集计算通过 `py.allow_threads` 释放 GIL。
+    - **中文无线表格不变量严格遵守**：
+      - 恢复阶段纯消费 `NativeSpanDto`、`RegionDto`、`StructureConfig` 和 `TableCandidateDto`，严格禁止调用 `page.get_text("words")`，自动化 PageSpy 拦截测试验证通过。
+      - 候选过滤严格遵从 excluded 与 allowed 几何区域约束，重叠率阈值 `>= 0.20` 时依质量评分择优淘汰，杜绝误并与冲突。
+    - **DTO 与导出路由**：在 `rust/types.rs` 新增 `WirelessRecoveryInput` 与 `WirelessRecoveryOutput` DTO 结构，登记到 `roundtrip_dto`；在 `rust/lib.rs` 导出 3 个算子并在 `src/hexai_pdf_parser/rust_adapter.py` 暴露强类型 Python 签名；在 `wireless_table_recovery.py` 接入 `PDF_RUST_MODE` 路由（生产默认 `python`，支持 `shadow` 和 `rust`），并完整保留原始诊断数据结构。
+  - **测试与基准测试结果**：
+    - 新增 `tests/test_pdf_fast_shared_recovery.py`，6 个针对质量评分、候选选择过滤与冲突排除、DTO roundtrip、端到端 recover_wireless_tables 以及 PageSpy（确保无 words 回读）的单元测试 100% 通过（`6 passed`）。
+    - `cargo test`: 全部通过。
+    - 无线全量测试套件：244 passed, 0 failed。
+    - `cargo fmt --check`: 格式检查通过，0 警告。
+    - `git diff --check`: 检查通过，0 警告。
+    - **基准测试 (shared-wireless)**：四路对比（baseline, python, shadow, rust）确认 `equal: true, differences_count: 0`；结构化结果完全一致，无冲突、无缺失。
+
 - Sprint 007：迁移中文/混合无线结构恢复（列带划分、叶子精化、物理网格与逻辑网格物化）至 Rust (PyO3) 并释放 GIL。
   - **根因与调用位置**：`src/hexai_pdf_parser/tables/wireless_structure/{columns,grid,logical_grid,recoverer}.py` 中的 `infer_column_bands()`、`refine_leaf_bands()`、`build_grid()`、`build_logical_grid()` 与 `recover_cells_from_region()` 原先在 Python 层面通过大量的候选循环、集合操作、物理行聚类与空槽位切分进行处理，在包含密集单元格的中文无线大表格上造成显著的解释执行耗时。
   - **设计与修复判定**：

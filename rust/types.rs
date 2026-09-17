@@ -1424,6 +1424,107 @@ impl NativeRegionOutput {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct WirelessRecoveryInput {
+    pub schema_version: i64,
+    pub page: PageDto,
+    pub spans: Vec<NativeSpanDto>,
+    pub regions: Vec<RegionDto>,
+    pub config: StructureConfig,
+}
+
+impl WirelessRecoveryInput {
+    pub fn from_py(dict: &Bound<'_, PyDict>) -> PyResult<Self> {
+        let sv: i64 = get_req(dict, "schema_version")?.extract()?;
+        check_schema_version(sv)?;
+        let page = PageDto::from_py(&get_req(dict, "page")?.downcast::<PyDict>()?.clone())?;
+        let spans_list: Bound<'_, PyList> = get_req(dict, "spans")?.extract()?;
+        let mut spans = Vec::with_capacity(spans_list.len());
+        for s in spans_list.iter() {
+            spans.push(NativeSpanDto::from_py(&s.downcast::<PyDict>()?.clone())?);
+        }
+        let regions_list: Bound<'_, PyList> = get_req(dict, "regions")?.extract()?;
+        let mut regions = Vec::with_capacity(regions_list.len());
+        for r in regions_list.iter() {
+            regions.push(RegionDto::from_py(&r.downcast::<PyDict>()?.clone())?);
+        }
+        let config =
+            StructureConfig::from_py(&get_req(dict, "config")?.downcast::<PyDict>()?.clone())?;
+        Ok(Self {
+            schema_version: sv,
+            page,
+            spans,
+            regions,
+            config,
+        })
+    }
+
+    pub fn to_py<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let d = PyDict::new_bound(py);
+        d.set_item("schema_version", self.schema_version)?;
+        d.set_item("page", self.page.to_py(py)?)?;
+        let sl = PyList::empty_bound(py);
+        for s in &self.spans {
+            sl.append(s.to_py(py)?)?;
+        }
+        d.set_item("spans", sl)?;
+        let rl = PyList::empty_bound(py);
+        for r in &self.regions {
+            rl.append(r.to_py(py)?)?;
+        }
+        d.set_item("regions", rl)?;
+        d.set_item("config", self.config.to_py(py)?)?;
+        Ok(d)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct WirelessRecoveryOutput {
+    pub schema_version: i64,
+    pub candidates: Vec<TableCandidateDto>,
+    pub diagnostics: Vec<DiagnosticDto>,
+}
+
+impl WirelessRecoveryOutput {
+    pub fn from_py(dict: &Bound<'_, PyDict>) -> PyResult<Self> {
+        let sv: i64 = get_req(dict, "schema_version")?.extract()?;
+        check_schema_version(sv)?;
+        let c_list: Bound<'_, PyList> = get_req(dict, "candidates")?.extract()?;
+        let mut candidates = Vec::with_capacity(c_list.len());
+        for c in c_list.iter() {
+            candidates.push(TableCandidateDto::from_py(
+                &c.downcast::<PyDict>()?.clone(),
+            )?);
+        }
+        let d_list: Bound<'_, PyList> = get_req(dict, "diagnostics")?.extract()?;
+        let mut diagnostics = Vec::with_capacity(d_list.len());
+        for d in d_list.iter() {
+            diagnostics.push(DiagnosticDto::from_py(&d.downcast::<PyDict>()?.clone())?);
+        }
+        Ok(Self {
+            schema_version: sv,
+            candidates,
+            diagnostics,
+        })
+    }
+
+    pub fn to_py<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let d = PyDict::new_bound(py);
+        d.set_item("schema_version", self.schema_version)?;
+        let cl = PyList::empty_bound(py);
+        for c in &self.candidates {
+            cl.append(c.to_py(py)?)?;
+        }
+        d.set_item("candidates", cl)?;
+        let dl = PyList::empty_bound(py);
+        for diag in &self.diagnostics {
+            dl.append(diag.to_py(py)?)?;
+        }
+        d.set_item("diagnostics", dl)?;
+        Ok(d)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct DiagnosticValueDto {
     pub schema_version: i64,
     pub kind: String,
@@ -1833,6 +1934,14 @@ pub fn roundtrip_dto_py<'py>(
         }
         "native_region_output" => {
             let dto = NativeRegionOutput::from_py(data)?;
+            dto.to_py(py)
+        }
+        "wireless_recovery_input" => {
+            let dto = WirelessRecoveryInput::from_py(data)?;
+            dto.to_py(py)
+        }
+        "wireless_recovery_output" => {
+            let dto = WirelessRecoveryOutput::from_py(data)?;
             dto.to_py(py)
         }
         other => Err(PyValueError::new_err(format!(

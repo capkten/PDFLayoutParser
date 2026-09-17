@@ -1,6 +1,7 @@
 use crate::types::{
     AtomDto, CellDto, ColumnBandDto, DiagnosticDto, GridDto, LogicalGridDto, NativeRegionInput,
-    NativeRegionOutput, PhysicalCell, Rect4, RowClusterDto,
+    NativeRegionOutput, PhysicalCell, Rect4, RowClusterDto, TableCandidateDto,
+    WirelessRecoveryInput, WirelessRecoveryOutput,
 };
 
 fn center_x(r: &Rect4) -> f64 {
@@ -426,6 +427,200 @@ pub fn recover_native_region(input: NativeRegionInput) -> NativeRegionOutput {
         grid: logical_grid,
         cells,
         diagnostics: diags,
+    }
+}
+
+pub fn table_quality(candidate: &TableCandidateDto) -> f64 {
+    let conf = candidate.confidence.unwrap_or(0.5);
+    let populated = candidate
+        .cells
+        .iter()
+        .filter(|c| !c.text.trim().is_empty())
+        .count() as f64;
+    let size = (candidate.rows * candidate.cols) as f64;
+    conf * 1_000_000.0 + populated * 1000.0 + size
+}
+
+pub fn select_candidates(
+    candidates: Vec<TableCandidateDto>,
+    excluded: Vec<Rect4>,
+    allowed: Vec<Rect4>,
+) -> Vec<TableCandidateDto> {
+    let mut filtered = Vec::new();
+    for cand in candidates {
+        let is_excluded = excluded.iter().any(|ex| {
+            let w = cand.rect.x1.min(ex.x1) - cand.rect.x0.max(ex.x0);
+            let h = cand.rect.y1.min(ex.y1) - cand.rect.y0.max(ex.y0);
+            w > 0.0 && h > 0.0
+        });
+        if is_excluded {
+            continue;
+        }
+        if !allowed.is_empty() {
+            let is_allowed = allowed.iter().any(|al| {
+                let w = cand.rect.x1.min(al.x1) - cand.rect.x0.max(al.x0);
+                let h = cand.rect.y1.min(al.y1) - cand.rect.y0.max(al.y0);
+                w > 0.0 && h > 0.0
+            });
+            if !is_allowed {
+                continue;
+            }
+        }
+        filtered.push(cand);
+    }
+
+    let mut accepted: Vec<TableCandidateDto> = Vec::new();
+    for cand in filtered {
+        let mut overlapping_indices = Vec::new();
+        for (idx, old) in accepted.iter().enumerate() {
+            let w = cand.rect.x1.min(old.rect.x1) - cand.rect.x0.max(old.rect.x0);
+            let h = cand.rect.y1.min(old.rect.y1) - cand.rect.y0.max(old.rect.y0);
+            if w > 0.0 && h > 0.0 {
+                let overlap = w * h;
+                let a1 = (cand.rect.x1 - cand.rect.x0) * (cand.rect.y1 - cand.rect.y0);
+                let a2 = (old.rect.x1 - old.rect.x0) * (old.rect.y1 - old.rect.y0);
+                if overlap / a1.min(a2).max(1.0) >= 0.20 {
+                    overlapping_indices.push(idx);
+                }
+            }
+        }
+
+        let cand_q = table_quality(&cand);
+        if !overlapping_indices.is_empty() {
+            let all_worse = overlapping_indices
+                .iter()
+                .all(|&idx| cand_q > table_quality(&accepted[idx]));
+            if all_worse {
+                for &idx in overlapping_indices.iter().rev() {
+                    accepted.remove(idx);
+                }
+                accepted.push(cand);
+            }
+        } else {
+            accepted.push(cand);
+        }
+    }
+    accepted
+}
+
+pub fn recover_wireless_tables(input: WirelessRecoveryInput) -> WirelessRecoveryOutput {
+    let mut candidates = Vec::new();
+
+    let excluded_regions: Vec<Rect4> = input
+        .regions
+        .iter()
+        .filter(|r| !r.allowed)
+        .map(|r| r.rect.clone())
+        .collect();
+
+    let allowed_regions: Vec<Rect4> = input
+        .regions
+        .iter()
+        .filter(|r| r.allowed)
+        .map(|r| r.rect.clone())
+        .collect();
+
+    let target_regions = if allowed_regions.is_empty() {
+        vec![Rect4 {
+            schema_version: 1,
+            x0: 0.0,
+            y0: 0.0,
+            x1: input.page.width,
+            y1: input.page.height,
+        }]
+    } else {
+        allowed_regions.clone()
+    };
+
+    for reg in target_regions {
+        let mut region_atoms = Vec::new();
+        for span in &input.spans {
+            let cx = (span.rect.x0 + span.rect.x1) / 2.0;
+            let cy = (span.rect.y0 + span.rect.y1) / 2.0;
+            if cx >= reg.x0 && cx <= reg.x1 && cy >= reg.y0 && cy <= reg.y1 {
+                region_atoms.push(AtomDto {
+                    schema_version: 1,
+                    text: span.text.clone(),
+                    rect: span.rect.clone(),
+                    run_refs: vec![span.order],
+                    row_hint: None,
+                    col_hint: None,
+                    order: span.order,
+                });
+            }
+        }
+
+        if region_atoms.len() < 4 {
+            continue;
+        }
+
+        let bands = infer_column_bands(region_atoms.clone(), reg.clone());
+        if bands.len() < 2 {
+            continue;
+        }
+
+        let (rows, bands_out, phys_cells, _diags) = build_grid(region_atoms, bands);
+        if rows.len() < 2 || bands_out.len() < 2 {
+            continue;
+        }
+
+        let mut cells = Vec::new();
+        let num_rows = rows.len();
+        let num_cols = bands_out.len();
+        let mut occupancy = vec![vec![None; num_cols]; num_rows];
+
+        for pc in phys_cells {
+            let r = pc.row as usize;
+            let c = pc.col as usize;
+            if r < num_rows && c < num_cols {
+                occupancy[r][c] = Some(cells.len());
+            }
+            cells.push(CellDto {
+                schema_version: 1,
+                text: pc.text.clone(),
+                row: pc.row,
+                col: pc.col,
+                rect: pc.rect.clone(),
+                rowspan: 1,
+                colspan: 1,
+                source: Some(pc),
+            });
+        }
+
+        let x0 = bands_out.iter().map(|b| b.x0).fold(f64::INFINITY, f64::min);
+        let x1 = bands_out
+            .iter()
+            .map(|b| b.x1)
+            .fold(f64::NEG_INFINITY, f64::max);
+        let y0 = rows.iter().map(|r| r.y0).fold(f64::INFINITY, f64::min);
+        let y1 = rows.iter().map(|r| r.y1).fold(f64::NEG_INFINITY, f64::max);
+
+        let cand_rect = Rect4 {
+            schema_version: 1,
+            x0,
+            y0,
+            x1,
+            y1,
+        };
+
+        let candidate = TableCandidateDto {
+            schema_version: 1,
+            rect: cand_rect,
+            source: "wireless_span_recovery".to_string(),
+            confidence: Some(0.90),
+            rows: num_rows as i64,
+            cols: num_cols as i64,
+            cells,
+        };
+        candidates.push(candidate);
+    }
+
+    let selected = select_candidates(candidates, excluded_regions, allowed_regions);
+
+    WirelessRecoveryOutput {
+        schema_version: 1,
+        candidates: selected,
+        diagnostics: Vec::new(),
     }
 }
 

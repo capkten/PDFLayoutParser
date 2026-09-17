@@ -559,6 +559,53 @@ fn recover_native_region_binding<'py>(
     output.to_py(py)
 }
 
+#[pyfunction(name = "table_quality")]
+fn table_quality_binding<'py>(_py: Python<'py>, candidate: &Bound<'py, PyDict>) -> PyResult<f64> {
+    let cand = types::TableCandidateDto::from_py(candidate)?;
+    Ok(wireless_structure::table_quality(&cand))
+}
+
+#[pyfunction(name = "select_candidates")]
+fn select_candidates_binding<'py>(
+    py: Python<'py>,
+    candidates: &Bound<'py, PyList>,
+    excluded: &Bound<'py, PyList>,
+    allowed: &Bound<'py, PyList>,
+) -> PyResult<Bound<'py, PyList>> {
+    let mut rust_candidates = Vec::with_capacity(candidates.len());
+    for c in candidates.iter() {
+        rust_candidates.push(types::TableCandidateDto::from_py(
+            &c.downcast::<PyDict>()?.clone(),
+        )?);
+    }
+    let mut rust_excluded = Vec::with_capacity(excluded.len());
+    for e in excluded.iter() {
+        rust_excluded.push(types::Rect4::from_py(&e.downcast::<PyDict>()?.clone())?);
+    }
+    let mut rust_allowed = Vec::with_capacity(allowed.len());
+    for a in allowed.iter() {
+        rust_allowed.push(types::Rect4::from_py(&a.downcast::<PyDict>()?.clone())?);
+    }
+    let selected = py.allow_threads(move || {
+        wireless_structure::select_candidates(rust_candidates, rust_excluded, rust_allowed)
+    });
+    let list = PyList::empty_bound(py);
+    for s in selected {
+        list.append(s.to_py(py)?)?;
+    }
+    Ok(list)
+}
+
+#[pyfunction(name = "recover_wireless_tables")]
+fn recover_wireless_tables_binding<'py>(
+    py: Python<'py>,
+    input_dict: &Bound<'py, PyDict>,
+) -> PyResult<Bound<'py, PyDict>> {
+    let input = types::WirelessRecoveryInput::from_py(input_dict)?;
+    let output = py.allow_threads(move || wireless_structure::recover_wireless_tables(input));
+    output.to_py(py)
+}
+
 #[pymodule]
 fn _pdf_fast(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(rect_overlap_binding, module)?)?;
@@ -576,6 +623,9 @@ fn _pdf_fast(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(build_grid_binding, module)?)?;
     module.add_function(wrap_pyfunction!(build_logical_grid_binding, module)?)?;
     module.add_function(wrap_pyfunction!(recover_native_region_binding, module)?)?;
+    module.add_function(wrap_pyfunction!(table_quality_binding, module)?)?;
+    module.add_function(wrap_pyfunction!(select_candidates_binding, module)?)?;
+    module.add_function(wrap_pyfunction!(recover_wireless_tables_binding, module)?)?;
     module.add_function(wrap_pyfunction!(merge_h_lines_binding, module)?)?;
     module.add_function(wrap_pyfunction!(merge_v_lines_binding, module)?)?;
     module.add_function(wrap_pyfunction!(

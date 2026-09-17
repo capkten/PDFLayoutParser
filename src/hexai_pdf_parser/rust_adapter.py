@@ -593,3 +593,118 @@ def recover_native_region(
         owned_bands.append(bd)
     d["bands"] = owned_bands
     return _pdf_fast.recover_native_region(d)
+
+
+def table_quality(candidate: Dict[str, Any]) -> float:
+    c = dict(candidate)
+    if "schema_version" not in c:
+        c["schema_version"] = 1
+    rect = c.get("rect")
+    if isinstance(rect, dict) and "schema_version" not in rect:
+        c["rect"] = {"schema_version": 1, **rect}
+    owned_cells = []
+    for cell in c.get("cells", []):
+        cd = dict(cell)
+        if "schema_version" not in cd:
+            cd["schema_version"] = 1
+        c_rect = cd.get("rect")
+        if isinstance(c_rect, dict) and "schema_version" not in c_rect:
+            cd["rect"] = {"schema_version": 1, **c_rect}
+        owned_cells.append(cd)
+    c["cells"] = owned_cells
+    return float(_pdf_fast.table_quality(c))
+
+
+def select_candidates(
+    candidates: List[Dict[str, Any]],
+    excluded: Optional[List[Dict[str, Any]]] = None,
+    allowed: Optional[List[Dict[str, Any]]] = None,
+) -> List[Dict[str, Any]]:
+    owned_candidates = []
+    for cand in candidates:
+        c = dict(cand)
+        if "schema_version" not in c:
+            c["schema_version"] = 1
+        rect = c.get("rect")
+        if isinstance(rect, dict) and "schema_version" not in rect:
+            c["rect"] = {"schema_version": 1, **rect}
+        owned_cells = []
+        for cell in c.get("cells", []):
+            cd = dict(cell)
+            if "schema_version" not in cd:
+                cd["schema_version"] = 1
+            c_rect = cd.get("rect")
+            if isinstance(c_rect, dict) and "schema_version" not in c_rect:
+                cd["rect"] = {"schema_version": 1, **c_rect}
+            owned_cells.append(cd)
+        c["cells"] = owned_cells
+        owned_candidates.append(c)
+
+    owned_excluded = []
+    for ex in (excluded or []):
+        d = dict(ex)
+        if "schema_version" not in d:
+            d["schema_version"] = 1
+        owned_excluded.append(d)
+
+    owned_allowed = []
+    for al in (allowed or []):
+        d = dict(al)
+        if "schema_version" not in d:
+            d["schema_version"] = 1
+        owned_allowed.append(d)
+
+    return _pdf_fast.select_candidates(owned_candidates, owned_excluded, owned_allowed)
+
+
+def recover_wireless_tables(input_dto: Dict[str, Any]) -> Dict[str, Any]:
+    d = dict(input_dto)
+    if "schema_version" not in d:
+        d["schema_version"] = 1
+    page = dict(d["page"])
+    if "schema_version" not in page:
+        page["schema_version"] = 1
+    d["page"] = page
+
+    owned_spans = []
+    for s in d.get("spans", []):
+        sd = dict(s)
+        if "schema_version" not in sd:
+            sd["schema_version"] = 1
+        rect = sd.get("rect")
+        if isinstance(rect, dict) and "schema_version" not in rect:
+            sd["rect"] = {"schema_version": 1, **rect}
+        sp = sd.get("source_position")
+        if isinstance(sp, dict) and "schema_version" not in sp:
+            sd["source_position"] = {"schema_version": 1, **sp}
+        chars = sd.get("characters", [])
+        owned_chars = []
+        for ch in chars:
+            ch_d = dict(ch)
+            if "schema_version" not in ch_d:
+                ch_d["schema_version"] = 1
+            ch_rect = ch_d.get("rect")
+            if isinstance(ch_rect, dict) and "schema_version" not in ch_rect:
+                ch_d["rect"] = {"schema_version": 1, **ch_rect}
+            owned_chars.append(ch_d)
+        sd["characters"] = owned_chars
+        owned_spans.append(sd)
+    d["spans"] = owned_spans
+
+    owned_regions = []
+    for r in d.get("regions", []):
+        rd = dict(r)
+        if "schema_version" not in rd:
+            rd["schema_version"] = 1
+        r_rect = rd.get("rect")
+        if isinstance(r_rect, dict) and "schema_version" not in r_rect:
+            rd["rect"] = {"schema_version": 1, **r_rect}
+        owned_regions.append(rd)
+    d["regions"] = owned_regions
+
+    config = dict(d["config"])
+    if "schema_version" not in config:
+        config["schema_version"] = 1
+    d["config"] = config
+
+    return _pdf_fast.recover_wireless_tables(d)

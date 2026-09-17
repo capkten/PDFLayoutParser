@@ -684,10 +684,10 @@ pub fn select_candidates(candidates: Vec<TableCandidateDto>, excluded: Vec<Rect4
 pub fn table_quality(candidate: &TableCandidateDto) -> f64;
 ~~~
 
-- [ ] Step 1: 为 row clustering、column tracks、candidate runs 和 quality selection 增加 RED vectors。
-- [ ] Step 2: 基于已验证的 native-span 和 structure DTO 实现共享 Rust recovery batch。
-- [ ] Step 3: Python 保留 diagnostics、excluded/allowed filtering、empty result、exception mapping 和 monkeypatch surface。
-- [ ] Step 4: 运行 differential tests 和 shared-wireless benchmark。
+- [x] Step 1: 为 row clustering、column tracks、candidate runs 和 quality selection 增加 RED vectors。
+- [x] Step 2: 基于已验证的 native-span 和 structure DTO 实现共享 Rust recovery batch。
+- [x] Step 3: Python 保留 diagnostics、excluded/allowed filtering、empty result、exception mapping 和 monkeypatch surface。
+- [x] Step 4: 运行 differential tests 和 shared-wireless benchmark。
 
 ~~~powershell
 $env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'
@@ -703,7 +703,7 @@ python scripts/benchmark_rust_migration.py --mode rust --source-root $migrationR
 python scripts/compare_rust_migration.py --baseline output/rust_migration_benchmark/sprint-008/baseline/shared-wireless-python.json --python output/rust_migration_benchmark/sprint-008/python/shared-wireless-python.json --rust output/rust_migration_benchmark/sprint-008/rust/shared-wireless-rust.json --shadow output/rust_migration_benchmark/sprint-008/shadow/shared-wireless-shadow.json --report docs/superpowers/rust-migration/evaluations/sprint-008-benchmark.md
 ~~~
 
-- [ ] Step 5: 只有 zh/mixed 输出和 no-words tests 通过后提交。
+- [x] Step 5: 只有 zh/mixed 输出和 no-words tests 通过后提交。
 
 ~~~powershell
 git diff --check
