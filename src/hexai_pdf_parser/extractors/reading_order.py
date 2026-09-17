@@ -95,6 +95,64 @@ def _has_spanning_element(bboxes: List[BBox]) -> bool:
     return False
 
 
+def _sort_items_by_row_reading_order(
+    items: List[T],
+    get_bbox: Callable[[T], BBox],
+) -> List[T]:
+    """Sort elements in a single column or leaf cluster by lines, then left-to-right.
+
+    Dynamically clusters vertically overlapping items into row bands, and
+    sorts items within each row strictly from left to right (by x0).
+    """
+    if len(items) <= 1:
+        return list(items)
+
+    # First sort primarily by y0, secondarily by x0
+    sorted_candidates = sorted(
+        items,
+        key=lambda item: (get_bbox(item).y0, get_bbox(item).x0),
+    )
+
+    rows: List[List[T]] = []
+    current_row: List[T] = [sorted_candidates[0]]
+    first_bbox = get_bbox(sorted_candidates[0])
+    row_y0 = first_bbox.y0
+    row_y1 = first_bbox.y1
+
+    for item in sorted_candidates[1:]:
+        b = get_bbox(item)
+        overlap = min(row_y1, b.y1) - max(row_y0, b.y0)
+        h_row = max(1.0, row_y1 - row_y0)
+        h_item = max(1.0, b.y1 - b.y0)
+        min_h = min(h_row, h_item)
+
+        # Same line condition: vertical overlap >= 30% of shorter item or center distance <= 40%
+        is_intersect = (overlap > 0 and (overlap >= 0.3 * min_h or overlap >= 2.0)) or (
+            abs(((b.y0 + b.y1) / 2.0) - ((row_y0 + row_y1) / 2.0)) <= 0.4 * min_h
+        )
+
+        if is_intersect:
+            current_row.append(item)
+            row_y0 = min(row_y0, b.y0)
+            row_y1 = max(row_y1, b.y1)
+        else:
+            current_row.sort(key=lambda it: get_bbox(it).x0)
+            rows.append(current_row)
+            current_row = [item]
+            row_y0 = b.y0
+            row_y1 = b.y1
+
+    current_row.sort(key=lambda it: get_bbox(it).x0)
+    rows.append(current_row)
+
+    rows.sort(key=lambda r: min(get_bbox(it).y0 for it in r))
+
+    out_res: List[T] = []
+    for r in rows:
+        out_res.extend(r)
+    return out_res
+
+
 def _recursive_xy_cut(
     items: List[T],
     get_bbox: Callable[[T], BBox],
@@ -185,16 +243,9 @@ def _recursive_xy_cut(
                     result.extend(_recursive_xy_cut(col, get_bbox, min_y_gap, min_x_gap))
             return result
 
-    # 4. Fallback: Sort by (y0, x0, y1, x1)
-    return sorted(
-        items,
-        key=lambda item: (
-            get_bbox(item).y0,
-            get_bbox(item).x0,
-            get_bbox(item).y1,
-            get_bbox(item).x1,
-        ),
-    )
+    # 4. Fallback: cluster items by row and sort each row left-to-right
+    return _sort_items_by_row_reading_order(items, get_bbox)
+
 
 
 def sort_by_reading_order(
