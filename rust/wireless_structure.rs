@@ -251,7 +251,38 @@ fn append_empty_cells(
     }
 }
 
+fn rebuild_occupancy_indices(
+    cells: &[CellDto],
+    rows: usize,
+    cols: usize,
+) -> (Vec<Vec<Option<i64>>>, Vec<(usize, usize)>) {
+    let mut occupancy = vec![vec![None; cols]; rows];
+    let mut conflicts = Vec::new();
+
+    for (cell_index, cell) in cells.iter().enumerate() {
+        let row_start = cell.row.max(0) as usize;
+        let col_start = cell.col.max(0) as usize;
+        let row_end = row_start.saturating_add(cell.rowspan.max(1) as usize);
+        let col_end = col_start.saturating_add(cell.colspan.max(1) as usize);
+        for row in row_start..row_end {
+            for col in col_start..col_end {
+                if row >= rows || col >= cols {
+                    continue;
+                }
+                if occupancy[row][col].is_some() {
+                    conflicts.push((row, col));
+                    continue;
+                }
+                occupancy[row][col] = Some(cell_index as i64);
+            }
+        }
+    }
+
+    (occupancy, conflicts)
+}
+
 pub fn build_logical_grid(atoms: Vec<AtomDto>, grid: GridDto) -> LogicalGridDto {
+    let mut grid = grid;
     let mut cells = Vec::new();
     let rows = grid.rows as usize;
     let cols = grid.cols as usize;
@@ -342,6 +373,8 @@ pub fn build_logical_grid(atoms: Vec<AtomDto>, grid: GridDto) -> LogicalGridDto 
         std::cmp::Ordering::Equal => a.col.cmp(&b.col),
         other => other,
     });
+    let (occupancy, _) = rebuild_occupancy_indices(&cells, rows, cols);
+    grid.occupancy = occupancy;
 
     LogicalGridDto {
         schema_version: 1,
@@ -429,6 +462,14 @@ pub fn recover_native_region(input: NativeRegionInput) -> NativeRegionOutput {
         std::cmp::Ordering::Equal => a.col.cmp(&b.col),
         other => other,
     });
+    let (occupancy, conflicts) = rebuild_occupancy_indices(&cells, num_rows, num_cols);
+    for (row, col) in conflicts {
+        diags.push(occupancy_conflict_diagnostic(
+            "wireless_structure.recover_native_region",
+            row,
+            col,
+        ));
+    }
 
     let grid_dto = GridDto {
         schema_version: 1,
@@ -679,6 +720,7 @@ pub fn recover_wireless_tables(input: WirelessRecoveryInput) -> WirelessRecovery
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::{RegionDto, StructureConfig};
 
     fn make_atom(text: &str, x0: f64, y0: f64, x1: f64, y1: f64, order: i64) -> AtomDto {
         AtomDto {
@@ -715,5 +757,65 @@ mod tests {
         ];
         let bands = infer_column_bands(atoms, region);
         assert_eq!(bands.len(), 2);
+    }
+
+    #[test]
+    fn test_recover_native_region_rebuilds_occupancy_after_cell_sort() {
+        let region = Rect4 {
+            schema_version: 1,
+            x0: 0.0,
+            y0: 0.0,
+            x1: 200.0,
+            y1: 40.0,
+        };
+        let input = NativeRegionInput {
+            schema_version: 1,
+            region: RegionDto {
+                schema_version: 1,
+                rect: region.clone(),
+                source_order: 0,
+                allowed: true,
+            },
+            atoms: vec![
+                make_atom("right", 100.0, 10.0, 140.0, 20.0, 0),
+                make_atom("left", 10.0, 10.0, 40.0, 20.0, 1),
+            ],
+            bands: vec![
+                ColumnBandDto {
+                    schema_version: 1,
+                    x0: 0.0,
+                    x1: 60.0,
+                    source_atoms: vec![1],
+                    order: 0,
+                },
+                ColumnBandDto {
+                    schema_version: 1,
+                    x0: 80.0,
+                    x1: 160.0,
+                    source_atoms: vec![0],
+                    order: 1,
+                },
+            ],
+            config: StructureConfig {
+                schema_version: 1,
+                line_tolerance: 2.0,
+                row_tolerance: 2.0,
+                column_tolerance: 2.0,
+                span_tolerance: 2.0,
+                numeric_tolerance: 2.0,
+            },
+        };
+
+        let output = recover_native_region(input);
+
+        for (row_index, row) in output.grid.grid.occupancy.iter().enumerate() {
+            for (col_index, cell_index) in row.iter().enumerate() {
+                let cell = &output.cells[cell_index.unwrap() as usize];
+                assert_eq!(cell.row, row_index as i64);
+                assert_eq!(cell.col, col_index as i64);
+                assert_eq!(cell.rowspan, 1);
+                assert_eq!(cell.colspan, 1);
+            }
+        }
     }
 }

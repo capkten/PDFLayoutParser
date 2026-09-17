@@ -190,7 +190,7 @@ def recover_cells_from_region(
     """Recover Chinese/mixed wireless cells from one trusted table region."""
     mode = rust_adapter.get_rust_mode("wireless_structure")
     if mode in ("rust", "shadow"):
-        try:
+        def _recover_cells_from_region_rust():
             native_spans = collect_native_spans(page, allowed_regions=[region_bbox])
             spans = region_spans(native_spans, region_bbox)
             output_mode = infer_output_order_mode(spans)
@@ -215,16 +215,15 @@ def recover_cells_from_region(
                     "numeric_tolerance": 2.0,
                 },
             }
-            return rust_adapter.run_python_or_rust(
-                mode=mode,
-                python_fn=lambda: _recover_cells_from_region_python(page, region_bbox),
-                rust_fn=lambda dto: _recover_cells_from_rust(
-                    rust_adapter.recover_native_region(dto), region_bbox
-                ),
-                input_dto=rust_input,
-                path="wireless_structure.recover_cells_from_region",
+            return _recover_cells_from_rust(
+                rust_adapter.recover_native_region(rust_input), region_bbox
             )
-        except Exception:
-            return _recover_cells_from_region_python(page, region_bbox)
+
+        return rust_adapter.run_python_or_rust(
+            mode=mode,
+            python_fn=lambda: _recover_cells_from_region_python(page, region_bbox),
+            rust_fn=_recover_cells_from_region_rust,
+            path="wireless_structure.recover_cells_from_region",
+        )
     else:
         return _recover_cells_from_region_python(page, region_bbox)

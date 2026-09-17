@@ -1151,7 +1151,7 @@ def recover_wireless_tables(
     """Recover borderless tables from a native PDF page with PDF_RUST_MODE support."""
     mode = rust_adapter.get_rust_mode("wireless_table_recovery")
     if mode in ("rust", "shadow"):
-        try:
+        def _recover_wireless_tables_rust():
             spans = collect_native_spans(
                 page,
                 excluded_regions=excluded_regions,
@@ -1222,19 +1222,18 @@ def recover_wireless_tables(
                     "numeric_tolerance": 2.0,
                 },
             }
-            return rust_adapter.run_python_or_rust(
-                mode=mode,
-                python_fn=lambda: _recover_wireless_tables_python(
-                    page, excluded_regions, allowed_regions
-                ),
-                rust_fn=lambda dto: _wireless_recovery_from_rust(
-                    rust_adapter.recover_wireless_tables(dto)
-                ),
-                input_dto=input_dto,
-                path="wireless_table_recovery.recover_wireless_tables",
+            return _wireless_recovery_from_rust(
+                rust_adapter.recover_wireless_tables(input_dto)
             )
-        except Exception:
-            return _recover_wireless_tables_python(page, excluded_regions, allowed_regions)
+
+        return rust_adapter.run_python_or_rust(
+            mode=mode,
+            python_fn=lambda: _recover_wireless_tables_python(
+                page, excluded_regions, allowed_regions
+            ),
+            rust_fn=_recover_wireless_tables_rust,
+            path="wireless_table_recovery.recover_wireless_tables",
+        )
     else:
         return _recover_wireless_tables_python(page, excluded_regions, allowed_regions)
 

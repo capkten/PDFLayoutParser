@@ -3,6 +3,7 @@ from pathlib import Path
 import fitz
 import pytest
 
+from hexai_pdf_parser import rust_adapter
 from hexai_pdf_parser.core.models import BBox, Cell
 from hexai_pdf_parser.tables.wireless_table_recovery import (
     NativeSpan,
@@ -120,6 +121,67 @@ def test_recover_wireless_tables_consumes_rust_sentinel(monkeypatch):
     assert len(recovery.tables) == 1
     assert recovery.tables[0].source == "rust_sentinel"
     assert [cell.text for cell in recovery.tables[0].cells] == ["RUST_SENTINEL"]
+
+
+def test_recover_cells_from_region_routes_native_span_exception_to_diagnostic(
+    monkeypatch,
+):
+    region = BBox(0, 0, 160, 70)
+    fallback = (1, 1, [Cell("PYTHON_FALLBACK", 0, 0, region)])
+    rust_adapter.clear_diagnostics()
+    monkeypatch.setenv("PDF_RUST_MODE", "rust")
+    monkeypatch.setattr(
+        recoverer,
+        "_recover_cells_from_region_python",
+        lambda page, region_bbox: fallback,
+    )
+
+    def fail_native_span_collection(page, allowed_regions):
+        raise ValueError("native span DTO construction failed")
+
+    monkeypatch.setattr(
+        recoverer,
+        "collect_native_spans",
+        fail_native_span_collection,
+    )
+
+    assert recover_cells_from_region(object(), region) == fallback
+    diagnostics = rust_adapter.get_diagnostics()
+    assert len(diagnostics) == 1
+    assert diagnostics[0]["status"] == "rust_fallback"
+    assert diagnostics[0]["path"] == "wireless_structure.recover_cells_from_region"
+    assert diagnostics[0]["error_type"] == "ValueError"
+
+
+def test_recover_wireless_tables_routes_native_span_exception_to_diagnostic(
+    monkeypatch,
+):
+    fallback = WirelessRecovery(
+        tables=[], diagnostics={"source": "python_fallback"}
+    )
+    rust_adapter.clear_diagnostics()
+    monkeypatch.setenv("PDF_RUST_MODE", "rust")
+    monkeypatch.setattr(
+        "hexai_pdf_parser.tables.wireless_table_recovery._recover_wireless_tables_python",
+        lambda page, excluded_regions=None, allowed_regions=None: fallback,
+    )
+
+    def fail_native_span_collection(page, excluded_regions=None, allowed_regions=None):
+        raise ValueError("native span DTO construction failed")
+
+    monkeypatch.setattr(
+        "hexai_pdf_parser.tables.wireless_table_recovery.collect_native_spans",
+        fail_native_span_collection,
+    )
+
+    recovery = recover_wireless_tables(object())
+
+    assert recovery == fallback
+    diagnostics = rust_adapter.get_diagnostics()
+    assert len(diagnostics) == 1
+    assert diagnostics[0]["status"] == "rust_fallback"
+    assert diagnostics[0]["path"] == "wireless_table_recovery.recover_wireless_tables"
+    assert diagnostics[0]["error_type"] == "ValueError"
 
 
 def test_recover_cells_from_region_converts_new_pipeline_to_project_cells(monkeypatch):

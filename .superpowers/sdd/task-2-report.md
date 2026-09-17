@@ -1,56 +1,68 @@
-# Task 2 收尾报告：中文/混合 native-span 与共享无线完整接入
+# Task 2 Review-Fix 报告
 
 ## 状态
 
-已完成验证并提交。生产入口消费 Rust sentinel 返回值，并将 owned DTO 转换为项目 `Cell`/`Table`；Rust 输出的空槽位、占用冲突和网格边界由 Rust/Python 两层校验，异常时保留 Python fallback。
+review-fix 已完成 GREEN 验证。范围限定为：两个 Python native-span 无线入口的统一 Rust fallback 路由，以及 Rust 排序后的 occupancy 索引重建。
 
-## RED/GREEN 证据
+## RED
 
-### RED
-
-在独立临时 worktree（基于收尾前 `HEAD`，仅复制当前 sentinel 测试文件和已存在的 `_pdf_fast.pyd` 以满足导入）运行：
+### Python 入口诊断
 
 ```powershell
-$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; & 'C:\Users\23662\AppData\Local\Programs\Python\Python312\Scripts\pytest.exe' -q tests/test_wireless_structure_recoverer.py -k 'sentinel'
+$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; & 'C:\Users\23662\AppData\Local\Programs\Python\Python312\Scripts\pytest.exe' -q tests/test_wireless_structure_recoverer.py -k 'routes_native_span_exception_to_diagnostic'
 ```
 
-关键输出：
+结果：
 
 ```text
-FF [100%]
-2 failed, 14 deselected in 1.26s
+2 failed, 16 deselected
 ```
 
-失败原因符合 sentinel 设计：旧 `recover_cells_from_region` 返回 `PYTHON_BASELINE`，旧 `recover_wireless_tables` 返回 0 张表，说明 Rust adapter 返回值曾被丢弃。
+两个失败都表现为 `len(diagnostics) == 0`。根因是 native span/DTO 构造在 `run_python_or_rust` 调用之前，入口级 `except` 直接回退 Python，绕过了 `rust_fallback` 记录。
 
-### GREEN
-
-当前 Task 2 实现运行相同 sentinel 测试：
-
-```text
-.. [100%]
-2 passed, 14 deselected in 0.40s
-```
-
-## 验证命令与结果
-
-1. 相关 Python 测试：
+### Rust occupancy
 
 ```powershell
-$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; & 'C:\Users\23662\AppData\Local\Programs\Python\Python312\Scripts\pytest.exe' -q tests/test_wireless_structure_recoverer.py tests/test_wireless_table_recovery.py tests/test_pdf_fast_wireless_structure.py tests/test_pdf_fast_shared_recovery.py
+cargo test wireless_structure
 ```
 
-结果：`53 passed in 0.71s`。
+结果：`1 passed; 1 failed; 13 filtered out`。失败断言显示 occupancy 中的索引仍指向排序前 cell。
 
-2. Rust 测试：
+## GREEN
+
+### 目标 review-fix 测试
+
+```powershell
+$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; & 'C:\Users\23662\AppData\Local\Programs\Python\Python312\Scripts\pytest.exe' -q tests/test_wireless_structure_recoverer.py -k 'routes_native_span_exception_to_diagnostic'
+```
+
+结果：`2 passed, 16 deselected`。
+
+```powershell
+cargo test wireless_structure
+```
+
+结果：`2 passed, 0 failed; 13 filtered out`。
+
+### 相关 wireless 测试
+
+执行了以下 wireless 相关测试文件：
+
+```powershell
+$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; & 'C:\Users\23662\AppData\Local\Programs\Python\Python312\Scripts\pytest.exe' -q tests/test_wireless_table_recovery.py tests/test_wireless_structure_text_runs.py tests/test_wireless_structure_span_chain.py tests/test_wireless_structure_recoverer.py tests/test_wireless_structure_merges.py tests/test_wireless_structure_header_topology.py tests/test_wireless_structure_grid.py tests/test_wireless_structure_columns.py tests/test_wireless_output_order.py tests/test_wireless_extractor_split.py tests/test_unify_wireless_recovery.py tests/test_rust_migration_routing.py tests/test_pdf_fast_wireless_structure.py tests/test_pdf_fast_wireless.py tests/test_pdf_fast_english_wireless.py tests/test_hybrid_body_recovery.py
+```
+
+结果：`270 passed in 2.00s`。
+
+### 完整 Rust 测试
 
 ```powershell
 cargo test
 ```
 
-结果：Rust 单元测试 `14 passed; 0 failed`；Doc-tests `0 passed; 0 failed`。
+结果：Rust 单元测试 `15 passed, 0 failed`；Doc-tests `0 passed, 0 failed`。
 
-3. 差异空白检查：
+### 差异检查
 
 ```powershell
 git diff --check
@@ -58,39 +70,34 @@ git diff --check
 
 结果：通过，无输出。
 
-4. 初次 cargo 验证曾暴露 `occupancy` 被双层 `move` 闭包移动、随后无法借用的问题；已在 `rust/wireless_structure.rs` 改为借用式双层遍历，之后 cargo test 通过。
+## 修复摘要
+
+- `recover_cells_from_region` 和 `recover_wireless_tables` 将 native span 收集、DTO 构造、Rust 调用和结果转换放入 `rust_fn`，统一由 `run_python_or_rust` 捕获异常。
+- `python` 模式不构造 Rust DTO；`rust` 模式在异常时记录 path 对应的 `rust_fallback` 并回退 Python；`shadow` 模式保留 Python 返回语义并记录 Rust 异常/差异。
+- `build_logical_grid` 和 `recover_native_region` 在 cells 排序后按行列及跨度重建 occupancy，不使用旧索引；跨度冲突继续生成 `occupancy_conflict` diagnostics。
+- native span 进入 atom 后，结构恢复阶段不回读 `page.get_text("words")`。
+- 空槽位继续按逻辑网格逐槽物化为独立空 Cell；最终 occupancy 索引指向排序后的 cell。
 
 ## 差异分类
 
-- Python 生产接入：`recoverer.py` 和 `wireless_table_recovery.py` 使用 `get_rust_mode` 与 `run_python_or_rust`，消费 `recover_native_region`/`recover_wireless_tables` 的结果。
-- DTO 转换：Rust `CellDto`/candidate 转换为项目 `Cell`/`Table`，保留文本、bbox、source、rows/cols 和 rowspan/colspan。
-- 结构安全：Rust 与 Python 检查跨度边界及 occupancy conflict；未占用槽位物化为独立空 Cell；冲突或不完整网格触发 Python fallback。
-- Rust 结构输出：`wireless_structure.rs` 保留每个逻辑槽位恰好一个 Cell，并记录 occupancy diagnostics；相邻 candidate 的冲突不进入最终候选。
-- 测试：sentinel RED/GREEN、空槽位、独立叶子列、表头冲突、跨度完整性、相邻表格边界和无 `get_text("words")` 回读覆盖。
+- Python 路由：修复诊断可见性和 fallback 边界，未改 `rust_adapter.py`。
+- Rust 结构：修复排序后的索引一致性，保留 occupancy 冲突诊断。
+- 测试：已有 review-fix RED 测试转 GREEN，相关 wireless 和 Rust 回归均通过。
+- 文档：本报告替换旧 PDF diff review 内容；新增 `迁移记录/sprints/sprint-002.md`。未修改 `scripts/pdf_diff_review.py` 或其他历史报告。
 
-## 文件清单
+## 文件范围
 
-本次提交文件：
+本次提交只包含：
 
 - `rust/wireless_structure.rs`
 - `src/hexai_pdf_parser/tables/wireless_structure/recoverer.py`
 - `src/hexai_pdf_parser/tables/wireless_table_recovery.py`
 - `tests/test_wireless_structure_recoverer.py`
+- `迁移记录/sprints/sprint-002.md`
 - `.superpowers/sdd/task-2-report.md`
 
-未纳入提交的现有未跟踪迁移记录文件已保留在工作区：
+工作区已有的 `迁移记录/baseline.md`、`capability-matrix.md`、`decisions.md`、`migration-plan.md` 未纳入本次提交。
 
-- `迁移记录/baseline.md`
-- `迁移记录/capability-matrix.md`
-- `迁移记录/decisions.md`
-- `迁移记录/migration-plan.md`
+## Concerns
 
-本 worktree 不存在 brief 指定的 `迁移记录/sprints/sprint-002.md`，因此未创建新文件。
-
-## 自审
-
-- 未修改 `rust_adapter.py`、`rust/lib.rs`、English/table_extractor/normalizers、`scripts/pdf_diff_review.py`。
-- 未修改或覆盖旧 PDF diff review 文件；本报告仅覆盖 `.superpowers/sdd/task-2-report.md`。
-- 中文/混合结构恢复消费 native span、atom、column bands、physical/logical Cell；结构恢复路径未新增 `page.get_text("words")` 读取。
-- Python fallback 仍由 `run_python_or_rust` 和异常回退路径保留；Rust 返回不完整、越界或冲突结构不会进入项目结果。
-- 仅发现并修复一个编译阻塞；修复后重新运行相关 Python 测试、cargo test 和 diff check，均通过。
+本轮没有执行 PDF 页面级全量重跑、最终 PNG 视觉核对或 PDF diff review；这些不属于本次指定的 review-fix 测试集合。其余要求的 RED/GREEN、相关 wireless 测试、完整 Rust 测试和 `git diff --check` 均有上方实测结果。
