@@ -200,6 +200,57 @@ pub fn build_grid(
     (row_clusters, bands, physical_cells, Vec::new())
 }
 
+fn occupancy_conflict_diagnostic(path: &str, row: usize, col: usize) -> DiagnosticDto {
+    DiagnosticDto {
+        schema_version: 1,
+        status: "occupancy_conflict".to_string(),
+        path: path.to_string(),
+        error_type: Some("OccupancyConflict".to_string()),
+        message: Some(format!("multiple cells claim slot ({row}, {col})")),
+        traceback_id: None,
+        field: Some("occupancy".to_string()),
+        python_value: None,
+        rust_value: None,
+        classification: Some("defect".to_string()),
+    }
+}
+
+fn append_empty_cells(
+    cells: &mut Vec<CellDto>,
+    occupancy: &mut [Vec<Option<i64>>],
+    row_edges: &[f64],
+    col_edges: &[f64],
+) {
+    for r in 0..occupancy.len() {
+        for c in 0..occupancy[r].len() {
+            if occupancy[r][c].is_some() {
+                continue;
+            }
+            let x0 = col_edges.get(c).copied().unwrap_or(0.0);
+            let x1 = col_edges.get(c + 1).copied().unwrap_or(x0 + 10.0);
+            let y0 = row_edges.get(r).copied().unwrap_or(0.0);
+            let y1 = row_edges.get(r + 1).copied().unwrap_or(y0 + 10.0);
+            occupancy[r][c] = Some(cells.len() as i64);
+            cells.push(CellDto {
+                schema_version: 1,
+                text: String::new(),
+                row: r as i64,
+                col: c as i64,
+                rect: Rect4 {
+                    schema_version: 1,
+                    x0,
+                    y0,
+                    x1,
+                    y1,
+                },
+                rowspan: 1,
+                colspan: 1,
+                source: None,
+            });
+        }
+    }
+}
+
 pub fn build_logical_grid(atoms: Vec<AtomDto>, grid: GridDto) -> LogicalGridDto {
     let mut cells = Vec::new();
     let rows = grid.rows as usize;
@@ -307,7 +358,7 @@ pub fn recover_native_region(input: NativeRegionInput) -> NativeRegionOutput {
         input.bands
     };
 
-    let (rows, bands, phys_cells, diags) = build_grid(input.atoms.clone(), bands);
+    let (rows, bands, phys_cells, mut diags) = build_grid(input.atoms.clone(), bands);
 
     let num_rows = rows.len().max(1);
     let num_cols = bands.len().max(1);
@@ -340,9 +391,18 @@ pub fn recover_native_region(input: NativeRegionInput) -> NativeRegionOutput {
     for pc in phys_cells {
         let r = pc.row as usize;
         let c = pc.col as usize;
-        if r < num_rows && c < num_cols {
-            occupancy[r][c] = Some(cells.len() as i64);
+        if r >= num_rows || c >= num_cols {
+            continue;
         }
+        if occupancy[r][c].is_some() {
+            diags.push(occupancy_conflict_diagnostic(
+                "wireless_structure.recover_native_region",
+                r,
+                c,
+            ));
+            continue;
+        }
+        occupancy[r][c] = Some(cells.len() as i64);
         cells.push(CellDto {
             schema_version: 1,
             text: pc.text.clone(),
@@ -356,50 +416,14 @@ pub fn recover_native_region(input: NativeRegionInput) -> NativeRegionOutput {
     }
 
     let mut empty_slots = Vec::new();
-    for r in 0..num_rows {
-        for c in 0..num_cols {
-            if occupancy[r][c].is_none() {
+    for (r, row) in occupancy.iter().enumerate() {
+        for (c, slot) in row.iter().enumerate() {
+            if slot.is_none() {
                 empty_slots.push(vec![r as i64, c as i64]);
-                let x0 = if c < col_edges.len() {
-                    col_edges[c]
-                } else {
-                    0.0
-                };
-                let x1 = if c + 1 < col_edges.len() {
-                    col_edges[c + 1]
-                } else {
-                    x0 + 10.0
-                };
-                let y0 = if r < row_edges.len() {
-                    row_edges[r]
-                } else {
-                    0.0
-                };
-                let y1 = if r + 1 < row_edges.len() {
-                    row_edges[r + 1]
-                } else {
-                    y0 + 10.0
-                };
-
-                cells.push(CellDto {
-                    schema_version: 1,
-                    text: String::new(),
-                    row: r as i64,
-                    col: c as i64,
-                    rect: Rect4 {
-                        schema_version: 1,
-                        x0,
-                        y0,
-                        x1,
-                        y1,
-                    },
-                    rowspan: 1,
-                    colspan: 1,
-                    source: None,
-                });
             }
         }
     }
+    append_empty_cells(&mut cells, &mut occupancy, &row_edges, &col_edges);
 
     cells.sort_by(|a, b| match a.row.cmp(&b.row) {
         std::cmp::Ordering::Equal => a.col.cmp(&b.col),
@@ -505,6 +529,7 @@ pub fn select_candidates(
 
 pub fn recover_wireless_tables(input: WirelessRecoveryInput) -> WirelessRecoveryOutput {
     let mut candidates = Vec::new();
+    let mut diagnostics = Vec::new();
 
     let excluded_regions: Vec<Rect4> = input
         .regions
@@ -559,7 +584,8 @@ pub fn recover_wireless_tables(input: WirelessRecoveryInput) -> WirelessRecovery
             continue;
         }
 
-        let (rows, bands_out, phys_cells, _diags) = build_grid(region_atoms, bands);
+        let (rows, bands_out, phys_cells, mut region_diags) = build_grid(region_atoms, bands);
+        diagnostics.append(&mut region_diags);
         if rows.len() < 2 || bands_out.len() < 2 {
             continue;
         }
@@ -568,13 +594,24 @@ pub fn recover_wireless_tables(input: WirelessRecoveryInput) -> WirelessRecovery
         let num_rows = rows.len();
         let num_cols = bands_out.len();
         let mut occupancy = vec![vec![None; num_cols]; num_rows];
+        let mut has_conflict = false;
 
         for pc in phys_cells {
             let r = pc.row as usize;
             let c = pc.col as usize;
-            if r < num_rows && c < num_cols {
-                occupancy[r][c] = Some(cells.len());
+            if r >= num_rows || c >= num_cols {
+                continue;
             }
+            if occupancy[r][c].is_some() {
+                has_conflict = true;
+                diagnostics.push(occupancy_conflict_diagnostic(
+                    "wireless_table_recovery.recover_wireless_tables",
+                    r,
+                    c,
+                ));
+                continue;
+            }
+            occupancy[r][c] = Some(cells.len() as i64);
             cells.push(CellDto {
                 schema_version: 1,
                 text: pc.text.clone(),
@@ -587,6 +624,10 @@ pub fn recover_wireless_tables(input: WirelessRecoveryInput) -> WirelessRecovery
             });
         }
 
+        if has_conflict {
+            continue;
+        }
+
         let x0 = bands_out.iter().map(|b| b.x0).fold(f64::INFINITY, f64::min);
         let x1 = bands_out
             .iter()
@@ -594,6 +635,17 @@ pub fn recover_wireless_tables(input: WirelessRecoveryInput) -> WirelessRecovery
             .fold(f64::NEG_INFINITY, f64::max);
         let y0 = rows.iter().map(|r| r.y0).fold(f64::INFINITY, f64::min);
         let y1 = rows.iter().map(|r| r.y1).fold(f64::NEG_INFINITY, f64::max);
+
+        append_empty_cells(
+            &mut cells,
+            &mut occupancy,
+            &rows.iter().map(|row| row.y0).chain(std::iter::once(y1)).collect::<Vec<_>>(),
+            &bands_out
+                .iter()
+                .map(|band| band.x0)
+                .chain(std::iter::once(x1))
+                .collect::<Vec<_>>(),
+        );
 
         let cand_rect = Rect4 {
             schema_version: 1,
@@ -620,7 +672,7 @@ pub fn recover_wireless_tables(input: WirelessRecoveryInput) -> WirelessRecovery
     WirelessRecoveryOutput {
         schema_version: 1,
         candidates: selected,
-        diagnostics: Vec::new(),
+        diagnostics,
     }
 }
 

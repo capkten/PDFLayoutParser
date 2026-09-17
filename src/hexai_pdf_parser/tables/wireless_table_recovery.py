@@ -90,6 +90,74 @@ class WirelessRecovery:
     diagnostics: Dict[str, Any]
 
 
+def _rust_bbox(value: Any, fallback: BBox | None = None) -> BBox:
+    if isinstance(value, dict):
+        return BBox(
+            float(value["x0"]),
+            float(value["y0"]),
+            float(value["x1"]),
+            float(value["y1"]),
+        )
+    if isinstance(value, (list, tuple)) and len(value) >= 4:
+        return BBox(
+            float(value[0]),
+            float(value[1]),
+            float(value[2]),
+            float(value[3]),
+        )
+    if fallback is not None:
+        return fallback
+    raise ValueError("Rust cell output is missing a rectangle")
+
+
+def _rust_cells_to_project(
+    raw_cells: Sequence[Dict[str, Any]],
+    rows: int,
+    columns: int,
+    fallback_bbox: BBox | None = None,
+) -> List[Cell]:
+    if rows < 0 or columns < 0:
+        raise ValueError("Rust grid dimensions must be non-negative")
+
+    occupied: set[tuple[int, int]] = set()
+    converted: List[Cell] = []
+    for item in raw_cells:
+        if not isinstance(item, dict):
+            raise TypeError("Rust cell output must contain mappings")
+        row = int(item["row"])
+        column = int(item["col"])
+        rowspan = max(1, int(item.get("rowspan", 1)))
+        colspan = max(1, int(item.get("colspan", 1)))
+        if (
+            row < 0
+            or column < 0
+            or row + rowspan > rows
+            or column + colspan > columns
+        ):
+            raise ValueError("Rust cell falls outside its grid")
+        for occupied_row in range(row, row + rowspan):
+            for occupied_column in range(column, column + colspan):
+                slot = (occupied_row, occupied_column)
+                if slot in occupied:
+                    raise ValueError("Rust cell output has an occupancy conflict")
+                occupied.add(slot)
+        converted.append(
+            Cell(
+                text=str(item.get("text", "")).strip(),
+                row_index=row,
+                col_index=column,
+                bbox=_rust_bbox(item.get("rect", item.get("bbox")), fallback_bbox),
+                rowspan=rowspan,
+                colspan=colspan,
+            )
+        )
+
+    if len(occupied) != rows * columns:
+        raise ValueError("Rust cell output leaves grid slots unmaterialized")
+    converted.sort(key=lambda cell: (cell.row_index, cell.col_index))
+    return converted
+
+
 def _union(items: Iterable[BBox]) -> BBox:
     boxes = list(items)
     return BBox(
@@ -908,6 +976,42 @@ def _table_quality(table: Table) -> tuple[float, int, int]:
     return (table.confidence, populated, table.rows * table.cols)
 
 
+def _table_from_rust_candidate(candidate: Dict[str, Any]) -> Table:
+    if not isinstance(candidate, dict):
+        raise TypeError("Rust candidate output must be a mapping")
+    rows = int(candidate["rows"])
+    columns = int(candidate["cols"])
+    bbox = _rust_bbox(candidate.get("rect"))
+    cells = _rust_cells_to_project(
+        candidate.get("cells", []), rows, columns, fallback_bbox=bbox
+    )
+    confidence = candidate.get("confidence")
+    return Table(
+        bbox=bbox,
+        rows=rows,
+        cols=columns,
+        cells=cells,
+        confidence=float(confidence) if confidence is not None else None,
+        source=candidate.get("source"),
+    )
+
+
+def _wireless_recovery_from_rust(output: Dict[str, Any]) -> WirelessRecovery:
+    if not isinstance(output, dict):
+        raise TypeError("Rust wireless recovery output must be a mapping")
+    diagnostics = output.get("diagnostics", [])
+    if any(
+        isinstance(item, dict) and item.get("status") == "occupancy_conflict"
+        for item in diagnostics
+    ):
+        raise ValueError("Rust wireless recovery reported an occupancy conflict")
+    tables = [_table_from_rust_candidate(item) for item in output.get("candidates", [])]
+    return WirelessRecovery(
+        tables=tables,
+        diagnostics={"source": "rust", "rust": diagnostics},
+    )
+
+
 def _recover_wireless_tables_python(
     page: fitz.Page,
     excluded_regions: Sequence[BBox] | None = None,
@@ -1045,9 +1149,8 @@ def recover_wireless_tables(
     allowed_regions: Sequence[BBox] | None = None,
 ) -> WirelessRecovery:
     """Recover borderless tables from a native PDF page with PDF_RUST_MODE support."""
-    mode = os.environ.get("PDF_RUST_MODE", "python").lower()
+    mode = rust_adapter.get_rust_mode("wireless_table_recovery")
     if mode in ("rust", "shadow"):
-        py_res = _recover_wireless_tables_python(page, excluded_regions, allowed_regions)
         try:
             spans = collect_native_spans(
                 page,
@@ -1119,10 +1222,19 @@ def recover_wireless_tables(
                     "numeric_tolerance": 2.0,
                 },
             }
-            _ = rust_adapter.recover_wireless_tables(input_dto)
+            return rust_adapter.run_python_or_rust(
+                mode=mode,
+                python_fn=lambda: _recover_wireless_tables_python(
+                    page, excluded_regions, allowed_regions
+                ),
+                rust_fn=lambda dto: _wireless_recovery_from_rust(
+                    rust_adapter.recover_wireless_tables(dto)
+                ),
+                input_dto=input_dto,
+                path="wireless_table_recovery.recover_wireless_tables",
+            )
         except Exception:
-            pass
-        return py_res
+            return _recover_wireless_tables_python(page, excluded_regions, allowed_regions)
     else:
         return _recover_wireless_tables_python(page, excluded_regions, allowed_regions)
 

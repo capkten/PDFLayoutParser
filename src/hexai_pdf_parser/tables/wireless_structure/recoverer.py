@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
-import os
 from typing import Any
 
 import fitz
 
 from hexai_pdf_parser import rust_adapter
 from hexai_pdf_parser.core.models import BBox, Cell
-from hexai_pdf_parser.tables.wireless_table_recovery import collect_native_spans
+from hexai_pdf_parser.tables.wireless_table_recovery import (
+    _rust_cells_to_project,
+    collect_native_spans,
+)
 
 from .columns import (
     infer_column_bands,
@@ -155,14 +157,39 @@ def _recover_cells_from_region_python(
         return 0, 0, []
 
 
+def _recover_cells_from_rust(
+    output: dict[str, Any],
+    region_bbox: BBox,
+) -> tuple[int, int, list[Cell]]:
+    if not isinstance(output, dict):
+        raise TypeError("Rust native recovery output must be a mapping")
+    grid_output = output.get("grid", {})
+    if not isinstance(grid_output, dict):
+        raise TypeError("Rust native recovery grid must be a mapping")
+    grid = grid_output.get("grid", grid_output)
+    if not isinstance(grid, dict):
+        raise TypeError("Rust native recovery inner grid must be a mapping")
+    diagnostics = output.get("diagnostics", [])
+    if any(
+        isinstance(item, dict) and item.get("status") == "occupancy_conflict"
+        for item in diagnostics
+    ):
+        raise ValueError("Rust native recovery reported an occupancy conflict")
+    rows = int(grid["rows"])
+    columns = int(grid["cols"])
+    cells = output.get("cells", grid_output.get("cells", []))
+    return rows, columns, _rust_cells_to_project(
+        cells, rows, columns, fallback_bbox=region_bbox
+    )
+
+
 def recover_cells_from_region(
     page: fitz.Page,
     region_bbox: BBox,
 ) -> tuple[int, int, list[Cell]]:
     """Recover Chinese/mixed wireless cells from one trusted table region."""
-    mode = os.environ.get("PDF_RUST_MODE", "python").lower()
+    mode = rust_adapter.get_rust_mode("wireless_structure")
     if mode in ("rust", "shadow"):
-        py_res = _recover_cells_from_region_python(page, region_bbox)
         try:
             native_spans = collect_native_spans(page, allowed_regions=[region_bbox])
             spans = region_spans(native_spans, region_bbox)
@@ -188,9 +215,16 @@ def recover_cells_from_region(
                     "numeric_tolerance": 2.0,
                 },
             }
-            _ = rust_adapter.recover_native_region(rust_input)
+            return rust_adapter.run_python_or_rust(
+                mode=mode,
+                python_fn=lambda: _recover_cells_from_region_python(page, region_bbox),
+                rust_fn=lambda dto: _recover_cells_from_rust(
+                    rust_adapter.recover_native_region(dto), region_bbox
+                ),
+                input_dto=rust_input,
+                path="wireless_structure.recover_cells_from_region",
+            )
         except Exception:
-            pass
-        return py_res
+            return _recover_cells_from_region_python(page, region_bbox)
     else:
         return _recover_cells_from_region_python(page, region_bbox)

@@ -1,60 +1,96 @@
-# Task 2 资源生成报告
+# Task 2 收尾报告：中文/混合 native-span 与共享无线完整接入
 
 ## 状态
 
-已完成并提交。实现范围严格限定为 `scripts/pdf_diff_review.py` 和 `tests/test_pdf_diff_review.py`；未修改原始 PDF、标签或真实输出目录。
+已完成验证并提交。生产入口消费 Rust sentinel 返回值，并将 owned DTO 转换为项目 `Cell`/`Table`；Rust 输出的空槽位、占用冲突和网格边界由 Rust/Python 两层校验，异常时保留 Python fallback。
 
-## Commit
+## RED/GREEN 证据
 
-- `d36b1886185ca036c3d94348bcc01b905e92faa3`
-- message: `feat: generate PDF diff review assets`
+### RED
 
-## 实现摘要
-
-- 读取并校验 Task 1 manifest，按 `page_index` 配对实际页面。
-- 调用 `scan_page_outputs`；当实际 Markdown 或 PNG 缺失时使用容错索引保留页面记录，并写入明确的 `errors`。
-- 按 `testset_root/source_visual_path`、`testset_root.parent/source_visual_path`、`testset_root.parent/source_table_png` 顺序寻找标签图。
-- 使用 `difflib.unified_diff` 生成标签到当前的 unified diff。
-- 输出 UTF-8 `classification.json`、`summary.json`、`images/page-XXX.png` 和供 Task 3 完善的 `index.html` 数据壳。
-- 使用 PyMuPDF 生成带 LABEL/CURRENT/PAGE 标识的并排 PNG；缺图绘制占位框。
-
-## 测试
-
-命令：
+在独立临时 worktree（基于收尾前 `HEAD`，仅复制当前 sentinel 测试文件和已存在的 `_pdf_fast.pyd` 以满足导入）运行：
 
 ```powershell
-$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; $env:PYTHONPATH='src'; pytest tests/test_pdf_diff_review.py -q
+$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; & 'C:\Users\23662\AppData\Local\Programs\Python\Python312\Scripts\pytest.exe' -q tests/test_wireless_structure_recoverer.py -k 'sentinel'
 ```
 
-结果：`9 passed, 5 warnings`。警告均为当前 PyMuPDF 运行环境的弃用警告。
+关键输出：
 
-额外自检：
+```text
+FF [100%]
+2 failed, 14 deselected in 1.26s
+```
 
-- `python -m py_compile scripts\\pdf_diff_review.py tests\\test_pdf_diff_review.py`：通过。
-- `git diff --check`：通过。
-- 临时目录测试确认生成的并排 PNG 可被测试打开。
+失败原因符合 sentinel 设计：旧 `recover_cells_from_region` 返回 `PYTHON_BASELINE`，旧 `recover_wireless_tables` 返回 0 张表，说明 Rust adapter 返回值曾被丢弃。
 
-## Concerns
+### GREEN
 
-- `index.html` 仅提供页面链接和 `window.reviewPages` 数据，不包含 Task 3 的交互逻辑。
-- 当扫描器遇到不完整实际页面时，容错索引会把扫描器的总体错误保存在 `summary.json.scan_errors`；页面级资源错误保存在对应页面的 `errors`。
-- 当前测试输出保留了 5 个既有 PyMuPDF 弃用警告，但没有测试失败。
+当前 Task 2 实现运行相同 sentinel 测试：
 
-## Task 2 审阅修复
+```text
+.. [100%]
+2 passed, 14 deselected in 0.40s
+```
 
-- C1：并排页面先由 PyMuPDF 页面渲染为 pixmap，再使用 `pixmap.save(...png)` 输出真实 PNG；测试校验 PNG 签名并用 PyMuPDF 解码。
-- I1：`absent_expected` 和 `excluded` 页面不要求标签/实际 Markdown，不再仅因合法无 Markdown 状态归入 `missing_resource`。
-- I2：scanner 失败后保留原始 `scan_error`，fallback 继续校验 JSON `index`、`page_type` 和页索引；无法索引的坏页错误同时写入对应页面记录。
-- M1：标签图候选严格按 `testset_root/source_visual_path`、`testset_root.parent/source_visual_path`、`testset_root.parent/source_table_png` 顺序查找。
-- M2：损坏 PNG 的 PyMuPDF 读取异常原因写入对应页面 `errors`，其余页面仍继续生成。
+## 验证命令与结果
 
-新增回归测试覆盖上述五项行为，测试命令及结果：
+1. 相关 Python 测试：
 
 ```powershell
-$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; $env:PYTHONPATH='src'; pytest tests/test_pdf_diff_review.py -q
+$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; & 'C:\Users\23662\AppData\Local\Programs\Python\Python312\Scripts\pytest.exe' -q tests/test_wireless_structure_recoverer.py tests/test_wireless_table_recovery.py tests/test_pdf_fast_wireless_structure.py tests/test_pdf_fast_shared_recovery.py
 ```
 
-结果：`13 passed, 5 warnings`。
+结果：`53 passed in 0.71s`。
 
-- `python -m py_compile scripts\\pdf_diff_review.py tests\\test_pdf_diff_review.py`：通过。
-- `git diff --check`：通过。
+2. Rust 测试：
+
+```powershell
+cargo test
+```
+
+结果：Rust 单元测试 `14 passed; 0 failed`；Doc-tests `0 passed; 0 failed`。
+
+3. 差异空白检查：
+
+```powershell
+git diff --check
+```
+
+结果：通过，无输出。
+
+4. 初次 cargo 验证曾暴露 `occupancy` 被双层 `move` 闭包移动、随后无法借用的问题；已在 `rust/wireless_structure.rs` 改为借用式双层遍历，之后 cargo test 通过。
+
+## 差异分类
+
+- Python 生产接入：`recoverer.py` 和 `wireless_table_recovery.py` 使用 `get_rust_mode` 与 `run_python_or_rust`，消费 `recover_native_region`/`recover_wireless_tables` 的结果。
+- DTO 转换：Rust `CellDto`/candidate 转换为项目 `Cell`/`Table`，保留文本、bbox、source、rows/cols 和 rowspan/colspan。
+- 结构安全：Rust 与 Python 检查跨度边界及 occupancy conflict；未占用槽位物化为独立空 Cell；冲突或不完整网格触发 Python fallback。
+- Rust 结构输出：`wireless_structure.rs` 保留每个逻辑槽位恰好一个 Cell，并记录 occupancy diagnostics；相邻 candidate 的冲突不进入最终候选。
+- 测试：sentinel RED/GREEN、空槽位、独立叶子列、表头冲突、跨度完整性、相邻表格边界和无 `get_text("words")` 回读覆盖。
+
+## 文件清单
+
+本次提交文件：
+
+- `rust/wireless_structure.rs`
+- `src/hexai_pdf_parser/tables/wireless_structure/recoverer.py`
+- `src/hexai_pdf_parser/tables/wireless_table_recovery.py`
+- `tests/test_wireless_structure_recoverer.py`
+- `.superpowers/sdd/task-2-report.md`
+
+未纳入提交的现有未跟踪迁移记录文件已保留在工作区：
+
+- `迁移记录/baseline.md`
+- `迁移记录/capability-matrix.md`
+- `迁移记录/decisions.md`
+- `迁移记录/migration-plan.md`
+
+本 worktree 不存在 brief 指定的 `迁移记录/sprints/sprint-002.md`，因此未创建新文件。
+
+## 自审
+
+- 未修改 `rust_adapter.py`、`rust/lib.rs`、English/table_extractor/normalizers、`scripts/pdf_diff_review.py`。
+- 未修改或覆盖旧 PDF diff review 文件；本报告仅覆盖 `.superpowers/sdd/task-2-report.md`。
+- 中文/混合结构恢复消费 native span、atom、column bands、physical/logical Cell；结构恢复路径未新增 `page.get_text("words")` 读取。
+- Python fallback 仍由 `run_python_or_rust` 和异常回退路径保留；Rust 返回不完整、越界或冲突结构不会进入项目结果。
+- 仅发现并修复一个编译阻塞；修复后重新运行相关 Python 测试、cargo test 和 diff check，均通过。

@@ -3,14 +3,123 @@ from pathlib import Path
 import fitz
 import pytest
 
-from hexai_pdf_parser.core.models import BBox
-from hexai_pdf_parser.tables.wireless_table_recovery import NativeSpan
+from hexai_pdf_parser.core.models import BBox, Cell
+from hexai_pdf_parser.tables.wireless_table_recovery import (
+    NativeSpan,
+    WirelessRecovery,
+    recover_wireless_tables,
+)
 from hexai_pdf_parser.tables.wireless_structure import recoverer
 from hexai_pdf_parser.tables.wireless_structure.recoverer import recover_cells_from_region
 from hexai_pdf_parser.tables.wireless_structure.text_runs import build_text_runs
 
 
 PAGE_437_FIXTURE = Path(__file__).parent / "fixtures" / "page_437_wireless.pdf"
+
+
+def _rust_rect(x0, y0, x1, y1):
+    return {
+        "schema_version": 1,
+        "x0": float(x0),
+        "y0": float(y0),
+        "x1": float(x1),
+        "y1": float(y1),
+    }
+
+
+def _rust_sentinel_cell(text="RUST_SENTINEL"):
+    return {
+        "schema_version": 1,
+        "text": text,
+        "row": 0,
+        "col": 0,
+        "rect": _rust_rect(0, 0, 40, 20),
+        "rowspan": 1,
+        "colspan": 1,
+        "source": None,
+    }
+
+
+def _rust_sentinel_candidate(text="RUST_SENTINEL"):
+    return {
+        "schema_version": 1,
+        "rect": _rust_rect(0, 0, 40, 20),
+        "source": "rust_sentinel",
+        "confidence": 1.0,
+        "rows": 1,
+        "cols": 1,
+        "cells": [_rust_sentinel_cell(text)],
+    }
+
+
+def test_recover_cells_from_region_consumes_rust_sentinel(monkeypatch):
+    region = BBox(0, 0, 160, 70)
+    monkeypatch.setenv("PDF_RUST_MODE", "rust")
+    monkeypatch.setattr(
+        recoverer,
+        "_recover_cells_from_region_python",
+        lambda page, region_bbox: (1, 1, [Cell("PYTHON_BASELINE", 0, 0, region)]),
+    )
+    monkeypatch.setattr(
+        recoverer,
+        "collect_native_spans",
+        lambda page, allowed_regions: [],
+    )
+    monkeypatch.setattr(
+        recoverer.rust_adapter,
+        "recover_native_region",
+        lambda input_dto: {
+            "schema_version": 1,
+            "grid": {
+                "schema_version": 1,
+                "rows": 1,
+                "cols": 1,
+                "row_edges": [0.0, 20.0],
+                "col_edges": [0.0, 40.0],
+                "occupancy": [[0]],
+            },
+            "cells": [_rust_sentinel_cell()],
+            "diagnostics": [],
+        },
+    )
+
+    rows, columns, cells = recover_cells_from_region(object(), region)
+
+    assert (rows, columns) == (1, 1)
+    assert [cell.text for cell in cells] == ["RUST_SENTINEL"]
+
+
+def test_recover_wireless_tables_consumes_rust_sentinel(monkeypatch):
+    monkeypatch.setenv("PDF_RUST_MODE", "rust")
+    monkeypatch.setattr(
+        "hexai_pdf_parser.tables.wireless_table_recovery._recover_wireless_tables_python",
+        lambda page, excluded_regions=None, allowed_regions=None: WirelessRecovery(
+            tables=[], diagnostics={"source": "python"}
+        ),
+    )
+    monkeypatch.setattr(
+        "hexai_pdf_parser.tables.wireless_table_recovery.collect_native_spans",
+        lambda page, excluded_regions=None, allowed_regions=None: [],
+    )
+    monkeypatch.setattr(
+        "hexai_pdf_parser.tables.wireless_table_recovery.rust_adapter.recover_wireless_tables",
+        lambda input_dto: {
+            "schema_version": 1,
+            "candidates": [_rust_sentinel_candidate()],
+            "diagnostics": [],
+        },
+    )
+
+    class Page:
+        number = 0
+        rotation = 0
+        rect = type("Rect", (), {"width": 500.0, "height": 500.0})()
+
+    recovery = recover_wireless_tables(Page())
+
+    assert len(recovery.tables) == 1
+    assert recovery.tables[0].source == "rust_sentinel"
+    assert [cell.text for cell in recovery.tables[0].cells] == ["RUST_SENTINEL"]
 
 
 def test_recover_cells_from_region_converts_new_pipeline_to_project_cells(monkeypatch):
