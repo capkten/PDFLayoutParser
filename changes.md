@@ -2,6 +2,16 @@
 
 ## 2026-09-17
 
+- 优化 PDF 加载器按需分类机制，彻底消除多页 PDF 局部提取时的全量扫描开销（端到端提速超 20 倍）：
+  - **根因与调用位置**：`src/hexai_pdf_parser/core/loader.py::Loader.load()` 原先无条件遍历 PDF 的所有页面，并在循环体内对每一页无差别调用 `classify_page_type(page)` 进行字符失真、字体和文本扫描。当处理 1000+ 页的超大 PDF（如 `zh_all_table_pages.pdf`）并指定仅提取少量页面（如 `pages=[196, 415]`）时，上层 `PDFParser` 与 `Pipeline` 虽然跳过了非目标页的处理，但 `Loader.load()` 仍盲目耗费约 19.6 秒扫描整本 1023 页，使原本只需 1 秒的局部提取严重劣化至 21 秒。
+  - **设计与修复**：
+    - `Loader.load(page_indices=...)` 新增可选参数 `page_indices`；仅对用户指定的请求页调用 `classify_page_type` 进行扫描，未请求页面保留默认值 `"vector"`，完全避免无谓的解析开销；
+    - 在 `PDFParser.extract_tables`、`extract_text`、`extract_images`、`render_pages` 及 `Pipeline.run()` 中全链路透传 `page_indices` 至 `Loader.load()`。
+  - **测试与验证**：
+    - 新增 `tests/test_loader_lazy_page_classification.py`，测试覆盖按需跳过未请求页扫描、`PDFParser.extract_tables` 参数透传及既有全量加载兼容（全部 pass）；
+    - 既有 `tests/test_loader.py` 回归通过（`3 passed`）；
+    - **实测端到端耗时**：在 `fix/zh_all_table_pages.pdf`（1023 页）上运行 `PDFParser.extract_tables(page_indices=[196, 415])`，稳定平均耗时从 **21.37 秒** 直降至 **1.05 秒**，端到端实际提速达 **20.4 倍**。
+
 - Sprint 004：迁移有线表格 Cell 划分、幽灵行修剪、超切列合并与文字归属至 Rust (PyO3) 并释放 GIL。
   - **根因与调用位置**：`src/hexai_pdf_parser/tables/extractors/wired_table_extractor.py` 中 `_build_cells_for_region()`、`_trim_ghost_edge_rows()`、`_merge_oversegmented_line_columns()` 与 `_assign_text_to_line_cells()` 原先在 Python 层面频繁进行网格连通分量遍历、泛洪填充、边界拓扑判定和跨行跨列字符拆分归属，存在大量解释执行开销与 GIL 竞争；且原提取器在多个子方法中多次调用 `page.get_text("words")` 与 `page.get_text("rawdict")`，违背结构恢复不回读 words 约束。
   - **设计与修复判定**：

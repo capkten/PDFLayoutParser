@@ -156,7 +156,7 @@ class PDFParser:
             from hexai_pdf_parser.tables.table_extractor import TableExtractor
             from hexai_pdf_parser.extractors.text_extractor import TextExtractor
 
-            document = Loader(self._pdf_path).load()
+            document = Loader(self._pdf_path).load(page_indices=page_indices)
             pdf_doc = _fitz.open(self._pdf_path)
             try:
                 table_extractor = TableExtractor(
@@ -203,7 +203,7 @@ class PDFParser:
             from hexai_pdf_parser.core.loader import Loader
             from hexai_pdf_parser.tables.table_extractor import TableExtractor
 
-            document = Loader(self._pdf_path).load()
+            document = Loader(self._pdf_path).load(page_indices=page_indices)
             pdf_doc = _fitz.open(self._pdf_path)
             try:
                 extractor = TableExtractor(
@@ -239,7 +239,7 @@ class PDFParser:
             pdf_path = self._pdf_path
             if pdf_path is None:
                 raise ValueError("extract_images requires a PDF file path, not a Document")
-            document = Loader(pdf_path).load()
+            document = Loader(pdf_path).load(page_indices=page_indices)
             extractor = ImageExtractor(output_dir)
             images: List[Image] = []
             for page in document.pages:
@@ -266,7 +266,7 @@ class PDFParser:
             if pdf_path is None:
                 raise ValueError("render_pages requires a PDF file path, not a Document")
             effective_dpi = dpi if dpi is not None else self._render_dpi
-            document = Loader(pdf_path).load()
+            document = Loader(pdf_path).load(page_indices=page_indices)
             engine = RenderEngine(output_dir, effective_dpi)
             renders: List[RenderInfo] = []
             for page in document.pages:

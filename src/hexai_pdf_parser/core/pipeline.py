@@ -702,7 +702,7 @@ class Pipeline:
         # 1. Load PDF
         document, _ = self._time_stage(
             "load",
-            lambda: Loader(self.pdf_path).load(),
+            lambda: Loader(self.pdf_path).load(page_indices=self.page_indices),
         )
 
         # Prepare output directories
