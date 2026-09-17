@@ -81,6 +81,32 @@ def test_run_python_or_rust_rust_mode_success():
     assert len(rust_adapter.get_diagnostics()) == 0
 
 
+def test_run_python_or_rust_routes_sentinel_without_changing_shadow_result():
+    """Rust mode returns the Rust sentinel while shadow mode keeps Python output."""
+    python_result = {"sentinel": False}
+    rust_result = {"sentinel": True}
+
+    assert rust_adapter.run_python_or_rust(
+        mode="rust",
+        python_fn=lambda: python_result,
+        rust_fn=lambda: rust_result,
+        path="sentinel",
+    ) == rust_result
+
+    rust_adapter.clear_diagnostics()
+    assert rust_adapter.run_python_or_rust(
+        mode="shadow",
+        python_fn=lambda: python_result,
+        rust_fn=lambda: rust_result,
+        path="sentinel",
+    ) == python_result
+
+    diagnostics = rust_adapter.get_diagnostics()
+    assert len(diagnostics) == 1
+    assert diagnostics[0]["status"] == "rust_output_mismatch"
+    assert {"schema_version", "status", "path"} <= diagnostics[0].keys()
+
+
 def test_run_python_or_rust_rust_mode_fallback():
     """In rust mode, if rust_fn raises an exception, fallback to python_fn and record diagnostic."""
     def bad_rust(inp):
@@ -99,6 +125,31 @@ def test_run_python_or_rust_rust_mode_fallback():
     assert diags[0]["status"] == "rust_fallback"
     assert diags[0]["path"] == "test/fallback_path"
     assert diags[0]["error_type"] == "RuntimeError"
+
+
+def test_diagnostic_path_is_normalized_and_has_common_fields():
+    """Diagnostics use unknown for blank paths and always expose the common fields."""
+    rust_adapter.run_python_or_rust(
+        mode="shadow",
+        python_fn=lambda: "python",
+        rust_fn=lambda: "rust",
+        path="   ",
+    )
+
+    diagnostics = rust_adapter.get_diagnostics()
+    assert len(diagnostics) == 1
+    assert diagnostics[0]["path"] == "unknown"
+    assert {"schema_version", "status", "path"} <= diagnostics[0].keys()
+
+
+def test_run_python_or_rust_rejects_non_string_mode():
+    """Invalid mode values fail through the routing contract with ValueError."""
+    with pytest.raises(ValueError, match="Invalid mode"):
+        rust_adapter.run_python_or_rust(
+            mode=None,
+            python_fn=lambda: "python",
+            rust_fn=lambda: "rust",
+        )
 
 
 def test_run_python_or_rust_shadow_mode():

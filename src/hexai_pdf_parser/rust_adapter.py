@@ -10,6 +10,12 @@ VALID_MODES = {"python", "shadow", "rust"}
 _ROUTING_DIAGNOSTICS: List[Dict[str, Any]] = []
 
 
+def _normalize_diagnostic_path(path: Any) -> str:
+    if isinstance(path, str) and path.strip():
+        return path.strip()
+    return "unknown"
+
+
 def get_diagnostics() -> List[Dict[str, Any]]:
     """Return a copy of the current routing diagnostics."""
     return list(_ROUTING_DIAGNOSTICS)
@@ -42,7 +48,7 @@ def assert_equivalent(path: str, python_value: Any, rust_value: Any) -> None:
         diag = {
             "schema_version": 1,
             "status": "rust_output_mismatch",
-            "path": path,
+            "path": _normalize_diagnostic_path(path),
             "field": "__root__",
             "python_value": {"str_val": str(python_value)},
             "rust_value": {"str_val": str(rust_value)},
@@ -54,9 +60,12 @@ def assert_equivalent(path: str, python_value: Any, rust_value: Any) -> None:
 
 def run_python_or_rust(mode: str, python_fn, rust_fn, input_dto: Any = None, path: str = ""):
     """Execute Python or Rust according to mode contract."""
+    if not isinstance(mode, str):
+        raise ValueError(f"Invalid mode '{mode}'. Allowed modes are: {sorted(list(VALID_MODES))}")
     m = mode.strip().lower()
     if m not in VALID_MODES:
         raise ValueError(f"Invalid mode '{mode}'. Allowed modes are: {sorted(list(VALID_MODES))}")
+    diagnostic_path = _normalize_diagnostic_path(path)
 
     if m == "python":
         return python_fn()
@@ -71,7 +80,7 @@ def run_python_or_rust(mode: str, python_fn, rust_fn, input_dto: Any = None, pat
             diag = {
                 "schema_version": 1,
                 "status": "rust_fallback",
-                "path": path or "unknown",
+                "path": diagnostic_path,
                 "error_type": type(exc).__name__,
                 "message": str(exc),
                 "traceback_id": tb_str[-200:],
@@ -90,7 +99,7 @@ def run_python_or_rust(mode: str, python_fn, rust_fn, input_dto: Any = None, pat
                 diag = {
                     "schema_version": 1,
                     "status": "rust_output_mismatch",
-                    "path": path or "unknown",
+                    "path": diagnostic_path,
                     "field": "__root__",
                     "python_value": {"str_val": str(py_res)},
                     "rust_value": {"str_val": str(r_res)},
@@ -102,7 +111,7 @@ def run_python_or_rust(mode: str, python_fn, rust_fn, input_dto: Any = None, pat
             diag = {
                 "schema_version": 1,
                 "status": "rust_fallback",
-                "path": path or "unknown",
+                "path": diagnostic_path,
                 "error_type": type(exc).__name__,
                 "message": str(exc),
                 "traceback_id": tb_str[-200:],
