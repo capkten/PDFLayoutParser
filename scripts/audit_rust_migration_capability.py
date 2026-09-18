@@ -29,6 +29,216 @@ class Record:
     retention: str
 
 
+@dataclass(frozen=True)
+class CapabilityUnit:
+    identifier: str
+    label: str
+    rust_files: Tuple[str, ...] = ()
+    rust_markers: Tuple[str, ...] = ()
+    python_files: Tuple[str, ...] = ()
+    route_markers: Tuple[str, ...] = ()
+    test_files: Tuple[str, ...] = ()
+    record_globs: Tuple[str, ...] = ()
+    evidence_globs: Tuple[str, ...] = ()
+    schema_markers: Tuple[str, ...] = ()
+    fixed_status: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class CapabilityResult:
+    identifier: str
+    label: str
+    status: str
+    missing: Tuple[str, ...]
+    evidence: Tuple[str, ...]
+
+
+CAPABILITY_UNITS: Tuple[CapabilityUnit, ...] = (
+    CapabilityUnit(
+        "wired-geometry",
+        "几何线段、坐标合并与 wired grid",
+        ("rust/geometry.rs", "rust/wired.rs"),
+        (
+            "pub fn merge_h_lines",
+            "pub fn merge_v_lines",
+            "pub fn find_table_regions",
+            "pub fn build_cells_for_region",
+            "pub fn assign_text_to_line_cells",
+            "pub fn merge_oversegmented_line_columns",
+            "pub fn trim_ghost_edge_rows",
+        ),
+        ("src/hexai_pdf_parser/tables/extractors/wired_table_extractor.py",),
+        (
+            "run_python_or_rust",
+            "_merge_h_lines",
+            "_merge_v_lines",
+            "_find_table_regions",
+            "_build_cells_for_region",
+            "_assign_text_to_line_cells",
+            "_merge_oversegmented_line_columns",
+            "_trim_ghost_edge_rows",
+        ),
+        ("tests/test_wired_table_extractor.py",),
+        ("迁移记录/*.md",),
+        ("output/rust-full-migration-*",),
+    ),
+    CapabilityUnit(
+        "native-span-structure",
+        "native span/atom 与中文混合逻辑网格",
+        ("rust/wireless_structure.rs",),
+        ("pub fn recover_native_region",),
+        (
+            "src/hexai_pdf_parser/tables/wireless_structure/recoverer.py",
+        ),
+        ("run_python_or_rust", "recover_native_region"),
+        (
+            "tests/test_pdf_fast_wireless_structure.py",
+            "tests/test_wireless_structure_recoverer.py",
+        ),
+        ("迁移记录/*.md",),
+        ("output/rust-full-migration-*",),
+    ),
+    CapabilityUnit(
+        "shared-wireless-recovery",
+        "shared wireless candidate recovery",
+        ("rust/wireless_structure.rs",),
+        ("pub fn recover_wireless_tables",),
+        ("src/hexai_pdf_parser/tables/wireless_table_recovery.py",),
+        ("run_python_or_rust", "recover_wireless_tables"),
+        ("tests/test_wireless_table_recovery.py",),
+        ("迁移记录/*.md",),
+        ("output/rust-full-migration-*",),
+    ),
+    CapabilityUnit(
+        "english-background-and-zebra",
+        "英文背景分组与 zebra row 分配",
+        ("rust/english_wireless.rs",),
+        ("pub fn group_backgrounds", "pub fn assign_words_to_zebra_rows"),
+        ("src/hexai_pdf_parser/tables/extractors/english_table_extractor.py",),
+        ("run_python_or_rust", "group_backgrounds", "assign_words_to_zebra_rows"),
+        ("tests/test_pdf_fast_english_wireless.py",),
+        ("迁移记录/*.md",),
+        ("output/rust-full-migration-*",),
+    ),
+    CapabilityUnit(
+        "english-columns-and-cells",
+        "英文 wireless 列推断与 Cell 构建",
+        ("rust/english_wireless.rs",),
+        ("pub fn infer_english_columns", "pub fn build_english_cells"),
+        ("src/hexai_pdf_parser/tables/extractors/english_table_extractor.py",),
+        ("run_python_or_rust", "infer_english_columns", "build_english_cells"),
+        ("tests/test_pdf_fast_english_wireless.py",),
+        ("迁移记录/*.md",),
+        ("output/rust-full-migration-*",),
+    ),
+    CapabilityUnit(
+        "text-alignment-grid",
+        "text alignment 行、列带与 Cell 网格",
+        ("rust/english_wireless.rs",),
+        ("pub fn build_general_wireless_cells",),
+        ("src/hexai_pdf_parser/tables/table_extractor.py",),
+        ("run_python_or_rust", "build_general_wireless_cells", "_build_text_alignment_table"),
+        ("tests/test_pdf_fast_text_alignment.py",),
+        ("迁移记录/*.md",),
+        ("output/rust-full-migration-*",),
+    ),
+    CapabilityUnit(
+        "legacy-text-rebuild",
+        "normalizer 的 legacy text-alignment 重建",
+        ("rust/english_wireless.rs",),
+        ("pub fn build_legacy_text_alignment",),
+        ("src/hexai_pdf_parser/tables/normalizers/table_header_normalizer.py",),
+        ("run_python_or_rust", "build_legacy_text_alignment", "_rebuild_text_aligned_table"),
+        ("tests/test_pdf_fast_table_normalization.py",),
+        ("迁移记录/*.md",),
+        ("output/rust-full-migration-*",),
+    ),
+    CapabilityUnit(
+        "header-topology",
+        "表头拓扑与 rowspan/colspan",
+        ("rust/table_normalization.rs",),
+        ("pub fn infer_header_structure",),
+        ("src/hexai_pdf_parser/tables/normalizers/table_header_normalizer.py",),
+        ("run_python_or_rust", "infer_header_structure", "_promote_grouped_header"),
+        ("tests/test_pdf_fast_table_normalization.py",),
+        ("迁移记录/*.md",),
+        ("output/rust-full-migration-*",),
+    ),
+    CapabilityUnit(
+        "financial-header-tokens",
+        "金融表头 token normalization",
+        ("rust/table_normalization.rs",),
+        ("pub fn normalize_financial_header_tokens",),
+        ("src/hexai_pdf_parser/tables/normalizers/table_header_normalizer.py",),
+        ("run_python_or_rust", "normalize_financial_header_tokens", "_normalize_financial_header_tokens"),
+        ("tests/test_pdf_fast_table_normalization.py",),
+        ("迁移记录/*.md",),
+        ("output/rust-full-migration-*",),
+    ),
+    CapabilityUnit("pymupdf-page-access", "PyMuPDF page/drawing/text 访问", fixed_status="python_orchestration"),
+    CapabilityUnit("ml-and-rendering", "模型推理与渲染", fixed_status="out_of_scope"),
+)
+
+
+def _read_project_file(root: Path, relative: str) -> str:
+    path = root / relative
+    try:
+        return path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return ""
+
+
+def _evaluate_capability(root: Path, unit: CapabilityUnit) -> CapabilityResult:
+    if unit.fixed_status:
+        return CapabilityResult(unit.identifier, unit.label, unit.fixed_status, (), ())
+
+    missing: List[str] = []
+    rust_text = "\n".join(_read_project_file(root, path) for path in unit.rust_files)
+    python_text = "\n".join(_read_project_file(root, path) for path in unit.python_files)
+    if not all(marker in rust_text for marker in unit.rust_markers):
+        missing.append("rust_symbol")
+    schema_markers = unit.schema_markers or (("schema_version: 1",) if unit.rust_files else ())
+    if schema_markers and not all(marker in rust_text for marker in schema_markers):
+        missing.append("dto_schema")
+    if not all(marker in python_text for marker in unit.route_markers):
+        missing.append("production_route")
+    if not all((root / path).exists() for path in unit.test_files):
+        missing.append("behavior_test")
+    if not any(any(root.glob(pattern)) for pattern in unit.record_globs):
+        missing.append("migration_record")
+    evidence = tuple(
+        sorted({str(path) for pattern in unit.evidence_globs for path in root.glob(pattern)})
+    )
+    if not evidence:
+        missing.append("page_or_diff_evidence")
+
+    if "production_route" in missing:
+        status = "adapter_only"
+    elif missing:
+        status = "blocked"
+    else:
+        status = "migrated"
+    return CapabilityResult(unit.identifier, unit.label, status, tuple(missing), evidence)
+
+
+def _find_project_root(path: Path) -> Path:
+    candidate = path.resolve()
+    if candidate.is_file():
+        candidate = candidate.parent
+    for directory in (candidate, *candidate.parents):
+        if (directory / "rust").is_dir():
+            return directory
+    return candidate
+
+
+def collect_capabilities(roots: Sequence[Path]) -> List[CapabilityResult]:
+    project_root = next(
+        (root for root in (_find_project_root(item) for item in roots) if (root / "rust").is_dir()),
+        _find_project_root(Path(roots[0])),
+    )
+    return [_evaluate_capability(project_root, unit) for unit in CAPABILITY_UNITS]
+
+
 def _name(node: ast.AST) -> Optional[str]:
     if isinstance(node, ast.Name):
         return node.id
@@ -67,6 +277,9 @@ def _node_text(node: ast.AST) -> str:
 def _classification(node: ast.AST, path: str) -> Tuple[str, str, str]:
     names = {item.id for item in ast.walk(node) if isinstance(item, ast.Name)}
     text = _node_text(node)
+    path_parts = {part.lower() for part in Path(path).parts}
+    if path_parts & {"scripts", "tests", "benchmark", "benchmarks"}:
+        return "脚本、测试或 benchmark 边界", "out_of_scope", "非生产 owned 算法，不列为待迁移能力"
     if names & {"open", "print", "subprocess"}:
         return "文件、进程或调试输出", "out_of_scope", "I/O、CLI 或调试包装保留 Python"
     if names & {"fitz", "Page", "page", "drawing", "drawings"} or "get_text" in text:
@@ -181,9 +394,15 @@ def _stable_path(path: Path) -> str:
 
 def collect(roots: Sequence[Path]) -> List[Record]:
     records: List[Record] = []
+    excluded_dirs = {".git", ".tmp", "target", "output", ".worktrees"}
     for root in sorted({item.resolve() for item in roots}, key=lambda item: item.as_posix()):
-        for path in sorted(root.rglob("*.py")) if root.is_dir() else [root]:
-            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        paths = (
+            path
+            for path in root.rglob("*.py")
+            if not any(part in excluded_dirs for part in path.relative_to(root).parts)
+        ) if root.is_dir() else [root]
+        for path in sorted(paths):
+            tree = ast.parse(path.read_text(encoding="utf-8-sig"), filename=str(path))
             nodes = list(_walk(tree, path.stem))
             qualified_names = {qualified for _, qualified, _, _ in nodes}
             calls: Dict[str, List[str]] = {qualified: [] for qualified in qualified_names}
@@ -205,12 +424,35 @@ def collect(roots: Sequence[Path]) -> List[Record]:
     return sorted(records, key=lambda item: (item.path, item.location, item.symbol))
 
 
-def render(records: Sequence[Record], roots: Sequence[Path]) -> str:
+def render(
+    records: Sequence[Record],
+    roots: Sequence[Path],
+    capabilities: Sequence[CapabilityResult] = (),
+) -> str:
     lines = [
         "# Rust 迁移能力矩阵（AST 审计）", "",
-        "> 本文件由 `scripts/audit_rust_migration_capability.py` 生成，是静态能力盘点，不是性能报告。",
+        "> 本文件由 `scripts/audit_rust_migration_capability.py` 生成。顶部能力单元是生产接入判定，下面 AST 表是静态盘点，不是性能报告。",
         "> 分类仅允许 `exact`、`semantic`、`redesign`、`out_of_scope`；未测量性能统一标记未来 benchmark。",
         f"> 输入根目录：{'、'.join(_stable_path(item) for item in roots)}；登记 {len(records)} 个 AST 函数/方法/嵌套函数/lambda 节点。", "",
+        "## 能力单元生产接入判定", "",
+        "| 能力单元 | 状态 | 缺失项 | 页面/差分证据 |",
+        "|---|---|---|---|",
+    ]
+    for item in capabilities:
+        lines.append(
+            "| "
+            + " | ".join(
+                (
+                    f"`{item.identifier}` {item.label}",
+                    item.status,
+                    ", ".join(item.missing) or "—",
+                    ", ".join(item.evidence) or "—",
+                )
+            )
+            + " |"
+        )
+    lines += [
+        "",
         "| 符号 | 调用者 | 位置/类型 | 依赖边界 | 输入字段 | 输出字段 | 分类 | Rust 目标 | 测试 | benchmark suite | 状态 | Python 保留理由 |",
         "|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
@@ -234,8 +476,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         raise RuntimeError("审计结果为空或包含未注册分类")
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(render(records, roots), encoding="utf-8")
-    print(f"已写入 {output}；登记 {len(records)} 个 AST 节点")
+    capabilities = collect_capabilities(roots)
+    output.write_text(render(records, roots, capabilities), encoding="utf-8")
+    counts: Dict[str, int] = {}
+    for item in capabilities:
+        counts[item.status] = counts.get(item.status, 0) + 1
+    print(
+        f"已写入 {output}；登记 {len(records)} 个 AST 节点；"
+        f"能力单元状态：{counts}"
+    )
     return 0
 
 
