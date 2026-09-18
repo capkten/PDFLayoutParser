@@ -203,3 +203,44 @@ def test_infer_column_bands_excludes_sparse_left_section_title():
         (260, 285),
         (320, 360),
     ]
+
+
+def test_is_sparse_left_section_title_rejects_row_with_different_font_baseline_offset():
+    # Left English item (ArialMT) and right Chinese item (Microsoft JhengHei)
+    # cy difference is 2.45pt (> 2.4pt), but vertical overlap is 11.35pt (>80%)
+    left = {"text": "Hang Seng Index Options", "bbox": [56.6, 105.56, 197.4, 118.94], "font_size": 12}
+    right = {"text": "恒生指數期權", "bbox": [320.3, 107.59, 392.3, 121.82], "font_size": 12}
+    atoms = [left, right]
+    region = BBox(50.0, 50.0, 550.0, 300.0)
+
+    assert columns.is_sparse_left_section_title(left, atoms, region) is False
+
+
+def test_is_sparse_left_section_title_rejects_row_with_multiline_left_entry():
+    # Multiline left entry with vertical overlap with right entries
+    left = {"text": "Hang Seng Index (Net Total Return Index)\nFutures", "bbox": [56.6, 59.58, 284.7, 90.86], "font_size": 12}
+    right1 = {"text": "恒生指數（淨股息累計指數）期貨", "bbox": [320.3, 61.61, 500.4, 75.84], "font_size": 12}
+    right2 = {"text": "股息累計指數期貨）", "bbox": [331.8, 82.39, 439.8, 96.62], "font_size": 12}
+    atoms = [left, right1, right2]
+    region = BBox(50.0, 50.0, 550.0, 300.0)
+
+    assert columns.is_sparse_left_section_title(left, atoms, region) is False
+
+
+def test_infer_column_bands_preserves_bilingual_glossary_columns_with_font_baseline_diff():
+    # All left items exceed 25% of table width and have ~2.45pt cy difference with right items
+    atoms = [
+        {"text": "Hang Seng Index Options", "bbox": [56.6, 105.56, 197.4, 118.94], "font_size": 12},
+        {"text": "恒生指數期權", "bbox": [320.3, 107.59, 392.3, 121.82], "font_size": 12},
+        {"text": "Hang Seng Industry Classification System", "bbox": [56.6, 130.88, 283.5, 144.26], "font_size": 12},
+        {"text": "恒生行業分類系統", "bbox": [320.3, 132.91, 416.3, 147.14], "font_size": 12},
+        {"text": "Hang Seng Infrastructure Index (HSII)", "bbox": [56.6, 156.08, 261.5, 169.46], "font_size": 12},
+        {"text": "恒生基礎建設指數", "bbox": [320.3, 158.11, 416.3, 172.34], "font_size": 12},
+    ]
+    region = BBox(50.0, 50.0, 550.0, 300.0)
+
+    bands = infer_column_bands(atoms, region)
+
+    assert len(bands) == 2
+    assert bands[0]["x0"] == 56.6
+    assert bands[1]["x0"] == 320.3

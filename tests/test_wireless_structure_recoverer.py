@@ -130,6 +130,46 @@ def test_glossary_page_53_merges_see_references_without_pseudo_columns():
     )
 
 
+@pytest.mark.skipif(not GLOSSARY_PDF.exists(), reason="glossary PDF is unavailable")
+def test_glossary_page_76_recovers_without_dropping_left_column():
+    document = fitz.open(str(GLOSSARY_PDF))
+    try:
+        rows, columns, cells = recover_cells_from_region(
+            document[75],
+            BBox(50.2, 28.2, 552.1, 683.9),
+        )
+    finally:
+        document.close()
+
+    assert (rows, columns, len(cells)) == (20, 2, 40)
+    assert any(
+        cell.row_index == 1
+        and cell.col_index == 0
+        and cell.text == "Hang Seng Index Options"
+        for cell in cells
+    )
+
+
+@pytest.mark.skipif(not GLOSSARY_PDF.exists(), reason="glossary PDF is unavailable")
+def test_glossary_page_81_recovers_without_dropping_left_column():
+    document = fitz.open(str(GLOSSARY_PDF))
+    try:
+        rows, columns, cells = recover_cells_from_region(
+            document[80],
+            BBox(53.4, 59.6, 520.5, 699.3),
+        )
+    finally:
+        document.close()
+
+    assert (rows, columns, len(cells)) == (22, 2, 44)
+    assert any(
+        cell.row_index == 1
+        and cell.col_index == 0
+        and "Hong Kong Institute of Directors" in cell.text
+        for cell in cells
+    )
+
+
 def test_table_header_gap_above_normal_gap_is_not_joined():
     def atom(text, x0, x1, order, line):
         return {
