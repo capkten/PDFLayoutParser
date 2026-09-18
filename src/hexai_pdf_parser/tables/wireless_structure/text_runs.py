@@ -1005,11 +1005,10 @@ def build_text_runs(
                     "normal_word_gap": normal_gap,
                 }
             )
-    result = _merge_wrapped_field_runs(result)
-    result = _merge_glossary_reference_runs(result)
     if output_mode == "columnar":
         return _merge_same_native_block_lines(result)
-    return result
+    result = _merge_wrapped_field_runs(result)
+    return _merge_glossary_reference_runs(result)
 
 
 def _same_native_line_run(left: dict[str, Any], right: dict[str, Any]) -> bool:

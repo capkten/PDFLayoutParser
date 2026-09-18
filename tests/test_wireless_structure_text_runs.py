@@ -741,3 +741,18 @@ def test_build_text_runs_does_not_merge_see_across_spatially_intermediate_atom()
     result = build_text_runs(atoms)
 
     assert "see definition" not in [item["text"] for item in result]
+
+
+def test_build_text_runs_columnar_mode_does_not_merge_wrapped_field_runs():
+    # In columnar mode (financial tables), vertically adjacent cells in different lines/rows
+    # should NOT be merged by _merge_wrapped_field_runs
+    atoms = [
+        _atom("归属于母公司所有者的净利润", 50.0, 180.0, 0, (1, 0, 0), y=10.0),
+        _atom("少数股东损益", 50.0, 150.0, 1, (2, 0, 0), y=30.0),
+    ]
+
+    result = build_text_runs(atoms, output_mode="columnar")
+
+    assert len(result) == 2
+    assert [item["text"] for item in result] == ["归属于母公司所有者的净利润", "少数股东损益"]
+
