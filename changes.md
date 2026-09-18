@@ -1,6 +1,15 @@
 # Changes
 
+## 2026-09-18
+
+- 修复 `glossary_ec.pdf` 第 76 页与第 81 页（解析索引 `75` 和 `80`）双语对照无线表格因西文中文字体基线与折行高度差导致首列被误判为单行稀疏标题而漏表的问题：
+  - **根因与调用位置**：`src/hexai_pdf_parser/tables/wireless_structure/columns.py::is_sparse_left_section_title()` 原先采用严格的 `abs(candidate_center_y - item_center_y) <= 2.4` 作为同行判定。在 `glossary_ec.pdf` 等中英对照表格中，左列英文（ArialMT 12pt）与右列中文（微软正黑体 12pt）在 PDF 中的垂直包围盒几何中心相差 `2.455pt`（> 2.4pt），且多行英文条目高度与单行中文存在明显垂直中心差。严格单点中心容差导致同行右侧中文被漏判，`len(same_row)` 误判为 1；加上两页条目宽度均超过 `0.25 * region_width`，左列所有 20 个（P76）与 22 个（P81）英文条目被 100% 误判为单行小节标题剔除，初始列带只剩右侧 1 列，最终触发 `len(bands) < 2` 导致整页漏表。
+  - **判定与修改**：在 `columns.py::is_sparse_left_section_title()` 中将同行判定重构为基于 Y 轴空间垂直实质重叠（`overlap_y >= max(2.0, min(item_h, candidate_h) * 0.25)`）与动态中心距离容差；保留对单行跨列无数据项目（如第 586 页资产负债表长科目）的排除能力不变。恢复流程只消费 native span/atom/列带/Cell，不回读 `page.get_text("words")`，不回退旧路径。
+  - **测试与验证**：在 `tests/test_wireless_structure_columns.py` 中新增中英字体基线差 2.45pt 且垂直重叠 11pt 正例、多行折行垂直重叠正例、双语词典列带推断正例，并保留第 586 页单行跨列无数据长科目严格排除反例；在 `tests/test_wireless_structure_recoverer.py` 中新增真实页面第 76 页与第 81 页表格结构回归；无线结构相关专项测试全部通过（`193 passed`），`git diff --check` 0 错误。
+  - **页面级验证**：完整管线独立重跑到 `D:\codes\PDFLayoutParser\output\glossary_ec_p76_p81_fix_20260918\`，对比清单 7 页：第 4 页（`26x2`，52 cells）、第 26 页（`23x3`，69 cells）、第 53 页（`23x2`，46 cells）、第 74 页（`20x2`，40 cells）、第 76 页（从 0 表恢复为 `20x2`，40 cells）、第 81 页（从 0 表恢复为 `22x2`，44 cells）、第 173 页（`23x2`，46 cells）；全部 7 页表格的 occupancy conflict 均为 0，槽位 100% 唯一覆盖；可视化 PNG 视觉核验确认中英列左右分离清晰、单元格网格边界完整。
+
 ## 2026-09-17
+
 
 - 修复 `glossary_ec.pdf` 第 4 页（解析索引 `3`）无线 glossary 的 `see` 引用被拆成伪列问题：
   - **根因与调用位置**：`src/hexai_pdf_parser/tables/wireless_structure/text_runs.py::build_text_runs()` 原先将 `see` 与右侧释义拆成独立 atom；`infer_column_bands()` 随后把两个稀疏的 `see` x 轨道当成独立列，空槽位物化后结果从目标 `26x2` 膨胀为 `26x4`、`101 cells`。其中 AUM 还会被拼成 `seeassets under management`。
