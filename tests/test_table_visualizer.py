@@ -24,6 +24,95 @@ def test_complete_wireless_recovery_table_still_uses_inferred_grid_rects():
     assert first.x1 > table.cells[0].bbox.x1
 
 
+def test_line_projection_visualization_draws_physical_segments_not_cell_rects():
+    finishes = []
+
+    class Shape:
+        def __init__(self):
+            self.operation = None
+
+        def draw_rect(self, rect):
+            self.operation = ("rect", rect)
+
+        def draw_line(self, start, end):
+            self.operation = ("line", start, end)
+
+        def finish(self, **kwargs):
+            finishes.append((self.operation, kwargs))
+
+        def insert_text(self, *_args, **_kwargs):
+            pass
+
+        def commit(self):
+            pass
+
+    class Page:
+        rect = table_visualizer.fitz.Rect(0, 0, 200, 200)
+
+        def clean_contents(self):
+            pass
+
+        def get_text(self, _mode):
+            return []
+
+        def new_shape(self):
+            return Shape()
+
+    table = Table(
+        bbox=BBox(0, 0, 100, 100),
+        rows=2,
+        cols=2,
+        source="line_projection",
+        cells=[
+            Cell("", 0, 0, BBox(0, 0, 100, 50), colspan=2),
+            Cell("", 1, 0, BBox(0, 50, 50, 100)),
+            Cell("", 1, 1, BBox(50, 50, 100, 100)),
+        ],
+        h_lines=[
+            (0.0, 0.0, 100.0, 0.0),
+            (40.0, 50.0, 100.0, 50.0),
+            (0.0, 100.0, 100.0, 100.0),
+        ],
+        v_lines=[
+            (0.0, 0.0, 0.0, 100.0),
+            (50.0, 50.0, 50.0, 100.0),
+            (100.0, 0.0, 100.0, 100.0),
+        ],
+    )
+
+    table_visualizer.draw_tables_on_page(Page(), [table])
+
+    blue_operations = [
+        operation
+        for operation, kwargs in finishes
+        if kwargs.get("color") == table_visualizer.CELL_BORDER_COLOR
+    ]
+    assert [operation[0] for operation in blue_operations] == [
+        "line",
+        "line",
+        "line",
+        "line",
+        "line",
+        "line",
+    ]
+    line_segments = [
+        (
+            round(operation[1].x, 1),
+            round(operation[1].y, 1),
+            round(operation[2].x, 1),
+            round(operation[2].y, 1),
+        )
+        for operation in blue_operations
+    ]
+    assert (40.0, 50.0, 100.0, 50.0) in line_segments
+    assert (0.0, 50.0, 100.0, 50.0) not in line_segments
+    assert not any(
+        operation[0] == "rect"
+        and operation[1] == table_visualizer.fitz.Rect(0, 50, 50, 100)
+        for operation in blue_operations
+    )
+
+
 def test_wireless_grid_preserves_tall_header_above_materialized_empty_slot():
     table = Table(
         bbox=BBox(0, 0, 100, 220),

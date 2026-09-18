@@ -1,5 +1,68 @@
 # Changes
 
+## 2026-09-18
+
+- 修复 `table_visualizer.py` 在相邻列水平投影重叠或存在左伸条目（如右列 `see` 交叉引用）时垂直列分隔线塌陷、导致左列长文本条目被竖线横切的问题：
+  - **根因与调用位置**：`src/hexai_pdf_parser/debug/table_visualizer.py::_compute_cell_grid_rects()` 在计算相邻列垂直分割边界 `boundary` 时，原先简单采用 `boundary = (col_rights[c_cur] + col_lefts[c_nxt]) / 2.0` 并执行极端钳位 `boundary = min(boundary, col_lefts[c_nxt])`。在 `glossary_ec.pdf` 第 52 页（印刷页 51）等双语词典无线表格中，由于前两行存在 `see` 交叉引用条目合并至右列（`see exchange traded note`，其起始 `x0 = 269.9`，而右列主流释义起始 `x0 = 319.0`），导致右列的全局最小 `col_lefts[1] = 269.9`。极端钳位直接将列分割线强制拉平至 `x = 269.9`。而左列第 4、7、9、10、11、12、14 行等 7 处长英文条目宽度延伸至 `x = 282.0 ~ 294.0`，导致原本仅在 `294.0 ~ 319.0` 之间存在的视觉安全走廊被破坏，垂直蓝色网格线直接横穿左列 7 处长英文单词。
+  - **判定与修改**：在 `table_visualizer.py::_compute_cell_grid_rects()` 中重构相邻列分割线推断逻辑。针对相邻列水平外包络存在重叠异常（`max_cur_r > min_nxt_l`）的情况，不再直接向单一最左离群值钳位，而是统计右列主流主轨分布（`dominant_nxt = [x for x in nxt_lefts if x >= max_cur_r]`）与左列主流分布；当超过 50% 的右列单元格位于左列最右侧右方时，分割线安全置于左列最右与主流右列最左的间隙中点 `(max_cur_r + min(dominant_nxt)) / 2.0`（本页计算结果为 `x = 306.5`，完美落在 `[294.0, 319.0]` 走廊中央）；同时确保边界不越过各列自身的有效起始与终止范围。该修复仅完善调试可视化几何网格绘制，底层表格数据模型保持 `23x2`（46 cells）不变，严格遵守不回读 `page.get_text("words")`、不回退旧路径的约束。
+  - **测试与验证**：在 `tests/test_table_visualizer_column_boundary.py` 中新增列水平重叠时左列边界不塌陷与不横切单元格测试，以及真实页面第 52 页无字符横切回归测试；`tests/test_table_visualizer.py`、`tests/test_table_visualizer_column_boundary.py`、`tests/test_wireless_structure_recoverer.py` 全部通过（`26 passed`），相关无线结构回归测试（`58 passed`）全部通过，`git diff --check` 0 错误。
+  - **页面级验证**：重跑第 52 页到独立输出目录 `D:\codes\PDFLayoutParser\output\glossary_ec_col_vis_fix_20260918\`；视觉核查确认垂直蓝色网格线由原本的 `x ≈ 44%`（`x = 269.9`）后移至 `x ≈ 50%`（`x = 306.5`）；左列 7 处长英文条目全部完整包裹在第 0 列网格内，外留充足安全边距，无任何文字横切或被遮挡。
+
+- 修复 `glossary_ec.pdf` 第 76 页与第 81 页（解析索引 `75` 和 `80`）双语对照无线表格因西文中文字体基线与折行高度差导致首列被误判为单行稀疏标题而漏表的问题：
+  - **根因与调用位置**：`src/hexai_pdf_parser/tables/wireless_structure/columns.py::is_sparse_left_section_title()` 原先采用严格的 `abs(candidate_center_y - item_center_y) <= 2.4` 作为同行判定。在 `glossary_ec.pdf` 等中英对照表格中，左列英文（ArialMT 12pt）与右列中文（微软正黑体 12pt）在 PDF 中的垂直包围盒几何中心相差 `2.455pt`（> 2.4pt），且多行英文条目高度与单行中文存在明显垂直中心差。严格单点中心容差导致同行右侧中文被漏判，`len(same_row)` 误判为 1；加上两页条目宽度均超过 `0.25 * region_width`，左列所有 20 个（P76）与 22 个（P81）英文条目被 100% 误判为单行小节标题剔除，初始列带只剩右侧 1 列，最终触发 `len(bands) < 2` 导致整页漏表。
+  - **判定与修改**：在 `columns.py::is_sparse_left_section_title()` 中将同行判定重构为基于 Y 轴空间垂直实质重叠（`overlap_y >= max(2.0, min(item_h, candidate_h) * 0.25)`）与动态中心距离容差；保留对单行跨列无数据项目（如第 586 页资产负债表长科目）的排除能力不变。恢复流程只消费 native span/atom/列带/Cell，不回读 `page.get_text("words")`，不回退旧路径。
+  - **测试与验证**：在 `tests/test_wireless_structure_columns.py` 中新增中英字体基线差 2.45pt 且垂直重叠 11pt 正例、多行折行垂直重叠正例、双语词典列带推断正例，并保留第 586 页单行跨列无数据长科目严格排除反例；在 `tests/test_wireless_structure_recoverer.py` 中新增真实页面第 76 页与第 81 页表格结构回归；无线结构相关专项测试全部通过（`193 passed`），`git diff --check` 0 错误。
+  - **页面级验证**：完整管线独立重跑到 `D:\codes\PDFLayoutParser\output\glossary_ec_p76_p81_fix_20260918\`，对比清单 7 页：第 4 页（`26x2`，52 cells）、第 26 页（`23x3`，69 cells）、第 53 页（`23x2`，46 cells）、第 74 页（`20x2`，40 cells）、第 76 页（从 0 表恢复为 `20x2`，40 cells）、第 81 页（从 0 表恢复为 `22x2`，44 cells）、第 173 页（`23x2`，46 cells）；全部 7 页表格的 occupancy conflict 均为 0，槽位 100% 唯一覆盖；可视化 PNG 视觉核验确认中英列左右分离清晰、单元格网格边界完整。
+
+## 2026-09-17
+
+
+- 修复 `glossary_ec.pdf` 第 4 页（解析索引 `3`）无线 glossary 的 `see` 引用被拆成伪列问题：
+  - **根因与调用位置**：`src/hexai_pdf_parser/tables/wireless_structure/text_runs.py::build_text_runs()` 原先将 `see` 与右侧释义拆成独立 atom；`infer_column_bands()` 随后把两个稀疏的 `see` x 轨道当成独立列，空槽位物化后结果从目标 `26x2` 膨胀为 `26x4`、`101 cells`。其中 AUM 还会被拼成 `seeassets under management`。
+  - **修复判定**：在 native span 到 atom 阶段合并严格为 `see` 的标记与流序相邻、同一 source block、同一视觉行、位于右侧且间距不超过 `2.0 * font_size` 的拉丁释义；候选区间存在其他 atom、数值或过大间距时拒绝合并。合并保留 `span_refs`、flow、source provenance，并以单个空格规范文本。恢复过程继续只消费 native span/atom/列带/Cell，不回读 `page.get_text("words")`，不回退 legacy 路径或修改 ML bbox。
+  - **测试与页面验证**：新增目标正例、数值邻接拒绝反例、空间中间 atom 拒绝反例及真实页面回归；`tests/test_wireless_structure_text_runs.py tests/test_wireless_structure_recoverer.py tests/test_wireless_structure_columns.py` 结果为 `72 passed`，有 5 条既有 PyMuPDF/SWIG 弃用警告。完整管线重跑到 `D:\codes\PDFLayoutParser\output\needs_human_glossary_ec_page4_fix_20260917\`：页面 1 张 `wireless_span_recovery` 表，`26x2`、`52 cells`、bbox `[51.7,45.4,598.0,707.7]`；52/52 槽位唯一覆盖，occupancy conflict 为 `0`。结构化结果为 `pages\page-003.json`，最终 PNG 为 `tables\page-003.png`（另有 `glossary_ec_page_003_visualized.png`），视觉检查确认伪中间列消失且相邻行、表格边界无误并。
+- 扩展上述 `see` 引用合并规则，覆盖 `glossary_ec.pdf` 第 53 页（解析索引 `52`）：该页 `see` 与释义间距约为 `2.2 * font_size`，原 `2.0 * font_size` 上限仍会留下窄伪列。上限放宽至 `2.5 * font_size`，其余同视觉行、连续 flow、同 source block、无空间中间 atom、非数值等保护条件不变。新增第 53 页文本与 recoverer 回归测试；无线结构相关测试结果为 `74 passed`。使用当前 worktree 源码重跑第 4、53、74、173 页至 `D:\codes\PDFLayoutParser\output\needs_human_glossary_ec_see_fix_v2_20260917\`：四页分别为 `26x2/52`、`23x2/46`、`20x2/40`、`23x2/46`，均为 `wireless_span_recovery`，槽位全部唯一覆盖且无冲突；第 53 页最终 PNG 为 `tables\page-052.png`。
+
+- 修复阅读顺序解析中同行动态文本碎片因微小垂直坐标浮点误差引发先右后左严重颠倒的问题，并严格保持双栏/多栏排版不横穿：
+  - **根因与调用链**：在 `src/hexai_pdf_parser/extractors/reading_order.py::_recursive_xy_cut()` 的 Fallback 分支中，原先直接使用 `sorted(items, key=lambda: (item.y0, item.x0))`。当中文财报附注页面中某一行因中英混排、标点或字体切换被拆分成两个 TextBlock（如左侧中文机构名与右侧英文证书编号）时，右半段因字体基线微差导致 `y0` 稍微偏高（如 `349.1` 对比 `349.4`，差值仅 0.3pt），排序器直接将右半段排在前面、左半段排在后面，造成严重的同行先右后左逆跳颠倒。
+  - **判定与修改**：
+    - 引入基于动态行包围盒聚合的 `_sort_items_by_row_reading_order()` 替换原 Fallback；先按 y0 初排，动态扩展维护当前行 `row_bbox`；当后续元素与当前行垂直相交（重叠比例达 30% 或重叠高度 >= 2.0pt）时合并为同一行；整行关闭后，行内严格按 `x0` 从左到右升序排序；
+    - 严格保持外层递归 XY-Cut 对全宽页眉、页脚及双栏/多栏（`_is_valid_column_partition`）的拓扑划分能力不变。双栏排版在宏观层被分离为独立分支处理，行聚合仅在单栏叶子节点内生效，彻底杜绝双栏横穿。
+  - **测试与验证**：在 `tests/test_reading_order.py` 中新增同一行右侧碎片微小 y0 上浮 0.3pt 正例、双栏排版同行 y 完全重叠严禁横向穿透反例，全量 6 项测试全部通过（`6 passed`），`git diff --check` 0 错误。
+  - **页面级验证**：在独立输出目录 `D:\codes\PDFLayoutParser\output\fixed_reading_order_20260917\` 重跑青岛国信经审计财报附注第 63、64、65 页。原本第 63 页存在的 7 处乱序逆跳完全归零（0 处乱序告警，降幅 100%），第 64、65 页的乱序逆跳同样完全归零，输出流向图与 Markdown 文本行左右逻辑 100% 顺畅。
+
+## 2026-09-16
+
+- 修复中文无线表格中排版大字距常见单字词组（如“合 计”、“小 计”等）成词被拆分并引发伪列带的问题：
+  - **根因与调用链**：在 `src/hexai_pdf_parser/tables/wireless_structure/text_runs.py::_can_join()` 中，`spaced_single_cjk` 间隙上限原固定为 `1.25 * font_size`。当 PDF 排版中两个单字（如“合”与“计”）使用分散对齐或双全角空格时，实际间隙可达约 `2.0 * font_size`（本例中 21.06pt），导致成词失败被拆为两个独立的 Atom。随后的 `infer_column_bands()` 将“合”归入项目列带，而游离的“计”被 `header_topology.py::rescue_sparse_body_bands()` 错误抢救为独立列带（Band 2），造成物理网格裂为 6 列，并在合计行产生孤立的 `<td>合</td><td>计</td>`。
+  - **判定与修改**：在 `text_runs.py` 中引入常见两字排版词白名单 `_SPACED_CJK_WORD_WHITELIST`（包含“合计”、“小计”、“总计”、“类别”、“税种”、“项目”等核心表格骨架词）。在同一原生文本行且两端均为严格单字 CJK 时，白名单词对允许的最大字间距放宽至 `2.5 * min(font_size)`；非白名单或普通单字依然严格限制在 `1.25 * font_size`。
+  - **测试与验证**：在 `tests/test_wireless_structure_text_runs.py` 中新增白名单词对（“合计”、“小计”）大字距合并正例、非白名单单字（如“男”、“女”）大字距保持独立反例；无线结构测试集 222 项全部通过（`222 passed`），`git diff --check` 0 错误。
+  - **页面级验证**：在独立输出目录 `output/fix_spaced_cjk_page_185/` 重跑 `fix/zh_all_table_pages.pdf` 页面索引 185（`page-185`）。Table 1 由原本异常的 `5x6` 正确恢复为 `5x5`，末行单元格成功合并为 `'合计'`，多余的空列带完全消除，可视化 PNG 中“合 计”由单一完整单元格边界包围。
+
+## 2026-09-15
+
+- 收紧有线候选的矩形边重复线去重：根因是部分 PDF 将同一条可见细线同时编码为描边 `l` 和窄填充 `re`，两条中心坐标相差约 `0.4pt`，在 `_merge_h_lines()`/`_merge_v_lines()` 前会形成重复网格坐标；但不能因为候选来自 `re` 就扩大所有线的合并容差。
+  - **判定与调用位置**：`WiredTableExtractor._extract_lines_from_drawings()` 记录窄填充矩形及其几何边，只在另一条候选与该矩形边的方向、长轴覆盖率（至少 `98%`）、端点和法向坐标均匹配时提前去重。普通 `l`、独立 `re` 以及跨度不一致的近邻线继续保留；`merge_group_tol` 不因 `re` 来源而放宽。
+  - **测试与验证**：新增同一几何矩形边的 `l`/`re` 重复正例、无匹配矩形边的近邻线反例和两个独立近邻 `re` 反例；有线提取器专项测试 `52 passed`。包含表格提取器、可视化和有线专项的结果为 `150 passed, 1 failed`，唯一失败仍为既有 hybrid 路由测试（预期 `hybrid_line_span_recovery`、实际 `line_projection`），未触及本次路径；`compileall` 与 `git diff --check` 通过。
+  - **页面级验证**：在独立输出目录 `D:\codes\PDFLayoutParser\output\rectangle_frame_line_dedupe_20260915\` 重跑真实 PDF 页面索引 `84/85/86/196`（P85/P86/P87/P197）。P85、P86、P87 的结构分别为 `36x4`、`40x4`、`27x4`；P197 保持 `36x9`、73 个 Cell。PNG 视觉复核确认三页原有边框和网格连续，P197 的大外框及局部线段没有被删除或扩展。
+
+## 2026-09-14
+
+- 修复 `fix/zh_all_table_pages.pdf` 页面索引 `415`（印刷页 17）柱形图被误检为有线表格，并阻止同一图表候选在下游重新变成 `english_general_wireless` 表格。
+  - **根因与调用链**：提交 `0ca829e` 在 `src/hexai_pdf_parser/tables/extractors/wired_table_extractor.py::_extract_lines_from_drawings()` 中恢复了描边封闭矩形的四条边，以支持 `PDFsam_merge1.pdf` 等真实有线表格。P415 的每个柱子也由同 bbox 的彩色填充 `re` 和黑色 `type="s"` 描边 `re` 组成；10 个柱子的底边与坐标轴相交后，经 `_find_table_regions()` 的“横竖线相交即连通”规则生成 `11x10` 的 `line_projection` 伪表格。移除 wired 结果后，ML 候选框仍会被 `TableExtractor._recover_tables_from_regions()` 送入 `EnglishTableExtractor.extract_general_wireless()`，因此单修 wired 层会把同一误检改名为 `english_general_wireless`。
+  - **修复判定**：在 wired 线拓扑之前，仅收集可见轴对齐 `re` 矩形；只有填充矩形与可见描边矩形 bbox 在 `1.0pt` 内匹配，并且成组满足“至少 3 根、共用底边、宽度差不超过 `max(1.5pt, 中位宽度的 15%)`、高度差至少 `max(4pt, 中位宽度的 50%)`、横向不重叠且至少有一个 `>= max(线容差, 中位柱宽的 25%)` 的柱间空隙”的组件，才建立柱形图 mask。最后一条是防止共享列边界的填充描边 `rowspan` 表格被误判；P415 的成对柱之间仍有明显空隙。mask 按 `max(6pt, 3 * 中位柱宽)` 扩展，覆盖 P415 坐标轴和图例；仅完整位于 mask 内的横/竖候选线被过滤。
+  - **下游守卫与兼容边界**：`WiredTableExtractor` 保存当前页面的 chart mask，并绑定产生它的 page 对象；`TableExtractor._recover_tables_from_regions()` 仅在同一 page 上、且候选 bbox 被 mask 覆盖比例达到 `0.5` 时跳过无线/回退候选。该规则不按页码、业务文字或“Cell 必须有文字”判定，也不新增 `page.get_text("words")` 读取。没有成组“填充+描边”柱形证据时，`0ca829e` 的 `type="s"`/`type="fs"` 封闭矩形四边拆解保持不变；`PDFsam_merge1.pdf` 第 0 页仍保留 4 张有线表格，目标“信息概要明细”仍为 `6x5`。
+  - **测试先行与回归**：在 `tests/test_wired_table_extractor.py` 新增合成柱形图反例、P415 页面反例、无填充描边 2x2 正例、填充描边 `rowspan` 正例和两色块图例反例；在 `tests/test_table_extractor.py` 新增候选恢复层及主入口 P415 回归、跨页 mask 隔离和局部重叠保留测试。新增边界测试均先在旧实现下稳定失败，修复后 wired 专项为 `51 passed`，表格模块排除既有历史失败项后为 `93 passed, 1 deselected`。完整 `tests/test_table_extractor.py` 仍有 1 个既有失败：`test_hybrid_wired_table_replaces_full_rowspan_body_before_shifting_footer` 的历史 source 期望差异。
+  - **页面验证**：使用 `D:\codes\PDFLayoutParser\fix\zh_all_table_pages.pdf`、页索引 `415` 和当前 worktree 源码独立输出到 `D:\codes\PDFLayoutParser\output\p415_bar_chart_filter_20260914\`。`pages/page-415.json` 的 `page_type=vector`，最终只有下方 `english_general_wireless`、`9x4`、bbox `[59.8,549.9,549.9,718.0]` 的 Operating Expenses 表格，图表区域表格数为 `0`。`zh_all_table_pages_page_415_visualized.png` 视觉核验确认图表未被红色表格框覆盖、下方真表边界和文字归属正常；调试图左上角的 `page_type: vector` 标注会遮住少量 logo，但不影响解析结果。
+
+- 修复 `fix/zh_all_table_pages.pdf` 页面索引 `196`（印刷页码 P197）有线表格的局部线段被投影为整页网格问题。根因在 `src/hexai_pdf_parser/tables/extractors/wired_table_extractor.py::_build_cells_for_region()`：非矩形连通组件原先按全局网格逐槽位物化，局部横/竖线坐标又被边界吸附和相邻候选同时命中，最终把不属于上方区域的线表现成跨页 Cell 边界；底部 ghost 行裁剪时还可能留下未同步收缩的跨行 Cell。最终可视化中的左侧延伸横线另有一层原因：物理线没有延伸，但 `table_visualizer` 为每个 Cell 直接绘制完整矩形，补出了不存在的边界。
+  - **修复判定**：新增 `_snap_grid_coordinates()`，只有接近区域边界且在正交方向具有近乎全长覆盖的真实线才可吸附为外框；`has_h_segment()` / `has_v_segment()` 只采用距离当前网格坐标最近的真实线候选。非矩形连通组件改为依据真实 `h_edges`/`v_edges` 切分为互不重叠的安全矩形，保留合法 `rowspan`/`colspan`，不再逐槽位制造跨区域假 Cell；ghost 行被裁剪时同步截断跨行 Cell 的 `rowspan`。
+  - **线段连接边界**：保留 PDF 视觉上常见的小断隙桥接；新增横线大间隙不连接测试，并覆盖边界附近局部横线不得扩展为整行的反例。结构恢复仍只消费物理线、网格和 Cell，不新增无线表格 `page.get_text("words")` 回读或旧路径回退。
+  - **可视化修复**：有线提取结果把真实区域线段保存到 `Table.h_lines`/`Table.v_lines`，`TableExtractor._clamp_table_to_page()` 保留该元数据；带物理线元数据的表格由 `table_visualizer` 直接绘制裁剪后的真实线段并跳过完整 Cell 矩形，旧测试构造的无元数据表格保持原行为。
+  - **测试与验证结果**：`tests/test_table_extractor.py tests/test_table_visualizer.py tests/test_wired_table_extractor.py tests/test_rule_first_table_detection.py` 为 `158 passed, 1 failed`；唯一失败为既有 `test_hybrid_wired_table_replaces_full_rowspan_body_before_shifting_footer`，预期 `hybrid_line_span_recovery`、实际 `line_projection`，本次未修改该调用链。`python -m compileall -q src tests/test_table_visualizer.py tests/test_wired_table_extractor.py tests/test_table_extractor.py` 与 `git diff --check` 通过。
+  - **页面级验证**：使用当前 worktree 独立重跑 P197 到 `D:\codes\PDFLayoutParser\output\p197_line_span_visualizer_fix_20260914_v2\`。结果为 1 张 `line_projection` 表，`36x9`、73 个 Cell、bbox `[30.6,63.8,560.5,814.7]`；324 个逻辑槽位全部恰好覆盖，occupancy conflict 为 `0`，没有越界 Cell；最终表对象携带 38 条横线和 25 条竖线。新 PNG 视觉复核确认左侧假横线消失，真实表格横线仍保留。
+  - **页面产物**：结构化结果为 `D:\codes\PDFLayoutParser\output\p197_line_span_visualizer_fix_20260914_v2\pages\page-196.json`，修复后表格可视化为 `D:\codes\PDFLayoutParser\output\p197_line_span_visualizer_fix_20260914_v2\tables\page-196.png`；旧目录中的 `p197_wired_lines_raw_final_overlay.png` 和 `p197_wired_lines_merged_final_overlay.png` 仍用于物理线对照。大连通域及真实整页外框仍保留，属于按物理连通线保留的预期结果。
+
 ## 2026-09-11
 
 - 在 `MLTableDetector` 中实现进程级共享会话缓存（`_GLOBAL_SESSION_CACHE` 与 `get_shared_session`），彻底解决多次实例化检测器时重复从磁盘加载 36.4 MB 模型并初始化 ONNX Runtime Session 的冷启动开销。

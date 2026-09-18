@@ -1803,7 +1803,9 @@ class EnglishTableExtractor(BaseTableExtractor):
         ci = 0
         while ci < len(columns) - 1:
             x0, x1 = columns[ci]
-            tokens = [w[4].strip() for w in (words or []) if x0 <= w[0] < x1]
+            col_words = [w for w in (words or []) if x0 <= w[0] < x1]
+            body_words = [w for w in col_words if table_y0 <= 0.0 or (w[1] + w[3]) / 2.0 >= table_y0 - 2.0]
+            tokens = [w[4].strip() for w in (body_words or col_words)]
             if tokens and all(token == "$" for token in tokens):
                 columns[ci] = (x0, columns[ci + 1][1])
                 del columns[ci + 1]
@@ -3294,7 +3296,7 @@ class EnglishTableExtractor(BaseTableExtractor):
             return None
 
         # 4. 列合并原则 3：全空列与只含 $ 列向右合并
-        all_cells, col_count = self._prune_empty_columns(all_cells, len(columns))
+        all_cells, col_count = self._prune_empty_columns(all_cells, len(columns), columns=columns)
 
         total_rows = num_h_rows + len(data_rows)
 
@@ -4348,7 +4350,7 @@ class EnglishTableExtractor(BaseTableExtractor):
         return cells
 
     def _prune_empty_columns(
-        self, cells: List[Cell], num_cols: int
+        self, cells: List[Cell], num_cols: int, columns: Optional[List[Tuple[float, float]]] = None
     ) -> Tuple[List[Cell], int]:
         if not cells or num_cols <= 1:
             return cells, num_cols
@@ -4415,6 +4417,19 @@ class EnglishTableExtractor(BaseTableExtractor):
                 c.col_index = new_start
                 c.colspan = max(1, new_end - new_start + 1)
                 pruned_cells.append(c)
+
+        if columns is not None and len(columns) == num_cols and new_num_cols < num_cols:
+            pruned_cols: List[Tuple[float, float]] = []
+            for ci, col in enumerate(columns):
+                if not col_has_text[ci]:
+                    if pruned_cols:
+                        pruned_cols[-1] = (pruned_cols[-1][0], col[1])
+                    elif ci + 1 < len(columns):
+                        pass
+                else:
+                    pruned_cols.append(col)
+            if len(pruned_cols) == new_num_cols:
+                columns[:] = pruned_cols
 
         return pruned_cells, new_num_cols
 

@@ -643,3 +643,116 @@ def test_merge_same_band_native_line_runs_keeps_fragments_in_distinct_bands():
     )
 
     assert [item["text"] for item in result] == ["FRASERS", "PROPERTY"]
+
+
+def test_build_text_runs_merges_whitelisted_spaced_single_cjk_pair():
+    # Gap is 21.0 pt, which exceeds 1.25 * font_size (13.125) but is within 2.5 * font_size (26.25)
+    atoms = [
+        _atom("合", 124.0, 134.5, 0, (7, 0, 0), font_size=10.5, y=191.5),
+        _atom("计", 155.5, 166.0, 1, (7, 0, 1), font_size=10.5, y=191.5),
+    ]
+    result = build_text_runs(atoms)
+    assert [item["text"] for item in result] == ["合计"]
+    assert result[0]["bbox"] == [124.0, 191.5, 166.0, 201.5]
+
+
+def test_build_text_runs_does_not_merge_non_whitelisted_single_cjk_with_large_gap():
+    # Non-whitelisted pair (男, 女) with gap = 21.0 pt should NOT merge
+    atoms = [
+        _atom("男", 124.0, 134.5, 0, (7, 0, 0), font_size=10.5, y=191.5),
+        _atom("女", 155.5, 166.0, 1, (7, 0, 1), font_size=10.5, y=191.5),
+    ]
+    result = build_text_runs(atoms)
+    assert [item["text"] for item in result] == ["男", "女"]
+
+
+def test_build_text_runs_merges_whitelisted_xiaoji_spaced_single_cjk_pair():
+    # Whitelisted pair (小, 计) with gap = 18.0 pt should merge
+    atoms = [
+        _atom("小", 100.0, 110.0, 0, (7, 0, 0), font_size=10.0, y=50.0),
+        _atom("计", 128.0, 138.0, 1, (7, 0, 1), font_size=10.0, y=50.0),
+    ]
+    result = build_text_runs(atoms)
+    assert [item["text"] for item in result] == ["小计"]
+
+
+def test_build_text_runs_merges_glossary_see_marker_with_following_definition():
+    atoms = [
+        _atom("see", 263.8, 283.2, 0, (3, 1, 0), y=10.0),
+        _atom(
+            "automated screen trading system",
+            299.1,
+            480.0,
+            1,
+            (3, 2, 0),
+            y=10.0,
+        ),
+    ]
+
+    result = build_text_runs(atoms)
+
+    assert [item["text"] for item in result] == [
+        "see automated screen trading system"
+    ]
+    assert result[0]["span_refs"] == ["S0", "S1"]
+    assert result[0]["flow_start"] == 1
+    assert result[0]["flow_end"] == 2
+
+
+def test_build_text_runs_merges_wider_glossary_see_reference_gap():
+    atoms = [
+        _atom("see", 269.9, 292.6, 0, (3, 1, 0), y=10.0, font_size=12.0),
+        _atom(
+            "exchange traded note",
+            319.0,
+            438.5,
+            1,
+            (3, 2, 0),
+            y=10.0,
+            font_size=12.0,
+        ),
+    ]
+
+    result = build_text_runs(atoms)
+
+    assert [item["text"] for item in result] == [
+        "see exchange traded note"
+    ]
+
+
+def test_build_text_runs_does_not_merge_see_marker_with_numeric_value():
+    atoms = [
+        _atom("see", 100.0, 120.0, 0, (3, 1, 0), y=10.0),
+        _atom("100", 140.0, 160.0, 1, (3, 1, 1), y=10.0),
+    ]
+
+    result = build_text_runs(atoms)
+
+    assert [item["text"] for item in result] == ["see", "100"]
+
+
+def test_build_text_runs_does_not_merge_see_across_spatially_intermediate_atom():
+    atoms = [
+        _atom("see", 100.0, 120.0, 0, (3, 1, 0), y=10.0),
+        _atom("middle", 140.0, 180.0, 2, (3, 1, 1), y=10.0),
+        _atom("definition", 200.0, 260.0, 1, (3, 1, 2), y=10.0),
+    ]
+
+    result = build_text_runs(atoms)
+
+    assert "see definition" not in [item["text"] for item in result]
+
+
+def test_build_text_runs_columnar_mode_does_not_merge_wrapped_field_runs():
+    # In columnar mode (financial tables), vertically adjacent cells in different lines/rows
+    # should NOT be merged by _merge_wrapped_field_runs
+    atoms = [
+        _atom("归属于母公司所有者的净利润", 50.0, 180.0, 0, (1, 0, 0), y=10.0),
+        _atom("少数股东损益", 50.0, 150.0, 1, (2, 0, 0), y=30.0),
+    ]
+
+    result = build_text_runs(atoms, output_mode="columnar")
+
+    assert len(result) == 2
+    assert [item["text"] for item in result] == ["归属于母公司所有者的净利润", "少数股东损益"]
+

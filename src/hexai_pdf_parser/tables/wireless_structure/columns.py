@@ -22,11 +22,19 @@ def is_sparse_left_section_title(
     item: dict[str, Any], atoms: Sequence[dict[str, Any]], region: BBox
 ) -> bool:
     """Identify a left-aligned section title that must not bridge data columns."""
+    item_h = max(1.0, item["bbox"][3] - item["bbox"][1])
     item_center = (item["bbox"][1] + item["bbox"][3]) / 2.0
     same_row = [
         candidate
         for candidate in atoms
-        if abs((candidate["bbox"][1] + candidate["bbox"][3]) / 2.0 - item_center) <= 2.4
+        if (
+            (
+                min(candidate["bbox"][3], item["bbox"][3])
+                - max(candidate["bbox"][1], item["bbox"][1])
+            )
+            >= max(2.0, min(item_h, candidate["bbox"][3] - candidate["bbox"][1]) * 0.25)
+            or abs((candidate["bbox"][1] + candidate["bbox"][3]) / 2.0 - item_center) <= 3.0
+        )
     ]
     return (
         len(same_row) == 1

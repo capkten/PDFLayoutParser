@@ -53,6 +53,95 @@ def test_extract_lines_accepts_visible_fill_only_rules():
     assert v_lines == [(10.25, 20.0, 10.25, 80.0)]
 
 
+def test_extract_lines_deduplicates_stroked_edge_with_matching_filled_rectangle_edge():
+    filled_edge = fitz.Rect(10.0, 20.02, 110.0, 20.98)
+    stroked_edge = fitz.Rect(10.0, 20.08, 110.0, 20.08)
+    page = SimpleNamespace(
+        get_drawings=lambda **_kwargs: [
+            {
+                "type": "s",
+                "color": (0.0, 0.0, 0.0),
+                "rect": stroked_edge,
+                "items": [
+                    ("l", fitz.Point(10.0, 20.08), fitz.Point(110.0, 20.08))
+                ],
+            },
+            {
+                "type": "f",
+                "color": None,
+                "fill": (0.0, 0.0, 0.0),
+                "rect": filled_edge,
+                "items": [("re", filled_edge)],
+            },
+        ]
+    )
+
+    h_lines, v_lines = WiredTableExtractor()._extract_lines_from_drawings(page)
+
+    assert len(h_lines) == 1
+    assert h_lines[0] == pytest.approx((10.0, 20.5, 110.0, 20.5))
+    assert v_lines == []
+
+
+def test_extract_lines_keeps_nearby_line_without_matching_rectangle_edge():
+    filled_edge = fitz.Rect(10.0, 20.02, 110.0, 20.98)
+    nearby_line = fitz.Rect(120.0, 20.08, 220.0, 20.08)
+    page = SimpleNamespace(
+        get_drawings=lambda **_kwargs: [
+            {
+                "type": "f",
+                "color": None,
+                "fill": (0.0, 0.0, 0.0),
+                "rect": filled_edge,
+                "items": [("re", filled_edge)],
+            },
+            {
+                "type": "s",
+                "color": (0.0, 0.0, 0.0),
+                "rect": nearby_line,
+                "items": [
+                    ("l", fitz.Point(120.0, 20.08), fitz.Point(220.0, 20.08))
+                ],
+            },
+        ]
+    )
+
+    h_lines, v_lines = WiredTableExtractor()._extract_lines_from_drawings(page)
+
+    assert len(h_lines) == 2
+    assert sorted(round(line[1], 2) for line in h_lines) == [20.08, 20.5]
+    assert v_lines == []
+
+
+def test_extract_lines_keeps_two_distinct_nearby_filled_rectangles():
+    first_edge = fitz.Rect(10.0, 20.02, 110.0, 20.98)
+    second_edge = fitz.Rect(10.0, 20.52, 110.0, 21.48)
+    page = SimpleNamespace(
+        get_drawings=lambda **_kwargs: [
+            {
+                "type": "f",
+                "color": None,
+                "fill": (0.0, 0.0, 0.0),
+                "rect": first_edge,
+                "items": [("re", first_edge)],
+            },
+            {
+                "type": "f",
+                "color": None,
+                "fill": (0.0, 0.0, 0.0),
+                "rect": second_edge,
+                "items": [("re", second_edge)],
+            },
+        ]
+    )
+
+    h_lines, v_lines = WiredTableExtractor()._extract_lines_from_drawings(page)
+
+    assert len(h_lines) == 2
+    assert sorted(round(line[1], 2) for line in h_lines) == [20.5, 21.0]
+    assert v_lines == []
+
+
 def test_extract_lines_clips_filled_rule_to_pdf_clip_region():
     extractor = WiredTableExtractor()
     raw_rect = fitz.Rect(28.0, 810.4804, 28.7507, 823.2422)
@@ -521,6 +610,15 @@ def test_extract_keeps_multi_cell_wire_table():
 
     assert len(tables) == 1
     assert (tables[0].rows, tables[0].cols) == (1, 2)
+    assert tables[0].h_lines == [
+        (10.0, 20.0, 110.0, 20.0),
+        (10.0, 50.0, 110.0, 50.0),
+    ]
+    assert tables[0].v_lines == [
+        (10.0, 20.0, 10.0, 50.0),
+        (60.0, 20.0, 60.0, 50.0),
+        (110.0, 20.0, 110.0, 50.0),
+    ]
 
 
 def test_build_cells_respects_partial_line_segments_and_merges_missing_edges():
@@ -544,6 +642,66 @@ def test_build_cells_respects_partial_line_segments_and_merges_missing_edges():
     assert len(merged) == 1
     assert merged[0].bbox == BBox(0.0, 0.0, 100.0, 10.0)
     assert merged[0].colspan == 2
+
+
+def test_build_cells_materializes_non_rect_component_as_safe_spans():
+    """非矩形连通域按真实边缘切成跨度单元格，而不是逐槽位造假边界。"""
+    extractor = WiredTableExtractor()
+
+    # 外框包住一个从 y=50 开始的局部网格。上半段没有 x=20/90 的
+    # 竖线，因此上半段应保持为一个 colspan=3 的 Cell；下半段的
+    # x=20/90 真实存在，不能被上半段的全局坐标投影成贯穿线。
+    cells = extractor._build_cells_for_region(
+        BBox(0.0, 0.0, 100.0, 100.0),
+        h_lines=[
+            (0.0, 0.0, 100.0, 0.0),
+            (20.0, 50.0, 90.0, 50.0),
+            (20.0, 100.0, 90.0, 100.0),
+            (0.0, 100.0, 100.0, 100.0),
+        ],
+        v_lines=[
+            (0.0, 0.0, 0.0, 100.0),
+            (20.0, 50.0, 20.0, 100.0),
+            (90.0, 50.0, 90.0, 100.0),
+            (100.0, 0.0, 100.0, 100.0),
+        ],
+    )
+
+    assert [(c.row_index, c.col_index, c.rowspan, c.colspan) for c in cells] == [
+        (0, 0, 1, 3),
+        (1, 0, 1, 1),
+        (1, 1, 1, 1),
+        (1, 2, 1, 1),
+    ]
+
+
+def test_build_cells_does_not_project_partial_horizontal_line_to_outer_width():
+    """区域边界附近的局部横线不能被当成贯穿整行的外框。"""
+    extractor = WiredTableExtractor()
+    cells = extractor._build_cells_for_region(
+        BBox(0.0, 0.0, 100.0, 100.0),
+        h_lines=[
+            (50.0, 1.0, 100.0, 1.0),
+            (0.0, 50.0, 100.0, 50.0),
+            (0.0, 100.0, 100.0, 100.0),
+        ],
+        v_lines=[
+            (0.0, 0.0, 0.0, 100.0),
+            (50.0, 0.0, 50.0, 100.0),
+            (100.0, 0.0, 100.0, 100.0),
+        ],
+    )
+
+    assert any(
+        cell.bbox == BBox(0.0, 0.0, 50.0, 50.0)
+        and cell.rowspan == 2
+        and cell.colspan == 1
+        for cell in cells
+    )
+    assert not any(
+        cell.bbox == BBox(0.0, 0.0, 100.0, 1.0)
+        for cell in cells
+    )
 
 
 def test_build_cells_synthesizes_missing_top_and_bottom_edges():
@@ -719,6 +877,78 @@ def test_merge_v_lines_does_not_connect_adjacent_tables_separated_by_gap():
     assert len(merged) == 2
     assert merged[0] == (28.0, 10.0, 28.0, 50.0)
     assert merged[1] == (28.0, 52.5, 28.0, 90.0)
+
+
+def test_merge_h_lines_does_not_connect_adjacent_tables_separated_by_gap():
+    extractor = WiredTableExtractor()
+    h_lines = [
+        (10.0, 20.0, 50.0, 20.0),
+        (53.5, 20.0, 90.0, 20.0),
+    ]
+
+    merged = extractor._merge_h_lines(h_lines)
+
+    assert len(merged) == 2
+    assert merged[0] == (10.0, 20.0, 50.0, 20.0)
+    assert merged[1] == (53.5, 20.0, 90.0, 20.0)
+
+
+def test_region_line_merge_connects_nearby_vertical_fragments():
+    extractor = WiredTableExtractor()
+    v_lines = [
+        (99.00, 87.24, 99.00, 414.60),
+        (98.40, 415.08, 98.40, 705.96),
+    ]
+
+    merged = extractor._merge_region_line_coordinates(v_lines, horizontal=False)
+
+    assert len(merged) == 1
+    assert merged[0][0] == pytest.approx(98.70)
+    assert merged[0][1] == pytest.approx(87.24)
+    assert merged[0][3] == pytest.approx(705.96)
+
+
+def test_region_line_merge_keeps_disconnected_vertical_fragments_separate():
+    extractor = WiredTableExtractor()
+    v_lines = [
+        (99.00, 87.24, 99.00, 414.60),
+        (98.40, 420.00, 98.40, 705.96),
+    ]
+
+    merged = extractor._merge_region_line_coordinates(v_lines, horizontal=False)
+
+    assert len(merged) == 2
+
+
+def test_region_line_merge_is_scoped_to_each_region():
+    extractor = WiredTableExtractor()
+    first_region = [(99.00, 87.24, 99.00, 414.60)]
+    second_region = [(98.40, 415.08, 98.40, 705.96)]
+
+    first_merged = extractor._merge_region_line_coordinates(
+        first_region, horizontal=False
+    )
+    second_merged = extractor._merge_region_line_coordinates(
+        second_region, horizontal=False
+    )
+
+    assert first_merged == first_region
+    assert second_merged == second_region
+
+
+def test_region_line_merge_connects_nearby_horizontal_fragments():
+    extractor = WiredTableExtractor()
+    h_lines = [
+        (20.0, 50.0, 80.0, 50.0),
+        (80.4, 50.6, 120.0, 50.6),
+    ]
+
+    merged = extractor._merge_region_line_coordinates(h_lines, horizontal=True)
+
+    assert len(merged) == 1
+    assert merged[0][1] == pytest.approx(50.3)
+    assert merged[0][0] == pytest.approx(20.0)
+    assert merged[0][2] == pytest.approx(120.0)
 
 
 def test_trim_ghost_edge_rows_preserves_physically_closed_empty_rows():
@@ -898,6 +1128,68 @@ def test_page_197_form_lines_do_not_create_wired_table():
     try:
         tables = WiredTableExtractor().extract(doc[197])
         assert tables == []
+    finally:
+        doc.close()
+
+
+def test_page_196_does_not_project_lower_columns_into_upper_form_area():
+    """P197 上方没有局部竖线时，不应被下方网格坐标切成多列。"""
+    import os
+
+    pdf_path = r"D:\codes\PDFLayoutParser\fix\zh_all_table_pages.pdf"
+    if not os.path.exists(pdf_path):
+        pytest.skip("PDF file not available")
+
+    doc = fitz.open(pdf_path)
+    try:
+        tables = WiredTableExtractor().extract(doc[196])
+        upper_cells = [
+            cell
+            for table in tables
+            for cell in table.cells
+            if cell.bbox.y0 < 390.0
+        ]
+
+        assert len(upper_cells) == 1
+        assert upper_cells[0].bbox.x0 == pytest.approx(30.6, abs=0.2)
+        assert upper_cells[0].bbox.x1 >= 559.0
+
+        for table in tables:
+            occupied = [
+                (row, col)
+                for cell in table.cells
+                for row in range(cell.row_index, cell.row_index + cell.rowspan)
+                for col in range(cell.col_index, cell.col_index + cell.colspan)
+            ]
+            assert all(
+                0 <= row < table.rows and 0 <= col < table.cols
+                for row, col in occupied
+            )
+            assert len(occupied) == table.rows * table.cols
+            assert len(set(occupied)) == len(occupied)
+    finally:
+        doc.close()
+
+
+def test_page_2_nearby_inner_boundary_fragments_form_one_column():
+    """P2 中跨行连续但坐标相差小于 1pt 的内边界只能形成一列。"""
+    import os
+
+    pdf_path = r"D:\codes\PDFLayoutParser\fix\zh_all_table_pages.pdf"
+    if not os.path.exists(pdf_path):
+        pytest.skip("PDF file not available")
+
+    doc = fitz.open(pdf_path)
+    try:
+        tables = WiredTableExtractor().extract(doc[1])
+        assert len(tables) == 1
+        table = tables[0]
+        assert (table.rows, table.cols) == (8, 2)
+        inner_lines = [
+            line for line in table.v_lines if 98.0 <= line[0] <= 99.0
+        ]
+        assert len(inner_lines) == 1
+        assert inner_lines[0][0] == pytest.approx(98.7, abs=0.1)
     finally:
         doc.close()
 
@@ -1193,3 +1485,219 @@ def test_wired_extractor_finds_tables_on_pdfsam_merge1_page0():
     assert overview.source == "line_projection"
     assert (overview.rows, overview.cols) == (6, 5)
 
+
+def _make_wired_test_page(drawings, width=240.0, height=200.0):
+    return SimpleNamespace(
+        rect=fitz.Rect(0.0, 0.0, width, height),
+        get_drawings=lambda **_kwargs: drawings,
+        get_fonts=lambda **_kwargs: [],
+        get_image_info=lambda **_kwargs: [],
+        get_text=lambda kind: [] if kind == "words" else {"blocks": []},
+    )
+
+
+def _make_paired_bar_chart_page():
+    drawings = []
+    baseline = 120.0
+    x = 50.0
+    bar_colors = (
+        (0.0, 0.0, 1.0),
+        (1.0, 0.0, 0.0),
+        (0.0, 0.0, 1.0),
+        (1.0, 0.0, 0.0),
+        (0.0, 0.0, 1.0),
+    )
+    for bar_height, fill_color in zip((60.0, 10.0, 35.0, 20.0, 50.0), bar_colors):
+        rect = fitz.Rect(x, baseline - bar_height, x + 12.0, baseline)
+        drawings.append(
+            {
+                "type": "f",
+                "color": None,
+                "fill": fill_color,
+                "rect": rect,
+                "items": [("re", rect, 0)],
+            }
+        )
+        drawings.append(
+            {
+                "type": "s",
+                "color": (0.0, 0.0, 0.0),
+                "fill": None,
+                "width": 0.5,
+                "rect": rect,
+                "items": [("re", rect, 1)],
+            }
+        )
+        x += 20.0
+
+    drawings.extend(
+        [
+            {
+                "type": "s",
+                "color": (0.0, 0.0, 0.0),
+                "fill": None,
+                "items": [("l", fitz.Point(40.0, 40.0), fitz.Point(40.0, 125.0))],
+            },
+            {
+                "type": "s",
+                "color": (0.0, 0.0, 0.0),
+                "fill": None,
+                "items": [("l", fitz.Point(40.0, baseline), fitz.Point(150.0, baseline))],
+            },
+        ]
+    )
+    for y in (40.0, 60.0, 80.0, 100.0, 120.0):
+        drawings.append(
+            {
+                "type": "s",
+                "color": (0.0, 0.0, 0.0),
+                "fill": None,
+                "items": [("l", fitz.Point(37.0, y), fitz.Point(40.0, y))],
+            }
+        )
+
+    return _make_wired_test_page(drawings)
+
+
+def test_extract_rejects_paired_stroked_bar_chart():
+    """多根共基线柱形图不能因描边矩形拆边而生成有线表格。"""
+    tables = WiredTableExtractor().extract(_make_paired_bar_chart_page())
+
+    assert tables == []
+
+
+def test_p415_bar_chart_does_not_create_wired_table():
+    """P415 图表区域不能被误报为 wired 表格。"""
+    import os
+
+    pdf_path = r"D:\codes\PDFLayoutParser\fix\zh_all_table_pages.pdf"
+    if not os.path.exists(pdf_path):
+        pytest.skip("zh_all_table_pages.pdf not found")
+
+    doc = fitz.open(pdf_path)
+    try:
+        tables = WiredTableExtractor().extract(doc[415])
+        assert all(
+            not (table.bbox.y0 < 280.0 and table.bbox.x0 < 400.0)
+            for table in tables
+        )
+    finally:
+        doc.close()
+
+
+def test_extract_keeps_unfilled_stroked_rectangle_table():
+    """没有填充配对证据时，描边封闭矩形表格仍保持 0ca829e 能力。"""
+    drawings = []
+    for y0, y1 in ((20.0, 50.0), (50.0, 80.0)):
+        for x0, x1 in ((10.0, 60.0), (60.0, 110.0)):
+            rect = fitz.Rect(x0, y0, x1, y1)
+            drawings.append(
+                {
+                    "type": "s",
+                    "color": (0.0, 0.0, 0.0),
+                    "fill": None,
+                    "rect": rect,
+                    "items": [("re", rect, 1)],
+                }
+            )
+
+    tables = WiredTableExtractor().extract(_make_wired_test_page(drawings))
+
+    assert len(tables) == 1
+    assert (tables[0].rows, tables[0].cols) == (2, 2)
+
+
+def test_extract_keeps_filled_stroked_rowspan_table():
+    """共享列边界的填充描边跨行表格不能被当作柱形图。"""
+    drawings = []
+    # 第一列跨两行；另外两列各自有上下两个单元格。
+    cell_rects = (
+        (10.0, 20.0, 60.0, 80.0),
+        (60.0, 20.0, 110.0, 50.0),
+        (110.0, 20.0, 160.0, 50.0),
+        (60.0, 50.0, 110.0, 80.0),
+        (110.0, 50.0, 160.0, 80.0),
+    )
+    for x0, y0, x1, y1 in cell_rects:
+        rect = fitz.Rect(x0, y0, x1, y1)
+        drawings.extend(
+            [
+                {
+                    "type": "f",
+                    "color": None,
+                    "fill": (0.8, 0.9, 1.0),
+                    "rect": rect,
+                    "items": [("re", rect, 0)],
+                },
+                {
+                    "type": "s",
+                    "color": (0.0, 0.0, 0.0),
+                    "fill": None,
+                    "rect": rect,
+                    "items": [("re", rect, 1)],
+                },
+            ]
+        )
+
+    tables = WiredTableExtractor().extract(_make_wired_test_page(drawings))
+
+    assert len(tables) == 1
+    assert (tables[0].rows, tables[0].cols) == (2, 3)
+
+
+def test_extract_keeps_same_height_paired_stroked_table():
+    """同高的填充+描边单元格不能仅因成对就触发柱形图过滤。"""
+    drawings = []
+    for x0, x1 in ((10.0, 60.0), (60.0, 110.0), (110.0, 160.0)):
+        rect = fitz.Rect(x0, 20.0, x1, 50.0)
+        drawings.extend(
+            [
+                {
+                    "type": "f",
+                    "color": None,
+                    "fill": (0.8, 0.9, 1.0),
+                    "rect": rect,
+                    "items": [("re", rect, 0)],
+                },
+                {
+                    "type": "s",
+                    "color": (0.0, 0.0, 0.0),
+                    "fill": None,
+                    "rect": rect,
+                    "items": [("re", rect, 1)],
+                },
+            ]
+        )
+
+    tables = WiredTableExtractor().extract(
+        _make_wired_test_page(drawings, width=200.0, height=100.0)
+    )
+
+    assert len(tables) == 1
+    assert (tables[0].rows, tables[0].cols) == (1, 3)
+
+
+def test_extract_does_not_treat_two_same_height_paired_swatches_as_chart():
+    """两个同高小色块（如图例）不足以构成柱形图组件。"""
+    drawings = []
+    for x in (30.0, 50.0):
+        rect = fitz.Rect(x, 100.0, x + 6.0, 104.0)
+        drawings.extend(
+            [
+                {
+                    "type": "f",
+                    "color": None,
+                    "fill": (0.0, 0.0, 1.0),
+                    "rect": rect,
+                    "items": [("re", rect, 0)],
+                },
+                {
+                    "type": "s",
+                    "color": (0.0, 0.0, 0.0),
+                    "fill": None,
+                    "rect": rect,
+                    "items": [("re", rect, 1)],
+                },
+            ]
+        )
+    assert WiredTableExtractor().extract(_make_wired_test_page(drawings)) == []

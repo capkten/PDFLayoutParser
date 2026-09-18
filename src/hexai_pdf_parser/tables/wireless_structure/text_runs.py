@@ -17,6 +17,29 @@ _LATIN = re.compile(r"[A-Za-z]")
 _NUMERIC = re.compile(r"^\(?[+\-–—−]?\d[\d,]*(?:\.\d+)?%?\)?$")
 _SEPARATOR_CHARS = set("-_=—–─━＝□■▪▫")
 _PLACEHOLDER_CHARS = set("-—–")
+_SPACED_CJK_WORD_WHITELIST = {
+    ("合", "计"),
+    ("小", "计"),
+    ("总", "计"),
+    ("共", "计"),
+    ("类", "别"),
+    ("税", "种"),
+    ("项", "目"),
+    ("名", "称"),
+    ("金", "额"),
+    ("单", "位"),
+    ("备", "注"),
+    ("比", "例"),
+    ("期", "初"),
+    ("期", "末"),
+    ("年", "初"),
+    ("年", "末"),
+    ("本", "年"),
+    ("上", "年"),
+    ("折", "旧"),
+    ("残", "值"),
+}
+
 
 
 def script_kind(text: str) -> str:
@@ -221,11 +244,16 @@ def _can_join(
         if not has_following_cjk:
             return False
     normal_gap_join = native_line and -0.8 <= gap <= _join_gap_limit(previous, candidate, normal_gap)
+    min_font_size = min(previous["font_size"], candidate["font_size"])
+    is_whitelisted_pair = (
+        (previous["text"].strip(), candidate["text"].strip()) in _SPACED_CJK_WORD_WHITELIST
+    )
+    max_cjk_gap = min_font_size * (2.5 if is_whitelisted_pair else 1.25)
     spaced_single_cjk = (
         native_line
         and _CJK.fullmatch(previous["text"]) is not None
         and _CJK.fullmatch(candidate["text"]) is not None
-        and -0.8 <= gap <= min(previous["font_size"], candidate["font_size"]) * 1.25
+        and -0.8 <= gap <= max_cjk_gap
     )
     return superscript or normal_gap_join or spaced_single_cjk
 
@@ -279,6 +307,8 @@ def _has_wrapped_cjk_suffix(
 
 def _join_text(group: Sequence[dict[str, Any]]) -> str:
     # 中文、数字和符号直接连接；中文财报中的空格由原生文本保留。
+    if len(group) > 1 and group[0]["text"].strip() == "see":
+        return " ".join(item["text"].strip() for item in group)
     return "".join(item["text"] for item in group)
 
 
@@ -765,6 +795,64 @@ def _merge_wrapped_field_runs(
     return sorted(result, key=lambda item: (item["flow_start"], item["flow_end"]))
 
 
+def _is_glossary_reference_pair(
+    marker: dict[str, Any],
+    candidate: dict[str, Any],
+    runs: Sequence[dict[str, Any]],
+) -> bool:
+    if marker.get("text", "").strip() != "see":
+        return False
+    if not candidate.get("text", "").strip() or candidate.get("script") != "latin":
+        return False
+    if candidate["flow_start"] != marker["flow_end"] + 1:
+        return False
+    if marker.get("source_blocks") != candidate.get("source_blocks"):
+        return False
+    if abs(_center_y(marker) - _center_y(candidate)) > max(
+        2.4, min(marker["font_size"], candidate["font_size"]) * 0.38
+    ):
+        return False
+    gap = candidate["bbox"][0] - marker["bbox"][2]
+    if not -0.8 <= gap <= max(
+        6.0, min(marker["font_size"], candidate["font_size"]) * 2.5
+    ):
+        return False
+    return not any(
+        item is not marker
+        and item is not candidate
+        and abs(_center_y(item) - _center_y(marker))
+        <= max(2.4, min(marker["font_size"], item["font_size"]) * 0.38)
+        and item["bbox"][0] >= marker["bbox"][2] - 0.8
+        and item["bbox"][2] <= candidate["bbox"][0] + 0.8
+        for item in runs
+    )
+
+
+def _merge_glossary_reference_runs(
+    runs: Sequence[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    ordered = sorted((dict(item) for item in runs), key=lambda item: item["flow_start"])
+    result: list[dict[str, Any]] = []
+    index = 0
+    while index < len(ordered):
+        if (
+            index + 1 < len(ordered)
+            and _is_glossary_reference_pair(
+                ordered[index], ordered[index + 1], ordered
+            )
+        ):
+            result.append(
+                _merge_run_chain(
+                    ordered[index : index + 2], " ", "glossary_reference"
+                )
+            )
+            index += 2
+            continue
+        result.append(ordered[index])
+        index += 1
+    return result
+
+
 def _is_columnar_native_block_line_pair(
     chain: Sequence[dict[str, Any]], candidate: dict[str, Any]
 ) -> bool:
@@ -919,7 +1007,8 @@ def build_text_runs(
             )
     if output_mode == "columnar":
         return _merge_same_native_block_lines(result)
-    return _merge_wrapped_field_runs(result)
+    result = _merge_wrapped_field_runs(result)
+    return _merge_glossary_reference_runs(result)
 
 
 def _same_native_line_run(left: dict[str, Any], right: dict[str, Any]) -> bool:

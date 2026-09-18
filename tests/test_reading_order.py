@@ -72,3 +72,52 @@ class TestReadingOrder:
         assert result[1].content == "Left Body"
         assert result[2].type == "table"
         assert result[3].content == "Right Body"
+
+    def test_same_line_minor_y_jitter_orders_left_to_right(self):
+        """When right fragment has slightly smaller y0 due to font differences, order must be left-to-right."""
+        line_prev = LayoutElement(
+            type="text",
+            bbox=BBox(125.5, 329.0, 505.8, 340.7),
+            order=0,
+            content="Line Prev",
+        )
+        # Left fragment (starts lower at y0=349.4)
+        left_frag = LayoutElement(
+            type="text",
+            bbox=BBox(125.5, 349.4, 372.7, 360.0),
+            order=1,
+            content="Left Fragment",
+        )
+        # Right fragment (due to English/brackets, y0=349.1 is 0.3pt higher than left)
+        right_frag = LayoutElement(
+            type="text",
+            bbox=BBox(362.3, 349.1, 505.8, 360.8),
+            order=2,
+            content="Right Fragment",
+        )
+        line_next = LayoutElement(
+            type="text",
+            bbox=BBox(125.5, 369.0, 505.8, 380.7),
+            order=3,
+            content="Line Next",
+        )
+
+        # Shuffle and sort
+        sorted_elements = sort_by_reading_order([right_frag, line_next, left_frag, line_prev])
+        contents = [e.content for e in sorted_elements]
+        assert contents == ["Line Prev", "Left Fragment", "Right Fragment", "Line Next"]
+
+    def test_two_column_never_interleaves_horizontally(self):
+        """Two columns with identical y-ranges must be fully read column-by-column, never interleaved."""
+        l1 = LayoutElement(type="text", bbox=BBox(50, 50, 200, 70), order=0, content="Left 1")
+        l2 = LayoutElement(type="text", bbox=BBox(50, 80, 200, 100), order=1, content="Left 2")
+        l3 = LayoutElement(type="text", bbox=BBox(50, 110, 200, 130), order=2, content="Left 3")
+
+        r1 = LayoutElement(type="text", bbox=BBox(250, 50, 400, 70), order=3, content="Right 1")
+        r2 = LayoutElement(type="text", bbox=BBox(250, 80, 400, 100), order=4, content="Right 2")
+        r3 = LayoutElement(type="text", bbox=BBox(250, 110, 400, 130), order=5, content="Right 3")
+
+        # Shuffled
+        sorted_elements = sort_by_reading_order([r2, l1, r1, l3, r3, l2])
+        contents = [e.content for e in sorted_elements]
+        assert contents == ["Left 1", "Left 2", "Left 3", "Right 1", "Right 2", "Right 3"]
