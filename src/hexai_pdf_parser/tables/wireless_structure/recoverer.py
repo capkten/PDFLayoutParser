@@ -178,6 +178,8 @@ def _recover_cells_from_rust(
     rows = int(grid["rows"])
     columns = int(grid["cols"])
     cells = output.get("cells", grid_output.get("cells", []))
+    if rows <= 0 or columns <= 0 or not cells:
+        raise ValueError("Rust native recovery returned an empty grid")
     return rows, columns, _rust_cells_to_project(
         cells, rows, columns, fallback_bbox=region_bbox
     )
@@ -196,6 +198,8 @@ def recover_cells_from_region(
             output_mode = infer_output_order_mode(spans)
             atoms = build_text_runs(spans, output_mode=output_mode)
             bands = infer_column_bands(atoms, region_bbox)
+            bands = prune_paired_cjk_artifact_bands(atoms, bands)
+            bands = prune_sparse_alignment_artifact_bands(atoms, bands)
             rust_input = {
                 "schema_version": 1,
                 "region": {

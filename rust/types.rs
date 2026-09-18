@@ -1588,6 +1588,7 @@ pub struct EnglishGridInput {
     pub region: RegionDto,
     pub words: Vec<WordDto>,
     pub backgrounds: Vec<BackgroundDto>,
+    pub horizontal_lines: Vec<f64>,
     pub config: StructureConfig,
 }
 
@@ -1606,6 +1607,10 @@ impl EnglishGridInput {
         for b in bg_list.iter() {
             backgrounds.push(BackgroundDto::from_py(&b.downcast::<PyDict>()?.clone())?);
         }
+        let horizontal_lines = match get_opt(dict, "horizontal_lines")? {
+            Some(value) => value.extract()?,
+            None => Vec::new(),
+        };
         let config =
             StructureConfig::from_py(&get_req(dict, "config")?.downcast::<PyDict>()?.clone())?;
         Ok(Self {
@@ -1613,6 +1618,7 @@ impl EnglishGridInput {
             region,
             words,
             backgrounds,
+            horizontal_lines,
             config,
         })
     }
@@ -1631,6 +1637,7 @@ impl EnglishGridInput {
             bl.append(b.to_py(py)?)?;
         }
         d.set_item("backgrounds", bl)?;
+        d.set_item("horizontal_lines", &self.horizontal_lines)?;
         d.set_item("config", self.config.to_py(py)?)?;
         Ok(d)
     }

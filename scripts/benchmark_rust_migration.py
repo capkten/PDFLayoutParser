@@ -180,6 +180,31 @@ def _segment_summary(samples: Sequence[float]) -> Dict[str, Any]:
     }
 
 
+def _parse_worker_output(stdout: str, stderr: str) -> Dict[str, Any]:
+    """Parse the worker's single JSON record without hiding malformed output."""
+
+    records: List[Dict[str, Any]] = []
+    for line in stdout.splitlines():
+        candidate = line.strip()
+        if not candidate:
+            continue
+        try:
+            value = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(value, dict):
+            raise ValueError("worker output contains a non-object JSON record")
+        records.append(value)
+
+    if len(records) != 1:
+        detail = (stderr.strip() or stdout.strip())[-1000:]
+        raise ValueError(
+            "worker output must contain exactly one JSON worker record; "
+            f"found {len(records)} ({detail})"
+        )
+    return records[0]
+
+
 def _run_single_worker(
     mode: str,
     input_path: str,
@@ -208,7 +233,7 @@ def _run_single_worker(
         text=True,
         check=True,
     )
-    return json.loads(proc.stdout)
+    return _parse_worker_output(proc.stdout, proc.stderr)
 
 
 def _worker_execute(

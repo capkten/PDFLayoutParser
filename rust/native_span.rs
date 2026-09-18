@@ -52,11 +52,14 @@ fn center_x(r: &Rect4) -> f64 {
 }
 
 fn is_separator_span(text: &str) -> bool {
-    let trimmed = text.trim();
-    if trimmed.is_empty() {
+    let compact: String = text
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect();
+    if compact.is_empty() {
         return false;
     }
-    trimmed.chars().all(|c| {
+    compact.chars().all(|c| {
         matches!(
             c,
             '-' | '_' | '=' | '—' | '–' | '─' | '━' | '＝' | '□' | '■' | '▪' | '▫'
@@ -464,5 +467,32 @@ mod tests {
         assert_eq!(runs.len(), 2);
         assert_eq!(runs[0].text, "男");
         assert_eq!(runs[1].text, "女");
+    }
+
+    #[test]
+    fn test_filters_spaced_text_separator_rows() {
+        let region = Rect4 {
+            schema_version: 1,
+            x0: 0.0,
+            y0: 0.0,
+            x1: 500.0,
+            y1: 500.0,
+        };
+        let spans = vec![
+            make_span(
+                "=================  ================",
+                10.0,
+                10.0,
+                180.0,
+                20.0,
+                0,
+            ),
+            make_span("项目", 10.0, 30.0, 40.0, 40.0, 1),
+            make_span("500", 100.0, 30.0, 130.0, 40.0, 2),
+        ];
+        let runs = build_text_runs(spans, region);
+        assert_eq!(runs.len(), 2);
+        assert_eq!(runs[0].text, "项目");
+        assert_eq!(runs[1].text, "500");
     }
 }

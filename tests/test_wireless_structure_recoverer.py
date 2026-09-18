@@ -153,6 +153,43 @@ def test_recover_cells_from_region_routes_native_span_exception_to_diagnostic(
     assert diagnostics[0]["error_type"] == "ValueError"
 
 
+def test_recover_cells_from_region_falls_back_when_rust_returns_empty_grid(
+    monkeypatch,
+):
+    region = BBox(0, 0, 160, 70)
+    fallback = (1, 1, [Cell("PYTHON_EMPTY_GRID_FALLBACK", 0, 0, region)])
+    monkeypatch.setenv("PDF_RUST_MODE", "rust")
+    monkeypatch.setattr(
+        recoverer,
+        "_recover_cells_from_region_python",
+        lambda page, region_bbox: fallback,
+    )
+    monkeypatch.setattr(recoverer, "collect_native_spans", lambda page, allowed_regions: [])
+    monkeypatch.setattr(
+        recoverer.rust_adapter,
+        "recover_native_region",
+        lambda input_dto: {
+            "schema_version": 1,
+            "grid": {
+                "schema_version": 1,
+                "rows": 0,
+                "cols": 0,
+                "row_edges": [],
+                "col_edges": [],
+                "occupancy": [],
+            },
+            "cells": [],
+            "diagnostics": [],
+        },
+    )
+
+    rust_adapter.clear_diagnostics()
+    assert recover_cells_from_region(object(), region) == fallback
+    diagnostics = rust_adapter.get_diagnostics()
+    assert diagnostics[-1]["status"] == "rust_fallback"
+    assert diagnostics[-1]["path"] == "wireless_structure.recover_cells_from_region"
+
+
 def test_recover_wireless_tables_routes_native_span_exception_to_diagnostic(
     monkeypatch,
 ):

@@ -45,6 +45,21 @@ def test_benchmark_summary_includes_percentiles():
     assert summary["p99"] == 3.97
 
 
+def test_parse_worker_output_accepts_one_json_record_after_diagnostics():
+    output = "fitz warning: deprecated API\n{\"pid\": 123, \"samples\": []}\n"
+
+    result = benchmark_rust_migration._parse_worker_output(output, "")
+
+    assert result == {"pid": 123, "samples": []}
+
+
+def test_parse_worker_output_rejects_multiple_json_records():
+    output = '{"pid": 1}\n{"pid": 2}\n'
+
+    with pytest.raises(ValueError, match="exactly one JSON worker record"):
+        benchmark_rust_migration._parse_worker_output(output, "")
+
+
 def test_public_debug_summarize_timings_remains_legacy_five_key_api():
     summary = public_summarize_timings([1.0, 2.0, 3.0, 4.0])
 
