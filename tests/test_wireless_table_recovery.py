@@ -574,8 +574,13 @@ def test_personal_credit_continuation_page_keeps_institution_query_table_togethe
     pdf_path = Path(
         r"D:\codes\PDFLayoutParser\个人信用报告\test\test\2_PDFsam_a1e4baf2-5f46-4f6b-865d-2d9240362880.pdf"
     )
-    model_path = Path(
-        r"D:\codes\PDFLayoutParser\.worktrees\fix-cross-page-wireless-table-20260918\src\hexai_pdf_parser\ml\table_detector_model\best.onnx"
+    model_path = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "hexai_pdf_parser"
+        / "ml"
+        / "table_detector_model"
+        / "best.onnx"
     )
     if not pdf_path.exists():
         pytest.skip(f"target PDF not found: {pdf_path}")
