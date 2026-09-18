@@ -426,8 +426,9 @@ def merge_wrapped_rows(rows: Sequence[Sequence[TextStrip]]) -> List[List[TextStr
     """Merge sparse, close continuation lines back into their visual row.
 
     Only a row that is sparser than a preceding multi-column row may be a
-    continuation.  Each of its strips must horizontally fall in an occupied
-    preceding column, which avoids merging a genuine following record.
+    continuation. Each strip must horizontally fall in an occupied preceding
+    column. A centered single-strip continuation that overlaps exactly one
+    preceding field is appended to that field instead of creating a new column.
     """
 
     if len(rows) < 2:
@@ -454,17 +455,37 @@ def merge_wrapped_rows(rows: Sequence[Sequence[TextStrip]]) -> List[List[TextStr
             )
             for strip in row
         )
-        # 续行通常为描述文字；数值行保持独立，避免吞掉下一条记录。
+        overlapping_fields = []
+        if len(row) == 1:
+            overlapping_fields = [
+                existing
+                for existing in current
+                if row[0].bbox.x1 >= existing.bbox.x0 - 8.0
+                and row[0].bbox.x0 <= existing.bbox.x1 + 8.0
+            ]
+        centered_continuation_target = (
+            overlapping_fields[0]
+            if centered_section_title and aligned and len(overlapping_fields) == 1
+            else None
+        )
         continuation = (
             close
             and sparse
             and aligned
-            and not centered_section_title
+            and (not centered_section_title or centered_continuation_target is not None)
             and not any(_is_number(strip.text) for strip in row)
             and not any(_looks_like_field(strip.text) for strip in row)
         )
         if continuation:
-            current.extend(row)
+            if centered_continuation_target is not None:
+                centered_continuation_target.text += row[0].text
+                centered_continuation_target.bbox = _union(
+                    (centered_continuation_target.bbox, row[0].bbox)
+                )
+                centered_continuation_target.spans.extend(row[0].spans)
+                centered_continuation_target.spans.sort(key=lambda span: span.order)
+            else:
+                current.extend(row)
             current.sort(key=lambda item: (item.bbox.x0, item.order))
         else:
             merged.append(list(row))
