@@ -110,15 +110,53 @@ def test_ast_audit_classifies_scripts_pages_and_pure_dto_functions():
     page = ast.parse("def read(page): return page.get_text('words')").body[0]
     dto = ast.parse("def make_dto(x): return {'schema_version': 1, 'x': x}").body[0]
     plain_page_value = ast.parse("def add_one(page): return page + 1").body[0]
+    plain_fitz_value = ast.parse("def add_one(fitz): return fitz + 1").body[0]
+    plain_page_type_name = ast.parse("def add_one(Page): return Page + 1").body[0]
+    plain_drawings_value = ast.parse("def count(drawings): return len(drawings)").body[0]
+    fitz_type = ast.parse("def read(page: fitz.Page): return page.get_text('words')").body[0]
+    fitz_constructor = ast.parse("def make_rect(): return fitz.Rect(0, 0, 1, 1)").body[0]
     normalizer_assembly = ast.parse(
         "def assemble(table, cell, bbox): return Table(table, cell, bbox)"
+    ).body[0]
+    normalizer_helper = ast.parse(
+        "def compare(table, cell, bbox): return table == cell or bbox is None"
     ).body[0]
 
     assert _classification(script, "scripts/audit.py")[1] == "out_of_scope"
     assert _classification(page, "src/parser.py")[1] == "out_of_scope"
     assert _classification(dto, "src/owned_dto.py")[1] == "exact"
     assert _classification(plain_page_value, "src/parser.py")[1] == "exact"
+    assert _classification(plain_fitz_value, "src/parser.py")[1] == "exact"
+    assert _classification(plain_page_type_name, "src/parser.py")[1] == "exact"
+    assert _classification(plain_drawings_value, "src/parser.py")[1] == "exact"
+    assert _classification(fitz_type, "src/parser.py")[1] == "out_of_scope"
+    assert _classification(fitz_constructor, "src/parser.py")[1] == "out_of_scope"
     assert _classification(normalizer_assembly, "src/tables/normalizer.py")[1] == "out_of_scope"
+    assert _classification(normalizer_helper, "src/tables/normalizer.py")[1] == "exact"
+
+
+def test_ast_audit_ignores_bare_page_and_drawing_parameter_names():
+    node = ast.parse(
+        "def keep(fitz, Page, drawing, drawings): return fitz, Page, drawing, drawings"
+    ).body[0]
+    assert _classification(node, "src/parser.py")[1] == "exact"
+
+
+def test_ast_audit_classifies_qualified_page_api_and_types_as_out_of_scope():
+    for source in (
+        "def read(page): return page.get_text('words')",
+        "def typed(page: fitz.Page): return page",
+        "def rect(page): return fitz.Rect(0, 0, 1, 1)",
+    ):
+        node = ast.parse(source).body[0]
+        assert _classification(node, "src/parser.py")[1] == "out_of_scope"
+
+
+def test_ast_audit_requires_normalizer_table_names_to_be_called():
+    variable_only = ast.parse(
+        "def keep(table, cell, bbox): return table, cell, bbox"
+    ).body[0]
+    assert _classification(variable_only, "src/tables/normalizer.py")[1] == "exact"
 
 
 def test_capability_evidence_requires_files_and_returns_repository_relative_paths(tmp_path):

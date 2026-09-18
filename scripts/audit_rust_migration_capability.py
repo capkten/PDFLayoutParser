@@ -296,19 +296,28 @@ def _node_text(node: ast.AST) -> str:
 def _classification(node: ast.AST, path: str) -> Tuple[str, str, str]:
     names = {item.id for item in ast.walk(node) if isinstance(item, ast.Name)}
     text = _node_text(node)
+    calls = [item for item in ast.walk(node) if isinstance(item, ast.Call)]
+    called_names = {_name(item.func) for item in calls}
     attribute_calls = {
-        item.attr for item in ast.walk(node) if isinstance(item, ast.Attribute)
+        item.func.attr for item in calls if isinstance(item.func, ast.Attribute)
+    }
+    qualified_fitz_names = {
+        _name(item) for item in ast.walk(node) if isinstance(item, ast.Attribute)
     }
     path_parts = {part.lower() for part in Path(path).parts}
     if path_parts & {"scripts", "tests", "benchmark", "benchmarks"}:
         return "脚本、测试或 benchmark 边界", "out_of_scope", "非生产 owned 算法，不列为待迁移能力"
     if names & {"open", "print", "subprocess"}:
         return "文件、进程或调试输出", "out_of_scope", "I/O、CLI 或调试包装保留 Python"
-    if names & {"fitz", "Page", "drawing", "drawings"} or attribute_calls & {
+    if attribute_calls & {
         "get_text", "get_drawings", "get_textbox"
-    }:
+    } or any(
+        item in {"fitz.Page", "fitz.Rect"} for item in qualified_fitz_names
+    ):
         return "PyMuPDF Page/drawing/文字采集", "out_of_scope", "页面读取必须由 Python 转为 owned DTO"
-    if names & {"Table", "Cell", "BBox", "table", "cell", "bbox"} and "normalizer" in path:
+    if {
+        item.rsplit(".", 1)[-1] for item in called_names if item
+    } & {"Table", "Cell", "BBox"} and "normalizer" in path:
         return "公开 Table/Cell/BBox 装配", "out_of_scope", "Python 保留公开对象装配，Rust 只消费 DTO"
     if "dict" in text or "any" in text or "mapping" in text:
         return "动态 Python 容器", "redesign", "先固定 DTO 字段，禁止动态字典直接过 FFI"
