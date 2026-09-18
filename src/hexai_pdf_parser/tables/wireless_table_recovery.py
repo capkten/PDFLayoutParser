@@ -460,8 +460,8 @@ def merge_wrapped_rows(rows: Sequence[Sequence[TextStrip]]) -> List[List[TextStr
             overlapping_fields = [
                 existing
                 for existing in current
-                if row[0].bbox.x1 >= existing.bbox.x0 - 8.0
-                and row[0].bbox.x0 <= existing.bbox.x1 + 8.0
+                if row[0].bbox.x1 > existing.bbox.x0
+                and row[0].bbox.x0 < existing.bbox.x1
             ]
         centered_continuation_target = (
             overlapping_fields[0]
