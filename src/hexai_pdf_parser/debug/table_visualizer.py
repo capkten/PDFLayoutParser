@@ -149,13 +149,45 @@ def _compute_cell_grid_rects(table: Table) -> list[tuple[Cell, fitz.Rect]]:
         row_bounds.append(boundary)
     row_bounds.append(tb.y1)
 
+    import statistics
+
     col_bounds = [tb.x0]
     for i in range(len(sorted_cols) - 1):
         c_cur = sorted_cols[i]
         c_nxt = sorted_cols[i + 1]
-        boundary = (col_rights[c_cur] + col_lefts[c_nxt]) / 2.0
-        boundary = max(boundary, col_lefts[c_cur])
-        boundary = min(boundary, col_lefts[c_nxt])
+
+        cur_rights = [
+            c.bbox.x1
+            for c in geometry_cells
+            if c.col_index == c_cur and c.colspan == 1 and c.text.strip()
+        ]
+        nxt_lefts = [
+            c.bbox.x0
+            for c in geometry_cells
+            if c.col_index == c_nxt and c.colspan == 1 and c.text.strip()
+        ]
+
+        if cur_rights and nxt_lefts:
+            max_cur_r = max(cur_rights)
+            min_nxt_l = min(nxt_lefts)
+            if max_cur_r <= min_nxt_l:
+                boundary = (max_cur_r + min_nxt_l) / 2.0
+            else:
+                dominant_nxt = [x for x in nxt_lefts if x >= max_cur_r]
+                dominant_cur = [x for x in cur_rights if x <= min_nxt_l]
+                if len(dominant_nxt) >= len(nxt_lefts) * 0.5:
+                    boundary = (max_cur_r + min(dominant_nxt)) / 2.0
+                elif len(dominant_cur) >= len(cur_rights) * 0.5:
+                    boundary = (max(dominant_cur) + min_nxt_l) / 2.0
+                else:
+                    boundary = (statistics.median(cur_rights) + statistics.median(nxt_lefts)) / 2.0
+            boundary = max(boundary, col_lefts.get(c_cur, boundary))
+            boundary = min(boundary, col_rights.get(c_nxt, boundary))
+        else:
+            boundary = (col_rights[c_cur] + col_lefts[c_nxt]) / 2.0
+            boundary = max(boundary, col_lefts[c_cur])
+            boundary = min(boundary, col_lefts[c_nxt])
+
         col_bounds.append(boundary)
     col_bounds.append(tb.x1)
 

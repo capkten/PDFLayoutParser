@@ -1,5 +1,13 @@
 # Changes
 
+## 2026-09-18
+
+- 修复 `table_visualizer.py` 在相邻列水平投影重叠或存在左伸条目（如右列 `see` 交叉引用）时垂直列分隔线塌陷、导致左列长文本条目被竖线横切的问题：
+  - **根因与调用位置**：`src/hexai_pdf_parser/debug/table_visualizer.py::_compute_cell_grid_rects()` 在计算相邻列垂直分割边界 `boundary` 时，原先简单采用 `boundary = (col_rights[c_cur] + col_lefts[c_nxt]) / 2.0` 并执行极端钳位 `boundary = min(boundary, col_lefts[c_nxt])`。在 `glossary_ec.pdf` 第 52 页（印刷页 51）等双语词典无线表格中，由于前两行存在 `see` 交叉引用条目合并至右列（`see exchange traded note`，其起始 `x0 = 269.9`，而右列主流释义起始 `x0 = 319.0`），导致右列的全局最小 `col_lefts[1] = 269.9`。极端钳位直接将列分割线强制拉平至 `x = 269.9`。而左列第 4、7、9、10、11、12、14 行等 7 处长英文条目宽度延伸至 `x = 282.0 ~ 294.0`，导致原本仅在 `294.0 ~ 319.0` 之间存在的视觉安全走廊被破坏，垂直蓝色网格线直接横穿左列 7 处长英文单词。
+  - **判定与修改**：在 `table_visualizer.py::_compute_cell_grid_rects()` 中重构相邻列分割线推断逻辑。针对相邻列水平外包络存在重叠异常（`max_cur_r > min_nxt_l`）的情况，不再直接向单一最左离群值钳位，而是统计右列主流主轨分布（`dominant_nxt = [x for x in nxt_lefts if x >= max_cur_r]`）与左列主流分布；当超过 50% 的右列单元格位于左列最右侧右方时，分割线安全置于左列最右与主流右列最左的间隙中点 `(max_cur_r + min(dominant_nxt)) / 2.0`（本页计算结果为 `x = 306.5`，完美落在 `[294.0, 319.0]` 走廊中央）；同时确保边界不越过各列自身的有效起始与终止范围。该修复仅完善调试可视化几何网格绘制，底层表格数据模型保持 `23x2`（46 cells）不变，严格遵守不回读 `page.get_text("words")`、不回退旧路径的约束。
+  - **测试与验证**：在 `tests/test_table_visualizer_column_boundary.py` 中新增列水平重叠时左列边界不塌陷与不横切单元格测试，以及真实页面第 52 页无字符横切回归测试；`tests/test_table_visualizer.py`、`tests/test_table_visualizer_column_boundary.py`、`tests/test_wireless_structure_recoverer.py` 全部通过（`26 passed`），相关无线结构回归测试（`58 passed`）全部通过，`git diff --check` 0 错误。
+  - **页面级验证**：重跑第 52 页到独立输出目录 `D:\codes\PDFLayoutParser\output\glossary_ec_col_vis_fix_20260918\`；视觉核查确认垂直蓝色网格线由原本的 `x ≈ 44%`（`x = 269.9`）后移至 `x ≈ 50%`（`x = 306.5`）；左列 7 处长英文条目全部完整包裹在第 0 列网格内，外留充足安全边距，无任何文字横切或被遮挡。
+
 ## 2026-09-17
 
 - 修复 `glossary_ec.pdf` 第 4 页（解析索引 `3`）无线 glossary 的 `see` 引用被拆成伪列问题：
