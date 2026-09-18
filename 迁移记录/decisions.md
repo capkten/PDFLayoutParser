@@ -16,6 +16,14 @@ Rust symbol、生产 route、行为测试、迁移记录、页面/差分证据�
 
 公开 `roundtrip_dto` 入口必须拒绝缺失或错误 schema，以及 NaN/Inf 坐标。现有 `rust/types.rs` 已提供统一校验，本阶段只补真实公开入口的回归合同测试，不重写 DTO 或 Rust 算法。
 
+## D-008：AST 与 evidence 也必须以仓库根为基准
+
+CLI 的 `collect`、`render`、能力评估和输出标题统一使用向上解析后的仓库根；不能只修复 capability 单元。`evidence_globs` 仅接受 `is_file()` 的真实文件，并输出相对仓库根的 POSIX 路径；空目录、目录命中和绝对机器路径都不是证据。
+
+## D-009：页面分类依赖访问语义而非参数名
+
+普通名为 `page` 的数值或 DTO 参数不触发页面范围外分类；只有 `fitz`/`Page`/绘图语义或真实 `get_text`、`get_drawings`、`get_textbox` 属性调用才标为页面读取。normalizer 中公开 Table/Cell/BBox 装配属于 Python `out_of_scope`。
+
 ## D-002：Rust 只接收 owned DTO
 
 Rust 不持有 PyMuPDF 对象。页面访问和对象转换留在 Python，纯几何/文本/网格规则在 Rust 执行。

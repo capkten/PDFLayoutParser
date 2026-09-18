@@ -10,11 +10,12 @@
 - 修复：沿传入路径向上查找包含 `rust/` 的目录作为项目根；仓库根和源码子目录调用共享同一能力结果。
 - 能力单元分别检查 `rust_symbol`、`production_route`、`behavior_test`、`migration_record`、`page_or_diff_evidence` 和 `dto_schema`。缺少 route 为 `adapter_only`，其余缺项为 `blocked`；固定 Python 编排/范围外单元不伪装为 migrated。
 - AST 分类将脚本、测试、benchmark、CLI/I/O/debug、页面/绘图/文字采集和公开对象装配保留在 Python；纯 owned DTO 函数可分类为 `exact`，不等于已完成生产迁移。
+- review 修复进一步统一 `collect`/`render` 到仓库根；普通 `page` 参数保持 `exact`，normalizer 的公开对象装配改为 `out_of_scope`；evidence 只收集真实文件并输出仓库相对 POSIX 路径。
 
 ## TDD 记录
 
 - RED：`PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 C:\Users\23662\AppData\Local\Programs\Python\Python312\python.exe -m pytest -q tests/test_audit_rust_migration_capability.py`，源码子目录断言失败，且 `schema_markers` 缺失导致合同测试失败。
-- GREEN：同命令最终 `5 passed`；`tests/test_owned_dto_contract.py` 最终 `8 passed`。
+- GREEN：`tests/test_audit_rust_migration_capability.py tests/test_owned_dto_contract.py` 最终 `23 passed`；DTO 合同覆盖每个坐标字段的 NaN、+Inf、-Inf。
 
 ## 验证命令
 
@@ -22,6 +23,7 @@
 - 同脚本以 `src/hexai_pdf_parser/tables` 为 `--root`：登记 779 个 AST 节点，能力状态相同，证明根解析一致。
 - `cargo test --lib`：43 passed、0 failed。
 - `git diff --check`：提交前执行。
+- CLI 的仓库根/源码子目录输出由完整 AST 节点数和 render 内容断言一致；空目录 evidence 断言不通过。
 
 ## 未迁移边界
 

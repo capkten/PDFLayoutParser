@@ -42,6 +42,7 @@ def test_public_rect_dto_rejects_missing_or_wrong_schema(schema_version):
 
 
 @pytest.mark.parametrize("field", ["x0", "y0", "x1", "y1"])
-def test_public_rect_dto_rejects_non_finite_coordinates(field):
+@pytest.mark.parametrize("value", [math.nan, math.inf, -math.inf])
+def test_public_rect_dto_rejects_non_finite_coordinates(field, value):
     with pytest.raises((ValueError, TypeError)):
-        rust_adapter.roundtrip_dto("rect", _rect(**{field: math.nan}))
+        rust_adapter.roundtrip_dto("rect", _rect(**{field: value}))

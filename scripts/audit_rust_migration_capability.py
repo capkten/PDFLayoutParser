@@ -207,7 +207,14 @@ def _evaluate_capability(root: Path, unit: CapabilityUnit) -> CapabilityResult:
     if not any(any(root.glob(pattern)) for pattern in unit.record_globs):
         missing.append("migration_record")
     evidence = tuple(
-        sorted({str(path) for pattern in unit.evidence_globs for path in root.glob(pattern)})
+        sorted(
+            {
+                path.relative_to(root).as_posix()
+                for pattern in unit.evidence_globs
+                for path in root.glob(pattern)
+                if path.is_file()
+            }
+        )
     )
     if not evidence:
         missing.append("page_or_diff_evidence")
@@ -237,6 +244,18 @@ def collect_capabilities(roots: Sequence[Path]) -> List[CapabilityResult]:
         _find_project_root(Path(roots[0])),
     )
     return [_evaluate_capability(project_root, unit) for unit in CAPABILITY_UNITS]
+
+
+def _normalize_audit_roots(roots: Sequence[Path]) -> Tuple[Path, ...]:
+    return tuple(
+        sorted(
+            {
+                _find_project_root(item)
+                for item in roots
+            },
+            key=lambda item: item.as_posix(),
+        )
+    )
 
 
 def _name(node: ast.AST) -> Optional[str]:
@@ -277,15 +296,20 @@ def _node_text(node: ast.AST) -> str:
 def _classification(node: ast.AST, path: str) -> Tuple[str, str, str]:
     names = {item.id for item in ast.walk(node) if isinstance(item, ast.Name)}
     text = _node_text(node)
+    attribute_calls = {
+        item.attr for item in ast.walk(node) if isinstance(item, ast.Attribute)
+    }
     path_parts = {part.lower() for part in Path(path).parts}
     if path_parts & {"scripts", "tests", "benchmark", "benchmarks"}:
         return "脚本、测试或 benchmark 边界", "out_of_scope", "非生产 owned 算法，不列为待迁移能力"
     if names & {"open", "print", "subprocess"}:
         return "文件、进程或调试输出", "out_of_scope", "I/O、CLI 或调试包装保留 Python"
-    if names & {"fitz", "Page", "page", "drawing", "drawings"} or "get_text" in text:
+    if names & {"fitz", "Page", "drawing", "drawings"} or attribute_calls & {
+        "get_text", "get_drawings", "get_textbox"
+    }:
         return "PyMuPDF Page/drawing/文字采集", "out_of_scope", "页面读取必须由 Python 转为 owned DTO"
     if names & {"Table", "Cell", "BBox", "table", "cell", "bbox"} and "normalizer" in path:
-        return "公开 Table/Cell/BBox 装配", "semantic", "Python 保留公开对象装配，Rust 只消费 DTO"
+        return "公开 Table/Cell/BBox 装配", "out_of_scope", "Python 保留公开对象装配，Rust 只消费 DTO"
     if "dict" in text or "any" in text or "mapping" in text:
         return "动态 Python 容器", "redesign", "先固定 DTO 字段，禁止动态字典直接过 FFI"
     return "owned 标量、列表或结构化值", "exact", "可按 DTO 做纯函数等价迁移"
@@ -395,7 +419,7 @@ def _stable_path(path: Path) -> str:
 def collect(roots: Sequence[Path]) -> List[Record]:
     records: List[Record] = []
     excluded_dirs = {".git", ".tmp", "target", "output", ".worktrees"}
-    for root in sorted({item.resolve() for item in roots}, key=lambda item: item.as_posix()):
+    for root in _normalize_audit_roots(roots):
         paths = (
             path
             for path in root.rglob("*.py")
@@ -429,6 +453,7 @@ def render(
     roots: Sequence[Path],
     capabilities: Sequence[CapabilityResult] = (),
 ) -> str:
+    roots = _normalize_audit_roots(roots)
     lines = [
         "# Rust 迁移能力矩阵（AST 审计）", "",
         "> 本文件由 `scripts/audit_rust_migration_capability.py` 生成。顶部能力单元是生产接入判定，下面 AST 表是静态盘点，不是性能报告。",
@@ -471,13 +496,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     missing = [str(item) for item in roots if not item.exists()]
     if missing:
         parser.error("根目录不存在: " + ", ".join(missing))
-    records = collect(roots)
+    audit_roots = _normalize_audit_roots(roots)
+    records = collect(audit_roots)
     if not records or any(item.classification not in CLASSIFICATIONS for item in records):
         raise RuntimeError("审计结果为空或包含未注册分类")
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
-    capabilities = collect_capabilities(roots)
-    output.write_text(render(records, roots, capabilities), encoding="utf-8")
+    capabilities = collect_capabilities(audit_roots)
+    output.write_text(render(records, audit_roots, capabilities), encoding="utf-8")
     counts: Dict[str, int] = {}
     for item in capabilities:
         counts[item.status] = counts.get(item.status, 0) + 1
