@@ -639,3 +639,38 @@ def test_recover_interleaved_vertical_cjk_columns(monkeypatch):
     assert "光" in row2_col0 and "电" in row2_col0 and "产" in row2_col0 and "业" in row2_col0
     assert next(cell for cell in cells if cell.row_index == 1 and cell.col_index == 1).text == "100.00"
     assert next(cell for cell in cells if cell.row_index == 2 and cell.col_index == 2).text == "240.00"
+
+
+ZH_ALL_TABLE_PAGES_PDF = Path("D:/codes/PDFLayoutParser/fix/zh_all_table_pages.pdf")
+
+
+@pytest.mark.skipif(not ZH_ALL_TABLE_PAGES_PDF.exists(), reason="zh_all_table_pages PDF unavailable")
+def test_page_587_recovers_numbered_multiblock_prefix_without_dropping_table():
+    document = fitz.open(str(ZH_ALL_TABLE_PAGES_PDF))
+    try:
+        page = document[587]
+        region = BBox(84.2, 98.8, 540.1, 767.9)
+        rows, columns, cells = recover_cells_from_region(page, region)
+    finally:
+        document.close()
+
+    assert rows >= 38
+    assert columns >= 5
+    assert len(cells) >= 190
+    assert any("6." in cell.text and "一揽子交易处置" in cell.text for cell in cells)
+
+
+@pytest.mark.skipif(not ZH_ALL_TABLE_PAGES_PDF.exists(), reason="zh_all_table_pages PDF unavailable")
+def test_page_590_financial_table_does_not_collapse_rows():
+    document = fitz.open(str(ZH_ALL_TABLE_PAGES_PDF))
+    try:
+        page = document[590]
+        region = BBox(54.5, 119.6, 785.9, 507.6)
+        rows, columns, cells = recover_cells_from_region(page, region)
+    finally:
+        document.close()
+
+    assert rows >= 28
+    assert columns >= 10
+    assert len(cells) >= 280
+
