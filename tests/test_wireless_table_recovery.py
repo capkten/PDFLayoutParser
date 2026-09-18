@@ -9,6 +9,7 @@
 
 from pathlib import Path
 
+import pytest
 import fitz
 
 from hexai_pdf_parser.models import BBox, Cell, Table
@@ -316,6 +317,29 @@ def test_merge_wrapped_rows_keeps_a_sparse_same_column_continuation():
     assert [strip.text for strip in merged[0]] == ["Description", "continued", "100"]
 
 
+def test_merge_wrapped_rows_appends_a_centered_continuation_to_the_overlapping_field():
+    institution = NativeSpan("机构名称", BBox(40, 20, 180, 30), "Helvetica", 10, 0)
+    number = NativeSpan("8", BBox(260, 20, 268, 30), "Helvetica", 10, 1)
+    continuation = NativeSpan("司", BBox(135, 33, 145, 43), "Helvetica", 10, 2)
+    rows = [
+        [
+            TextStrip(institution.text, institution.bbox, [institution]),
+            TextStrip(number.text, number.bbox, [number]),
+        ],
+        [TextStrip(continuation.text, continuation.bbox, [continuation])],
+    ]
+
+    merged = merge_wrapped_rows(rows)
+
+    assert len(merged) == 1
+    assert len(merged[0]) == 2
+    merged_institution = merged[0][0]
+    assert merged_institution.text == "机构名称司"
+    assert merged_institution.bbox == BBox(40, 20, 180, 43)
+    assert [span.order for span in merged_institution.spans] == [0, 2]
+    assert merged[0][1].text == "8"
+
+
 def test_merge_wrapped_rows_does_not_absorb_a_centered_section_title():
     label = NativeSpan("Item", BBox(20, 20, 45, 30), "Helvetica", 10, 0)
     value = NativeSpan("Amount", BBox(170, 20, 205, 30), "Helvetica", 10, 1)
@@ -523,3 +547,47 @@ def test_column_tracks_multi_table_run_keeps_independent_tracks():
     assert len(tracks) >= 2
     assert any(abs(t - 73.5) < 5.0 for t in tracks)
     assert any(abs(t - 208.2) < 5.0 for t in tracks)
+
+
+def test_personal_credit_continuation_page_keeps_institution_query_table_together():
+    pdf_path = Path(
+        r"D:\codes\PDFLayoutParser\个人信用报告\test\test\2_PDFsam_a1e4baf2-5f46-4f6b-865d-2d9240362880.pdf"
+    )
+    if not pdf_path.exists():
+        pytest.skip(f"target PDF not found: {pdf_path}")
+
+    with fitz.open(pdf_path) as document:
+        tables = TableExtractor(use_ml_table_detector=False).extract(document[1])
+
+    institution_tables = []
+    for table in tables:
+        texts = {cell.text.strip() for cell in table.cells}
+        if table.source == "wireless_span_recovery" and all(
+            str(number) in texts for number in range(8, 20)
+        ):
+            institution_tables.append(table)
+
+    assert len(institution_tables) == 1
+    institution = institution_tables[0]
+    assert (institution.rows, institution.cols) == (12, 4)
+    assert institution.source == "wireless_span_recovery"
+    assert len(institution.cells) == 48
+
+    occupied = set()
+    for cell in institution.cells:
+        for row_index in range(cell.row_index, cell.row_index + cell.rowspan):
+            for col_index in range(cell.col_index, cell.col_index + cell.colspan):
+                assert (row_index, col_index) not in occupied
+                occupied.add((row_index, col_index))
+    assert occupied == {
+        (row_index, col_index)
+        for row_index in range(12)
+        for col_index in range(4)
+    }
+
+    personal_tables = [table for table in tables if table is not institution]
+    assert len(personal_tables) == 1
+    personal = personal_tables[0]
+    assert (personal.rows, personal.cols) == (4, 4)
+    assert personal.source == "wireless_span_recovery"
+    assert institution.bbox.y1 < personal.bbox.y0
