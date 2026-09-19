@@ -1,5 +1,5 @@
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList, PyModule, PyTuple};
+use pyo3::types::{PyBytes, PyDict, PyList, PyModule, PyTuple};
 
 pub mod english_wireless;
 pub mod geometry;
@@ -249,6 +249,46 @@ fn roundtrip_dto_binding<'py>(
     data: &Bound<'py, pyo3::types::PyDict>,
 ) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
     types::roundtrip_dto_py(py, dto_type, data)
+}
+
+fn canonical_digest<'py>(py: Python<'py>, data: &Bound<'py, PyDict>) -> PyResult<String> {
+    let json = PyModule::import_bound(py, "json")?;
+    let kwargs = PyDict::new_bound(py);
+    kwargs.set_item("ensure_ascii", false)?;
+    kwargs.set_item("sort_keys", true)?;
+    kwargs.set_item("separators", PyTuple::new_bound(py, [",", ":"]))?;
+    kwargs.set_item("allow_nan", false)?;
+    let encoded: String = json
+        .getattr("dumps")?
+        .call((data,), Some(&kwargs))?
+        .extract()?;
+
+    let hashlib = PyModule::import_bound(py, "hashlib")?;
+    let digest: String = hashlib
+        .getattr("sha256")?
+        .call1((PyBytes::new_bound(py, encoded.as_bytes()),))?
+        .getattr("hexdigest")?
+        .call0()?
+        .extract()?;
+    Ok(digest)
+}
+
+#[pyfunction(name = "page_snapshot_digest")]
+fn page_snapshot_digest_binding<'py>(
+    py: Python<'py>,
+    data: &Bound<'py, PyDict>,
+) -> PyResult<String> {
+    types::PageSnapshotDto::from_py(data)?;
+    canonical_digest(py, data)
+}
+
+#[pyfunction(name = "stage_input_digest")]
+fn stage_input_digest_binding<'py>(
+    py: Python<'py>,
+    data: &Bound<'py, PyDict>,
+) -> PyResult<String> {
+    types::OwnedValue::from_py(data.as_any(), "stage")?;
+    canonical_digest(py, data)
 }
 
 #[pyfunction(name = "rect_overlap")]
@@ -820,6 +860,8 @@ fn _pdf_fast(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(assign_text_to_line_cells_binding, module)?)?;
     module.add_function(wrap_pyfunction!(extract_wired_region_binding, module)?)?;
     module.add_function(wrap_pyfunction!(roundtrip_dto_binding, module)?)?;
+    module.add_function(wrap_pyfunction!(page_snapshot_digest_binding, module)?)?;
+    module.add_function(wrap_pyfunction!(stage_input_digest_binding, module)?)?;
     module.add_function(wrap_pyfunction!(infer_header_structure_binding, module)?)?;
     module.add_function(wrap_pyfunction!(merge_header_spans_binding, module)?)?;
     module.add_function(wrap_pyfunction!(

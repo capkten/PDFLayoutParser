@@ -4,6 +4,9 @@
 from __future__ import annotations
 
 import os
+import copy
+import hashlib
+import json
 import pytest
 from hexai_pdf_parser import rust_adapter
 
@@ -190,3 +193,198 @@ def test_assert_equivalent():
     diags = rust_adapter.get_diagnostics()
     assert len(diags) == 1
     assert diags[0]["status"] == "rust_output_mismatch"
+
+
+def _snapshot_fixture():
+    return {
+        "schema_version": 1,
+        "version": 1,
+        "page_index": 4,
+        "geometry": {
+            "rect": (0.0, 0.0, 120.0, 80.0),
+            "x0": 0.0,
+            "y0": 0.0,
+            "x1": 120.0,
+            "y1": 80.0,
+            "width": 120.0,
+            "height": 80.0,
+            "rotation": 90,
+        },
+        "text_blocks": (
+            {
+                "bbox": (1.0, 2.0, 30.0, 14.0),
+                "raw_source_position": (0,),
+                "source_order": 0,
+                "lines": (
+                    {
+                        "bbox": (1.0, 2.0, 30.0, 14.0),
+                        "raw_source_position": (0, 0),
+                        "source_order": 0,
+                        "spans": (
+                            {
+                                "bbox": (1.0, 2.0, 30.0, 14.0),
+                                "raw_source_position": (0, 0, 0),
+                                "source_order": 0,
+                                "text": "甲",
+                                "font": "Noto",
+                                "size": 12.0,
+                                "flags": 3,
+                                "chars": (
+                                    {
+                                        "c": "甲",
+                                        "bbox": (1.0, 2.0, 8.0, 14.0),
+                                        "raw_source_position": (0, 0, 0, 0),
+                                        "source_order": 0,
+                                    },
+                                ),
+                            },
+                        ),
+                    },
+                ),
+            },
+        ),
+        "spans": (
+            {
+                "bbox": (1.0, 2.0, 30.0, 14.0),
+                "raw_source_position": (0, 0, 0),
+                "source_order": 0,
+                "text": "甲",
+                "font": "Noto",
+                "size": 12.0,
+                "flags": 3,
+                "chars": (
+                    {
+                        "c": "甲",
+                        "bbox": (1.0, 2.0, 8.0, 14.0),
+                        "raw_source_position": (0, 0, 0, 0),
+                        "source_order": 0,
+                    },
+                ),
+            },
+        ),
+        "words": (
+            {
+                "bbox": (1.0, 2.0, 30.0, 14.0),
+                "text": "甲",
+                "block_index": 0,
+                "line_index": 0,
+                "word_index": 2,
+                "source_order": 7,
+            },
+        ),
+        "drawings": (
+            {
+                "type": "fs",
+                "rect": (0.0, 0.0, 120.0, 20.0),
+                "color": (0.0, 0.0, 0.0),
+                "fill": (0.8, 0.8, 0.8),
+                "opacity": 0.5,
+                "fill_opacity": 0.4,
+                "width": 1.25,
+                "items": (
+                    ("l", (0.0, 0.0), (120.0, 0.0)),
+                    ("re", (0.0, 0.0, 120.0, 20.0), 1),
+                ),
+                "seqno": 9,
+                "level": 2,
+            },
+        ),
+        "allowed_regions": ({"x0": 0.0, "y0": 0.0, "x1": 60.0, "y1": 40.0},),
+        "excluded_regions": ({"x0": 50.0, "y0": 10.0, "x1": 55.0, "y1": 20.0},),
+        "extraction_options": {
+            "rawdict": {
+                "selected": {"status": "ok", "kwargs": {"flags": 2}},
+                "variants": {"default": {"status": "ok"}},
+            },
+            "words": {"selected": {"status": "ok"}},
+        },
+    }
+
+
+def _snapshot_object():
+    class Snapshot:
+        pass
+
+    snapshot = Snapshot()
+    for key, value in _snapshot_fixture().items():
+        setattr(snapshot, key, value)
+    return snapshot
+
+
+def test_page_snapshot_to_rust_input_normalizes_owned_contract_without_mutation():
+    snapshot = _snapshot_object()
+    before = copy.deepcopy(snapshot.__dict__)
+
+    dto = rust_adapter.page_snapshot_to_rust_input(snapshot)
+
+    assert snapshot.__dict__ == before
+    assert set(dto) == {
+        "schema_version",
+        "page_index",
+        "page",
+        "text_blocks",
+        "spans",
+        "words",
+        "drawings",
+        "allowed_regions",
+        "excluded_regions",
+        "extraction_options",
+    }
+    assert dto["page"] == {
+        "schema_version": 1,
+        "width": 120.0,
+        "height": 80.0,
+        "rotation": 90,
+    }
+    assert dto["spans"][0]["order"] == 0
+    assert dto["words"][0]["order"] == 7
+    assert dto["drawings"][0]["source_order"] == 0
+    assert dto["drawings"][0]["opacity"] == 0.5
+    assert dto["drawings"][0]["items"][1][0] == "re"
+    assert dto["allowed_regions"][0]["allowed"] is True
+    assert dto["excluded_regions"][0]["allowed"] is False
+    assert dto["allowed_regions"][0]["source_order"] == 0
+    assert dto["excluded_regions"][0]["source_order"] == 0
+
+
+def test_page_snapshot_contract_roundtrips_and_rust_digest_matches_python():
+    dto = rust_adapter.page_snapshot_to_rust_input(_snapshot_object())
+    roundtripped = rust_adapter.roundtrip_dto("page_snapshot", dto)
+
+    assert roundtripped == dto
+    canonical = json.dumps(
+        dto, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False
+    ).encode("utf-8")
+    expected = hashlib.sha256(canonical).hexdigest()
+    assert expected == "a05f7956e7e0e9b6c00e66ec81be00e43636beaac436248bef2f623a96b60e16"
+    assert rust_adapter.stage_input_digest(dto) == expected
+    assert rust_adapter.page_snapshot_digest(dto) == expected
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda dto: dto.pop("page"),
+        lambda dto: dto.update(schema_version=2),
+        lambda dto: dto["page"].update(width=float("nan")),
+        lambda dto: dto["words"].append({}),
+        lambda dto: dto.__setitem__("extraction_options", []),
+    ],
+)
+def test_page_snapshot_contract_rejects_missing_schema_type_and_nonfinite_values(mutate):
+    dto = rust_adapter.page_snapshot_to_rust_input(_snapshot_object())
+    mutate(dto)
+
+    with pytest.raises(ValueError):
+        rust_adapter.roundtrip_dto("page_snapshot", dto)
+
+
+def test_stage_dto_declares_stage_and_snapshot_digest():
+    snapshot_dto = rust_adapter.page_snapshot_to_rust_input(_snapshot_object())
+    stage = rust_adapter.recover_native_text_input(
+        snapshot_dto, region=snapshot_dto["allowed_regions"][0]
+    )
+
+    assert stage["stage"] == "recover_native_text_input"
+    assert stage["input_snapshot_digest"] == rust_adapter.stage_input_digest(snapshot_dto)
+    assert stage["spans"] == snapshot_dto["spans"]
