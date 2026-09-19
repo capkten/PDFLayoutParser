@@ -1264,10 +1264,10 @@ def _clip_word_from_characters(
     characters: Sequence[Mapping[str, Any]],
     clip: Mapping[str, Any],
     spans: Mapping[tuple[Any, ...], Mapping[str, Any]] | None = None,
-) -> Mapping[str, Any] | None:
+) -> tuple[Mapping[str, Any], ...]:
     word_box = _bbox(word)
     if word_box is None:
-        return None
+        return ()
     word_characters = []
     for character in characters:
         char_box = _bbox(character)
@@ -1287,13 +1287,13 @@ def _clip_word_from_characters(
             word_characters.append(character)
     word_characters.sort(key=lambda character: character.get("source_order", 0))
     if not word_characters:
-        return None
+        return ()
     character_text = "".join(str(character.get("c", "")) for character in word_characters)
     word_text = str(word.get("text", ""))
     if character_text != word_text:
-        return None
+        return ()
     if len(word_characters) != len(word_text):
-        return None
+        return ()
 
     def glyph_clip_box(character: Mapping[str, Any]) -> tuple[float, float, float, float] | None:
         span = spans.get(_source_position(character, 3)) if spans else None
@@ -1332,22 +1332,35 @@ def _clip_word_from_characters(
         )
 
     selected = [
-        character
-        for character in word_characters
+        (index, character)
+        for index, character in enumerate(word_characters)
         if selected_by_clip(character)
     ]
     if not selected:
-        return None
-    copied = _thaw(word)
-    copied["text"] = "".join(str(character.get("c", "")) for character in selected)
-    boxes = [_bbox(character) for character in selected]
-    copied["bbox"] = (
-        min(box[0] for box in boxes if box is not None),
-        min(box[1] for box in boxes if box is not None),
-        max(box[2] for box in boxes if box is not None),
-        max(box[3] for box in boxes if box is not None),
-    )
-    return _freeze(copied)
+        return ()
+
+    runs: list[list[Mapping[str, Any]]] = []
+    previous_index = None
+    for index, character in selected:
+        if previous_index is None or index != previous_index + 1:
+            runs.append([character])
+        else:
+            runs[-1].append(character)
+        previous_index = index
+
+    clipped_words = []
+    for run in runs:
+        copied = _thaw(word)
+        copied["text"] = "".join(str(character.get("c", "")) for character in run)
+        boxes = [_bbox(character) for character in run]
+        copied["bbox"] = (
+            min(box[0] for box in boxes if box is not None),
+            min(box[1] for box in boxes if box is not None),
+            max(box[2] for box in boxes if box is not None),
+            max(box[3] for box in boxes if box is not None),
+        )
+        clipped_words.append(_freeze(copied))
+    return tuple(clipped_words)
 
 
 def snapshot_words_for_clip(
@@ -1369,36 +1382,55 @@ def snapshot_words_for_clip(
         _source_position(span, 3): span
         for span in snapshot.spans
     }
+    space_widths: dict[tuple[Any, Any], float] = {}
+    for character in snapshot.characters:
+        if not str(character.get("c", "")).isspace():
+            continue
+        box = _bbox(character)
+        source_line = _source_position(character, 2)
+        if box is None or box[2] <= box[0]:
+            continue
+        width = box[2] - box[0]
+        previous = space_widths.get(source_line)
+        if previous is None or width < previous:
+            space_widths[source_line] = width
     result = []
     for word in words:
-        clipped = _clip_word_from_characters(
+        clipped_words = _clip_word_from_characters(
             word,
             snapshot.characters,
             clip_values,
             spans,
         )
-        if clipped is not None:
-            result.append(clipped)
+        result.extend(clipped_words)
     local_block_indices: dict[Any, int] = {}
-    local_line_indices: dict[tuple[Any, Any], int] = {}
     local_word_indices: dict[tuple[int, int], int] = {}
     normalized = []
+    previous_word = None
+    current_block = None
+    current_line = -1
     for word in result:
         raw_block_index = word.get("block_index")
         raw_line_index = word.get("line_index")
-        block_index = local_block_indices.setdefault(
-            raw_block_index,
-            len(local_block_indices),
-        )
-        raw_line_key = (raw_block_index, raw_line_index)
-        line_index = local_line_indices.setdefault(
-            raw_line_key,
-            sum(
-                1
-                for block, line in local_line_indices
-                if block == raw_block_index
-            ),
-        )
+        block_index = local_block_indices.setdefault(raw_block_index, len(local_block_indices))
+        if current_block != raw_block_index:
+            current_block = raw_block_index
+            current_line = 0
+        elif previous_word is None or previous_word.get("line_index") != raw_line_index:
+            current_line += 1
+        else:
+            previous_box = _bbox(previous_word)
+            current_box = _bbox(word)
+            space_width = space_widths.get((raw_block_index, raw_line_index))
+            if (
+                previous_box is not None
+                and current_box is not None
+                and previous_word.get("word_index") != word.get("word_index")
+                and space_width is not None
+                and current_box[0] - previous_box[2] > 2.0 * space_width
+            ):
+                current_line += 1
+        line_index = current_line
         key = (block_index, line_index)
         word_index = local_word_indices.get(key, 0)
         local_word_indices[key] = word_index + 1
@@ -1407,6 +1439,7 @@ def snapshot_words_for_clip(
         copied["line_index"] = line_index
         copied["word_index"] = word_index
         normalized.append(_freeze(copied))
+        previous_word = word
     return tuple(normalized)
 
 

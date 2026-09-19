@@ -982,6 +982,23 @@ def test_snapshot_words_for_clip_matches_real_pymupdf_for_multiple_boundaries(
         document.close()
 
 
+def test_snapshot_words_for_clip_splits_noncontiguous_selected_characters():
+    document = fitz.open()
+    real_page = document.new_page(width=120, height=80)
+    real_page.insert_text((10, 30), "hello world", fontsize=12)
+    try:
+        snapshot = _capture(real_page)
+        clip = fitz.Rect(0, 16, 75, 23)
+        expected = real_page.get_text("words", clip=clip)
+        actual = _api().snapshot_words_for_clip(snapshot, clip)
+        assert [tuple(word[:4]) + (word[4],) + tuple(word[5:]) for word in expected] == [
+            (word["bbox"] + (word["text"], word["block_index"], word["line_index"], word["word_index"]))
+            for word in actual
+        ]
+    finally:
+        document.close()
+
+
 def test_snapshot_words_for_clip_reindexes_selected_blocks_and_lines():
     document = fitz.open()
     real_page = document.new_page(width=120, height=100)
