@@ -75,32 +75,12 @@ def test_snapshot_preserves_source_order_and_character_boxes():
     recording_page = RecordingPage(page)
     try:
         snapshot = _capture(recording_page)
-        assert [call[0] for call in recording_page.calls] == [
-            "get_text",
-            "get_text",
-            "get_text",
-            "get_text",
-            "get_text",
-            "get_drawings",
-        ]
-        assert recording_page.calls[0][1:] == (
-            ("rawdict",),
-            {"flags": fitz.TEXT_PRESERVE_WHITESPACE},
-        )
-        assert recording_page.calls[1][1:] == (
-            ("dict",),
-            {"flags": fitz.TEXT_PRESERVE_WHITESPACE},
-        )
-        assert recording_page.calls[2][1:] == (
-            ("text",),
-            {"flags": fitz.TEXT_PRESERVE_WHITESPACE},
-        )
-        assert recording_page.calls[3][1:] == (
-            ("blocks",),
-            {"flags": fitz.TEXT_PRESERVE_WHITESPACE},
-        )
-        assert recording_page.calls[4][1:] == (("words",), {})
-        assert recording_page.calls[5][1:] == ((), {"extended": True})
+        assert [call[0] for call in recording_page.calls].count("get_text") == 10
+        assert [call[0] for call in recording_page.calls].count("get_drawings") == 2
+        assert recording_page.calls[0][1:] == (("rawdict",), {})
+        assert recording_page.calls[1][1:] == (("rawdict",), {"flags": fitz.TEXT_PRESERVE_WHITESPACE})
+        assert recording_page.calls[2][1:] == (("dict",), {})
+        assert recording_page.calls[3][1:] == (("dict",), {"flags": fitz.TEXT_PRESERVE_WHITESPACE})
         assert recording_page.property_reads.count("rect") == 1
         assert recording_page.property_reads.count("rotation") == 1
         assert recording_page.property_reads.count("number") == 1
@@ -232,7 +212,7 @@ def test_snapshot_is_recursively_immutable():
         with pytest.raises(TypeError):
             snapshot.drawings[0]["items"][0][1][0] = 0
         with pytest.raises(TypeError):
-            snapshot.extraction_options["rawdict"]["kwargs"]["flags"] = 0
+            snapshot.extraction_options["rawdict"]["variants"]["preserve_whitespace"]["kwargs"]["flags"] = 0
         assert _api().page_snapshot_digest(snapshot) == _api().page_snapshot_digest(
             snapshot
         )
@@ -245,17 +225,11 @@ def test_snapshot_records_exact_extraction_options():
     try:
         snapshot = _capture(RecordingPage(page))
         options = snapshot.extraction_options
-        assert options["rawdict"]["mode"] == "rawdict"
-        assert options["rawdict"]["flags"] == fitz.TEXT_PRESERVE_WHITESPACE
-        assert options["rawdict"]["clip"] is None
-        assert options["words"] == {
-            "method": "get_text",
-            "mode": "words",
-            "args": ("words",),
-            "kwargs": {},
-            "clip": None,
-        }
-        assert options["drawings"]["extended"] is True
+        assert options["rawdict"]["selected"]["kwargs"]["flags"] == fitz.TEXT_PRESERVE_WHITESPACE
+        assert options["rawdict"]["variants"]["default"]["args"] == ("rawdict",)
+        assert options["words"]["selected"]["args"] == ("words",)
+        assert options["words"]["variants"]["preserve_whitespace"]["kwargs"]["flags"] == fitz.TEXT_PRESERVE_WHITESPACE
+        assert options["drawings"]["variants"]["extended"]["kwargs"]["extended"] is True
         assert snapshot.schema_version == 1
         assert snapshot.version == 1
         assert snapshot.summary["span_count"] == len(snapshot.spans)
@@ -284,6 +258,26 @@ def test_snapshot_digest_is_stable_for_same_page():
         assert hashlib.sha256(encoded).hexdigest() == api.page_snapshot_digest(first)
         assert '": ' not in encoded.decode("utf-8")
         assert ", " not in encoded.decode("utf-8")
+    finally:
+        document.close()
+
+
+def test_real_capture_digest_has_fixed_canonical_golden_value():
+    page, document = _page_and_doc()
+    try:
+        snapshot = _capture(RecordingPage(page))
+        dto = _api().page_snapshot_to_dto(snapshot)
+        canonical = json.dumps(
+            {key: value for key, value in dto.items() if key != "digest"},
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+        assert hashlib.sha256(canonical).hexdigest() == (
+            "aa5a67b26fa38502f888df23c8c78176999ccea757915a84a8fbee441d1b6f02"
+        )
+        assert dto["digest"] == snapshot.digest
     finally:
         document.close()
 
@@ -507,5 +501,174 @@ def test_snapshot_digest_keeps_empty_values_in_canonical_golden_fixture():
     assert _api().page_snapshot_to_dto(snapshot)["extraction_options"]["text"] == ""
     assert _api().page_snapshot_to_dto(snapshot)["summary"]["empty"] == []
     assert _api().page_snapshot_digest(snapshot) == (
-        "ae23e12b6c1e5dc7f13aa99b93643c249822cbae656b1249a5f8070ab52ece3e"
+        "b37a29c03d77ed8880960afca865c429e2adbdf1fd384d5866b61b67665f6c32"
     )
+
+
+def test_snapshot_records_pixmap_pixels_and_all_registered_parameter_variants():
+    page = _FullPageSpy()
+    snapshot = _capture(page, allowed_regions=(fitz.Rect(0, 0, 60, 60),))
+
+    text_calls = [call for call in page.calls if call[0] == "get_text"]
+    assert ("rawdict",) in [call[1] for call in text_calls]
+    assert ("dict",) in [call[1] for call in text_calls]
+    assert ("text",) in [call[1] for call in text_calls]
+    assert ("blocks",) in [call[1] for call in text_calls]
+    assert any(call[1] == ("words",) and not call[2] for call in text_calls)
+    assert any(
+        call[1] == ("words",) and call[2].get("flags") == fitz.TEXT_PRESERVE_WHITESPACE
+        for call in text_calls
+    )
+    assert any(
+        call[1] == ("words",)
+        and isinstance(call[2].get("clip"), fitz.Rect)
+        and call[2].get("flags") == fitz.TEXT_PRESERVE_WHITESPACE
+        for call in text_calls
+    )
+    drawing_calls = [call for call in page.calls if call[0] == "get_drawings"]
+    assert any(not call[2] for call in drawing_calls)
+    assert any(call[2] == {"extended": True} for call in drawing_calls)
+
+    pixmap_calls = [call for call in page.calls if call[0] == "get_pixmap"]
+    assert len(pixmap_calls) == 1
+    assert pixmap_calls[0][2]["alpha"] is False
+    assert pixmap_calls[0][2]["matrix"] == fitz.Matrix(0.1, 0.1)
+    assert "colorspace" in pixmap_calls[0][2]
+    pixels = snapshot.raster["result"]["samples"]
+    assert pixels["byte_length"] == 3
+    assert pixels["sha256"] == hashlib.sha256(b"rgb").hexdigest()
+    assert pixels["hex"] == b"rgb".hex()
+
+
+def test_snapshot_records_find_tables_extract_rows_and_fake_fallback_evidence():
+    class FakeTable:
+        bbox = fitz.Rect(1, 2, 30, 40)
+        cells = ((1.0, 2.0, 30.0, 20.0),)
+        header = {"names": ["A"]}
+
+        def extract(self):
+            return [["A"], ["value"]]
+
+    class TablePage(_FullPageSpy):
+        def find_tables(self, *args, **kwargs):
+            self.calls.append(("find_tables", args, kwargs))
+            return type("FakeFinder", (), {"tables": [FakeTable()]})()
+
+    snapshot = _capture(TablePage())
+    fallback = snapshot.table_fallback
+    assert fallback["status"] == "ok"
+    assert fallback["tables"][0]["bbox"] == (1.0, 2.0, 30.0, 40.0)
+    assert fallback["tables"][0]["extract"]["args"] == ()
+    assert fallback["tables"][0]["extract"]["kwargs"] == {}
+    assert fallback["tables"][0]["extract"]["status"] == "ok"
+    assert fallback["tables"][0]["extract"]["result"] == (("A",), ("value",))
+
+
+def test_filter_snapshot_evidence_preserves_hierarchy_and_filters_footer_and_blank_spans():
+    class FooterPage(_FullPageSpy):
+        def get_text(self, *args, **kwargs):
+            result = super().get_text(*args, **kwargs)
+            if args and args[0] == "rawdict":
+                result["blocks"][0]["lines"].extend(
+                    [
+                        {
+                            "bbox": [10.0, 125.0, 80.0, 137.0],
+                            "spans": [
+                                {
+                                    "bbox": [10.0, 125.0, 80.0, 137.0],
+                                    "chars": [
+                                        {"c": "第3页/共5页", "bbox": [10.0, 125.0, 80.0, 137.0]}
+                                    ],
+                                }
+                            ],
+                        },
+                        {
+                            "bbox": [90.0, 80.0, 95.0, 90.0],
+                            "spans": [
+                                {
+                                    "bbox": [90.0, 80.0, 95.0, 90.0],
+                                    "chars": [{"c": " ", "bbox": [90.0, 80.0, 95.0, 90.0]}],
+                                }
+                            ],
+                        },
+                    ]
+                )
+            return result
+
+    snapshot = _capture(FooterPage())
+    filtered = _api().filter_snapshot_evidence(snapshot)
+    assert len(filtered.lines) == 1
+    assert all("第3页" not in line.get("text", "") for line in filtered.lines)
+    assert all(span["text"].strip() for span in filtered.spans)
+    assert [block["filtered_order"] for block in filtered.text_blocks] == list(
+        range(len(filtered.text_blocks))
+    )
+    assert [line["filtered_order"] for line in filtered.lines] == list(
+        range(len(filtered.lines))
+    )
+    assert [span["filtered_order"] for span in filtered.spans] == list(
+        range(len(filtered.spans))
+    )
+    assert any("第3页" in span["text"] for span in snapshot.spans)
+
+
+def test_parent_dto_is_minimal_and_digest_is_stable_across_equivalent_documents():
+    first = _capture(_FullPageSpy())
+    second = _capture(_FullPageSpy())
+    api = _api()
+    first_dto = api.page_snapshot_to_dto(first)
+    second_dto = api.page_snapshot_to_dto(second)
+    assert first_dto["page_reads"]["parent"]["result"] == {
+        "available": True,
+        "type": "_ParentSpy",
+    }
+    assert "attributes" not in first_dto["page_reads"]["parent"]["result"]
+    assert api.page_snapshot_digest(first) == api.page_snapshot_digest(second)
+
+
+@pytest.mark.parametrize("bad_value", [math.nan, math.inf, -math.inf])
+def test_snapshot_records_nonfinite_result_normalization_errors_without_crashing(bad_value):
+    class NonFinitePage(_FullPageSpy):
+        def get_bboxlog(self, *args, **kwargs):
+            self.calls.append(("get_bboxlog", args, kwargs))
+            return [("fill", (bad_value, 1.0, 2.0, 3.0))]
+
+    snapshot = _capture(NonFinitePage())
+    record = snapshot.bboxlog
+    assert record["status"] == "error"
+    assert record["error"]["phase"] == "normalize"
+    assert record["result"] is None
+
+
+def test_snapshot_serialization_and_filtering_never_reenter_strict_spy_page():
+    class StrictPage(_FullPageSpy):
+        locked = False
+
+        def __getattribute__(self, name):
+            if name in {
+                "rect", "width", "height", "size", "rotation", "number",
+                "parent", "get_text", "get_drawings", "get_fonts", "get_images",
+                "get_image_info", "get_image_rects", "get_pixmap", "get_bboxlog",
+                "find_tables",
+            } and object.__getattribute__(self, "locked"):
+                raise AssertionError(f"page reread after capture: {name}")
+            return super().__getattribute__(name)
+
+    page = StrictPage()
+    snapshot = _capture(page)
+    page.locked = True
+    api = _api()
+    dto = api.page_snapshot_to_dto(snapshot)
+    api.page_snapshot_digest(snapshot)
+    api.filter_snapshot_evidence(snapshot)
+
+    def assert_owned(value):
+        assert not isinstance(value, (fitz.Page, fitz.Document))
+        if isinstance(value, dict):
+            for item in value.values():
+                assert_owned(item)
+        elif isinstance(value, (tuple, list)):
+            for item in value:
+                assert_owned(item)
+
+    assert_owned(dto)

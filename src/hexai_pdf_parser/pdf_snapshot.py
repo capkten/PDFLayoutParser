@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 from dataclasses import dataclass, field
 from hashlib import sha256
 from types import MappingProxyType
@@ -22,6 +23,13 @@ def _finite_float(value: Any) -> float:
     if not math.isfinite(result):
         raise ValueError("snapshot values must contain finite floats")
     return result
+
+
+def _safe_finite(value: Any, fallback: float = 0.0) -> float:
+    try:
+        return _finite_float(value)
+    except (TypeError, ValueError, OverflowError):
+        return fallback
 
 
 def _is_rect(value: Any) -> bool:
@@ -44,6 +52,8 @@ def _plain(value: Any) -> Any:
         return (_finite_float(value.x), _finite_float(value.y))
     if all(hasattr(value, name) for name in ("a", "b", "c", "d", "e", "f")):
         return tuple(_finite_float(getattr(value, name)) for name in "abcdef")
+    if isinstance(value, (fitz.Page, fitz.Document)):
+        return {"type": type(value).__name__, "available": True}
     if isinstance(value, Mapping):
         return {str(key): _plain(item) for key, item in value.items()}
     if isinstance(value, (list, tuple)):
@@ -54,6 +64,7 @@ def _plain(value: Any) -> Any:
         return {
             "byte_length": len(value),
             "sha256": hashlib.sha256(value).hexdigest(),
+            "hex": value.hex(),
         }
     if all(hasattr(value, name) for name in ("width", "height", "samples")):
         samples = getattr(value, "samples", b"")
@@ -88,16 +99,6 @@ def _plain(value: Any) -> Any:
             known_attributes[name] = _plain(item)
     if known_attributes:
         return {"type": type(value).__name__, **known_attributes}
-    attributes = getattr(value, "__dict__", None)
-    if isinstance(attributes, Mapping):
-        return {
-            "type": type(value).__name__,
-            "attributes": {
-                str(key): _plain(item)
-                for key, item in attributes.items()
-                if not callable(item)
-            },
-        }
     return {"type": type(value).__name__}
 
 
@@ -126,15 +127,34 @@ def _thaw(value: Any) -> Any:
 def _read_call(page: Any, method: str, *args: Any, **kwargs: Any) -> tuple[dict[str, Any], Any]:
     """Call one page API and retain only a deterministic result record."""
 
-    record: dict[str, Any] = {
-        "method": method,
-        "args": _plain(args),
-        "kwargs": _plain(kwargs),
-    }
+    record: dict[str, Any] = {"method": method}
+    try:
+        record["args"] = _plain(args)
+        record["kwargs"] = _plain(kwargs)
+    except Exception as exc:
+        record.update(
+            {
+                "args": [],
+                "kwargs": {},
+                "status": "error",
+                "error": {
+                    "phase": "normalize_args",
+                    "type": type(exc).__name__,
+                    "message": str(exc),
+                },
+                "result": None,
+            }
+        )
+        return record, None
     try:
         function = getattr(page, method)
     except AttributeError:
         record["status"] = "unavailable"
+        record["result"] = None
+        return record, None
+    except Exception as exc:
+        record["status"] = "error"
+        record["error"] = {"phase": "call", "type": type(exc).__name__, "message": str(exc)}
         record["result"] = None
         return record, None
     if not callable(function):
@@ -149,8 +169,15 @@ def _read_call(page: Any, method: str, *args: Any, **kwargs: Any) -> tuple[dict[
         record["error"] = {"type": type(exc).__name__, "message": str(exc)}
         record["result"] = None
         return record, None
+    try:
+        normalized = _plain(result)
+    except Exception as exc:
+        record["status"] = "error"
+        record["error"] = {"phase": "normalize", "type": type(exc).__name__, "message": str(exc)}
+        record["result"] = None
+        return record, result
     record["status"] = "ok"
-    record["result"] = _plain(result)
+    record["result"] = normalized
     return record, result
 
 
@@ -164,12 +191,116 @@ def _read_property(page: Any, name: str) -> tuple[dict[str, Any], Any]:
         return record, None
     except Exception as exc:
         record["status"] = "error"
-        record["error"] = {"type": type(exc).__name__, "message": str(exc)}
+        record["error"] = {"phase": "call", "type": type(exc).__name__, "message": str(exc)}
         record["result"] = None
         return record, None
+    if name == "parent":
+        record["status"] = "ok"
+        record["result"] = {
+            "available": result is not None,
+            "type": type(result).__name__ if result is not None else None,
+        }
+        return record, result
+    try:
+        normalized = _plain(result)
+    except Exception as exc:
+        record["status"] = "error"
+        record["error"] = {"phase": "normalize", "type": type(exc).__name__, "message": str(exc)}
+        record["result"] = None
+        return record, result
     record["status"] = "ok"
-    record["result"] = _plain(result)
+    record["result"] = normalized
     return record, result
+
+
+def _find_tables_record(page: Any) -> dict[str, Any]:
+    """Capture table fallback structure and eagerly materialize each table's rows."""
+
+    record, finder = _read_call(page, "find_tables")
+    if record.get("status") != "ok" or finder is None:
+        return record
+    if isinstance(finder, Mapping):
+        tables = finder.get("tables", ())
+    else:
+        try:
+            tables = getattr(finder, "tables", ())
+        except Exception:
+            tables = ()
+    if not isinstance(tables, Iterable) or isinstance(tables, (str, bytes, Mapping)):
+        tables = ()
+    table_records = []
+    for table in tables:
+        try:
+            table_record = _plain(table)
+        except Exception as exc:
+            table_record = {
+                "type": type(table).__name__,
+                "status": "error",
+                "error": {
+                    "phase": "normalize",
+                    "type": type(exc).__name__,
+                    "message": str(exc),
+                },
+            }
+        if not isinstance(table_record, dict):
+            table_record = {"value": table_record}
+        try:
+            extract = getattr(table, "extract")
+        except AttributeError:
+            table_record["extract"] = {
+                "method": "extract",
+                "args": [],
+                "kwargs": {},
+                "status": "unavailable",
+                "result": None,
+            }
+        except Exception as exc:
+            table_record["extract"] = {
+                "method": "extract",
+                "args": [],
+                "kwargs": {},
+                "status": "error",
+                "error": {"phase": "call", "type": type(exc).__name__, "message": str(exc)},
+                "result": None,
+            }
+        else:
+            if not callable(extract):
+                table_record["extract"] = {
+                    "method": "extract",
+                    "args": [],
+                    "kwargs": {},
+                    "status": "error",
+                    "error": {"phase": "call", "type": "TypeError", "message": "attribute is not callable"},
+                    "result": None,
+                }
+            else:
+                extract_record = {"method": "extract", "args": [], "kwargs": {}}
+                try:
+                    rows = extract()
+                except Exception as exc:
+                    extract_record["status"] = "error"
+                    extract_record["error"] = {
+                        "phase": "call",
+                        "type": type(exc).__name__,
+                        "message": str(exc),
+                    }
+                    extract_record["result"] = None
+                else:
+                    try:
+                        extract_record["status"] = "ok"
+                        extract_record["result"] = _plain(rows)
+                    except Exception as exc:
+                        extract_record["status"] = "error"
+                        extract_record["error"] = {
+                            "phase": "normalize",
+                            "type": type(exc).__name__,
+                            "message": str(exc),
+                        }
+                        extract_record["result"] = None
+                table_record["extract"] = extract_record
+        table_records.append(table_record)
+    record["tables"] = table_records
+    return record
 
 
 def _clip_value(region: Any) -> fitz.Rect:
@@ -236,17 +367,52 @@ def _ordered_filtered(
     records: Sequence[Mapping[str, Any]],
     allowed_regions: Sequence[Mapping[str, Any]],
     excluded_regions: Sequence[Mapping[str, Any]],
+    predicate: Any = None,
 ) -> tuple[Any, ...]:
     result = []
     for filtered_order, record in enumerate(
         record
         for record in records
         if _selected(record, allowed_regions, excluded_regions)
+        and (predicate is None or predicate(record))
     ):
         copied = _thaw(record)
         copied["filtered_order"] = filtered_order
         result.append(_freeze(copied))
     return tuple(result)
+
+
+_FOOTER_PAGE_NUMBER = re.compile(
+    r"^\s*第\s*\d+\s*页\s*/\s*共\s*\d+\s*页\s*$"
+)
+
+
+def _line_text(line: Mapping[str, Any]) -> str:
+    text = line.get("text")
+    if text is not None:
+        return str(text)
+    return "".join(
+        str(char.get("c", ""))
+        for span in line.get("spans", ())
+        for char in span.get("chars", ())
+    )
+
+
+def _is_footer_line(line: Mapping[str, Any], geometry: Mapping[str, Any]) -> bool:
+    box = _bbox(line)
+    height = _finite_float(geometry.get("height", 0.0))
+    y0 = _finite_float(geometry.get("y0", 0.0))
+    return bool(
+        box
+        and height > 0
+        and box[1] >= y0 + height * 0.85
+        and _FOOTER_PAGE_NUMBER.match(_line_text(line))
+    )
+
+
+def _source_position(record: Mapping[str, Any], length: int) -> tuple[Any, ...]:
+    value = record.get("raw_source_position", ())
+    return tuple(value[:length]) if isinstance(value, (tuple, list)) else ()
 
 
 def _raw_char(char: Mapping[str, Any], position: tuple[int, int, int, int], order: int) -> dict[str, Any]:
@@ -402,6 +568,7 @@ class PageSnapshot:
     bboxlog: Mapping[str, Any] = field(default_factory=dict)
     table_fallback: Mapping[str, Any] = field(default_factory=dict)
     page_reads: Mapping[str, Any] = field(default_factory=dict)
+    lines: tuple[Any, ...] = ()
 
     def __post_init__(self) -> None:
         for name in (
@@ -420,6 +587,7 @@ class PageSnapshot:
             "bboxlog",
             "table_fallback",
             "page_reads",
+            "lines",
         ):
             object.__setattr__(self, name, _freeze(getattr(self, name)))
 
@@ -439,6 +607,7 @@ class FilteredSnapshotEvidence:
     drawings: tuple[Any, ...]
     allowed_regions: tuple[Any, ...]
     excluded_regions: tuple[Any, ...]
+    lines: tuple[Any, ...] = ()
 
     def __post_init__(self) -> None:
         for name in (
@@ -450,6 +619,7 @@ class FilteredSnapshotEvidence:
             "drawings",
             "allowed_regions",
             "excluded_regions",
+            "lines",
         ):
             object.__setattr__(self, name, _freeze(getattr(self, name)))
 
@@ -482,53 +652,126 @@ def capture_page_snapshot(
     )
     if _is_rect(page_rect):
         rect_values = tuple(
-            _finite_float(getattr(page_rect, name))
+            _safe_finite(getattr(page_rect, name))
             for name in ("x0", "y0", "x1", "y1")
         )
     else:
         rect_values = (0.0, 0.0, 0.0, 0.0)
-    rotation = int(rotation_value) if rotation_value is not None else 0
-    number = int(number_value) if number_value is not None else int(page_index)
-    page_width = _finite_float(width_value) if isinstance(width_value, (int, float)) else rect_values[2] - rect_values[0]
-    page_height = _finite_float(height_value) if isinstance(height_value, (int, float)) else rect_values[3] - rect_values[1]
+    try:
+        rotation = int(rotation_value) if rotation_value is not None else 0
+    except (TypeError, ValueError, OverflowError):
+        rotation = 0
+    try:
+        number = int(number_value) if number_value is not None else int(page_index)
+    except (TypeError, ValueError, OverflowError):
+        number = int(page_index)
+    page_width = (
+        _safe_finite(width_value, rect_values[2] - rect_values[0])
+        if isinstance(width_value, (int, float))
+        else rect_values[2] - rect_values[0]
+    )
+    page_height = (
+        _safe_finite(height_value, rect_values[3] - rect_values[1])
+        if isinstance(height_value, (int, float))
+        else rect_values[3] - rect_values[1]
+    )
 
     frozen_allowed = _regions(allowed_regions)
     frozen_excluded = _regions(excluded_regions)
 
-    raw_record, raw_text_value = _read_call(
-        page, "get_text", "rawdict", flags=fitz.TEXT_PRESERVE_WHITESPACE
-    )
-    dict_record, dict_text_value = _read_call(
-        page, "get_text", "dict", flags=fitz.TEXT_PRESERVE_WHITESPACE
-    )
-    text_record, _ = _read_call(
-        page, "get_text", "text", flags=fitz.TEXT_PRESERVE_WHITESPACE
-    )
-    blocks_record, _ = _read_call(
-        page, "get_text", "blocks", flags=fitz.TEXT_PRESERVE_WHITESPACE
-    )
-    words_record, words_value = _read_call(page, "get_text", "words")
-    page_reads.update(
-        {
-            "text.rawdict": raw_record,
-            "text.dict": dict_record,
-            "text.text": text_record,
-            "text.blocks": blocks_record,
-            "text.words": words_record,
+    text_variants: dict[str, dict[str, Any]] = {}
+    text_values: dict[str, Any] = {}
+    for mode in ("rawdict", "dict", "text", "blocks"):
+        default_record, default_value = _read_call(page, "get_text", mode)
+        preserve_record, preserve_value = _read_call(
+            page, "get_text", mode, flags=fitz.TEXT_PRESERVE_WHITESPACE
+        )
+        selected_record = (
+            preserve_record if preserve_record.get("status") == "ok" else default_record
+        )
+        selected_value = (
+            preserve_value if preserve_record.get("status") == "ok" else default_value
+        )
+        if preserve_record.get("status") != "ok" and default_record.get("status") != "ok":
+            selected_value = None
+        text_values[mode] = selected_value
+        text_variants[mode] = {
+            "default": default_record,
+            "preserve_whitespace": preserve_record,
         }
+        page_reads[f"text.{mode}.default"] = default_record
+        page_reads[f"text.{mode}.preserve_whitespace"] = preserve_record
+        page_reads[f"text.{mode}"] = selected_record
+
+    words_default_record, words_default_value = _read_call(page, "get_text", "words")
+    words_preserve_record, words_preserve_value = _read_call(
+        page, "get_text", "words", flags=fitz.TEXT_PRESERVE_WHITESPACE
     )
+    words_record = (
+        words_default_record
+        if words_default_record.get("status") == "ok"
+        else words_preserve_record
+    )
+    words_value = (
+        words_default_value
+        if words_default_record.get("status") == "ok"
+        else words_preserve_value
+    )
+    if (
+        words_default_record.get("status") != "ok"
+        and words_preserve_record.get("status") != "ok"
+    ):
+        words_value = None
+    page_reads["text.words.default"] = words_default_record
+    page_reads["text.words.preserve_whitespace"] = words_preserve_record
+    page_reads["text.words"] = words_record
     for index, region in enumerate((*frozen_allowed, *frozen_excluded)):
-        clip_record, _ = _read_call(
+        clip_default_record, _ = _read_call(
             page,
             "get_text",
             "words",
             clip=_clip_value(region),
         )
-        page_reads[f"text.words.clip.{index}"] = clip_record
+        clip_preserve_record, _ = _read_call(
+            page,
+            "get_text",
+            "words",
+            flags=fitz.TEXT_PRESERVE_WHITESPACE,
+            clip=_clip_value(region),
+        )
+        page_reads[f"text.words.clip.{index}.default"] = clip_default_record
+        page_reads[f"text.words.clip.{index}.preserve_whitespace"] = clip_preserve_record
+        page_reads[f"text.words.clip.{index}"] = (
+            clip_default_record
+            if clip_default_record.get("status") == "ok"
+            else clip_preserve_record
+        )
 
-    drawings_record, drawings_value = _read_call(page, "get_drawings", extended=True)
+    drawings_default_record, drawings_default_value = _read_call(page, "get_drawings")
+    drawings_extended_record, drawings_extended_value = _read_call(
+        page, "get_drawings", extended=True
+    )
+    drawings_record = (
+        drawings_extended_record
+        if drawings_extended_record.get("status") == "ok"
+        else drawings_default_record
+    )
+    drawings_value = (
+        drawings_extended_value
+        if drawings_extended_record.get("status") == "ok"
+        else drawings_default_value
+    )
+    if (
+        drawings_extended_record.get("status") != "ok"
+        and drawings_default_record.get("status") != "ok"
+    ):
+        drawings_value = None
+    page_reads["drawings.default"] = drawings_default_record
+    page_reads["drawings.extended"] = drawings_extended_record
     page_reads["drawings"] = drawings_record
 
+    raw_text_value = text_values["rawdict"]
+    dict_text_value = text_values["dict"]
     raw_text = raw_text_value if isinstance(raw_text_value, Mapping) else None
     if raw_text is None and isinstance(dict_text_value, Mapping):
         raw_text = dict_text_value
@@ -537,6 +780,7 @@ def capture_page_snapshot(
     drawings = drawings_value if isinstance(drawings_value, Iterable) and not isinstance(drawings_value, (str, bytes, Mapping)) else ()
 
     text_blocks = []
+    lines = []
     spans = []
     characters = []
     span_order = 0
@@ -554,6 +798,9 @@ def capture_page_snapshot(
             line_order,
         ) = _raw_block(block, block_index, span_order, character_order, line_order)
         text_blocks.append(frozen_block)
+        lines.extend(
+            _freeze(_thaw(line)) for line in frozen_block.get("lines", ())
+        )
         spans.extend(_freeze(span) for span in block_spans)
         characters.extend(_freeze(char) for char in block_characters)
         line_count += block_line_count
@@ -576,55 +823,33 @@ def capture_page_snapshot(
     )
     extraction_options = _freeze(
         {
-            "rawdict": {
-                "method": "get_text",
-                "mode": "rawdict",
-                "args": ("rawdict",),
-                "kwargs": {"flags": int(fitz.TEXT_PRESERVE_WHITESPACE)},
-                "flags": int(fitz.TEXT_PRESERVE_WHITESPACE),
-                "clip": None,
-            },
-            "dict": {
-                "method": "get_text",
-                "mode": "dict",
-                "args": ("dict",),
-                "kwargs": {"flags": int(fitz.TEXT_PRESERVE_WHITESPACE)},
-                "flags": int(fitz.TEXT_PRESERVE_WHITESPACE),
-                "clip": None,
-            },
-            "text": {
-                "method": "get_text",
-                "mode": "text",
-                "args": ("text",),
-                "kwargs": {"flags": int(fitz.TEXT_PRESERVE_WHITESPACE)},
-                "flags": int(fitz.TEXT_PRESERVE_WHITESPACE),
-                "clip": None,
-            },
-            "blocks": {
-                "method": "get_text",
-                "mode": "blocks",
-                "args": ("blocks",),
-                "kwargs": {"flags": int(fitz.TEXT_PRESERVE_WHITESPACE)},
-                "flags": int(fitz.TEXT_PRESERVE_WHITESPACE),
-                "clip": None,
+            **{
+                mode: {
+                    "selected": (
+                        text_variants[mode]["preserve_whitespace"]
+                        if text_variants[mode]["preserve_whitespace"].get("status") == "ok"
+                        else text_variants[mode]["default"]
+                    ),
+                    "variants": text_variants[mode],
+                }
+                for mode in ("rawdict", "dict", "text", "blocks")
             },
             "words": {
-                "method": "get_text",
-                "mode": "words",
-                "args": ("words",),
-                "kwargs": {},
-                "clip": None,
-            },
-            "words_variants": {
+                "selected": words_record,
+                "variants": {
+                    "default": words_default_record,
+                    "preserve_whitespace": words_preserve_record,
+                },
                 "clip_regions": tuple(
                     _thaw(region) for region in (*frozen_allowed, *frozen_excluded)
                 ),
             },
             "drawings": {
-                "method": "get_drawings",
-                "args": (),
-                "kwargs": {"extended": True},
-                "extended": True,
+                "selected": drawings_record,
+                "variants": {
+                    "default": drawings_default_record,
+                    "extended": drawings_extended_record,
+                },
             },
         }
     )
@@ -691,11 +916,12 @@ def capture_page_snapshot(
     pixmap_record, _ = _read_call(
         page,
         "get_pixmap",
-        matrix=fitz.Matrix(1, 1),
+        matrix=fitz.Matrix(0.1, 0.1),
+        colorspace=fitz.csRGB,
         alpha=False,
     )
     bboxlog_record, _ = _read_call(page, "get_bboxlog")
-    tables_record, _ = _read_call(page, "find_tables")
+    tables_record = _find_tables_record(page)
     page_reads.update(
         {"pixmap": pixmap_record, "bboxlog": bboxlog_record, "find_tables": tables_record}
     )
@@ -742,6 +968,7 @@ def capture_page_snapshot(
         bboxlog=_freeze(bboxlog_record),
         table_fallback=_freeze(tables_record),
         page_reads=_freeze(page_reads),
+        lines=tuple(lines),
     )
 
 
@@ -757,12 +984,58 @@ def filter_snapshot_evidence(
     excluded = (
         _regions(excluded_regions) if excluded_regions else snapshot.excluded_regions
     )
+    footer_positions = {
+        _source_position(line, 2)
+        for line in snapshot.lines
+        if _is_footer_line(line, snapshot.geometry)
+    }
+    valid_span_positions = {
+        _source_position(span, 3)
+        for span in snapshot.spans
+        if str(span.get("text", "")).strip()
+        and _source_position(span, 3)[:2] not in footer_positions
+    }
+    valid_line = lambda line: (
+        _source_position(line, 2) not in footer_positions
+        and bool(_line_text(line).strip())
+    )
+    valid_span = lambda span: (
+        str(span.get("text", "")).strip()
+        and _source_position(span, 3)[:2] not in footer_positions
+    )
+    valid_char = lambda char: (
+        _source_position(char, 3) in valid_span_positions
+    )
+    filtered_blocks = []
+    for block in _ordered_filtered(snapshot.text_blocks, allowed, excluded):
+        copied = _thaw(block)
+        copied["lines"] = [
+            _thaw(line)
+            for line in snapshot.lines
+            if _source_position(line, 1) == _source_position(block, 1)
+            and _selected(line, allowed, excluded)
+            and valid_line(line)
+        ]
+        for line in copied["lines"]:
+            line["spans"] = [
+                _thaw(span)
+                for span in snapshot.spans
+                if _source_position(span, 2) == _source_position(line, 2)
+                and _selected(span, allowed, excluded)
+                and valid_span(span)
+            ]
+        filtered_blocks.append(_freeze(copied))
+    filtered_blocks = tuple(
+        dict(block, filtered_order=index)
+        for index, block in enumerate(filtered_blocks)
+    )
     return FilteredSnapshotEvidence(
         page_index=snapshot.page_index,
         geometry=snapshot.geometry,
-        text_blocks=_ordered_filtered(snapshot.text_blocks, allowed, excluded),
-        spans=_ordered_filtered(snapshot.spans, allowed, excluded),
-        characters=_ordered_filtered(snapshot.characters, allowed, excluded),
+        text_blocks=tuple(_freeze(block) for block in filtered_blocks),
+        lines=_ordered_filtered(snapshot.lines, allowed, excluded, valid_line),
+        spans=_ordered_filtered(snapshot.spans, allowed, excluded, valid_span),
+        characters=_ordered_filtered(snapshot.characters, allowed, excluded, valid_char),
         words=_ordered_filtered(snapshot.words, allowed, excluded),
         drawings=_ordered_filtered(snapshot.drawings, allowed, excluded),
         allowed_regions=tuple(_freeze(_thaw(region)) for region in allowed),
@@ -781,6 +1054,7 @@ def _snapshot_content_to_dto(snapshot: PageSnapshot) -> dict[str, Any]:
         "characters": _thaw(snapshot.characters),
         "words": _thaw(snapshot.words),
         "drawings": _thaw(snapshot.drawings),
+        "lines": _thaw(snapshot.lines),
         "allowed_regions": _thaw(snapshot.allowed_regions),
         "excluded_regions": _thaw(snapshot.excluded_regions),
         "extraction_options": _thaw(snapshot.extraction_options),
