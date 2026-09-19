@@ -1175,6 +1175,7 @@ def filter_snapshot_evidence(
         dict(block, filtered_order=index)
         for index, block in enumerate(filtered_blocks)
     )
+    valid_word = lambda word: _source_position(word, 2) not in footer_positions
     return FilteredSnapshotEvidence(
         page_index=snapshot.page_index,
         geometry=snapshot.geometry,
@@ -1182,7 +1183,7 @@ def filter_snapshot_evidence(
         lines=filtered_lines,
         spans=filtered_spans,
         characters=_ordered_filtered(snapshot.characters, allowed, excluded, valid_char),
-        words=_ordered_filtered(snapshot.words, allowed, excluded),
+        words=_ordered_filtered(snapshot.words, allowed, excluded, valid_word),
         drawings=_ordered_filtered(snapshot.drawings, allowed, excluded),
         allowed_regions=tuple(_freeze(_thaw(region)) for region in allowed),
         excluded_regions=tuple(_freeze(_thaw(region)) for region in excluded),
@@ -1287,12 +1288,56 @@ def _clip_word_from_characters(
     if not word_characters:
         return None
     character_text = "".join(str(character.get("c", "")) for character in word_characters)
-    if character_text != str(word.get("text", "")):
+    word_text = str(word.get("text", ""))
+    if character_text != word_text:
         return None
+    if len(word_characters) != len(word_text):
+        return None
+
+    def horizontal_interval(index: int, character: Mapping[str, Any]) -> tuple[float, float]:
+        char_box = _bbox(character)
+        assert char_box is not None
+        origin = character.get("origin")
+        origin_x = None
+        if isinstance(origin, (tuple, list)) and origin:
+            try:
+                origin_x = _finite_float(origin[0])
+            except (TypeError, ValueError, OverflowError):
+                origin_x = None
+        x0 = origin_x if origin_x is not None else char_box[0]
+        if index + 1 < len(word_characters):
+            next_origin = word_characters[index + 1].get("origin")
+            if isinstance(next_origin, (tuple, list)) and next_origin:
+                try:
+                    x1 = _finite_float(next_origin[0])
+                except (TypeError, ValueError, OverflowError):
+                    x1 = char_box[2]
+            else:
+                x1 = char_box[2]
+        else:
+            x1 = char_box[2]
+        if x1 <= x0:
+            x0, x1 = char_box[0], char_box[2]
+        return x0, x1
+
+    def selected_by_clip(index: int, character: Mapping[str, Any]) -> bool:
+        char_box = _bbox(character)
+        if char_box is None:
+            return False
+        x0, x1 = horizontal_interval(index, character)
+        overlap = max(0.0, min(x1, clip["x1"]) - max(x0, clip["x0"]))
+        width = x1 - x0
+        if width <= 0.0 or overlap / width < 0.1:
+            return False
+        return not (
+            char_box[3] <= clip["y0"]
+            or char_box[1] >= clip["y1"]
+        )
+
     selected = [
         character
-        for character in word_characters
-        if _word_intersects_clip(character, clip)
+        for index, character in enumerate(word_characters)
+        if selected_by_clip(index, character)
     ]
     if not selected:
         return None
@@ -1328,9 +1373,16 @@ def snapshot_words_for_clip(
         clipped = _clip_word_from_characters(word, snapshot.characters, clip_values)
         if clipped is not None:
             result.append(clipped)
-        elif _word_intersects_clip(word, clip_values):
-            result.append(word)
-    return tuple(result)
+    local_word_indices: dict[tuple[Any, Any], int] = {}
+    normalized = []
+    for word in result:
+        key = (word.get("block_index"), word.get("line_index"))
+        word_index = local_word_indices.get(key, 0)
+        local_word_indices[key] = word_index + 1
+        copied = _thaw(word)
+        copied["word_index"] = word_index
+        normalized.append(_freeze(copied))
+    return tuple(normalized)
 
 
 def _stable_json(value: Mapping[str, Any]) -> bytes:

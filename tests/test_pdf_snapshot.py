@@ -899,7 +899,21 @@ def test_snapshot_materializes_table_header_proxy_attributes_without_callables()
 
 
 def test_snapshot_words_for_clip_is_pure_and_uses_captured_words():
-    page = _FullPageSpy()
+    class CompleteCharacterPage(_FullPageSpy):
+        def get_text(self, *args, **kwargs):
+            result = super().get_text(*args, **kwargs)
+            if args and args[0] == "rawdict":
+                result["blocks"][0]["lines"][0]["spans"][0]["chars"] = [
+                    {
+                        "c": char,
+                        "origin": (10.0 + index * 6.0, 20.0),
+                        "bbox": [10.0 + index * 6.0, 10.0, 16.0 + index * 6.0, 22.0],
+                    }
+                    for index, char in enumerate("hello")
+                ]
+            return result
+
+    page = CompleteCharacterPage()
     snapshot = _capture(page)
     page.locked = True
     words = _api().snapshot_words_for_clip(snapshot, fitz.Rect(0, 0, 50, 50))
@@ -908,6 +922,83 @@ def test_snapshot_words_for_clip_is_pure_and_uses_captured_words():
     assert all("page" not in word and "document" not in word for word in words)
     with pytest.raises(TypeError):
         words[0]["text"] = "changed"
+
+
+def test_snapshot_words_for_clip_matches_real_pymupdf_for_multiple_boundaries():
+    document = fitz.open()
+    real_page = document.new_page(width=120, height=80)
+    real_page.insert_text((10, 30), "hello world", fontsize=12)
+
+    class StrictRealPage:
+        _blocked = {
+            "get_text", "get_drawings", "get_fonts", "get_images",
+            "get_image_info", "get_image_rects", "get_pixmap",
+            "get_bboxlog", "find_tables", "rect", "rotation", "number",
+        }
+
+        def __init__(self, page):
+            self._page = page
+            self.locked = False
+
+        def __getattr__(self, name):
+            if self.locked and name in self._blocked:
+                raise AssertionError(f"page reread after capture: {name}")
+            return getattr(self._page, name)
+
+    page = StrictRealPage(real_page)
+    try:
+        snapshot = _capture(page)
+        page.locked = True
+        clips = (
+            fitz.Rect(10, 10, 20, 40),  # left boundary: he
+            fitz.Rect(20, 10, 25, 40),  # middle boundary: el
+            fitz.Rect(25, 10, 30, 40),  # right boundary: llo
+            fitz.Rect(30, 10, 31, 40),  # single character: o
+            fitz.Rect(35, 10, 38, 40),  # gap between words: empty
+            fitz.Rect(35, 10, 45, 40),  # second word: w
+            fitz.Rect(70, 10, 80, 40),  # outside all text: empty
+        )
+        for clip in clips:
+            expected = real_page.get_text("words", clip=clip)
+            actual = _api().snapshot_words_for_clip(snapshot, clip)
+            assert [tuple(word[:4]) + (word[4],) + tuple(word[5:]) for word in expected] == [
+                (word["bbox"] + (word["text"], word["block_index"], word["line_index"], word["word_index"]))
+                for word in actual
+            ]
+    finally:
+        document.close()
+
+
+def test_filter_snapshot_evidence_removes_footer_words_with_their_footer_line():
+    class FooterWordsPage(_FullPageSpy):
+        def get_text(self, *args, **kwargs):
+            result = super().get_text(*args, **kwargs)
+            if args and args[0] == "rawdict":
+                result["blocks"][0]["lines"].append(
+                    {
+                        "bbox": [10.0, 125.0, 80.0, 137.0],
+                        "spans": [
+                            {
+                                "bbox": [10.0, 125.0, 80.0, 137.0],
+                                "chars": [
+                                    {"c": "第3页/共5页", "bbox": [10.0, 125.0, 80.0, 137.0]}
+                                ],
+                            }
+                        ],
+                    }
+                )
+            if args and args[0] == "words":
+                return [
+                    (10.0, 10.0, 40.0, 22.0, "hello", 0, 0, 0),
+                    (10.0, 125.0, 80.0, 137.0, "第3页/共5页", 0, 1, 0),
+                ]
+            return result
+
+    snapshot = _capture(FooterWordsPage())
+    filtered = _api().filter_snapshot_evidence(snapshot)
+    assert [word["text"] for word in snapshot.words] == ["hello", "第3页/共5页"]
+    assert [word["text"] for word in filtered.words] == ["hello"]
+    assert [word["filtered_order"] for word in filtered.words] == [0]
 
 
 def test_filter_snapshot_evidence_keeps_block_when_only_child_span_is_in_region():
