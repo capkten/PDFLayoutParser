@@ -275,7 +275,7 @@ def test_real_capture_digest_has_fixed_canonical_golden_value():
             allow_nan=False,
         ).encode("utf-8")
         assert hashlib.sha256(canonical).hexdigest() == (
-            "aa5a67b26fa38502f888df23c8c78176999ccea757915a84a8fbee441d1b6f02"
+            "3ce5fd94a498f2a320f246b2f39695388f1958a5e9f2528652e5d0b7ccf03e32"
         )
         assert dto["digest"] == snapshot.digest
     finally:
@@ -530,7 +530,7 @@ def test_snapshot_records_pixmap_pixels_and_all_registered_parameter_variants():
     assert any(call[2] == {"extended": True} for call in drawing_calls)
 
     pixmap_calls = [call for call in page.calls if call[0] == "get_pixmap"]
-    assert len(pixmap_calls) == 1
+    assert len(pixmap_calls) == 2
     assert pixmap_calls[0][2]["alpha"] is False
     assert pixmap_calls[0][2]["matrix"] == fitz.Matrix(0.1, 0.1)
     assert "colorspace" in pixmap_calls[0][2]
@@ -672,3 +672,144 @@ def test_snapshot_serialization_and_filtering_never_reenter_strict_spy_page():
                 assert_owned(item)
 
     assert_owned(dto)
+
+
+def test_snapshot_captures_replayable_production_and_ml_pixmap_variants():
+    class Pixmap:
+        def __init__(self, width, height, stride, samples, colorspace, alpha):
+            self.width = width
+            self.height = height
+            self.stride = stride
+            self.samples = samples
+            self.colorspace = colorspace
+            self.n = colorspace.n + int(alpha)
+            self.alpha = alpha
+
+    class PixmapPage(_FullPageSpy):
+        def get_pixmap(self, *args, **kwargs):
+            self.calls.append(("get_pixmap", args, kwargs))
+            matrix = kwargs["matrix"]
+            colorspace = kwargs["colorspace"]
+            if matrix == fitz.Matrix(0.1, 0.1):
+                return Pixmap(12, 8, 36, b"rgb", colorspace, False)
+            assert matrix == fitz.Matrix(1, 1)
+            return Pixmap(220, 140, 220, b"gray", colorspace, False)
+
+    page = PixmapPage()
+    snapshot = _capture(page)
+    variants = snapshot.raster["variants"]
+
+    assert [call[2] for call in page.calls if call[0] == "get_pixmap"] == [
+        {"matrix": fitz.Matrix(0.1, 0.1), "colorspace": fitz.csRGB, "alpha": False},
+        {"matrix": fitz.Matrix(1, 1), "colorspace": fitz.csGRAY, "alpha": False},
+    ]
+    assert variants["production"]["kwargs"]["matrix"] == (0.1, 0.0, 0.0, 0.1, 0.0, 0.0)
+    assert variants["production"]["kwargs"]["colorspace"]["identity"] == "csRGB"
+    assert variants["production"]["result"]["stride"] == 36
+    assert variants["production"]["result"]["samples"]["hex"] == b"rgb".hex()
+    assert variants["ml"]["kwargs"]["matrix"] == (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
+    assert variants["ml"]["kwargs"]["colorspace"]["identity"] == "csGRAY"
+    assert variants["ml"]["result"]["samples"]["hex"] == b"gray".hex()
+    assert _api().snapshot_pixmap(snapshot, variant="ml")["result"]["width"] == 220
+    with pytest.raises(TypeError):
+        variants["production"]["result"]["samples"]["hex"] = "changed"
+
+
+def test_snapshot_materializes_table_header_proxy_attributes_without_callables():
+    class Header:
+        bbox = fitz.Rect(1, 2, 30, 10)
+        cells = ((1.0, 2.0, 15.0, 10.0), (15.0, 2.0, 30.0, 10.0))
+        names = ("left", "right")
+        external = True
+
+        def get_names(self):
+            return self.names
+
+    class Table:
+        bbox = fitz.Rect(1, 2, 30, 40)
+        cells = ((1.0, 2.0, 30.0, 20.0),)
+        header = Header()
+
+        def extract(self):
+            return [["value"]]
+
+    class TablePage(_FullPageSpy):
+        def find_tables(self, *args, **kwargs):
+            self.calls.append(("find_tables", args, kwargs))
+            return type("Finder", (), {"tables": (Table(),)})()
+
+    snapshot = _capture(TablePage())
+    table = snapshot.table_fallback["tables"][0]
+    assert table["header"]["bbox"] == (1.0, 2.0, 30.0, 10.0)
+    assert table["header"]["cells"] == ((1.0, 2.0, 15.0, 10.0), (15.0, 2.0, 30.0, 10.0))
+    assert table["header"]["names"] == ("left", "right")
+    assert table["header"]["external"] is True
+    assert "get_names" not in table["header"]
+
+
+def test_snapshot_words_for_clip_is_pure_and_uses_captured_words():
+    page = _FullPageSpy()
+    snapshot = _capture(page)
+    page.locked = True
+    words = _api().snapshot_words_for_clip(snapshot, fitz.Rect(0, 0, 50, 50))
+    assert len(words) == 1
+    assert words[0]["text"] == "hello"
+    assert all("page" not in word and "document" not in word for word in words)
+    with pytest.raises(TypeError):
+        words[0]["text"] = "changed"
+
+
+def test_filter_snapshot_evidence_keeps_block_when_only_child_span_is_in_region():
+    class ParentOutsideChildInside(_FullPageSpy):
+        def get_text(self, *args, **kwargs):
+            result = super().get_text(*args, **kwargs)
+            if args and args[0] == "rawdict":
+                result["blocks"][0]["bbox"] = [100.0, 100.0, 130.0, 130.0]
+                result["blocks"][0]["lines"][0]["bbox"] = [100.0, 100.0, 130.0, 130.0]
+                result["blocks"][0]["lines"][0]["spans"][0]["bbox"] = [
+                    10.0, 10.0, 40.0, 22.0
+                ]
+            return result
+
+    snapshot = _capture(ParentOutsideChildInside())
+    filtered = _api().filter_snapshot_evidence(
+        snapshot,
+        allowed_regions=(fitz.Rect(0, 0, 60, 60),),
+    )
+    assert len(filtered.text_blocks) == 1
+    assert len(filtered.lines) == 1
+    assert len(filtered.spans) == 1
+
+
+def test_snapshot_page_api_call_contract_is_exact_and_owned():
+    page = _FullPageSpy()
+    snapshot = _capture(page)
+    calls = [call for call in page.calls if call[0] in {
+        "get_fonts", "get_images", "get_image_info", "get_image_rects",
+        "get_pixmap", "get_bboxlog", "find_tables",
+    }]
+
+    assert [call for call in calls if call[0] == "get_fonts"] == [
+        ("get_fonts", (), {"full": True})
+    ]
+    assert [call[2] for call in calls if call[0] == "get_images"] == [{}, {"full": True}]
+    assert [call for call in calls if call[0] == "get_image_info"] == [
+        ("get_image_info", (), {"xrefs": True})
+    ]
+    assert [call for call in calls if call[0] == "get_image_rects"] == [
+        ("get_image_rects", (11,), {})
+    ]
+    assert [call[2] for call in calls if call[0] == "get_pixmap"] == [
+        {"matrix": fitz.Matrix(0.1, 0.1), "colorspace": fitz.csRGB, "alpha": False},
+        {"matrix": fitz.Matrix(1, 1), "colorspace": fitz.csGRAY, "alpha": False},
+    ]
+    assert [call for call in calls if call[0] == "get_bboxlog"] == [
+        ("get_bboxlog", (), {})
+    ]
+    assert [call for call in calls if call[0] == "find_tables"] == [
+        ("find_tables", (), {})
+    ]
+    assert page.parent.calls == [7]
+    dto = _api().page_snapshot_to_dto(snapshot)
+    assert dto["page_reads"]["pixmap.ml"]["kwargs"]["colorspace"]["identity"] == "csGRAY"
+    assert dto["page_reads"]["find_tables"]["status"] == "ok"

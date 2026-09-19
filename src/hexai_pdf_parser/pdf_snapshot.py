@@ -52,6 +52,20 @@ def _plain(value: Any) -> Any:
         return (_finite_float(value.x), _finite_float(value.y))
     if all(hasattr(value, name) for name in ("a", "b", "c", "d", "e", "f")):
         return tuple(_finite_float(getattr(value, name)) for name in "abcdef")
+    colorspace_type = getattr(fitz, "Colorspace", ())
+    if colorspace_type and isinstance(value, colorspace_type):
+        name = str(getattr(value, "name", ""))
+        identity = {
+            "DeviceRGB": "csRGB",
+            "DeviceGray": "csGRAY",
+            "DeviceCMYK": "csCMYK",
+        }.get(name, name or type(value).__name__)
+        return {
+            "type": "colorspace",
+            "identity": identity,
+            "name": name,
+            "n": int(getattr(value, "n", 0)),
+        }
     if isinstance(value, (fitz.Page, fitz.Document)):
         return {"type": type(value).__name__, "available": True}
     if isinstance(value, Mapping):
@@ -72,8 +86,10 @@ def _plain(value: Any) -> Any:
             "type": "pixmap",
             "width": int(value.width),
             "height": int(value.height),
+            "stride": int(getattr(value, "stride", 0)),
             "n": int(getattr(value, "n", 0)),
             "alpha": bool(getattr(value, "alpha", False)),
+            "colorspace": _plain(getattr(value, "colorspace", None)),
             "samples": _plain(samples),
         }
     if isinstance(value, float):
@@ -89,6 +105,10 @@ def _plain(value: Any) -> Any:
         "rows",
         "row_count",
         "col_count",
+        "names",
+        "external",
+        "status",
+        "error",
         "xref",
     ):
         try:
@@ -244,6 +264,48 @@ def _find_tables_record(page: Any) -> dict[str, Any]:
             }
         if not isinstance(table_record, dict):
             table_record = {"value": table_record}
+        try:
+            header = getattr(table, "header")
+        except AttributeError:
+            table_record["header"] = {
+                "status": "unavailable",
+                "result": None,
+            }
+        except Exception as exc:
+            table_record["header"] = {
+                "status": "error",
+                "error": {
+                    "phase": "call",
+                    "type": type(exc).__name__,
+                    "message": str(exc),
+                },
+                "result": None,
+            }
+        else:
+            if header is None:
+                table_record["header"] = {
+                    "status": "unavailable",
+                    "result": None,
+                }
+            else:
+                try:
+                    header_record = _plain(header)
+                except Exception as exc:
+                    header_record = {
+                        "type": type(header).__name__,
+                        "status": "error",
+                        "error": {
+                            "phase": "normalize",
+                            "type": type(exc).__name__,
+                            "message": str(exc),
+                        },
+                        "result": None,
+                    }
+                if not isinstance(header_record, dict):
+                    header_record = {"value": header_record}
+                if "error" not in header_record:
+                    header_record["status"] = "ok"
+                table_record["header"] = header_record
         try:
             extract = getattr(table, "extract")
         except AttributeError:
@@ -569,6 +631,7 @@ class PageSnapshot:
     table_fallback: Mapping[str, Any] = field(default_factory=dict)
     page_reads: Mapping[str, Any] = field(default_factory=dict)
     lines: tuple[Any, ...] = ()
+    word_variants: Mapping[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         for name in (
@@ -588,6 +651,7 @@ class PageSnapshot:
             "table_fallback",
             "page_reads",
             "lines",
+            "word_variants",
         ):
             object.__setattr__(self, name, _freeze(getattr(self, name)))
 
@@ -913,13 +977,21 @@ def capture_page_snapshot(
         font_xref_records[str(xref)] = record
         page_reads[f"xref_object.{xref}"] = record
 
-    pixmap_record, _ = _read_call(
-        page,
-        "get_pixmap",
-        matrix=fitz.Matrix(0.1, 0.1),
-        colorspace=fitz.csRGB,
-        alpha=False,
-    )
+    pixmap_variants = {}
+    for variant, matrix, colorspace in (
+        ("production", fitz.Matrix(0.1, 0.1), fitz.csRGB),
+        ("ml", fitz.Matrix(1, 1), fitz.csGRAY),
+    ):
+        pixmap_record, _ = _read_call(
+            page,
+            "get_pixmap",
+            matrix=matrix,
+            colorspace=colorspace,
+            alpha=False,
+        )
+        pixmap_variants[variant] = pixmap_record
+        page_reads[f"pixmap.{variant}"] = pixmap_record
+    pixmap_record = pixmap_variants["production"]
     bboxlog_record, _ = _read_call(page, "get_bboxlog")
     tables_record = _find_tables_record(page)
     page_reads.update(
@@ -964,11 +1036,32 @@ def capture_page_snapshot(
         extraction_options=extraction_options,
         summary=summary,
         resources=resources,
-        raster=_freeze({"purpose": "algorithm", **pixmap_record}),
+        raster=_freeze(
+            {
+                "purpose": "algorithm",
+                "selected_variant": "production",
+                "variants": pixmap_variants,
+                **pixmap_record,
+            }
+        ),
         bboxlog=_freeze(bboxlog_record),
         table_fallback=_freeze(tables_record),
         page_reads=_freeze(page_reads),
         lines=tuple(lines),
+        word_variants={
+            "default": _word_records(
+                words_default_value
+                if isinstance(words_default_value, Iterable)
+                and not isinstance(words_default_value, (str, bytes, Mapping))
+                else ()
+            ),
+            "preserve_whitespace": _word_records(
+                words_preserve_value
+                if isinstance(words_preserve_value, Iterable)
+                and not isinstance(words_preserve_value, (str, bytes, Mapping))
+                else ()
+            ),
+        },
     )
 
 
@@ -989,41 +1082,66 @@ def filter_snapshot_evidence(
         for line in snapshot.lines
         if _is_footer_line(line, snapshot.geometry)
     }
+    valid_span = lambda span: (
+        bool(str(span.get("text", "")).strip())
+        and _source_position(span, 3)[:2] not in footer_positions
+    )
+    selected_span = lambda span: valid_span(span) and _selected(
+        span, allowed, excluded
+    )
     valid_span_positions = {
         _source_position(span, 3)
         for span in snapshot.spans
-        if str(span.get("text", "")).strip()
-        and _source_position(span, 3)[:2] not in footer_positions
+        if selected_span(span)
     }
     valid_line = lambda line: (
         _source_position(line, 2) not in footer_positions
         and bool(_line_text(line).strip())
-    )
-    valid_span = lambda span: (
-        str(span.get("text", "")).strip()
-        and _source_position(span, 3)[:2] not in footer_positions
+        and any(
+            _source_position(span, 2) == _source_position(line, 2)
+            and selected_span(span)
+            for span in snapshot.spans
+        )
     )
     valid_char = lambda char: (
         _source_position(char, 3) in valid_span_positions
     )
+    filtered_lines = _ordered_filtered(
+        snapshot.lines, (), (), lambda line: valid_line(line)
+    )
+    filtered_spans = _ordered_filtered(
+        snapshot.spans, (), (), lambda span: selected_span(span)
+    )
+    line_orders = {
+        _source_position(line, 2): line["filtered_order"]
+        for line in filtered_lines
+    }
+    span_orders = {
+        _source_position(span, 3): span["filtered_order"]
+        for span in filtered_spans
+    }
     filtered_blocks = []
-    for block in _ordered_filtered(snapshot.text_blocks, allowed, excluded):
-        copied = _thaw(block)
-        copied["lines"] = [
-            _thaw(line)
+    for block in snapshot.text_blocks:
+        block_lines = [
+            line
             for line in snapshot.lines
             if _source_position(line, 1) == _source_position(block, 1)
-            and _selected(line, allowed, excluded)
             and valid_line(line)
         ]
+        if not block_lines and block.get("lines"):
+            continue
+        copied = _thaw(block)
+        copied["lines"] = [_thaw(line) for line in block_lines]
         for line in copied["lines"]:
+            line["filtered_order"] = line_orders[_source_position(line, 2)]
             line["spans"] = [
                 _thaw(span)
                 for span in snapshot.spans
                 if _source_position(span, 2) == _source_position(line, 2)
-                and _selected(span, allowed, excluded)
-                and valid_span(span)
+                and selected_span(span)
             ]
+            for span in line["spans"]:
+                span["filtered_order"] = span_orders[_source_position(span, 3)]
         filtered_blocks.append(_freeze(copied))
     filtered_blocks = tuple(
         dict(block, filtered_order=index)
@@ -1033,8 +1151,8 @@ def filter_snapshot_evidence(
         page_index=snapshot.page_index,
         geometry=snapshot.geometry,
         text_blocks=tuple(_freeze(block) for block in filtered_blocks),
-        lines=_ordered_filtered(snapshot.lines, allowed, excluded, valid_line),
-        spans=_ordered_filtered(snapshot.spans, allowed, excluded, valid_span),
+        lines=filtered_lines,
+        spans=filtered_spans,
         characters=_ordered_filtered(snapshot.characters, allowed, excluded, valid_char),
         words=_ordered_filtered(snapshot.words, allowed, excluded),
         drawings=_ordered_filtered(snapshot.drawings, allowed, excluded),
@@ -1065,6 +1183,71 @@ def _snapshot_content_to_dto(snapshot: PageSnapshot) -> dict[str, Any]:
         "table_fallback": _thaw(snapshot.table_fallback),
         "page_reads": _thaw(snapshot.page_reads),
     }
+
+
+def snapshot_pixmap(
+    snapshot: PageSnapshot,
+    *,
+    variant: str | None = None,
+    matrix: Any = None,
+    colorspace: Any = None,
+    alpha: bool | None = None,
+) -> Mapping[str, Any]:
+    """Return one captured pixmap record without touching the source page."""
+
+    variants = snapshot.raster.get("variants", {})
+    if variant is not None:
+        return variants[variant]
+    if matrix is None and colorspace is None and alpha is None:
+        return variants.get(
+            snapshot.raster.get("selected_variant", "production"),
+            snapshot.raster,
+        )
+    expected = {
+        key: _plain(value)
+        for key, value in (
+            ("matrix", matrix),
+            ("colorspace", colorspace),
+            ("alpha", alpha),
+        )
+        if value is not None
+    }
+    for record in variants.values():
+        if all(record.get("kwargs", {}).get(key) == value for key, value in expected.items()):
+            return record
+    raise KeyError("no captured pixmap matches the requested parameters")
+
+
+def _word_intersects_clip(word: Mapping[str, Any], clip: Mapping[str, Any]) -> bool:
+    box = _bbox(word)
+    if box is None:
+        return False
+    return not (
+        box[2] <= clip["x0"]
+        or box[0] >= clip["x1"]
+        or box[3] <= clip["y0"]
+        or box[1] >= clip["y1"]
+    )
+
+
+def snapshot_words_for_clip(
+    snapshot: PageSnapshot,
+    clip: Any,
+    *,
+    flags: int = 0,
+) -> tuple[Any, ...]:
+    """Return captured words intersecting a PyMuPDF-compatible clip rectangle."""
+
+    clip_values = _region(clip)
+    variant = (
+        "preserve_whitespace"
+        if flags & fitz.TEXT_PRESERVE_WHITESPACE
+        else "default"
+    )
+    words = snapshot.word_variants.get(variant, snapshot.words)
+    return tuple(
+        word for word in words if _word_intersects_clip(word, clip_values)
+    )
 
 
 def _stable_json(value: Mapping[str, Any]) -> bytes:
@@ -1098,4 +1281,6 @@ __all__ = [
     "filter_snapshot_evidence",
     "page_snapshot_digest",
     "page_snapshot_to_dto",
+    "snapshot_pixmap",
+    "snapshot_words_for_clip",
 ]
