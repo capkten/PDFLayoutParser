@@ -1292,6 +1292,91 @@ def test_snapshot_words_for_clip_keeps_one_original_block_after_narrow_clip():
         document.close()
 
 
+def test_snapshot_words_for_clip_rebuilds_single_block_line_split_from_real_clip():
+    document = fitz.open()
+    real_page = document.new_page(width=120, height=100)
+    real_page.insert_textbox(
+        fitz.Rect(10, 4, 110, 90),
+        "aaaaa\nbbbbb\nccccc\nddddd",
+        fontsize=12,
+        lineheight=1.0,
+    )
+
+    class StrictRealPage:
+        _blocked = {
+            "get_text", "get_drawings", "get_fonts", "get_images",
+            "get_image_info", "get_image_rects", "get_pixmap",
+            "get_bboxlog", "find_tables", "rect", "rotation", "number",
+        }
+
+        def __init__(self, page):
+            self._page = page
+            self.locked = False
+
+        def __getattr__(self, name):
+            if self.locked and name in self._blocked:
+                raise AssertionError(f"page reread after capture: {name}")
+            return getattr(self._page, name)
+
+    clip = fitz.Rect(35, 0, 36, 40)
+    expected = real_page.get_text("words", clip=clip)
+    page = StrictRealPage(real_page)
+    try:
+        snapshot = _capture(page)
+        page.locked = True
+        actual = _api().snapshot_words_for_clip(snapshot, clip)
+        assert [
+            tuple(word[:4]) + (word[4],) + tuple(word[5:8])
+            for word in expected
+        ] == [
+            word["bbox"]
+            + (word["text"], word["block_index"], word["line_index"], word["word_index"])
+            for word in actual
+        ]
+    finally:
+        document.close()
+
+
+def test_snapshot_words_for_clip_rebuilds_vertical_lines_for_multiple_words():
+    document = fitz.open()
+    real_page = document.new_page(width=120, height=120)
+    real_page.insert_text((50, 78), "hello world", fontsize=11, rotate=90)
+
+    class StrictRealPage:
+        _blocked = {
+            "get_text", "get_drawings", "get_fonts", "get_images",
+            "get_image_info", "get_image_rects", "get_pixmap",
+            "get_bboxlog", "find_tables", "rect", "rotation", "number",
+        }
+
+        def __init__(self, page):
+            self._page = page
+            self.locked = False
+
+        def __getattr__(self, name):
+            if self.locked and name in self._blocked:
+                raise AssertionError(f"page reread after capture: {name}")
+            return getattr(self._page, name)
+
+    clip = fitz.Rect(50, 40, 62, 58)
+    expected = real_page.get_text("words", clip=clip)
+    page = StrictRealPage(real_page)
+    try:
+        snapshot = _capture(page)
+        page.locked = True
+        actual = _api().snapshot_words_for_clip(snapshot, clip)
+        assert [
+            tuple(word[:4]) + (word[4],) + tuple(word[5:8])
+            for word in expected
+        ] == [
+            word["bbox"]
+            + (word["text"], word["block_index"], word["line_index"], word["word_index"])
+            for word in actual
+        ]
+    finally:
+        document.close()
+
+
 @pytest.mark.parametrize(
     ("text_rotation", "clip_values"),
     (

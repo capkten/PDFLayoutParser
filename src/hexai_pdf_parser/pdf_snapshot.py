@@ -1459,34 +1459,65 @@ def snapshot_words_for_clip(
         result.extend(clipped_words)
     local_block_indices: dict[Any, int] = {}
     local_word_indices: dict[tuple[int, int], int] = {}
-    selected_lines: dict[Any, list[Any]] = {}
-    for word in result:
+    segment_for_word: dict[int, tuple[Any, int]] = {}
+    segment_state: dict[Any, dict[str, Any]] = {}
+    for result_index, word in enumerate(result):
         raw_block_index = word.get("block_index")
         raw_line_index = word.get("line_index")
-        lines = selected_lines.setdefault(raw_block_index, [])
+        state = segment_state.setdefault(
+            raw_block_index,
+            {"segment": 0, "last_line": None, "last_line_left": None},
+        )
+        box = _bbox(word)
+        direction = line_directions.get((raw_block_index, raw_line_index))
+        horizontal = not (
+            isinstance(direction, (tuple, list))
+            and len(direction) >= 2
+            and abs(_safe_finite(direction[1])) > abs(_safe_finite(direction[0]))
+        )
+        if (
+            box is not None
+            and state["last_line"] is not None
+            and raw_line_index != state["last_line"]
+            and horizontal
+            and state["last_line_left"] is not None
+            and box[0] > state["last_line_left"] + 1e-3
+        ):
+            state["segment"] += 1
+        if raw_line_index != state["last_line"] and box is not None:
+            state["last_line_left"] = box[0]
+        state["last_line"] = raw_line_index
+        segment_for_word[result_index] = (raw_block_index, state["segment"])
+
+    selected_lines: dict[Any, list[Any]] = {}
+    for result_index, word in enumerate(result):
+        segment = segment_for_word[result_index]
+        raw_line_index = word.get("line_index")
+        lines = selected_lines.setdefault(segment, [])
         if raw_line_index not in lines:
             lines.append(raw_line_index)
     preserve_lines = {
-        raw_block_index: any(
+        segment: any(
             current - previous > 1
             for previous, current in zip(lines, lines[1:])
         )
-        for raw_block_index, lines in selected_lines.items()
+        for segment, lines in selected_lines.items()
     }
     normalized = []
     previous_word = None
-    current_block = None
+    current_segment = None
     current_line = -1
-    for word in result:
+    for result_index, word in enumerate(result):
         raw_block_index = word.get("block_index")
         raw_line_index = word.get("line_index")
+        segment = segment_for_word[result_index]
         block_index = local_block_indices.setdefault(
-            raw_block_index, len(local_block_indices)
+            segment, len(local_block_indices)
         )
-        if preserve_lines.get(raw_block_index):
+        if preserve_lines.get(segment):
             line_index = raw_line_index
-        elif current_block != raw_block_index:
-            current_block = raw_block_index
+        elif current_segment != segment:
+            current_segment = segment
             current_line = 0
             line_index = current_line
         elif previous_word is None or previous_word.get("line_index") != raw_line_index:
@@ -1495,8 +1526,19 @@ def snapshot_words_for_clip(
         else:
             previous_box = _bbox(previous_word)
             current_box = _bbox(word)
+            direction = line_directions.get((raw_block_index, raw_line_index))
+            vertical = (
+                isinstance(direction, (tuple, list))
+                and len(direction) >= 2
+                and abs(_safe_finite(direction[1])) > abs(_safe_finite(direction[0]))
+            )
             space_width = space_widths.get((raw_block_index, raw_line_index))
             if (
+                vertical
+                and previous_word.get("word_index") != word.get("word_index")
+            ):
+                current_line += 1
+            elif (
                 previous_box is not None
                 and current_box is not None
                 and previous_word.get("word_index") != word.get("word_index")
