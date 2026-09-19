@@ -924,10 +924,32 @@ def test_snapshot_words_for_clip_is_pure_and_uses_captured_words():
         words[0]["text"] = "changed"
 
 
-def test_snapshot_words_for_clip_matches_real_pymupdf_for_multiple_boundaries():
+def test_snapshot_words_for_clip_does_not_fallback_when_characters_are_incomplete():
+    snapshot = _capture(_FullPageSpy())
+    assert _api().snapshot_words_for_clip(snapshot, fitz.Rect(0, 0, 50, 50)) == ()
+
+
+@pytest.mark.parametrize(
+    "clip_values",
+    (
+        (9, 0, 24, 40),
+        (20, 10, 25, 40),
+        (23, 0, 24, 40),
+        (10, 0, 11, 40),
+        (12, 0, 13, 40),
+        (16, 0, 17, 40),
+        (22, 0, 25, 40),
+        (70, 10, 80, 40),
+    ),
+)
+@pytest.mark.parametrize("font_size", (6, 12, 24))
+def test_snapshot_words_for_clip_matches_real_pymupdf_for_multiple_boundaries(
+    clip_values,
+    font_size,
+):
     document = fitz.open()
     real_page = document.new_page(width=120, height=80)
-    real_page.insert_text((10, 30), "hello world", fontsize=12)
+    real_page.insert_text((10, 30), "hello world", fontsize=font_size)
 
     class StrictRealPage:
         _blocked = {
@@ -949,22 +971,71 @@ def test_snapshot_words_for_clip_matches_real_pymupdf_for_multiple_boundaries():
     try:
         snapshot = _capture(page)
         page.locked = True
-        clips = (
-            fitz.Rect(10, 10, 20, 40),  # left boundary: he
-            fitz.Rect(20, 10, 25, 40),  # middle boundary: el
-            fitz.Rect(25, 10, 30, 40),  # right boundary: llo
-            fitz.Rect(30, 10, 31, 40),  # single character: o
-            fitz.Rect(35, 10, 38, 40),  # gap between words: empty
-            fitz.Rect(35, 10, 45, 40),  # second word: w
-            fitz.Rect(70, 10, 80, 40),  # outside all text: empty
-        )
-        for clip in clips:
-            expected = real_page.get_text("words", clip=clip)
-            actual = _api().snapshot_words_for_clip(snapshot, clip)
-            assert [tuple(word[:4]) + (word[4],) + tuple(word[5:]) for word in expected] == [
-                (word["bbox"] + (word["text"], word["block_index"], word["line_index"], word["word_index"]))
-                for word in actual
-            ]
+        clip = fitz.Rect(*clip_values)
+        expected = real_page.get_text("words", clip=clip)
+        actual = _api().snapshot_words_for_clip(snapshot, clip)
+        assert [tuple(word[:4]) + (word[4],) + tuple(word[5:]) for word in expected] == [
+            (word["bbox"] + (word["text"], word["block_index"], word["line_index"], word["word_index"]))
+            for word in actual
+        ]
+    finally:
+        document.close()
+
+
+def test_snapshot_words_for_clip_reindexes_selected_blocks_and_lines():
+    document = fitz.open()
+    real_page = document.new_page(width=120, height=100)
+    real_page.insert_text((10, 30), "hello world", fontsize=12)
+    real_page.insert_text((10, 60), "alpha beta", fontsize=12)
+
+    class StrictRealPage:
+        _blocked = {
+            "get_text", "get_drawings", "get_fonts", "get_images",
+            "get_image_info", "get_image_rects", "get_pixmap",
+            "get_bboxlog", "find_tables", "rect", "rotation", "number",
+        }
+
+        def __init__(self, page):
+            self._page = page
+            self.locked = False
+
+        def __getattr__(self, name):
+            if self.locked and name in self._blocked:
+                raise AssertionError(f"page reread after capture: {name}")
+            return getattr(self._page, name)
+
+    page = StrictRealPage(real_page)
+    try:
+        snapshot = _capture(page)
+        page.locked = True
+        clip = fitz.Rect(0, 40, 120, 80)
+        expected = real_page.get_text("words", clip=clip)
+        actual = _api().snapshot_words_for_clip(snapshot, clip)
+        assert [tuple(word[:4]) + (word[4],) + tuple(word[5:]) for word in expected] == [
+            (word["bbox"] + (word["text"], word["block_index"], word["line_index"], word["word_index"]))
+            for word in actual
+        ]
+    finally:
+        document.close()
+
+
+def test_snapshot_words_for_clip_reindexes_selected_lines_within_one_block():
+    document = fitz.open()
+    real_page = document.new_page(width=120, height=100)
+    real_page.insert_textbox(
+        fitz.Rect(10, 10, 110, 90),
+        "hello\nalpha\nomega",
+        fontsize=12,
+    )
+    snapshot = _capture(real_page)
+    try:
+        clip = fitz.Rect(0, 40, 120, 80)
+        expected = real_page.get_text("words", clip=clip)
+        actual = _api().snapshot_words_for_clip(snapshot, clip)
+        assert [tuple(word[:4]) + (word[4],) + tuple(word[5:]) for word in expected] == [
+            (word["bbox"] + (word["text"], word["block_index"], word["line_index"], word["word_index"]))
+            for word in actual
+        ]
     finally:
         document.close()
 

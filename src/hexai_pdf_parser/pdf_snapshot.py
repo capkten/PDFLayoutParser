@@ -1263,6 +1263,7 @@ def _clip_word_from_characters(
     word: Mapping[str, Any],
     characters: Sequence[Mapping[str, Any]],
     clip: Mapping[str, Any],
+    spans: Mapping[tuple[Any, ...], Mapping[str, Any]] | None = None,
 ) -> Mapping[str, Any] | None:
     word_box = _bbox(word)
     if word_box is None:
@@ -1294,50 +1295,46 @@ def _clip_word_from_characters(
     if len(word_characters) != len(word_text):
         return None
 
-    def horizontal_interval(index: int, character: Mapping[str, Any]) -> tuple[float, float]:
+    def glyph_clip_box(character: Mapping[str, Any]) -> tuple[float, float, float, float] | None:
+        span = spans.get(_source_position(character, 3)) if spans else None
+        origin = character.get("origin")
+        char_value = character.get("c", "")
+        if not span or not isinstance(char_value, str) or len(char_value) != 1:
+            return None
+        if not isinstance(origin, (tuple, list)) or len(origin) < 2:
+            return None
+        try:
+            font_name = span.get("font")
+            size = _finite_float(span.get("size"))
+            origin_x = _finite_float(origin[0])
+            origin_y = _finite_float(origin[1])
+            if not isinstance(font_name, str) or not font_name or size <= 0.0:
+                return None
+            glyph = fitz.Font(font_name).glyph_bbox(ord(char_value))
+            return (
+                origin_x + _finite_float(glyph.x0) * size,
+                origin_y - _finite_float(glyph.y1) * size,
+                origin_x + _finite_float(glyph.x1) * size,
+                origin_y - _finite_float(glyph.y0) * size,
+            )
+        except (TypeError, ValueError, OverflowError, RuntimeError):
+            return None
+
+    def selected_by_clip(character: Mapping[str, Any]) -> bool:
         char_box = _bbox(character)
         assert char_box is not None
-        origin = character.get("origin")
-        origin_x = None
-        if isinstance(origin, (tuple, list)) and origin:
-            try:
-                origin_x = _finite_float(origin[0])
-            except (TypeError, ValueError, OverflowError):
-                origin_x = None
-        x0 = origin_x if origin_x is not None else char_box[0]
-        if index + 1 < len(word_characters):
-            next_origin = word_characters[index + 1].get("origin")
-            if isinstance(next_origin, (tuple, list)) and next_origin:
-                try:
-                    x1 = _finite_float(next_origin[0])
-                except (TypeError, ValueError, OverflowError):
-                    x1 = char_box[2]
-            else:
-                x1 = char_box[2]
-        else:
-            x1 = char_box[2]
-        if x1 <= x0:
-            x0, x1 = char_box[0], char_box[2]
-        return x0, x1
-
-    def selected_by_clip(index: int, character: Mapping[str, Any]) -> bool:
-        char_box = _bbox(character)
-        if char_box is None:
-            return False
-        x0, x1 = horizontal_interval(index, character)
-        overlap = max(0.0, min(x1, clip["x1"]) - max(x0, clip["x0"]))
-        width = x1 - x0
-        if width <= 0.0 or overlap / width < 0.1:
-            return False
+        glyph_box = glyph_clip_box(character) or char_box
         return not (
-            char_box[3] <= clip["y0"]
-            or char_box[1] >= clip["y1"]
+            glyph_box[2] <= clip["x0"]
+            or glyph_box[0] >= clip["x1"]
+            or glyph_box[3] <= clip["y0"]
+            or glyph_box[1] >= clip["y1"]
         )
 
     selected = [
         character
-        for index, character in enumerate(word_characters)
-        if selected_by_clip(index, character)
+        for character in word_characters
+        if selected_by_clip(character)
     ]
     if not selected:
         return None
@@ -1368,18 +1365,46 @@ def snapshot_words_for_clip(
         else "default"
     )
     words = snapshot.word_variants.get(variant, snapshot.words)
+    spans = {
+        _source_position(span, 3): span
+        for span in snapshot.spans
+    }
     result = []
     for word in words:
-        clipped = _clip_word_from_characters(word, snapshot.characters, clip_values)
+        clipped = _clip_word_from_characters(
+            word,
+            snapshot.characters,
+            clip_values,
+            spans,
+        )
         if clipped is not None:
             result.append(clipped)
-    local_word_indices: dict[tuple[Any, Any], int] = {}
+    local_block_indices: dict[Any, int] = {}
+    local_line_indices: dict[tuple[Any, Any], int] = {}
+    local_word_indices: dict[tuple[int, int], int] = {}
     normalized = []
     for word in result:
-        key = (word.get("block_index"), word.get("line_index"))
+        raw_block_index = word.get("block_index")
+        raw_line_index = word.get("line_index")
+        block_index = local_block_indices.setdefault(
+            raw_block_index,
+            len(local_block_indices),
+        )
+        raw_line_key = (raw_block_index, raw_line_index)
+        line_index = local_line_indices.setdefault(
+            raw_line_key,
+            sum(
+                1
+                for block, line in local_line_indices
+                if block == raw_block_index
+            ),
+        )
+        key = (block_index, line_index)
         word_index = local_word_indices.get(key, 0)
         local_word_indices[key] = word_index + 1
         copied = _thaw(word)
+        copied["block_index"] = block_index
+        copied["line_index"] = line_index
         copied["word_index"] = word_index
         normalized.append(_freeze(copied))
     return tuple(normalized)
