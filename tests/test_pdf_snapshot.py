@@ -1057,6 +1057,241 @@ def test_snapshot_words_for_clip_reindexes_selected_lines_within_one_block():
         document.close()
 
 
+def test_snapshot_words_for_clip_preserves_skipped_line_indices_and_reindexes_blocks():
+    class MultiLinePage(_FullPageSpy):
+        def get_text(self, *args, **kwargs):
+            result = super().get_text(*args, **kwargs)
+            if not args or args[0] != "rawdict":
+                if args and args[0] == "words":
+                    return [
+                        (10.0, 0.0, 12.0, 5.0, "x", 0, 0, 0),
+                        (35.0, 10.0, 36.0, 15.0, "a", 0, 1, 0),
+                        (10.0, 20.0, 12.0, 25.0, "y", 0, 2, 0),
+                        (35.0, 30.0, 36.0, 35.0, "b", 0, 3, 0),
+                        (35.0, 10.0, 36.0, 15.0, "c", 1, 2, 0),
+                    ]
+                return result
+            result["blocks"] = [
+                {
+                    "type": 0,
+                    "bbox": [10.0, 0.0, 36.0, 35.0],
+                    "lines": [
+                        {
+                            "bbox": [10.0, 0.0, 12.0, 5.0],
+                            "spans": [{
+                                "bbox": [10.0, 0.0, 12.0, 5.0],
+                                "chars": [{"c": "x", "bbox": [10.0, 0.0, 12.0, 5.0]}],
+                            }],
+                        },
+                        {
+                            "bbox": [35.0, 10.0, 36.0, 15.0],
+                            "spans": [{
+                                "bbox": [35.0, 10.0, 36.0, 15.0],
+                                "chars": [{"c": "a", "bbox": [35.0, 10.0, 36.0, 15.0]}],
+                            }],
+                        },
+                        {
+                            "bbox": [10.0, 20.0, 12.0, 25.0],
+                            "spans": [{
+                                "bbox": [10.0, 20.0, 12.0, 25.0],
+                                "chars": [{"c": "y", "bbox": [10.0, 20.0, 12.0, 25.0]}],
+                            }],
+                        },
+                        {
+                            "bbox": [35.0, 30.0, 36.0, 35.0],
+                            "spans": [{
+                                "bbox": [35.0, 30.0, 36.0, 35.0],
+                                "chars": [{"c": "b", "bbox": [35.0, 30.0, 36.0, 35.0]}],
+                            }],
+                        },
+                    ],
+                },
+                {
+                    "type": 0,
+                    "bbox": [35.0, 10.0, 36.0, 15.0],
+                    "lines": [
+                        {"bbox": [35.0, 10.0, 36.0, 15.0], "spans": []},
+                        {"bbox": [35.0, 10.0, 36.0, 15.0], "spans": []},
+                        {
+                            "bbox": [35.0, 10.0, 36.0, 15.0],
+                            "spans": [{
+                                "bbox": [35.0, 10.0, 36.0, 15.0],
+                                "chars": [{"c": "c", "bbox": [35.0, 10.0, 36.0, 15.0]}],
+                            }],
+                        },
+                    ],
+                },
+            ]
+            return result
+
+    snapshot = _capture(MultiLinePage())
+    actual = _api().snapshot_words_for_clip(snapshot, fitz.Rect(35, 0, 36, 40))
+    assert [
+        word["bbox"] + (word["text"], word["block_index"], word["line_index"], word["word_index"])
+        for word in actual
+    ] == [
+        (35.0, 10.0, 36.0, 15.0, "a", 0, 1, 0),
+        (35.0, 30.0, 36.0, 35.0, "b", 0, 3, 0),
+        (35.0, 10.0, 36.0, 15.0, "c", 1, 0, 0),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("text_rotation", "clip_values"),
+    (
+        (0, (49, 65, 74, 82)),
+        (90, (35, 55, 55, 81)),
+        (180, (26, 74, 51, 90)),
+        (270, (46, 77, 63, 94)),
+    ),
+)
+def test_snapshot_words_for_clip_matches_rotated_glyph_geometry(
+    text_rotation,
+    clip_values,
+):
+    document = fitz.open()
+    real_page = document.new_page(width=120, height=120)
+    real_page.insert_text((50, 78), "hello world", fontsize=11, rotate=text_rotation)
+
+    class StrictRealPage:
+        _blocked = {
+            "get_text", "get_drawings", "get_fonts", "get_images",
+            "get_image_info", "get_image_rects", "get_pixmap",
+            "get_bboxlog", "find_tables", "rect", "rotation", "number",
+        }
+
+        def __init__(self, page):
+            self._page = page
+            self.locked = False
+
+        def __getattr__(self, name):
+            if self.locked and name in self._blocked:
+                raise AssertionError(f"page reread after capture: {name}")
+            return getattr(self._page, name)
+
+    page = StrictRealPage(real_page)
+    try:
+        snapshot = _capture(page)
+        page.locked = True
+        clip = fitz.Rect(*clip_values)
+        expected = real_page.get_text("words", clip=clip)
+        actual = _api().snapshot_words_for_clip(snapshot, clip)
+        assert [tuple(word[:4]) + (word[4],) + tuple(word[5:]) for word in expected] == [
+            (word["bbox"] + (word["text"], word["block_index"], word["line_index"], word["word_index"]))
+            for word in actual
+        ]
+    finally:
+        document.close()
+
+
+@pytest.mark.parametrize(
+    ("text", "clip_values"),
+    (
+        ("aaaaa\nbbbbb\nccccc\nddddd", (35, 0, 36, 40)),
+        ("aaaaa\nbbbbb\nccccc\nddddd", (35, 20, 36, 50)),
+        ("zero\naaaaaa\ntwo\nthree", (35, 0, 36, 40)),
+    ),
+)
+def test_snapshot_words_for_clip_matches_real_multiline_block_indexing(
+    text,
+    clip_values,
+):
+    document = fitz.open()
+    real_page = document.new_page(width=120, height=100)
+    real_page.insert_textbox(
+        fitz.Rect(10, 4, 110, 90),
+        text,
+        fontsize=12,
+        lineheight=1.0,
+    )
+
+    class StrictRealPage:
+        _blocked = {
+            "get_text", "get_drawings", "get_fonts", "get_images",
+            "get_image_info", "get_image_rects", "get_pixmap",
+            "get_bboxlog", "find_tables", "rect", "rotation", "number",
+        }
+
+        def __init__(self, page):
+            self._page = page
+            self.locked = False
+
+        def __getattr__(self, name):
+            if self.locked and name in self._blocked:
+                raise AssertionError(f"page reread after capture: {name}")
+            return getattr(self._page, name)
+
+    page = StrictRealPage(real_page)
+    try:
+        snapshot = _capture(page)
+        clip = fitz.Rect(*clip_values)
+        expected = real_page.get_text("words", clip=clip)
+        page.locked = True
+        actual = _api().snapshot_words_for_clip(snapshot, clip)
+        assert [
+            tuple(word[:4]) + (word[4],) + tuple(word[5:8])
+            for word in expected
+        ] == [
+            word["bbox"]
+            + (word["text"], word["block_index"], word["line_index"], word["word_index"])
+            for word in actual
+        ]
+    finally:
+        document.close()
+
+
+@pytest.mark.parametrize(
+    ("text_rotation", "clip_values"),
+    (
+        (0, (49, 65, 74, 82)),
+        (90, (35, 55, 55, 81)),
+        (180, (26, 74, 51, 90)),
+        (270, (46, 77, 63, 94)),
+    ),
+)
+def test_snapshot_words_for_clip_matches_real_rotated_page_without_reread(
+    text_rotation,
+    clip_values,
+):
+    document = fitz.open()
+    real_page = document.new_page(width=120, height=120)
+    real_page.insert_text((50, 78), "hello world", fontsize=11, rotate=text_rotation)
+
+    class StrictRealPage:
+        _blocked = {
+            "get_text", "get_drawings", "get_fonts", "get_images",
+            "get_image_info", "get_image_rects", "get_pixmap",
+            "get_bboxlog", "find_tables", "rect", "rotation", "number",
+        }
+
+        def __init__(self, page):
+            self._page = page
+            self.locked = False
+
+        def __getattr__(self, name):
+            if self.locked and name in self._blocked:
+                raise AssertionError(f"page reread after capture: {name}")
+            return getattr(self._page, name)
+
+    page = StrictRealPage(real_page)
+    try:
+        snapshot = _capture(page)
+        clip = fitz.Rect(*clip_values)
+        expected = real_page.get_text("words", clip=clip)
+        page.locked = True
+        actual = _api().snapshot_words_for_clip(snapshot, clip)
+        assert [
+            tuple(word[:4]) + (word[4],) + tuple(word[5:8])
+            for word in expected
+        ] == [
+            word["bbox"]
+            + (word["text"], word["block_index"], word["line_index"], word["word_index"])
+            for word in actual
+        ]
+    finally:
+        document.close()
+
+
 def test_filter_snapshot_evidence_removes_footer_words_with_their_footer_line():
     class FooterWordsPage(_FullPageSpy):
         def get_text(self, *args, **kwargs):

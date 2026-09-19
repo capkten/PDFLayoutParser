@@ -1264,6 +1264,7 @@ def _clip_word_from_characters(
     characters: Sequence[Mapping[str, Any]],
     clip: Mapping[str, Any],
     spans: Mapping[tuple[Any, ...], Mapping[str, Any]] | None = None,
+    line_directions: Mapping[tuple[Any, Any], Any] | None = None,
 ) -> tuple[Mapping[str, Any], ...]:
     word_box = _bbox(word)
     if word_box is None:
@@ -1278,11 +1279,22 @@ def _clip_word_from_characters(
             word.get("line_index"),
         ):
             continue
+        direction = (
+            line_directions.get(_source_position(character, 2))
+            if line_directions
+            else None
+        )
+        rotated = (
+            isinstance(direction, (tuple, list))
+            and len(direction) >= 2
+            and abs(_safe_finite(direction[0]) - 1.0) > 1e-6
+        )
+        boundary_epsilon = 1e-3 if rotated else 0.0
         if not (
-            char_box[2] <= word_box[0]
-            or char_box[0] >= word_box[2]
-            or char_box[3] <= word_box[1]
-            or char_box[1] >= word_box[3]
+            char_box[2] <= word_box[0] + boundary_epsilon
+            or char_box[0] >= word_box[2] - boundary_epsilon
+            or char_box[3] <= word_box[1] + boundary_epsilon
+            or char_box[1] >= word_box[3] - boundary_epsilon
         ):
             word_characters.append(character)
     word_characters.sort(key=lambda character: character.get("source_order", 0))
@@ -1311,6 +1323,37 @@ def _clip_word_from_characters(
             if not isinstance(font_name, str) or not font_name or size <= 0.0:
                 return None
             glyph = fitz.Font(font_name).glyph_bbox(ord(char_value))
+            direction = span.get("dir")
+            if not isinstance(direction, (tuple, list)) and line_directions:
+                direction = line_directions.get(_source_position(character, 2))
+            if isinstance(direction, (tuple, list)) and len(direction) >= 2:
+                dx = _finite_float(direction[0])
+                dy = _finite_float(direction[1])
+                length = math.hypot(dx, dy)
+                if length > 0.0:
+                    dx /= length
+                    dy /= length
+                    nx, ny = dy, -dx
+                    points = [
+                        (
+                            origin_x + dx * _finite_float(glyph_x) * size
+                            + nx * _finite_float(glyph_y) * size,
+                            origin_y + dy * _finite_float(glyph_x) * size
+                            + ny * _finite_float(glyph_y) * size,
+                        )
+                        for glyph_x, glyph_y in (
+                            (glyph.x0, glyph.y0),
+                            (glyph.x0, glyph.y1),
+                            (glyph.x1, glyph.y0),
+                            (glyph.x1, glyph.y1),
+                        )
+                    ]
+                    return (
+                        min(point[0] for point in points),
+                        min(point[1] for point in points),
+                        max(point[0] for point in points),
+                        max(point[1] for point in points),
+                    )
             return (
                 origin_x + _finite_float(glyph.x0) * size,
                 origin_y - _finite_float(glyph.y1) * size,
@@ -1323,6 +1366,11 @@ def _clip_word_from_characters(
     def selected_by_clip(character: Mapping[str, Any]) -> bool:
         char_box = _bbox(character)
         assert char_box is not None
+        direction = (
+            line_directions.get(_source_position(character, 2))
+            if line_directions
+            else None
+        )
         glyph_box = glyph_clip_box(character) or char_box
         return not (
             glyph_box[2] <= clip["x0"]
@@ -1378,10 +1426,6 @@ def snapshot_words_for_clip(
         else "default"
     )
     words = snapshot.word_variants.get(variant, snapshot.words)
-    spans = {
-        _source_position(span, 3): span
-        for span in snapshot.spans
-    }
     space_widths: dict[tuple[Any, Any], float] = {}
     for character in snapshot.characters:
         if not str(character.get("c", "")).isspace():
@@ -1395,29 +1439,81 @@ def snapshot_words_for_clip(
         if previous is None or width < previous:
             space_widths[source_line] = width
     result = []
+    spans = {
+        _source_position(span, 3): span
+        for span in snapshot.spans
+    }
+    line_directions = {
+        _source_position(line, 2): line.get("dir")
+        for block in snapshot.text_blocks
+        for line in block.get("lines", ())
+    }
     for word in words:
         clipped_words = _clip_word_from_characters(
             word,
             snapshot.characters,
             clip_values,
             spans,
+            line_directions,
         )
         result.extend(clipped_words)
     local_block_indices: dict[Any, int] = {}
     local_word_indices: dict[tuple[int, int], int] = {}
-    normalized = []
-    previous_word = None
-    current_block = None
-    current_line = -1
+    selected_lines: dict[Any, list[Any]] = {}
     for word in result:
         raw_block_index = word.get("block_index")
         raw_line_index = word.get("line_index")
-        block_index = local_block_indices.setdefault(raw_block_index, len(local_block_indices))
-        if current_block != raw_block_index:
-            current_block = raw_block_index
+        lines = selected_lines.setdefault(raw_block_index, [])
+        if raw_line_index not in lines:
+            lines.append(raw_line_index)
+    preserve_lines = {
+        raw_block_index: any(
+            current - previous > 1
+            for previous, current in zip(lines, lines[1:])
+        )
+        for raw_block_index, lines in selected_lines.items()
+    }
+    segment_for_word: dict[int, tuple[Any, int]] = {}
+    segment_state: dict[Any, dict[str, Any]] = {}
+    for result_index, word in enumerate(result):
+        raw_block_index = word.get("block_index")
+        raw_line_index = word.get("line_index")
+        state = segment_state.setdefault(
+            raw_block_index,
+            {"segment": 0, "baseline_left": None, "last_line": None, "split": False},
+        )
+        box = _bbox(word)
+        if box is not None and state["baseline_left"] is None:
+            state["baseline_left"] = box[0]
+        if (
+            box is not None
+            and state["last_line"] is not None
+            and raw_line_index != state["last_line"]
+            and not state["split"]
+            and abs(box[0] - state["baseline_left"]) > 2.0
+        ):
+            state["segment"] += 1
+            state["split"] = True
+        state["last_line"] = raw_line_index
+        segment_for_word[result_index] = (raw_block_index, state["segment"])
+    normalized = []
+    previous_word = None
+    current_segment = None
+    current_line = -1
+    for result_index, word in enumerate(result):
+        raw_block_index = word.get("block_index")
+        raw_line_index = word.get("line_index")
+        segment = segment_for_word[result_index]
+        block_index = local_block_indices.setdefault(segment, len(local_block_indices))
+        if preserve_lines.get(raw_block_index) and segment[1] == 0:
+            line_index = raw_line_index
+        elif current_segment != segment:
+            current_segment = segment
             current_line = 0
+            line_index = current_line
         elif previous_word is None or previous_word.get("line_index") != raw_line_index:
             current_line += 1
+            line_index = current_line
         else:
             previous_box = _bbox(previous_word)
             current_box = _bbox(word)
@@ -1430,7 +1526,7 @@ def snapshot_words_for_clip(
                 and current_box[0] - previous_box[2] > 2.0 * space_width
             ):
                 current_line += 1
-        line_index = current_line
+            line_index = current_line
         key = (block_index, line_index)
         word_index = local_word_indices.get(key, 0)
         local_word_indices[key] = word_index + 1
