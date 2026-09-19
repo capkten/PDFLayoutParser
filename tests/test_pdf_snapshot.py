@@ -83,7 +83,7 @@ def test_snapshot_preserves_source_order_and_character_boxes():
     recording_page = RecordingPage(page)
     try:
         snapshot = _capture(recording_page)
-        assert [call[0] for call in recording_page.calls].count("get_text") == 10
+        assert [call[0] for call in recording_page.calls].count("get_text") == 11
         assert [call[0] for call in recording_page.calls].count("get_drawings") == 2
         assert recording_page.calls[0][1:] == (("rawdict",), {})
         assert recording_page.calls[1][1:] == (("rawdict",), {"flags": fitz.TEXT_PRESERVE_WHITESPACE})
@@ -101,6 +101,9 @@ def test_snapshot_preserves_source_order_and_character_boxes():
         assert snapshot.characters[0]["raw_source_position"] == (0, 0, 0, 0)
         assert snapshot.characters[0]["c"] == " "
         assert snapshot.characters[0]["bbox"]
+        glyph_character = next(character for character in snapshot.characters if character["c"].strip())
+        assert len(glyph_character["glyph_bbox"]) == 4
+        assert all(math.isfinite(value) for value in glyph_character["glyph_bbox"])
         assert [word["source_order"] for word in snapshot.words] == [0, 1]
         assert snapshot.words[0]["raw_source_position"] == (0, 0, 0)
     finally:
@@ -236,6 +239,7 @@ def test_snapshot_records_exact_extraction_options():
         assert options["rawdict"]["selected"]["kwargs"]["flags"] == fitz.TEXT_PRESERVE_WHITESPACE
         assert options["rawdict"]["variants"]["default"]["args"] == ("rawdict",)
         assert options["words"]["selected"]["args"] == ("words",)
+        assert options["words"]["variants"]["flags_zero"]["kwargs"]["flags"] == 0
         assert options["words"]["variants"]["preserve_whitespace"]["kwargs"]["flags"] == fitz.TEXT_PRESERVE_WHITESPACE
         assert options["drawings"]["variants"]["extended"]["kwargs"]["extended"] is True
         assert snapshot.schema_version == 1
@@ -283,7 +287,7 @@ def test_real_capture_digest_has_fixed_canonical_golden_value():
             allow_nan=False,
         ).encode("utf-8")
         assert hashlib.sha256(canonical).hexdigest() == (
-            "a5ef950ed76e3533b7a1797cacb859f840fc8db047456030887142af0fdfdfe7"
+            "090f5555b06485d343cf8603456b7d4fe805f06c10fad53e7594367b48f23877"
         )
         assert dto["digest"] == snapshot.digest
     finally:
@@ -1418,6 +1422,36 @@ def test_snapshot_words_for_clip_keeps_vertical_words_on_one_line_when_geometry_
         document.close()
 
 
+def test_snapshot_words_for_clip_does_not_touch_page_or_font_after_capture(monkeypatch):
+    document = fitz.open()
+    real_page = document.new_page(width=120, height=100)
+    real_page.insert_text((10, 20), "hello world", fontsize=11)
+    real_page.insert_text((10, 50), "second line", fontsize=11)
+    page = _LockedSnapshotPage(real_page)
+    clips = (fitz.Rect(0, 0, 120, 30), fitz.Rect(0, 0, 120, 70))
+    try:
+        snapshot = _capture(page)
+        expected = [real_page.get_text("words", clip=clip) for clip in clips]
+        page.locked = True
+
+        def forbidden_font(*args, **kwargs):
+            raise AssertionError("Font constructed after capture")
+
+        monkeypatch.setattr(fitz, "Font", forbidden_font)
+        for clip, expected_words in zip(clips, expected):
+            actual = _api().snapshot_words_for_clip(snapshot, clip)
+            assert [
+                tuple(word[:4]) + (word[4],) + tuple(word[5:8])
+                for word in expected_words
+            ] == [
+                word["bbox"]
+                + (word["text"], word["block_index"], word["line_index"], word["word_index"])
+                for word in actual
+            ]
+    finally:
+        document.close()
+
+
 class _LockedSnapshotPage:
     _blocked_after_capture = {
         "get_text",
@@ -1442,6 +1476,64 @@ class _LockedSnapshotPage:
         if self.locked and name in self._blocked_after_capture:
             raise AssertionError(f"page reread after capture: {name}")
         return getattr(self._page, name)
+
+
+def _merge_test_chunks(character_index, *, clip_artifact):
+    def item(text, source_line, source_index, box):
+        return {
+            "character": {
+                "c": text,
+                "bbox": box,
+                "raw_source_position": (*source_line, 0, source_index),
+            }
+        }
+
+    previous = {
+        "last_source_line": (0, 0),
+        "source_line": (0, 0),
+        "source_line_count": 1,
+        "direction": (0.0, 1.0),
+        "items": [
+            item("a", (0, 0), 0, (0.0, 0.0, 4.0, 8.0)),
+            item(" ", (0, 0), 1, (0.0, 4.0, 4.0, 6.0)),
+        ],
+        "normal_min": -1.0,
+        "normal_max": 5.0,
+        "flow_start": 0.0,
+        "word_gap": 1.0,
+        "clip_cuts_normal": clip_artifact,
+        "clip_flow_start": 0.0,
+        "clip_normal_max": 0.0 if clip_artifact else 5.0,
+    }
+    current = {
+        "source_line": (0, 1),
+        "source_line_count": 1,
+        "direction": (0.0, 1.0),
+        "items": [
+            item(" ", (0, 1), 0, (0.0, 6.0, 4.0, 8.0)),
+            item("b", (0, 1), character_index, (0.0, 6.0, 4.0, 14.0)),
+        ],
+        "normal_min": -1.0,
+        "normal_max": 5.0,
+        "flow_start": 6.0,
+        "word_gap": 1.0,
+        "clip_cuts_normal": clip_artifact,
+        "clip_flow_start": 0.0,
+        "clip_normal_max": 0.0 if clip_artifact else 5.0,
+    }
+    return previous, current
+
+
+def test_clipped_line_merge_uses_geometry_not_character_source_index():
+    api = _api()
+    positive = [
+        api._clipped_line_chunk_can_merge(*_merge_test_chunks(index, clip_artifact=True))
+        for index in (6, 7)
+    ]
+    assert positive == [True, True]
+    assert not api._clipped_line_chunk_can_merge(
+        *_merge_test_chunks(7, clip_artifact=False)
+    )
 
 
 def _differential_clip_cases(seed):
@@ -1491,80 +1583,106 @@ def _differential_clip_cases(seed):
 
 def test_snapshot_words_for_clip_real_pymupdf_differential_harness():
     seed = 20260920
-    scanned, differences, first_mismatch = _run_differential_clip_harness(seed)
+    scanned, differences, first_mismatch, variants = _run_differential_clip_harness(seed)
     print(
         "snapshot clip differential "
         f"seed={seed} scanned={scanned} differences={differences} "
-        f"first={first_mismatch!r}"
+        f"variants={variants!r} first={first_mismatch!r}"
     )
     assert differences == 0, (
         f"seed={seed} scanned={scanned} differences={differences} "
-        f"first={first_mismatch!r}"
+        f"variants={variants!r} first={first_mismatch!r}"
     )
+    assert variants == {
+        "default": {"scanned": 1288, "differences": 0},
+        "preserve_whitespace": {"scanned": 1288, "differences": 0},
+    }
 
 
 def test_snapshot_words_for_clip_real_pymupdf_differential_harness_second_seed():
     seed = 20260921
-    scanned, differences, first_mismatch = _run_differential_clip_harness(seed)
+    scanned, differences, first_mismatch, variants = _run_differential_clip_harness(seed)
     print(
         "snapshot clip differential "
         f"seed={seed} scanned={scanned} differences={differences} "
-        f"first={first_mismatch!r}"
+        f"variants={variants!r} first={first_mismatch!r}"
     )
     assert differences == 0, (
         f"seed={seed} scanned={scanned} differences={differences} "
-        f"first={first_mismatch!r}"
+        f"variants={variants!r} first={first_mismatch!r}"
     )
+    assert variants == {
+        "default": {"scanned": 1288, "differences": 0},
+        "preserve_whitespace": {"scanned": 1288, "differences": 0},
+    }
 
 
 def test_snapshot_words_for_clip_real_pymupdf_differential_harness_third_seed():
     seed = 20260922
-    scanned, differences, first_mismatch = _run_differential_clip_harness(seed)
+    scanned, differences, first_mismatch, variants = _run_differential_clip_harness(seed)
     print(
         "snapshot clip differential "
         f"seed={seed} scanned={scanned} differences={differences} "
-        f"first={first_mismatch!r}"
+        f"variants={variants!r} first={first_mismatch!r}"
     )
     assert differences == 0, (
         f"seed={seed} scanned={scanned} differences={differences} "
-        f"first={first_mismatch!r}"
+        f"variants={variants!r} first={first_mismatch!r}"
     )
+    assert variants == {
+        "default": {"scanned": 1288, "differences": 0},
+        "preserve_whitespace": {"scanned": 1288, "differences": 0},
+    }
 
 
 def _run_differential_clip_harness(seed):
     scanned = 0
     differences = 0
     first_mismatch = None
+    variants = {}
     cases = _differential_clip_cases(seed)
     try:
-        for document, real_page, page, snapshot, clip in cases:
-            expected = real_page.get_text("words", clip=clip)
-            page.locked = True
-            actual = _api().snapshot_words_for_clip(snapshot, clip)
-            actual_rows = [
-                (
-                    word["bbox"],
-                    word["text"],
-                    word["block_index"],
-                    word["line_index"],
-                    word["word_index"],
-                )
-                for word in actual
-            ]
-            expected_rows = [
-                (tuple(word[:4]), word[4], word[5], word[6], word[7])
-                for word in expected
-            ]
-            scanned += 1
-            if actual_rows != expected_rows:
-                differences += 1
-                if first_mismatch is None:
-                    first_mismatch = {
-                        "clip": tuple(clip),
-                        "expected": expected_rows,
-                        "actual": actual_rows,
-                    }
-            page.locked = False
+        for variant_name, flags in (
+            ("default", 0),
+            ("preserve_whitespace", fitz.TEXT_PRESERVE_WHITESPACE),
+        ):
+            variant_scanned = 0
+            variant_differences = 0
+            for document, real_page, page, snapshot, clip in cases:
+                expected = real_page.get_text("words", clip=clip, flags=flags)
+                page.locked = True
+                actual = _api().snapshot_words_for_clip(snapshot, clip, flags=flags)
+                actual_rows = [
+                    (
+                        word["bbox"],
+                        word["text"],
+                        word["block_index"],
+                        word["line_index"],
+                        word["word_index"],
+                    )
+                    for word in actual
+                ]
+                expected_rows = [
+                    (tuple(word[:4]), word[4], word[5], word[6], word[7])
+                    for word in expected
+                ]
+                scanned += 1
+                variant_scanned += 1
+                if actual_rows != expected_rows:
+                    differences += 1
+                    variant_differences += 1
+                    if first_mismatch is None:
+                        first_mismatch = {
+                            "flags": flags,
+                            "clip": tuple(clip),
+                            "expected": expected_rows,
+                            "actual": actual_rows,
+                        }
+                page.locked = False
+            variants[variant_name] = {
+                "scanned": variant_scanned,
+                "differences": variant_differences,
+            }
     finally:
         closed_documents = set()
         for document, _real_page, _page, _snapshot, _clip in cases:
@@ -1572,7 +1690,7 @@ def _run_differential_clip_harness(seed):
             if identity not in closed_documents:
                 document.close()
                 closed_documents.add(identity)
-    return scanned, differences, first_mismatch
+    return scanned, differences, first_mismatch, variants
 
 
 @pytest.mark.parametrize(

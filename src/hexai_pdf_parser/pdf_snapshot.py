@@ -17,6 +17,14 @@ import fitz
 SCHEMA_VERSION = 1
 SNAPSHOT_VERSION = 1
 
+_DIRECTION_ALIGNMENT_TOLERANCE = 1e-6
+_DEGENERATE_PROJECTION_TOLERANCE = 1e-9
+_CLIP_BOUNDARY_TOLERANCE = 1e-6
+_FLOW_CONTINUITY_TOLERANCE = 1e-3
+_NORMAL_OVERLAP_RATIO = 0.5
+_SINGLE_GLYPH_EXTENSION_RATIO = 0.25
+_SHORT_GLYPH_FLOW_THRESHOLD = 4.0
+
 
 def _finite_float(value: Any) -> float:
     result = float(value)
@@ -489,11 +497,31 @@ def _source_position(record: Mapping[str, Any], length: int) -> tuple[Any, ...]:
     return tuple(value[:length]) if isinstance(value, (tuple, list)) else ()
 
 
-def _raw_char(char: Mapping[str, Any], position: tuple[int, int, int, int], order: int) -> dict[str, Any]:
+def _capture_glyph_bbox(font: Any, char_value: Any) -> tuple[float, float, float, float] | None:
+    if font is None or not isinstance(char_value, str) or len(char_value) != 1:
+        return None
+    try:
+        glyph = font.glyph_bbox(ord(char_value))
+        return tuple(
+            _finite_float(getattr(glyph, name))
+            for name in ("x0", "y0", "x1", "y1")
+        )  # type: ignore[return-value]
+    except (AttributeError, TypeError, ValueError, OverflowError, RuntimeError):
+        return None
+
+
+def _raw_char(
+    char: Mapping[str, Any],
+    position: tuple[int, int, int, int],
+    order: int,
+    glyph_bbox: tuple[float, float, float, float] | None,
+) -> dict[str, Any]:
     result = _plain(char)
     result["raw_source_position"] = position
     result["source_order"] = order
     result.setdefault("c", "")
+    if glyph_bbox is not None:
+        result["glyph_bbox"] = glyph_bbox
     return result
 
 
@@ -504,8 +532,20 @@ def _raw_span(
     character_order: int,
 ) -> tuple[dict[str, Any], list[dict[str, Any]], int]:
     raw_chars = span.get("chars", []) or []
+    font = None
+    font_name = span.get("font")
+    if isinstance(font_name, str) and font_name:
+        try:
+            font = fitz.Font(font_name)
+        except (TypeError, ValueError, RuntimeError):
+            font = None
     chars = [
-        _raw_char(char, (*position, char_index), character_order + char_index)
+        _raw_char(
+            char,
+            (*position, char_index),
+            character_order + char_index,
+            _capture_glyph_bbox(font, char.get("c", "")),
+        )
         for char_index, char in enumerate(raw_chars)
     ]
     result = {key: _plain(value) for key, value in span.items() if key != "chars"}
@@ -781,6 +821,9 @@ def capture_page_snapshot(
         page_reads[f"text.{mode}"] = selected_record
 
     words_default_record, words_default_value = _read_call(page, "get_text", "words")
+    words_flags_zero_record, words_flags_zero_value = _read_call(
+        page, "get_text", "words", flags=0
+    )
     words_preserve_record, words_preserve_value = _read_call(
         page, "get_text", "words", flags=fitz.TEXT_PRESERVE_WHITESPACE
     )
@@ -800,6 +843,7 @@ def capture_page_snapshot(
     ):
         words_value = None
     page_reads["text.words.default"] = words_default_record
+    page_reads["text.words.flags_zero"] = words_flags_zero_record
     page_reads["text.words.preserve_whitespace"] = words_preserve_record
     page_reads["text.words"] = words_record
     for index, region in enumerate((*frozen_allowed, *frozen_excluded)):
@@ -915,6 +959,7 @@ def capture_page_snapshot(
                 "selected": words_record,
                 "variants": {
                     "default": words_default_record,
+                    "flags_zero": words_flags_zero_record,
                     "preserve_whitespace": words_preserve_record,
                 },
                 "clip_regions": tuple(
@@ -1077,6 +1122,12 @@ def capture_page_snapshot(
                 words_default_value
                 if isinstance(words_default_value, Iterable)
                 and not isinstance(words_default_value, (str, bytes, Mapping))
+                else ()
+            ),
+            "flags_zero": _word_records(
+                words_flags_zero_value
+                if isinstance(words_flags_zero_value, Iterable)
+                and not isinstance(words_flags_zero_value, (str, bytes, Mapping))
                 else ()
             ),
             "preserve_whitespace": _word_records(
@@ -1265,6 +1316,7 @@ def _clip_word_from_characters(
     clip: Mapping[str, Any],
     spans: Mapping[tuple[Any, ...], Mapping[str, Any]] | None = None,
     line_directions: Mapping[tuple[Any, Any], Any] | None = None,
+    use_glyph_geometry: bool = True,
 ) -> tuple[Mapping[str, Any], ...]:
     word_box = _bbox(word)
     if word_box is None:
@@ -1308,21 +1360,19 @@ def _clip_word_from_characters(
         return ()
 
     def glyph_clip_box(character: Mapping[str, Any]) -> tuple[float, float, float, float] | None:
-        span = spans.get(_source_position(character, 3)) if spans else None
         origin = character.get("origin")
-        char_value = character.get("c", "")
-        if not span or not isinstance(char_value, str) or len(char_value) != 1:
+        glyph_bbox = character.get("glyph_bbox")
+        if glyph_bbox is None:
             return None
         if not isinstance(origin, (tuple, list)) or len(origin) < 2:
             return None
         try:
-            font_name = span.get("font")
-            size = _finite_float(span.get("size"))
+            span = spans.get(_source_position(character, 3)) if spans else None
+            size = _finite_float(span.get("size")) if span else 0.0
             origin_x = _finite_float(origin[0])
             origin_y = _finite_float(origin[1])
-            if not isinstance(font_name, str) or not font_name or size <= 0.0:
+            if size <= 0.0 or len(glyph_bbox) != 4:
                 return None
-            glyph = fitz.Font(font_name).glyph_bbox(ord(char_value))
             direction = span.get("dir")
             if not isinstance(direction, (tuple, list)) and line_directions:
                 direction = line_directions.get(_source_position(character, 2))
@@ -1342,10 +1392,10 @@ def _clip_word_from_characters(
                             + ny * _finite_float(glyph_y) * size,
                         )
                         for glyph_x, glyph_y in (
-                            (glyph.x0, glyph.y0),
-                            (glyph.x0, glyph.y1),
-                            (glyph.x1, glyph.y0),
-                            (glyph.x1, glyph.y1),
+                            (glyph_bbox[0], glyph_bbox[1]),
+                            (glyph_bbox[0], glyph_bbox[3]),
+                            (glyph_bbox[2], glyph_bbox[1]),
+                            (glyph_bbox[2], glyph_bbox[3]),
                         )
                     ]
                     return (
@@ -1355,10 +1405,10 @@ def _clip_word_from_characters(
                         max(point[1] for point in points),
                     )
             return (
-                origin_x + _finite_float(glyph.x0) * size,
-                origin_y - _finite_float(glyph.y1) * size,
-                origin_x + _finite_float(glyph.x1) * size,
-                origin_y - _finite_float(glyph.y0) * size,
+                origin_x + _finite_float(glyph_bbox[0]) * size,
+                origin_y - _finite_float(glyph_bbox[3]) * size,
+                origin_x + _finite_float(glyph_bbox[2]) * size,
+                origin_y - _finite_float(glyph_bbox[1]) * size,
             )
         except (TypeError, ValueError, OverflowError, RuntimeError):
             return None
@@ -1372,11 +1422,12 @@ def _clip_word_from_characters(
             else None
         )
         glyph_box = glyph_clip_box(character) or char_box
+        selection_box = glyph_box if use_glyph_geometry else char_box
         return not (
-            glyph_box[2] <= clip["x0"]
-            or glyph_box[0] >= clip["x1"]
-            or glyph_box[3] <= clip["y0"]
-            or glyph_box[1] >= clip["y1"]
+            selection_box[2] <= clip["x0"]
+            or selection_box[0] >= clip["x1"]
+            or selection_box[3] <= clip["y0"]
+            or selection_box[1] >= clip["y1"]
         )
 
     selected = [
@@ -1436,14 +1487,17 @@ def _legacy_snapshot_words_for_clip(
     snapshot: PageSnapshot,
     clip: Any,
     *,
-    flags: int = 0,
+    flags: int | None = None,
 ) -> tuple[Any, ...]:
     """Return captured words intersecting a PyMuPDF-compatible clip rectangle."""
 
     clip_values = _region(clip)
+    explicit_flags = flags is not None
     variant = (
         "preserve_whitespace"
-        if flags & fitz.TEXT_PRESERVE_WHITESPACE
+        if flags is not None and flags & fitz.TEXT_PRESERVE_WHITESPACE
+        else "flags_zero"
+        if flags == 0
         else "default"
     )
     words = snapshot.word_variants.get(variant, snapshot.words)
@@ -1492,10 +1546,12 @@ def _legacy_snapshot_words_for_clip(
             clip_values,
             spans,
             line_directions,
+            use_glyph_geometry=not explicit_flags,
         )
         result.extend(clipped_words)
     local_block_indices: dict[Any, int] = {}
     local_word_indices: dict[tuple[int, int], int] = {}
+    source_word_indices: dict[tuple[Any, Any], int] = {}
     segment_for_word: dict[int, tuple[Any, int]] = {}
     segment_state: dict[Any, dict[str, Any]] = {}
     for result_index, word in enumerate(result):
@@ -1592,9 +1648,16 @@ def _legacy_snapshot_words_for_clip(
         word_index = local_word_indices.get(key, 0)
         local_word_indices[key] = word_index + 1
         copied = _thaw(word)
-        copied["block_index"] = block_index
-        copied["line_index"] = line_index
-        copied["word_index"] = word_index
+        if explicit_flags:
+            copied["block_index"] = raw_block_index
+            copied["line_index"] = raw_line_index
+            source_key = (raw_block_index, raw_line_index)
+            copied["word_index"] = source_word_indices.get(source_key, 0)
+            source_word_indices[source_key] = copied["word_index"] + 1
+        else:
+            copied["block_index"] = block_index
+            copied["line_index"] = line_index
+            copied["word_index"] = word_index
         normalized.append(_freeze(copied))
         previous_word = word
     return tuple(normalized)
@@ -1638,8 +1701,8 @@ def _character_glyph_clip_box(
         return None
     span = spans.get(_source_position(character, 3))
     origin = character.get("origin")
-    char_value = character.get("c", "")
-    if not span or not isinstance(char_value, str) or len(char_value) != 1:
+    glyph_bbox = character.get("glyph_bbox")
+    if not span or glyph_bbox is None:
         return char_box
     if not isinstance(origin, (tuple, list)) or len(origin) < 2:
         return char_box
@@ -1648,7 +1711,8 @@ def _character_glyph_clip_box(
         size = _finite_float(span.get("size"))
         if not isinstance(font_name, str) or not font_name or size <= 0.0:
             return char_box
-        glyph = fitz.Font(font_name).glyph_bbox(ord(char_value))
+        if len(glyph_bbox) != 4:
+            return char_box
         direction = _unit_direction(span.get("dir"))
         if direction is None:
             direction = _unit_direction(
@@ -1668,10 +1732,10 @@ def _character_glyph_clip_box(
                 + ny * _finite_float(glyph_y) * size,
             )
             for glyph_x, glyph_y in (
-                (glyph.x0, glyph.y0),
-                (glyph.x0, glyph.y1),
-                (glyph.x1, glyph.y0),
-                (glyph.x1, glyph.y1),
+                (glyph_bbox[0], glyph_bbox[1]),
+                (glyph_bbox[0], glyph_bbox[3]),
+                (glyph_bbox[2], glyph_bbox[1]),
+                (glyph_bbox[2], glyph_bbox[3]),
             )
         ]
         return (
@@ -1682,6 +1746,28 @@ def _character_glyph_clip_box(
         )
     except (TypeError, ValueError, OverflowError, RuntimeError):
         return char_box
+
+
+def _boundary_space_is_clip_artifact(
+    previous: Mapping[str, Any],
+    current: Mapping[str, Any],
+) -> bool:
+    """Accept a boundary space only when clipping explains its selection."""
+
+    if not (
+        previous.get("clip_cuts_normal", False)
+        and current.get("clip_cuts_normal", False)
+    ):
+        return False
+    normal_remainder = current.get("clip_normal_max", current["normal_max"]) < (
+        max(previous["normal_max"], current["normal_max"])
+        - _CLIP_BOUNDARY_TOLERANCE
+    )
+    flow_remainder = previous.get("clip_flow_start", previous["flow_start"]) > (
+        previous["flow_start"]
+        + max(previous.get("word_gap", 0.0), _FLOW_CONTINUITY_TOLERANCE)
+    )
+    return normal_remainder or flow_remainder
 
 
 def _clipped_line_chunk_can_merge(
@@ -1701,7 +1787,7 @@ def _clipped_line_chunk_can_merge(
     if abs(
         direction[0] * current["direction"][0]
         + direction[1] * current["direction"][1]
-    ) < 1.0 - 1e-6:
+    ) < 1.0 - _DIRECTION_ALIGNMENT_TOLERANCE:
         return False
 
     previous_nonspace = [
@@ -1767,14 +1853,18 @@ def _clipped_line_chunk_can_merge(
             previous["normal_max"] - previous["normal_min"],
             current["normal_max"] - current["normal_min"],
         )
-        if normal_shortest > 1e-9 and normal_overlap / normal_shortest < 0.5:
+        if (
+            normal_shortest > _DEGENERATE_PROJECTION_TOLERANCE
+            and normal_overlap / normal_shortest < _NORMAL_OVERLAP_RATIO
+        ):
             return False
+        if not has_space:
+            return False
+        boundary_space_artifact = _boundary_space_is_clip_artifact(previous, current)
         if direction[1] > 0.0:
-            if current_leading_space and not (
-                _source_position(current_word[0]["character"], 4)[3] >= 7
-                and previous.get("clip_cuts_normal", False)
-                and current.get("clip_cuts_normal", False)
-            ):
+            if has_space and not current_leading_space:
+                return False
+            if current_leading_space and not boundary_space_artifact:
                 return False
             previous_word_flow = _project_bbox(
                 (
@@ -1814,7 +1904,8 @@ def _clipped_line_chunk_can_merge(
                     or previous_word_flow[0] - current_word_flow[0]
                     <= max(
                         1.0,
-                        (previous_word_flow[1] - previous_word_flow[0]) * 0.25,
+                        (previous_word_flow[1] - previous_word_flow[0])
+                        * _SINGLE_GLYPH_EXTENSION_RATIO,
                     )
                 )
             ) or (
@@ -1823,17 +1914,7 @@ def _clipped_line_chunk_can_merge(
                 and bool(current["items"])
                 and str(current["items"][0]["character"].get("c", "")).isspace()
                 and len(current_word) == 1
-                and _source_position(current_word[0]["character"], 4)[3] >= 7
-                and (
-                    (
-                        previous.get("clip_cuts_normal", False)
-                        and current.get("clip_cuts_normal", False)
-                        and current.get("clip_normal_max", current["normal_max"])
-                        < max(previous["normal_max"], current["normal_max"]) - 1e-6
-                    )
-                    or previous.get("clip_flow_start", previous["flow_start"])
-                    > previous["flow_start"] + previous.get("word_gap", 0.0)
-                )
+                and boundary_space_artifact
             )
         if has_space or len(previous_nonspace) > 2 or len(current_nonspace) > 2:
             return False
@@ -1858,10 +1939,12 @@ def _clipped_line_chunk_can_merge(
         start_extension = previous_word_flow[0] - current_word_flow[0]
         if start_extension > 0.0:
             if start_extension < max(
-                1.0, (previous_word_flow[1] - previous_word_flow[0]) * 0.25
+                1.0,
+                (previous_word_flow[1] - previous_word_flow[0])
+                * _SINGLE_GLYPH_EXTENSION_RATIO,
             ):
                 return False
-        elif previous_word_flow[1] - previous_word_flow[0] > 4.0:
+        elif previous_word_flow[1] - previous_word_flow[0] > _SHORT_GLYPH_FLOW_THRESHOLD:
             return False
         return current_word_flow[1] > previous_word_flow[1]
 
@@ -1880,7 +1963,10 @@ def _clipped_line_chunk_can_merge(
         previous["normal_max"] - previous["normal_min"],
         current["normal_max"] - current["normal_min"],
     )
-    if normal_shortest > 1e-9 and normal_overlap / normal_shortest < 0.5:
+    if (
+        normal_shortest > _DEGENERATE_PROJECTION_TOLERANCE
+        and normal_overlap / normal_shortest < _NORMAL_OVERLAP_RATIO
+    ):
         return False
     overlap = min(previous_flow[1], current_flow[1]) - max(
         previous_flow[0], current_flow[0]
@@ -1889,7 +1975,10 @@ def _clipped_line_chunk_can_merge(
         previous_flow[1] - previous_flow[0],
         current_flow[1] - current_flow[0],
     )
-    if shortest > 1e-9 and 0.0 < overlap / shortest <= 0.5:
+    if (
+        shortest > _DEGENERATE_PROJECTION_TOLERANCE
+        and 0.0 < overlap / shortest <= _NORMAL_OVERLAP_RATIO
+    ):
         return True
     if direction[1] > 0.0:
         gap = max(
@@ -1897,7 +1986,7 @@ def _clipped_line_chunk_can_merge(
             current_flow[0] - previous_flow[1],
             0.0,
         )
-        return gap <= 1e-3
+        return gap <= _FLOW_CONTINUITY_TOLERANCE
     return False
 
 
@@ -1906,6 +1995,8 @@ def _snapshot_words_from_clipped_characters(
     clip: Mapping[str, Any],
     words: Sequence[Mapping[str, Any]],
     line_directions: Mapping[tuple[Any, Any], Any],
+    *,
+    preserve_source_indices: bool = False,
 ) -> tuple[Any, ...]:
     spans = {_source_position(span, 3): span for span in snapshot.spans}
     selected = []
@@ -1919,7 +2010,11 @@ def _snapshot_words_from_clipped_characters(
         if direction is None:
             continue
         glyph_box = _character_glyph_clip_box(character, spans, line_directions)
-        selection_box = char_box if str(character.get("c", "")).isspace() else glyph_box
+        selection_box = (
+            char_box
+            if preserve_source_indices or str(character.get("c", "")).isspace()
+            else glyph_box
+        )
         if selection_box is None or (
             selection_box[2] <= clip["x0"]
             or selection_box[0] >= clip["x1"]
@@ -2012,8 +2107,8 @@ def _snapshot_words_from_clipped_characters(
             chunk["direction"],
         )
         chunk["clip_cuts_normal"] = (
-            clip_projection[2] > chunk["normal_min"] + 1e-6
-            or clip_projection[3] < chunk["normal_max"] - 1e-6
+            clip_projection[2] > chunk["normal_min"] + _CLIP_BOUNDARY_TOLERANCE
+            or clip_projection[3] < chunk["normal_max"] - _CLIP_BOUNDARY_TOLERANCE
         )
         chunk["clip_flow_start"] = clip_projection[0]
         chunk["clip_normal_max"] = clip_projection[3]
@@ -2260,12 +2355,18 @@ def _snapshot_words_from_clipped_characters(
             blocks.append({"direction": direction, "flow_min": flow0, "flow_max": flow1, "normal_min": normal0, "normal_max": normal1, "source_lines": set(line["source_lines"]), "lines": [line]})
 
     normalized = []
+    source_word_indices: dict[tuple[Any, Any], int] = {}
     for block_index, block in enumerate(blocks):
         for line_index, line in enumerate(block["lines"]):
             for word_index, word in enumerate(line["items"]):
-                word["block_index"] = block_index
-                word["line_index"] = line_index
-                word["word_index"] = word_index
+                if preserve_source_indices:
+                    source_key = (word.get("block_index"), word.get("line_index"))
+                    word["word_index"] = source_word_indices.get(source_key, 0)
+                    source_word_indices[source_key] = word["word_index"] + 1
+                else:
+                    word["block_index"] = block_index
+                    word["line_index"] = line_index
+                    word["word_index"] = word_index
                 normalized.append(_freeze(word))
     return tuple(normalized)
 
@@ -2274,14 +2375,17 @@ def snapshot_words_for_clip(
     snapshot: PageSnapshot,
     clip: Any,
     *,
-    flags: int = 0,
+    flags: int | None = None,
 ) -> tuple[Any, ...]:
     """Return captured words using PyMuPDF's clipped character stream semantics."""
 
     clip_values = _region(clip)
+    explicit_flags = flags is not None
     variant = (
         "preserve_whitespace"
-        if flags & fitz.TEXT_PRESERVE_WHITESPACE
+        if flags is not None and flags & fitz.TEXT_PRESERVE_WHITESPACE
+        else "flags_zero"
+        if flags == 0
         else "default"
     )
     words = snapshot.word_variants.get(variant, snapshot.words)
@@ -2316,7 +2420,11 @@ def snapshot_words_for_clip(
     if len(selected_line_keys) <= 1:
         return _legacy_snapshot_words_for_clip(snapshot, clip, flags=flags)
     return _snapshot_words_from_clipped_characters(
-        snapshot, clip_values, words, line_directions
+        snapshot,
+        clip_values,
+        words,
+        line_directions,
+        preserve_source_indices=explicit_flags,
     )
 
 
