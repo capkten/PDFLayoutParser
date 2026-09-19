@@ -1426,15 +1426,28 @@ def snapshot_words_for_clip(
         else "default"
     )
     words = snapshot.word_variants.get(variant, snapshot.words)
+    line_directions = {
+        _source_position(line, 2): line.get("dir")
+        for block in snapshot.text_blocks
+        for line in block.get("lines", ())
+    }
     space_widths: dict[tuple[Any, Any], float] = {}
     for character in snapshot.characters:
         if not str(character.get("c", "")).isspace():
             continue
         box = _bbox(character)
         source_line = _source_position(character, 2)
-        if box is None or box[2] <= box[0]:
+        if box is None:
             continue
-        width = box[2] - box[0]
+        direction = line_directions.get(source_line)
+        vertical = (
+            isinstance(direction, (tuple, list))
+            and len(direction) >= 2
+            and abs(_safe_finite(direction[1])) > abs(_safe_finite(direction[0]))
+        )
+        width = (box[3] - box[1]) if vertical else (box[2] - box[0])
+        if width <= 0.0:
+            continue
         previous = space_widths.get(source_line)
         if previous is None or width < previous:
             space_widths[source_line] = width
@@ -1442,11 +1455,6 @@ def snapshot_words_for_clip(
     spans = {
         _source_position(span, 3): span
         for span in snapshot.spans
-    }
-    line_directions = {
-        _source_position(line, 2): line.get("dir")
-        for block in snapshot.text_blocks
-        for line in block.get("lines", ())
     }
     for word in words:
         clipped_words = _clip_word_from_characters(
@@ -1533,11 +1541,15 @@ def snapshot_words_for_clip(
                 and abs(_safe_finite(direction[1])) > abs(_safe_finite(direction[0]))
             )
             space_width = space_widths.get((raw_block_index, raw_line_index))
-            if (
-                vertical
-                and previous_word.get("word_index") != word.get("word_index")
-            ):
-                current_line += 1
+            if vertical and previous_word.get("word_index") != word.get("word_index"):
+                dy = _safe_finite(direction[1]) if isinstance(direction, (tuple, list)) else 0.0
+                gap = (
+                    previous_box[1] - current_box[3]
+                    if dy < 0.0
+                    else current_box[1] - previous_box[3]
+                )
+                if space_width is None or gap > 2.0 * space_width:
+                    current_line += 1
             elif (
                 previous_box is not None
                 and current_box is not None
