@@ -4,6 +4,7 @@ import hashlib
 import importlib
 import json
 import math
+import random
 
 import fitz
 import pytest
@@ -1415,6 +1416,163 @@ def test_snapshot_words_for_clip_keeps_vertical_words_on_one_line_when_geometry_
         ]
     finally:
         document.close()
+
+
+class _LockedSnapshotPage:
+    _blocked_after_capture = {
+        "get_text",
+        "get_drawings",
+        "get_fonts",
+        "get_images",
+        "get_image_info",
+        "get_image_rects",
+        "get_pixmap",
+        "get_bboxlog",
+        "find_tables",
+        "rect",
+        "rotation",
+        "number",
+    }
+
+    def __init__(self, page):
+        self._page = page
+        self.locked = False
+
+    def __getattr__(self, name):
+        if self.locked and name in self._blocked_after_capture:
+            raise AssertionError(f"page reread after capture: {name}")
+        return getattr(self._page, name)
+
+
+def _differential_clip_cases(seed):
+    rng = random.Random(seed)
+    cases = []
+    width, height = 220, 180
+    for rotation in (0, 90, 180, 270):
+        document = fitz.open()
+        page = document.new_page(width=width, height=height)
+        for row, text in enumerate(("aaa bbb ccc", "ddd ee ffff", "gg hhh iii")):
+            page.insert_text(
+                (12 + rotation // 90 * 8, 22 + row * 18),
+                text,
+                fontsize=11,
+                rotate=rotation,
+            )
+        for row, text in enumerate(("jjj k llll", "mm nnn oooo", "pp qqq r")):
+            page.insert_text(
+                (112 + rotation // 90 * 5, 30 + row * 22),
+                text,
+                fontsize=10,
+                rotate=rotation,
+            )
+        wrapper = _LockedSnapshotPage(page)
+        snapshot = _capture(wrapper)
+        cases.append((document, page, wrapper, snapshot, fitz.Rect(0, 0, width, height)))
+        cases.append((document, page, wrapper, snapshot, fitz.Rect(54, 0, 97, 55)))
+
+        grid_x = tuple(range(0, width + 1, 11))
+        grid_y = tuple(range(0, height + 1, 13))
+        for x0 in grid_x:
+            for y0 in grid_y:
+                x1 = min(width, x0 + rng.choice((1, 4, 9, 17, 33, 61)))
+                y1 = min(height, y0 + rng.choice((1, 5, 12, 21, 47, 79)))
+                if x1 > x0 and y1 > y0:
+                    cases.append(
+                        (document, page, wrapper, snapshot, fitz.Rect(x0, y0, x1, y1))
+                    )
+        for _ in range(40):
+            x0 = rng.randrange(0, width - 1)
+            y0 = rng.randrange(0, height - 1)
+            x1 = min(width, x0 + rng.choice((1, 2, 3, 7, 14, 29, 58)))
+            y1 = min(height, y0 + rng.choice((1, 2, 4, 8, 19, 43, 71)))
+            cases.append((document, page, wrapper, snapshot, fitz.Rect(x0, y0, x1, y1)))
+    return cases
+
+
+def test_snapshot_words_for_clip_real_pymupdf_differential_harness():
+    seed = 20260920
+    scanned, differences, first_mismatch = _run_differential_clip_harness(seed)
+    print(
+        "snapshot clip differential "
+        f"seed={seed} scanned={scanned} differences={differences} "
+        f"first={first_mismatch!r}"
+    )
+    assert differences == 0, (
+        f"seed={seed} scanned={scanned} differences={differences} "
+        f"first={first_mismatch!r}"
+    )
+
+
+def test_snapshot_words_for_clip_real_pymupdf_differential_harness_second_seed():
+    seed = 20260921
+    scanned, differences, first_mismatch = _run_differential_clip_harness(seed)
+    print(
+        "snapshot clip differential "
+        f"seed={seed} scanned={scanned} differences={differences} "
+        f"first={first_mismatch!r}"
+    )
+    assert differences == 0, (
+        f"seed={seed} scanned={scanned} differences={differences} "
+        f"first={first_mismatch!r}"
+    )
+
+
+def test_snapshot_words_for_clip_real_pymupdf_differential_harness_third_seed():
+    seed = 20260922
+    scanned, differences, first_mismatch = _run_differential_clip_harness(seed)
+    print(
+        "snapshot clip differential "
+        f"seed={seed} scanned={scanned} differences={differences} "
+        f"first={first_mismatch!r}"
+    )
+    assert differences == 0, (
+        f"seed={seed} scanned={scanned} differences={differences} "
+        f"first={first_mismatch!r}"
+    )
+
+
+def _run_differential_clip_harness(seed):
+    scanned = 0
+    differences = 0
+    first_mismatch = None
+    cases = _differential_clip_cases(seed)
+    try:
+        for document, real_page, page, snapshot, clip in cases:
+            expected = real_page.get_text("words", clip=clip)
+            page.locked = True
+            actual = _api().snapshot_words_for_clip(snapshot, clip)
+            actual_rows = [
+                (
+                    word["bbox"],
+                    word["text"],
+                    word["block_index"],
+                    word["line_index"],
+                    word["word_index"],
+                )
+                for word in actual
+            ]
+            expected_rows = [
+                (tuple(word[:4]), word[4], word[5], word[6], word[7])
+                for word in expected
+            ]
+            scanned += 1
+            if actual_rows != expected_rows:
+                differences += 1
+                if first_mismatch is None:
+                    first_mismatch = {
+                        "clip": tuple(clip),
+                        "expected": expected_rows,
+                        "actual": actual_rows,
+                    }
+            page.locked = False
+    finally:
+        closed_documents = set()
+        for document, _real_page, _page, _snapshot, _clip in cases:
+            identity = id(document)
+            if identity not in closed_documents:
+                document.close()
+                closed_documents.add(identity)
+    return scanned, differences, first_mismatch
 
 
 @pytest.mark.parametrize(

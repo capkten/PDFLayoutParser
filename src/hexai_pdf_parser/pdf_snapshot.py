@@ -1390,7 +1390,28 @@ def _clip_word_from_characters(
     runs: list[list[Mapping[str, Any]]] = []
     previous_index = None
     for index, character in selected:
-        if previous_index is None or index != previous_index + 1:
+        skipped = () if previous_index is None else word_characters[previous_index + 1 : index]
+        split_run = previous_index is None or any(
+            str(item.get("c", "")).isspace() for item in skipped
+        )
+        if not split_run and index != previous_index + 1:
+            previous_box = _bbox(word_characters[previous_index])
+            current_box = _bbox(character)
+            direction = _unit_direction(
+                line_directions.get(_source_position(character, 2))
+            )
+            if previous_box is None or current_box is None or direction is None:
+                split_run = True
+            else:
+                previous_flow = _project_bbox(previous_box, direction)
+                current_flow = _project_bbox(current_box, direction)
+                gap = max(
+                    previous_flow[0] - current_flow[1],
+                    current_flow[0] - previous_flow[1],
+                    0.0,
+                )
+                split_run = gap > 1e-6
+        if split_run:
             runs.append([character])
         else:
             runs[-1].append(character)
@@ -1411,7 +1432,7 @@ def _clip_word_from_characters(
     return tuple(clipped_words)
 
 
-def snapshot_words_for_clip(
+def _legacy_snapshot_words_for_clip(
     snapshot: PageSnapshot,
     clip: Any,
     *,
@@ -1426,6 +1447,14 @@ def snapshot_words_for_clip(
         else "default"
     )
     words = snapshot.word_variants.get(variant, snapshot.words)
+    geometry = snapshot.geometry
+    if (
+        clip_values["x0"] <= _safe_finite(geometry.get("x0"))
+        and clip_values["y0"] <= _safe_finite(geometry.get("y0"))
+        and clip_values["x1"] >= _safe_finite(geometry.get("x1"))
+        and clip_values["y1"] >= _safe_finite(geometry.get("y1"))
+    ):
+        return tuple(words)
     line_directions = {
         _source_position(line, 2): line.get("dir")
         for block in snapshot.text_blocks
@@ -1569,6 +1598,726 @@ def snapshot_words_for_clip(
         normalized.append(_freeze(copied))
         previous_word = word
     return tuple(normalized)
+
+
+def _unit_direction(value: Any) -> tuple[float, float] | None:
+    if not isinstance(value, (tuple, list)) or len(value) < 2:
+        return None
+    dx = _safe_finite(value[0])
+    dy = _safe_finite(value[1])
+    length = math.hypot(dx, dy)
+    if length <= 1e-9:
+        return None
+    return dx / length, dy / length
+
+
+def _project_bbox(
+    box: tuple[float, float, float, float],
+    direction: tuple[float, float],
+) -> tuple[float, float, float, float]:
+    dx, dy = direction
+    nx, ny = -dy, dx
+    values = [
+        (box[0] * dx + box[1] * dy, box[0] * nx + box[1] * ny),
+        (box[0] * dx + box[3] * dy, box[0] * nx + box[3] * ny),
+        (box[2] * dx + box[1] * dy, box[2] * nx + box[1] * ny),
+        (box[2] * dx + box[3] * dy, box[2] * nx + box[3] * ny),
+    ]
+    flow = [item[0] for item in values]
+    normal = [item[1] for item in values]
+    return min(flow), max(flow), min(normal), max(normal)
+
+
+def _character_glyph_clip_box(
+    character: Mapping[str, Any],
+    spans: Mapping[tuple[Any, ...], Mapping[str, Any]],
+    line_directions: Mapping[tuple[Any, Any], Any],
+) -> tuple[float, float, float, float] | None:
+    char_box = _bbox(character)
+    if char_box is None:
+        return None
+    span = spans.get(_source_position(character, 3))
+    origin = character.get("origin")
+    char_value = character.get("c", "")
+    if not span or not isinstance(char_value, str) or len(char_value) != 1:
+        return char_box
+    if not isinstance(origin, (tuple, list)) or len(origin) < 2:
+        return char_box
+    try:
+        font_name = span.get("font")
+        size = _finite_float(span.get("size"))
+        if not isinstance(font_name, str) or not font_name or size <= 0.0:
+            return char_box
+        glyph = fitz.Font(font_name).glyph_bbox(ord(char_value))
+        direction = _unit_direction(span.get("dir"))
+        if direction is None:
+            direction = _unit_direction(
+                line_directions.get(_source_position(character, 2))
+            )
+        if direction is None:
+            return char_box
+        dx, dy = direction
+        nx, ny = dy, -dx
+        origin_x = _finite_float(origin[0])
+        origin_y = _finite_float(origin[1])
+        points = [
+            (
+                origin_x + dx * _finite_float(glyph_x) * size
+                + nx * _finite_float(glyph_y) * size,
+                origin_y + dy * _finite_float(glyph_x) * size
+                + ny * _finite_float(glyph_y) * size,
+            )
+            for glyph_x, glyph_y in (
+                (glyph.x0, glyph.y0),
+                (glyph.x0, glyph.y1),
+                (glyph.x1, glyph.y0),
+                (glyph.x1, glyph.y1),
+            )
+        ]
+        return (
+            min(point[0] for point in points),
+            min(point[1] for point in points),
+            max(point[0] for point in points),
+            max(point[1] for point in points),
+        )
+    except (TypeError, ValueError, OverflowError, RuntimeError):
+        return char_box
+
+
+def _clipped_line_chunk_can_merge(
+    previous: Mapping[str, Any],
+    current: Mapping[str, Any],
+) -> bool:
+    """Join clipped raw lines only when their selected flow is continuous."""
+
+    previous_source_line = previous.get(
+        "last_source_line", previous["source_line"]
+    )
+    if previous_source_line[0] != current["source_line"][0]:
+        return False
+    if previous.get("source_line_count", 1) >= 2:
+        return False
+    direction = previous["direction"]
+    if abs(
+        direction[0] * current["direction"][0]
+        + direction[1] * current["direction"][1]
+    ) < 1.0 - 1e-6:
+        return False
+
+    previous_nonspace = [
+        item
+        for item in previous["items"]
+        if not str(item["character"].get("c", "")).isspace()
+    ]
+    current_nonspace = [
+        item
+        for item in current["items"]
+        if not str(item["character"].get("c", "")).isspace()
+    ]
+    if not previous_nonspace or not current_nonspace:
+        return False
+    vertical = abs(direction[1]) > abs(direction[0])
+    has_space = len(previous_nonspace) != len(previous["items"]) or len(
+        current_nonspace
+    ) != len(current["items"])
+    previous_trailing_space = bool(previous["items"]) and str(
+        previous["items"][-1]["character"].get("c", "")
+    ).isspace()
+    current_leading_space = bool(current["items"]) and str(
+        current["items"][0]["character"].get("c", "")
+    ).isspace()
+    boundary_space = previous_trailing_space or current_leading_space
+    if vertical:
+        if has_space and direction[1] < 0.0 and boundary_space:
+            return False
+
+        def first_word(items: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+            result: list[Mapping[str, Any]] = []
+            for item in items:
+                if str(item["character"].get("c", "")).isspace():
+                    if result:
+                        break
+                    continue
+                result.append(item)
+            return result
+
+        def last_word(items: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+            result: list[Mapping[str, Any]] = []
+            for item in reversed(items):
+                if str(item["character"].get("c", "")).isspace():
+                    if result:
+                        break
+                    continue
+                result.append(item)
+            result.reverse()
+            return result
+
+        previous_word = (
+            last_word(previous["items"])
+        )
+        current_word = (
+            first_word(current["items"])
+        )
+        if not previous_word or not current_word:
+            return False
+        normal_overlap = min(previous["normal_max"], current["normal_max"]) - max(
+            previous["normal_min"], current["normal_min"]
+        )
+        normal_shortest = min(
+            previous["normal_max"] - previous["normal_min"],
+            current["normal_max"] - current["normal_min"],
+        )
+        if normal_shortest > 1e-9 and normal_overlap / normal_shortest < 0.5:
+            return False
+        if direction[1] > 0.0:
+            if current_leading_space and not (
+                _source_position(current_word[0]["character"], 4)[3] >= 7
+                and previous.get("clip_cuts_normal", False)
+                and current.get("clip_cuts_normal", False)
+            ):
+                return False
+            previous_word_flow = _project_bbox(
+                (
+                    min(_bbox(item["character"])[0] for item in previous_word),
+                    min(_bbox(item["character"])[1] for item in previous_word),
+                    max(_bbox(item["character"])[2] for item in previous_word),
+                    max(_bbox(item["character"])[3] for item in previous_word),
+                ),
+                direction,
+            )
+            current_word_flow = _project_bbox(
+                (
+                    min(_bbox(item["character"])[0] for item in current_word),
+                    min(_bbox(item["character"])[1] for item in current_word),
+                    max(_bbox(item["character"])[2] for item in current_word),
+                    max(_bbox(item["character"])[3] for item in current_word),
+                ),
+                direction,
+            )
+            flow_overlap = min(
+                previous_word_flow[1], current_word_flow[1]
+            ) - max(previous_word_flow[0], current_word_flow[0])
+            return (
+                current_word_flow[0] >= previous_word_flow[0]
+                and current_word_flow[1] > previous_word_flow[1]
+                and flow_overlap > 0.0
+                and flow_overlap
+                <= max(previous.get("word_gap", 0.0), current.get("word_gap", 0.0))
+            ) or (
+                not has_space
+                and len(previous_nonspace) == 1
+                and len(current_nonspace) == 1
+                and flow_overlap > 0.0
+                and current_word_flow[1] > current_word_flow[0]
+                and (
+                    current_word_flow[0] >= previous_word_flow[0]
+                    or previous_word_flow[0] - current_word_flow[0]
+                    <= max(
+                        1.0,
+                        (previous_word_flow[1] - previous_word_flow[0]) * 0.25,
+                    )
+                )
+            ) or (
+                has_space
+                and boundary_space
+                and bool(current["items"])
+                and str(current["items"][0]["character"].get("c", "")).isspace()
+                and len(current_word) == 1
+                and _source_position(current_word[0]["character"], 4)[3] >= 7
+                and (
+                    (
+                        previous.get("clip_cuts_normal", False)
+                        and current.get("clip_cuts_normal", False)
+                        and current.get("clip_normal_max", current["normal_max"])
+                        < max(previous["normal_max"], current["normal_max"]) - 1e-6
+                    )
+                    or previous.get("clip_flow_start", previous["flow_start"])
+                    > previous["flow_start"] + previous.get("word_gap", 0.0)
+                )
+            )
+        if has_space or len(previous_nonspace) > 2 or len(current_nonspace) > 2:
+            return False
+        previous_word_flow = _project_bbox(
+            (
+                min(_bbox(item["character"])[0] for item in previous_word),
+                min(_bbox(item["character"])[1] for item in previous_word),
+                max(_bbox(item["character"])[2] for item in previous_word),
+                max(_bbox(item["character"])[3] for item in previous_word),
+            ),
+            direction,
+        )
+        current_word_flow = _project_bbox(
+            (
+                min(_bbox(item["character"])[0] for item in current_word),
+                min(_bbox(item["character"])[1] for item in current_word),
+                max(_bbox(item["character"])[2] for item in current_word),
+                max(_bbox(item["character"])[3] for item in current_word),
+            ),
+            direction,
+        )
+        start_extension = previous_word_flow[0] - current_word_flow[0]
+        if start_extension > 0.0:
+            if start_extension < max(
+                1.0, (previous_word_flow[1] - previous_word_flow[0]) * 0.25
+            ):
+                return False
+        elif previous_word_flow[1] - previous_word_flow[0] > 4.0:
+            return False
+        return current_word_flow[1] > previous_word_flow[1]
+
+    previous_item = previous["items"][-1]
+    current_item = current["items"][0]
+    previous_box = _bbox(previous_item["character"])
+    current_box = _bbox(current_item["character"])
+    if previous_box is None or current_box is None:
+        return False
+    previous_flow = _project_bbox(previous_box, direction)
+    current_flow = _project_bbox(current_box, direction)
+    normal_overlap = min(previous["normal_max"], current["normal_max"]) - max(
+        previous["normal_min"], current["normal_min"]
+    )
+    normal_shortest = min(
+        previous["normal_max"] - previous["normal_min"],
+        current["normal_max"] - current["normal_min"],
+    )
+    if normal_shortest > 1e-9 and normal_overlap / normal_shortest < 0.5:
+        return False
+    overlap = min(previous_flow[1], current_flow[1]) - max(
+        previous_flow[0], current_flow[0]
+    )
+    shortest = min(
+        previous_flow[1] - previous_flow[0],
+        current_flow[1] - current_flow[0],
+    )
+    if shortest > 1e-9 and 0.0 < overlap / shortest <= 0.5:
+        return True
+    if direction[1] > 0.0:
+        gap = max(
+            previous_flow[0] - current_flow[1],
+            current_flow[0] - previous_flow[1],
+            0.0,
+        )
+        return gap <= 1e-3
+    return False
+
+
+def _snapshot_words_from_clipped_characters(
+    snapshot: PageSnapshot,
+    clip: Mapping[str, Any],
+    words: Sequence[Mapping[str, Any]],
+    line_directions: Mapping[tuple[Any, Any], Any],
+) -> tuple[Any, ...]:
+    spans = {_source_position(span, 3): span for span in snapshot.spans}
+    selected = []
+    for character in snapshot.characters:
+        char_box = _bbox(character)
+        if char_box is None:
+            continue
+        direction = _unit_direction(
+            line_directions.get(_source_position(character, 2))
+        )
+        if direction is None:
+            continue
+        glyph_box = _character_glyph_clip_box(character, spans, line_directions)
+        selection_box = char_box if str(character.get("c", "")).isspace() else glyph_box
+        if selection_box is None or (
+            selection_box[2] <= clip["x0"]
+            or selection_box[0] >= clip["x1"]
+            or selection_box[3] <= clip["y0"]
+            or selection_box[1] >= clip["y1"]
+        ):
+            continue
+        flow_start, flow_end, normal_min, normal_max = _project_bbox(
+            char_box, direction
+        )
+        selected.append(
+            {
+                "character": character,
+                "direction": direction,
+                "flow_start": flow_start,
+                "flow_end": flow_end,
+                "normal_min": normal_min,
+                "normal_max": normal_max,
+            }
+        )
+    if not selected:
+        return ()
+
+    space_widths: dict[tuple[Any, Any], float] = {}
+    for character in snapshot.characters:
+        if not str(character.get("c", "")).isspace():
+            continue
+        source_line = _source_position(character, 2)
+        direction = _unit_direction(line_directions.get(source_line))
+        char_box = _bbox(character)
+        if direction is None or char_box is None:
+            continue
+        flow_start, flow_end, _normal_min, _normal_max = _project_bbox(
+            char_box, direction
+        )
+        width = flow_end - flow_start
+        if width > 0.0:
+            previous = space_widths.get(source_line)
+            if previous is None or width < previous:
+                space_widths[source_line] = width
+
+    line_chunks: list[dict[str, Any]] = []
+    for item in selected:
+        direction = item["direction"]
+        source_line = _source_position(item["character"], 2)
+        if not line_chunks:
+            line_chunks.append(
+                {
+                    "direction": direction,
+                    "items": [item],
+                    "source_line": source_line,
+                    "flow_start": item["flow_start"],
+                    "flow_end": item["flow_end"],
+                    "normal_min": item["normal_min"],
+                    "normal_max": item["normal_max"],
+                    "word_gap": 2.0 * space_widths.get(source_line, 0.0),
+                    "last_source_line": source_line,
+                    "source_line_count": 1,
+                    "clip_cuts_normal": False,
+                }
+            )
+            continue
+        current = line_chunks[-1]
+        if source_line == current["source_line"]:
+            current["items"].append(item)
+            current["flow_start"] = min(current["flow_start"], item["flow_start"])
+            current["flow_end"] = max(current["flow_end"], item["flow_end"])
+            current["normal_min"] = min(current["normal_min"], item["normal_min"])
+            current["normal_max"] = max(current["normal_max"], item["normal_max"])
+        else:
+            line_chunks.append(
+                {
+                    "direction": direction,
+                    "items": [item],
+                    "source_line": source_line,
+                    "flow_start": item["flow_start"],
+                    "flow_end": item["flow_end"],
+                    "normal_min": item["normal_min"],
+                    "normal_max": item["normal_max"],
+                    "word_gap": 2.0 * space_widths.get(source_line, 0.0),
+                    "last_source_line": source_line,
+                    "source_line_count": 1,
+                    "clip_cuts_normal": False,
+                }
+            )
+
+    for chunk in line_chunks:
+        clip_projection = _project_bbox(
+            (clip["x0"], clip["y0"], clip["x1"], clip["y1"]),
+            chunk["direction"],
+        )
+        chunk["clip_cuts_normal"] = (
+            clip_projection[2] > chunk["normal_min"] + 1e-6
+            or clip_projection[3] < chunk["normal_max"] - 1e-6
+        )
+        chunk["clip_flow_start"] = clip_projection[0]
+        chunk["clip_normal_max"] = clip_projection[3]
+
+    line_groups: list[dict[str, Any]] = []
+    for chunk in line_chunks:
+        if line_groups and _clipped_line_chunk_can_merge(line_groups[-1], chunk):
+            current = line_groups[-1]
+            strip_boundary_space = (
+                current.get("clip_cuts_normal") and chunk.get("clip_cuts_normal")
+            ) or (
+                chunk.get("clip_flow_start", chunk["flow_start"])
+                > current["flow_start"] + current.get("word_gap", 0.0)
+                and bool(chunk["items"])
+                and str(chunk["items"][0]["character"].get("c", "")).isspace()
+                and len(
+                    [
+                        item
+                        for item in chunk["items"]
+                        if not str(item["character"].get("c", "")).isspace()
+                    ]
+                ) == 1
+            )
+            if strip_boundary_space:
+                chunk_items = list(chunk["items"])
+                while chunk_items and str(
+                    chunk_items[0]["character"].get("c", "")
+                ).isspace():
+                    chunk_items.pop(0)
+                current["items"].extend(chunk_items)
+            else:
+                current["items"].extend(chunk["items"])
+            current["flow_start"] = min(current["flow_start"], chunk["flow_start"])
+            current["flow_end"] = max(current["flow_end"], chunk["flow_end"])
+            current["normal_min"] = min(current["normal_min"], chunk["normal_min"])
+            current["normal_max"] = max(current["normal_max"], chunk["normal_max"])
+            current["word_gap"] = max(current["word_gap"], chunk["word_gap"])
+            current["last_source_line"] = chunk["source_line"]
+            current["source_line_count"] = current.get("source_line_count", 1) + 1
+            current["clip_cuts_normal"] = (
+                current.get("clip_cuts_normal", False)
+                or chunk.get("clip_cuts_normal", False)
+            )
+            current["clip_flow_start"] = chunk.get(
+                "clip_flow_start", current.get("clip_flow_start", current["flow_start"])
+            )
+            current["clip_normal_max"] = max(
+                current.get("clip_normal_max", current["normal_max"]),
+                chunk.get("clip_normal_max", chunk["normal_max"]),
+            )
+        else:
+            line_groups.append(chunk)
+
+    words_by_line: dict[tuple[Any, Any], list[Mapping[str, Any]]] = {}
+    for word in words:
+        words_by_line.setdefault(_source_position(word, 2), []).append(word)
+
+    def template_for(character: Mapping[str, Any]) -> Mapping[str, Any]:
+        line_key = _source_position(character, 2)
+        candidates = words_by_line.get(line_key, ())
+        char_box = _bbox(character)
+        if char_box is not None:
+            center_x = (char_box[0] + char_box[2]) / 2.0
+            center_y = (char_box[1] + char_box[3]) / 2.0
+            containing = []
+            for candidate in candidates:
+                box = _bbox(candidate)
+                if box is None:
+                    continue
+                if box[0] <= center_x <= box[2] and box[1] <= center_y <= box[3]:
+                    containing.append(candidate)
+            if containing:
+                return containing[0]
+        return candidates[0] if candidates else {
+            "bbox": char_box or (0.0, 0.0, 0.0, 0.0),
+            "text": "",
+            "block_index": 0,
+            "line_index": 0,
+            "word_index": 0,
+            "raw_source_position": line_key + (0,),
+            "source_order": 0,
+            "extra": (),
+        }
+
+    raw_lines = []
+    for line in line_groups:
+        word_groups: list[list[Mapping[str, Any]]] = []
+        current_group: list[Mapping[str, Any]] = []
+        previous_item = None
+        for item in line["items"]:
+            character = item["character"]
+            text = str(character.get("c", ""))
+            if text.isspace():
+                if current_group:
+                    word_groups.append(current_group)
+                    current_group = []
+                previous_item = None
+                continue
+            if previous_item is not None and abs(line["direction"][1]) <= abs(
+                line["direction"][0]
+            ):
+                previous_source_position = _source_position(
+                    previous_item["character"], 4
+                )
+                current_source_position = _source_position(character, 4)
+                skipped_source_characters = (
+                    len(previous_source_position) >= 4
+                    and len(current_source_position) >= 4
+                    and previous_source_position[:3] == current_source_position[:3]
+                    and current_source_position[3] > previous_source_position[3] + 1
+                )
+                gap = max(
+                    previous_item["flow_start"] - item["flow_end"],
+                    item["flow_start"] - previous_item["flow_end"],
+                    0.0,
+                )
+                source_line = _source_position(character, 2)
+                previous_source_line = _source_position(
+                    previous_item["character"], 2
+                )
+                word_gap = min(
+                    value
+                    for value in (
+                        space_widths.get(source_line, 0.0) * 2.0,
+                        space_widths.get(previous_source_line, 0.0) * 2.0,
+                    )
+                    if value > 0.0
+                ) if (
+                    space_widths.get(source_line, 0.0) > 0.0
+                    or space_widths.get(previous_source_line, 0.0) > 0.0
+                ) else 0.0
+                if skipped_source_characters or gap > word_gap:
+                    if current_group:
+                        word_groups.append(current_group)
+                    current_group = []
+            current_group.append(item)
+            previous_item = item
+        if current_group:
+            word_groups.append(current_group)
+        output_words = []
+        for group in word_groups:
+            boxes = [_bbox(item["character"]) for item in group]
+            boxes = [box for box in boxes if box is not None]
+            if not boxes:
+                continue
+            template = template_for(group[0]["character"])
+            copied = _thaw(template)
+            copied["text"] = "".join(
+                str(item["character"].get("c", "")) for item in group
+            )
+            copied["bbox"] = (
+                min(box[0] for box in boxes),
+                min(box[1] for box in boxes),
+                max(box[2] for box in boxes),
+                max(box[3] for box in boxes),
+            )
+            output_words.append(copied)
+        if output_words:
+            split_lines: list[list[Mapping[str, Any]]] = [[]]
+            for word in output_words:
+                if split_lines[-1]:
+                    previous_word = split_lines[-1][-1]
+                    previous_flow = _project_bbox(
+                        _bbox(previous_word) or (0.0, 0.0, 0.0, 0.0),
+                        line["direction"],
+                    )
+                    current_flow = _project_bbox(
+                        _bbox(word) or (0.0, 0.0, 0.0, 0.0),
+                        line["direction"],
+                    )
+                    gap = max(
+                        previous_flow[0] - current_flow[1],
+                        current_flow[0] - previous_flow[1],
+                        0.0,
+                    )
+                    if gap > line["word_gap"]:
+                        split_lines.append([])
+                split_lines[-1].append(word)
+            for split_line in split_lines:
+                raw_lines.append(
+                    {
+                        "direction": line["direction"],
+                        "items": split_line,
+                        "source_lines": {
+                            _source_position(word, 2) for word in split_line
+                        },
+                    }
+                )
+    if not raw_lines:
+        return ()
+
+    blocks: list[dict[str, Any]] = []
+    for line in raw_lines:
+        direction = line["direction"]
+        line_boxes = [_bbox(word) for word in line["items"]]
+        line_boxes = [box for box in line_boxes if box is not None]
+        line_box = (
+            min(box[0] for box in line_boxes),
+            min(box[1] for box in line_boxes),
+            max(box[2] for box in line_boxes),
+            max(box[3] for box in line_boxes),
+        )
+        flow0, flow1, normal0, normal1 = _project_bbox(line_box, direction)
+        line_normal_center = (normal0 + normal1) / 2.0
+        if not blocks:
+            blocks.append({"direction": direction, "flow_min": flow0, "flow_max": flow1, "normal_min": normal0, "normal_max": normal1, "source_lines": set(line["source_lines"]), "lines": [line]})
+            continue
+        block = blocks[-1]
+        dot = direction[0] * block["direction"][0] + direction[1] * block["direction"][1]
+        normal_gap = max(
+            block["normal_min"] - normal1,
+            normal0 - block["normal_max"],
+            0.0,
+        )
+        normal_size = max(normal1 - normal0, block["normal_max"] - block["normal_min"], 1.0)
+        flow_center = (flow0 + flow1) / 2.0
+        block_flow_center = (block["flow_min"] + block["flow_max"]) / 2.0
+        flow_size = max(flow1 - flow0, block["flow_max"] - block["flow_min"], 1.0)
+        horizontal_flow_alignment = (
+            abs(direction[0]) >= abs(direction[1])
+            and abs(flow_center - block_flow_center) <= flow_size * 0.30
+        )
+        negative_horizontal_normal_alignment = (
+            direction[0] < -0.5
+            and abs(line_normal_center - (block["normal_min"] + block["normal_max"]) / 2.0)
+            <= normal_size * 0.5
+        )
+        same_source_line_fragment = bool(
+            block["source_lines"] & line["source_lines"]
+        )
+        if dot >= 1.0 - 1e-6 and normal_gap <= normal_size * 0.15 and (
+            same_source_line_fragment
+            or abs(direction[0]) < abs(direction[1])
+            or horizontal_flow_alignment
+            or negative_horizontal_normal_alignment
+        ):
+            block["lines"].append(line)
+            block["flow_min"] = min(block["flow_min"], flow0)
+            block["flow_max"] = max(block["flow_max"], flow1)
+            block["normal_min"] = min(block["normal_min"], normal0)
+            block["normal_max"] = max(block["normal_max"], normal1)
+            block["source_lines"].update(line["source_lines"])
+        else:
+            blocks.append({"direction": direction, "flow_min": flow0, "flow_max": flow1, "normal_min": normal0, "normal_max": normal1, "source_lines": set(line["source_lines"]), "lines": [line]})
+
+    normalized = []
+    for block_index, block in enumerate(blocks):
+        for line_index, line in enumerate(block["lines"]):
+            for word_index, word in enumerate(line["items"]):
+                word["block_index"] = block_index
+                word["line_index"] = line_index
+                word["word_index"] = word_index
+                normalized.append(_freeze(word))
+    return tuple(normalized)
+
+
+def snapshot_words_for_clip(
+    snapshot: PageSnapshot,
+    clip: Any,
+    *,
+    flags: int = 0,
+) -> tuple[Any, ...]:
+    """Return captured words using PyMuPDF's clipped character stream semantics."""
+
+    clip_values = _region(clip)
+    variant = (
+        "preserve_whitespace"
+        if flags & fitz.TEXT_PRESERVE_WHITESPACE
+        else "default"
+    )
+    words = snapshot.word_variants.get(variant, snapshot.words)
+    geometry = snapshot.geometry
+    if (
+        clip_values["x0"] <= _safe_finite(geometry.get("x0"))
+        and clip_values["y0"] <= _safe_finite(geometry.get("y0"))
+        and clip_values["x1"] >= _safe_finite(geometry.get("x1"))
+        and clip_values["y1"] >= _safe_finite(geometry.get("y1"))
+    ):
+        return tuple(words)
+    line_directions = {
+        _source_position(line, 2): line.get("dir")
+        for block in snapshot.text_blocks
+        for line in block.get("lines", ())
+    }
+    if not line_directions or any(
+        _unit_direction(direction) is None for direction in line_directions.values()
+    ):
+        return _legacy_snapshot_words_for_clip(snapshot, clip, flags=flags)
+    selected_line_keys = {
+        _source_position(character, 2)
+        for character in snapshot.characters
+        if (box := _bbox(character)) is not None
+        and not (
+            box[2] <= clip_values["x0"]
+            or box[0] >= clip_values["x1"]
+            or box[3] <= clip_values["y0"]
+            or box[1] >= clip_values["y1"]
+        )
+    }
+    if len(selected_line_keys) <= 1:
+        return _legacy_snapshot_words_for_clip(snapshot, clip, flags=flags)
+    return _snapshot_words_from_clipped_characters(
+        snapshot, clip_values, words, line_directions
+    )
 
 
 def _stable_json(value: Mapping[str, Any]) -> bytes:
