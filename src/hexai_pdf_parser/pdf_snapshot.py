@@ -43,6 +43,18 @@ def _is_point(value: Any) -> bool:
 def _plain(value: Any) -> Any:
     """Copy PyMuPDF containers without retaining library-owned objects."""
 
+    pixmap_type = getattr(fitz, "Pixmap", ())
+    if pixmap_type and isinstance(value, pixmap_type):
+        return {
+            "type": "pixmap",
+            "width": int(value.width),
+            "height": int(value.height),
+            "stride": int(getattr(value, "stride", 0)),
+            "n": int(getattr(value, "n", 0)),
+            "alpha": bool(getattr(value, "alpha", False)),
+            "colorspace": _plain(getattr(value, "colorspace", None)),
+            "samples": _plain(getattr(value, "samples", b"")),
+        }
     if _is_rect(value):
         return tuple(
             _finite_float(getattr(value, name))
@@ -694,6 +706,7 @@ def capture_page_snapshot(
     page_index: int,
     allowed_regions: Sequence[Any] = (),
     excluded_regions: Sequence[Any] = (),
+    ml_render_dpi: float = 72.0,
 ) -> PageSnapshot:
     """Capture all page evidence once, before any filtering or parsing."""
 
@@ -978,19 +991,30 @@ def capture_page_snapshot(
         page_reads[f"xref_object.{xref}"] = record
 
     pixmap_variants = {}
-    for variant, matrix, colorspace in (
-        ("production", fitz.Matrix(0.1, 0.1), fitz.csRGB),
-        ("ml", fitz.Matrix(1, 1), fitz.csGRAY),
-    ):
-        pixmap_record, _ = _read_call(
-            page,
-            "get_pixmap",
-            matrix=matrix,
-            colorspace=colorspace,
-            alpha=False,
-        )
-        pixmap_variants[variant] = pixmap_record
-        page_reads[f"pixmap.{variant}"] = pixmap_record
+    production_matrix = fitz.Matrix(0.1, 0.1)
+    production_record, _ = _read_call(
+        page,
+        "get_pixmap",
+        matrix=production_matrix,
+        colorspace=fitz.csRGB,
+        alpha=False,
+    )
+    pixmap_variants["production"] = production_record
+    page_reads["pixmap.production"] = production_record
+
+    ml_dpi = _finite_float(ml_render_dpi)
+    if ml_dpi <= 0:
+        raise ValueError("ml_render_dpi must be positive")
+    ml_factor = ml_dpi / 72.0
+    ml_matrix = fitz.Matrix(ml_factor, ml_factor)
+    ml_record, _ = _read_call(
+        page,
+        "get_pixmap",
+        matrix=ml_matrix,
+        alpha=False,
+    )
+    pixmap_variants["ml"] = ml_record
+    page_reads["pixmap.ml"] = ml_record
     pixmap_record = pixmap_variants["production"]
     bboxlog_record, _ = _read_call(page, "get_bboxlog")
     tables_record = _find_tables_record(page)
@@ -1130,6 +1154,10 @@ def filter_snapshot_evidence(
         ]
         if not block_lines and block.get("lines"):
             continue
+        if not block_lines and not block.get("lines") and not _selected(
+            block, allowed, excluded
+        ):
+            continue
         copied = _thaw(block)
         copied["lines"] = [_thaw(line) for line in block_lines]
         for line in copied["lines"]:
@@ -1230,6 +1258,56 @@ def _word_intersects_clip(word: Mapping[str, Any], clip: Mapping[str, Any]) -> b
     )
 
 
+def _clip_word_from_characters(
+    word: Mapping[str, Any],
+    characters: Sequence[Mapping[str, Any]],
+    clip: Mapping[str, Any],
+) -> Mapping[str, Any] | None:
+    word_box = _bbox(word)
+    if word_box is None:
+        return None
+    word_characters = []
+    for character in characters:
+        char_box = _bbox(character)
+        if char_box is None:
+            continue
+        if _source_position(character, 2) != (
+            word.get("block_index"),
+            word.get("line_index"),
+        ):
+            continue
+        if not (
+            char_box[2] <= word_box[0]
+            or char_box[0] >= word_box[2]
+            or char_box[3] <= word_box[1]
+            or char_box[1] >= word_box[3]
+        ):
+            word_characters.append(character)
+    word_characters.sort(key=lambda character: character.get("source_order", 0))
+    if not word_characters:
+        return None
+    character_text = "".join(str(character.get("c", "")) for character in word_characters)
+    if character_text != str(word.get("text", "")):
+        return None
+    selected = [
+        character
+        for character in word_characters
+        if _word_intersects_clip(character, clip)
+    ]
+    if not selected:
+        return None
+    copied = _thaw(word)
+    copied["text"] = "".join(str(character.get("c", "")) for character in selected)
+    boxes = [_bbox(character) for character in selected]
+    copied["bbox"] = (
+        min(box[0] for box in boxes if box is not None),
+        min(box[1] for box in boxes if box is not None),
+        max(box[2] for box in boxes if box is not None),
+        max(box[3] for box in boxes if box is not None),
+    )
+    return _freeze(copied)
+
+
 def snapshot_words_for_clip(
     snapshot: PageSnapshot,
     clip: Any,
@@ -1245,9 +1323,14 @@ def snapshot_words_for_clip(
         else "default"
     )
     words = snapshot.word_variants.get(variant, snapshot.words)
-    return tuple(
-        word for word in words if _word_intersects_clip(word, clip_values)
-    )
+    result = []
+    for word in words:
+        clipped = _clip_word_from_characters(word, snapshot.characters, clip_values)
+        if clipped is not None:
+            result.append(clipped)
+        elif _word_intersects_clip(word, clip_values):
+            result.append(word)
+    return tuple(result)
 
 
 def _stable_json(value: Mapping[str, Any]) -> bytes:

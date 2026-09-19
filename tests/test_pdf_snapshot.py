@@ -60,13 +60,20 @@ class RecordingPage:
         return self._page.get_drawings(*args, **kwargs)
 
 
-def _capture(recording_page, *, allowed_regions=(), excluded_regions=()):
+def _capture(
+    recording_page,
+    *,
+    allowed_regions=(),
+    excluded_regions=(),
+    ml_render_dpi=72,
+):
     api = _api()
     return api.capture_page_snapshot(
         recording_page,
         page_index=3,
         allowed_regions=allowed_regions,
         excluded_regions=excluded_regions,
+        ml_render_dpi=ml_render_dpi,
     )
 
 
@@ -275,7 +282,7 @@ def test_real_capture_digest_has_fixed_canonical_golden_value():
             allow_nan=False,
         ).encode("utf-8")
         assert hashlib.sha256(canonical).hexdigest() == (
-            "3ce5fd94a498f2a320f246b2f39695388f1958a5e9f2528652e5d0b7ccf03e32"
+            "a5ef950ed76e3533b7a1797cacb859f840fc8db047456030887142af0fdfdfe7"
         )
         assert dto["digest"] == snapshot.digest
     finally:
@@ -689,11 +696,16 @@ def test_snapshot_captures_replayable_production_and_ml_pixmap_variants():
         def get_pixmap(self, *args, **kwargs):
             self.calls.append(("get_pixmap", args, kwargs))
             matrix = kwargs["matrix"]
-            colorspace = kwargs["colorspace"]
             if matrix == fitz.Matrix(0.1, 0.1):
-                return Pixmap(12, 8, 36, b"rgb", colorspace, False)
+                assert kwargs == {
+                    "matrix": fitz.Matrix(0.1, 0.1),
+                    "colorspace": fitz.csRGB,
+                    "alpha": False,
+                }
+                return Pixmap(12, 8, 36, b"rgb", fitz.csRGB, False)
             assert matrix == fitz.Matrix(1, 1)
-            return Pixmap(220, 140, 220, b"gray", colorspace, False)
+            assert kwargs == {"matrix": fitz.Matrix(1, 1), "alpha": False}
+            return Pixmap(220, 140, 660, b"ml-rgb", fitz.csRGB, False)
 
     page = PixmapPage()
     snapshot = _capture(page)
@@ -701,18 +713,157 @@ def test_snapshot_captures_replayable_production_and_ml_pixmap_variants():
 
     assert [call[2] for call in page.calls if call[0] == "get_pixmap"] == [
         {"matrix": fitz.Matrix(0.1, 0.1), "colorspace": fitz.csRGB, "alpha": False},
-        {"matrix": fitz.Matrix(1, 1), "colorspace": fitz.csGRAY, "alpha": False},
+        {"matrix": fitz.Matrix(1, 1), "alpha": False},
     ]
     assert variants["production"]["kwargs"]["matrix"] == (0.1, 0.0, 0.0, 0.1, 0.0, 0.0)
     assert variants["production"]["kwargs"]["colorspace"]["identity"] == "csRGB"
     assert variants["production"]["result"]["stride"] == 36
     assert variants["production"]["result"]["samples"]["hex"] == b"rgb".hex()
     assert variants["ml"]["kwargs"]["matrix"] == (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
-    assert variants["ml"]["kwargs"]["colorspace"]["identity"] == "csGRAY"
-    assert variants["ml"]["result"]["samples"]["hex"] == b"gray".hex()
+    assert "colorspace" not in variants["ml"]["kwargs"]
+    assert variants["ml"]["result"]["colorspace"]["identity"] == "csRGB"
+    assert variants["ml"]["result"]["samples"]["hex"] == b"ml-rgb".hex()
+    assert variants["ml"]["result"]["stride"] == 660
     assert _api().snapshot_pixmap(snapshot, variant="ml")["result"]["width"] == 220
     with pytest.raises(TypeError):
         variants["production"]["result"]["samples"]["hex"] = "changed"
+
+
+def test_snapshot_uses_configurable_ml_render_dpi_and_exact_rgb_call():
+    class PixmapPage(_FullPageSpy):
+        def get_pixmap(self, *args, **kwargs):
+            self.calls.append(("get_pixmap", args, kwargs))
+            if kwargs.get("colorspace") is fitz.csRGB:
+                return _PixmapSpy()
+            assert kwargs == {"matrix": fitz.Matrix(2, 2), "alpha": False}
+            return type(
+                "MLPixmap",
+                (),
+                {
+                    "width": 440,
+                    "height": 280,
+                    "stride": 1320,
+                    "n": 3,
+                    "alpha": False,
+                    "colorspace": fitz.csRGB,
+                    "samples": b"custom-ml-rgb",
+                },
+            )()
+
+    snapshot = _capture(PixmapPage(), ml_render_dpi=144)
+    ml = snapshot.raster["variants"]["ml"]
+    assert ml["kwargs"] == {"matrix": (2.0, 0.0, 0.0, 2.0, 0.0, 0.0), "alpha": False}
+    assert ml["result"]["width"] == 440
+    assert ml["result"]["height"] == 280
+    assert ml["result"]["stride"] == 1320
+    assert ml["result"]["n"] == 3
+    assert ml["result"]["alpha"] is False
+    assert ml["result"]["colorspace"]["identity"] == "csRGB"
+    assert ml["result"]["samples"]["hex"] == b"custom-ml-rgb".hex()
+
+
+def test_plain_serializes_real_pixmap_before_point_detection_with_full_pixels():
+    pixmap = fitz.Pixmap(fitz.csRGB, (0, 0, 2, 1))
+    plain = _api()._plain(pixmap)
+    assert plain["type"] == "pixmap"
+    assert plain["width"] == 2
+    assert plain["height"] == 1
+    assert plain["stride"] == 6
+    assert plain["n"] == 3
+    assert plain["alpha"] is False
+    assert plain["colorspace"]["identity"] == "csRGB"
+    assert plain["samples"]["byte_length"] == len(pixmap.samples)
+    assert plain["samples"]["hex"] == bytes(pixmap.samples).hex()
+
+
+def test_snapshot_words_for_clip_reconstructs_partial_words_from_captured_chars():
+    class CharWordPage(_FullPageSpy):
+        def get_text(self, *args, **kwargs):
+            result = super().get_text(*args, **kwargs)
+            if args and args[0] == "rawdict":
+                chars = [
+                    {"c": char, "bbox": [10.0 + index * 5, 10.0, 15.0 + index * 5, 22.0]}
+                    for index, char in enumerate("hello")
+                ]
+                result["blocks"][0]["lines"][0]["spans"][0]["chars"] = chars
+                result["blocks"][0]["lines"][0]["spans"][0]["text"] = "hello"
+            if args and args[0] == "words":
+                return [(10.0, 10.0, 35.0, 22.0, "hello", 0, 0, 0)]
+            return result
+
+        def __getattribute__(self, name):
+            if name == "get_text" and object.__getattribute__(self, "locked"):
+                raise AssertionError("clip query reread page after capture")
+            return super().__getattribute__(name)
+
+        locked = False
+
+    page = CharWordPage()
+    snapshot = _capture(page)
+    page.locked = True
+    words = _api().snapshot_words_for_clip(snapshot, fitz.Rect(10, 10, 20, 22))
+    assert len(words) == 1
+    assert words[0]["text"] == "he"
+    assert words[0]["bbox"] == (10.0, 10.0, 20.0, 22.0)
+    assert words[0]["block_index"] == 0
+    assert words[0]["line_index"] == 0
+    assert words[0]["word_index"] == 0
+    assert words[0]["raw_source_position"] == (0, 0, 0)
+    assert words[0]["source_order"] == 0
+
+
+def test_filter_snapshot_evidence_applies_regions_to_empty_and_image_blocks():
+    class LineLessBlocksPage(_FullPageSpy):
+        def get_text(self, *args, **kwargs):
+            result = super().get_text(*args, **kwargs)
+            if args and args[0] == "rawdict":
+                result["blocks"].extend(
+                    [
+                        {"type": 0, "bbox": [70.0, 10.0, 80.0, 20.0]},
+                        {"type": 1, "bbox": [80.0, 10.0, 90.0, 20.0]},
+                        {"type": 1, "bbox": [40.0, 40.0, 50.0, 50.0]},
+                    ]
+                )
+            return result
+
+    snapshot = _capture(LineLessBlocksPage())
+    filtered = _api().filter_snapshot_evidence(
+        snapshot,
+        allowed_regions=(fitz.Rect(0, 0, 60, 60),),
+        excluded_regions=(fitz.Rect(15, 35, 35, 55),),
+    )
+    assert [block["type"] for block in filtered.text_blocks] == [0, 1]
+    assert [block["bbox"] for block in filtered.text_blocks if "bbox" in block] == [
+        (10.0, 10.0, 40.0, 22.0),
+        (40.0, 40.0, 50.0, 50.0),
+    ]
+
+
+def test_snapshot_strict_spy_captures_exact_parent_xref_call_and_never_reenters_it():
+    class StrictParent(_ParentSpy):
+        locked = False
+
+        def xref_object(self, *args, **kwargs):
+            if self.locked:
+                raise AssertionError("parent.xref_object reread after capture")
+            assert args == (7,)
+            assert kwargs == {}
+            self.calls.append((args, kwargs))
+            return "<< /Font 7 0 R >>"
+
+    class StrictPage(_FullPageSpy):
+        def __init__(self):
+            super().__init__()
+            self.parent = StrictParent()
+
+    page = StrictPage()
+    snapshot = _capture(page)
+    page.parent.locked = True
+    api = _api()
+    api.page_snapshot_to_dto(snapshot)
+    api.page_snapshot_digest(snapshot)
+    api.filter_snapshot_evidence(snapshot)
+    assert page.parent.calls == [((7,), {})]
 
 
 def test_snapshot_materializes_table_header_proxy_attributes_without_callables():
@@ -801,7 +952,7 @@ def test_snapshot_page_api_call_contract_is_exact_and_owned():
     ]
     assert [call[2] for call in calls if call[0] == "get_pixmap"] == [
         {"matrix": fitz.Matrix(0.1, 0.1), "colorspace": fitz.csRGB, "alpha": False},
-        {"matrix": fitz.Matrix(1, 1), "colorspace": fitz.csGRAY, "alpha": False},
+        {"matrix": fitz.Matrix(1, 1), "alpha": False},
     ]
     assert [call for call in calls if call[0] == "get_bboxlog"] == [
         ("get_bboxlog", (), {})
@@ -811,5 +962,5 @@ def test_snapshot_page_api_call_contract_is_exact_and_owned():
     ]
     assert page.parent.calls == [7]
     dto = _api().page_snapshot_to_dto(snapshot)
-    assert dto["page_reads"]["pixmap.ml"]["kwargs"]["colorspace"]["identity"] == "csGRAY"
+    assert "colorspace" not in dto["page_reads"]["pixmap.ml"]["kwargs"]
     assert dto["page_reads"]["find_tables"]["status"] == "ok"
