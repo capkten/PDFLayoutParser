@@ -1473,42 +1473,20 @@ def snapshot_words_for_clip(
         )
         for raw_block_index, lines in selected_lines.items()
     }
-    segment_for_word: dict[int, tuple[Any, int]] = {}
-    segment_state: dict[Any, dict[str, Any]] = {}
-    for result_index, word in enumerate(result):
-        raw_block_index = word.get("block_index")
-        raw_line_index = word.get("line_index")
-        state = segment_state.setdefault(
-            raw_block_index,
-            {"segment": 0, "baseline_left": None, "last_line": None, "split": False},
-        )
-        box = _bbox(word)
-        if box is not None and state["baseline_left"] is None:
-            state["baseline_left"] = box[0]
-        if (
-            box is not None
-            and state["last_line"] is not None
-            and raw_line_index != state["last_line"]
-            and not state["split"]
-            and abs(box[0] - state["baseline_left"]) > 2.0
-        ):
-            state["segment"] += 1
-            state["split"] = True
-        state["last_line"] = raw_line_index
-        segment_for_word[result_index] = (raw_block_index, state["segment"])
     normalized = []
     previous_word = None
-    current_segment = None
+    current_block = None
     current_line = -1
-    for result_index, word in enumerate(result):
+    for word in result:
         raw_block_index = word.get("block_index")
         raw_line_index = word.get("line_index")
-        segment = segment_for_word[result_index]
-        block_index = local_block_indices.setdefault(segment, len(local_block_indices))
-        if preserve_lines.get(raw_block_index) and segment[1] == 0:
+        block_index = local_block_indices.setdefault(
+            raw_block_index, len(local_block_indices)
+        )
+        if preserve_lines.get(raw_block_index):
             line_index = raw_line_index
-        elif current_segment != segment:
-            current_segment = segment
+        elif current_block != raw_block_index:
+            current_block = raw_block_index
             current_line = 0
             line_index = current_line
         elif previous_word is None or previous_word.get("line_index") != raw_line_index:
