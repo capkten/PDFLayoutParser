@@ -753,20 +753,52 @@ impl NativeSpanDto {
 pub struct NativeSpanInputDto {
     pub span: NativeSpanDto,
     pub raw_source_position: Vec<i64>,
+    /// Snapshot-only extension preserving each character's complete source position.
+    pub character_raw_source_positions: Vec<Vec<i64>>,
 }
 
 impl NativeSpanInputDto {
     pub fn from_py(dict: &Bound<'_, PyDict>) -> PyResult<Self> {
         let raw_source_position = required_i64_list(dict, "raw_source_position")?;
+        let character_list = required_list(dict, "characters")?;
+        let mut character_raw_source_positions = Vec::with_capacity(character_list.len());
+        for item in character_list.iter() {
+            let character = item.downcast::<PyDict>().map_err(|_| {
+                PyValueError::new_err("Field 'characters' items must be objects")
+            })?;
+            character_raw_source_positions
+                .push(required_i64_list(&character, "raw_source_position")?);
+        }
         Ok(Self {
             span: NativeSpanDto::from_py(dict)?,
             raw_source_position,
+            character_raw_source_positions,
         })
     }
 
     pub fn to_py<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         let dict = self.span.to_py(py)?;
         dict.set_item("raw_source_position", &self.raw_source_position)?;
+        let characters_value = dict
+            .get_item("characters")?
+            .ok_or_else(|| PyValueError::new_err("Serialized span is missing characters"))?;
+        let characters = characters_value
+            .downcast::<PyList>()
+            .map_err(|_| PyValueError::new_err("Serialized span characters must be a list"))?;
+        if characters.len() != self.character_raw_source_positions.len() {
+            return Err(PyValueError::new_err(
+                "Character source-position extension length does not match characters",
+            ));
+        }
+        for (item, raw_source_position) in characters
+            .iter()
+            .zip(&self.character_raw_source_positions)
+        {
+            let character = item
+                .downcast::<PyDict>()
+                .map_err(|_| PyValueError::new_err("Serialized characters must be objects"))?;
+            character.set_item("raw_source_position", raw_source_position)?;
+        }
         Ok(dict)
     }
 }
@@ -907,6 +939,10 @@ pub struct PageSnapshotDto {
     pub allowed_regions: Vec<RegionDto>,
     pub excluded_regions: Vec<RegionDto>,
     pub extraction_options: ExtractionOptionsDto,
+    /// Snapshot-only extensions for records whose shared algorithm DTOs predate
+    /// the full PyMuPDF source-position shape.
+    pub word_raw_source_positions: Vec<Vec<i64>>,
+    pub drawing_raw_source_positions: Vec<Vec<i64>>,
 }
 
 impl PageSnapshotDto {
@@ -936,19 +972,23 @@ impl PageSnapshotDto {
 
         let word_list = required_list(dict, "words")?;
         let mut words = Vec::with_capacity(word_list.len());
+        let mut word_raw_source_positions = Vec::with_capacity(word_list.len());
         for item in word_list.iter() {
             let value = item.downcast::<PyDict>().map_err(|_| {
                 PyValueError::new_err("Field 'words' items must be objects")
             })?;
+            word_raw_source_positions.push(required_i64_list(&value, "raw_source_position")?);
             words.push(WordDto::from_py(&value)?);
         }
 
         let drawing_list = required_list(dict, "drawings")?;
         let mut drawings = Vec::with_capacity(drawing_list.len());
+        let mut drawing_raw_source_positions = Vec::with_capacity(drawing_list.len());
         for item in drawing_list.iter() {
             let value = item.downcast::<PyDict>().map_err(|_| {
                 PyValueError::new_err("Field 'drawings' items must be objects")
             })?;
+            drawing_raw_source_positions.push(required_i64_list(&value, "raw_source_position")?);
             drawings.push(DrawingDto::from_py(&value)?);
         }
 
@@ -979,6 +1019,8 @@ impl PageSnapshotDto {
             allowed_regions: parse_regions("allowed_regions")?,
             excluded_regions: parse_regions("excluded_regions")?,
             extraction_options,
+            word_raw_source_positions,
+            drawing_raw_source_positions,
         })
     }
 
@@ -1001,14 +1043,28 @@ impl PageSnapshotDto {
         dict.set_item("spans", spans)?;
 
         let words = PyList::empty_bound(py);
-        for value in &self.words {
-            words.append(value.to_py(py)?)?;
+        for (index, value) in self.words.iter().enumerate() {
+            let word = value.to_py(py)?;
+            word.set_item(
+                "raw_source_position",
+                self.word_raw_source_positions
+                    .get(index)
+                    .ok_or_else(|| PyValueError::new_err("Missing word source-position extension"))?,
+            )?;
+            words.append(word)?;
         }
         dict.set_item("words", words)?;
 
         let drawings = PyList::empty_bound(py);
-        for value in &self.drawings {
-            drawings.append(value.to_py(py)?)?;
+        for (index, value) in self.drawings.iter().enumerate() {
+            let drawing = value.to_py(py)?;
+            drawing.set_item(
+                "raw_source_position",
+                self.drawing_raw_source_positions
+                    .get(index)
+                    .ok_or_else(|| PyValueError::new_err("Missing drawing source-position extension"))?,
+            )?;
+            drawings.append(drawing)?;
         }
         dict.set_item("drawings", drawings)?;
 

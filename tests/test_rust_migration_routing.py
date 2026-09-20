@@ -359,7 +359,7 @@ def test_page_snapshot_contract_roundtrips_and_rust_digest_matches_python():
         dto, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False
     ).encode("utf-8")
     expected = hashlib.sha256(canonical).hexdigest()
-    assert expected == "9e30199c1a491478fb1a9869c8c06b48be377feae96727deaae6cef8c74d2635"
+    assert expected == "f6181446f0cdb04b9b26d463bb9609a534673747417688801a206eca050835dc"
     assert rust_adapter.stage_input_digest(dto) == expected
     assert rust_adapter.page_snapshot_digest(dto) == expected
 
@@ -472,6 +472,37 @@ def test_page_snapshot_adapter_preserves_raw_positions_and_structured_drawing_li
     }
 
 
+def test_page_snapshot_preserves_full_character_word_and_drawing_positions_and_digest():
+    fixture = _snapshot_fixture()
+    fixture["text_blocks"][0]["lines"][0]["spans"][0]["chars"][0][
+        "raw_source_position"
+    ] = (7, 8, 9, 10, 11)
+    fixture["words"][0]["raw_source_position"] = (4, 5, 6, 7, 8)
+    fixture["drawings"][0]["raw_source_position"] = (12, 13, 14, 15)
+    snapshot = type("Snapshot", (), {})()
+    for key, value in fixture.items():
+        setattr(snapshot, key, value)
+
+    dto = rust_adapter.page_snapshot_to_rust_input(snapshot)
+    character = dto["text_blocks"][0]["lines"][0]["spans"][0]["characters"][0]
+    assert character["raw_source_position"] == [7, 8, 9, 10, 11]
+    assert dto["spans"][0]["characters"][0]["raw_source_position"] == [0, 0, 0, 0]
+    assert dto["words"][0]["raw_source_position"] == [4, 5, 6, 7, 8]
+    assert dto["drawings"][0]["raw_source_position"] == [12, 13, 14, 15]
+
+    roundtripped = rust_adapter.roundtrip_dto("page_snapshot", dto)
+    assert roundtripped == dto
+
+    changed_fixture = copy.deepcopy(fixture)
+    changed_fixture["words"][0]["raw_source_position"] = (4, 5, 6, 7, 99)
+    changed_snapshot = type("Snapshot", (), {})()
+    for key, value in changed_fixture.items():
+        setattr(changed_snapshot, key, value)
+    assert rust_adapter.page_snapshot_digest(dto) != rust_adapter.page_snapshot_digest(
+        rust_adapter.page_snapshot_to_rust_input(changed_snapshot)
+    )
+
+
 def test_page_snapshot_adapter_requires_source_order_instead_of_fallback_indices():
     fixture = _snapshot_fixture()
     fixture["words"] = (dict(fixture["words"][0]),)
@@ -540,6 +571,10 @@ def test_direct_rust_stage_digest_matches_python_wrapper_for_fixed_unicode_fixtu
 def test_page_snapshot_adapter_and_stage_output_are_recursively_unaliased():
     snapshot = _snapshot_object()
     dto = rust_adapter.page_snapshot_to_rust_input(snapshot)
+    digest = rust_adapter.page_snapshot_digest(dto)
+    snapshot_before = copy.deepcopy(snapshot.__dict__)
+    dto_before = copy.deepcopy(dto)
+
     dto["text_blocks"][0]["lines"][0]["spans"][0]["characters"][0]["text"] = "changed"
     dto["drawings"][0]["items"][0][1][0] = 999.0
     dto["extraction_options"]["options"]["rawdict"]["selected"]["kwargs"]["flags"] = 99
@@ -547,3 +582,15 @@ def test_page_snapshot_adapter_and_stage_output_are_recursively_unaliased():
     assert snapshot.text_blocks[0]["lines"][0]["spans"][0]["chars"][0]["c"] == "甲"
     assert snapshot.drawings[0]["items"][0][1][0] == 0.0
     assert snapshot.extraction_options["rawdict"]["selected"]["kwargs"]["flags"] == 2
+
+    stage = rust_adapter.recover_native_text_input(
+        {**dto_before, "input_snapshot_digest": digest},
+        region=dto_before["allowed_regions"][0],
+    )
+    stage["spans"][0]["characters"][0]["text"] = "stage-mutated"
+    stage["spans"][0]["characters"][0]["raw_source_position"].append(99)
+    stage["region"]["x0"] = 99.0
+    stage["input_snapshot_digest"] = "mutated"
+
+    assert snapshot.__dict__ == snapshot_before
+    assert dto_before == rust_adapter.page_snapshot_to_rust_input(snapshot)

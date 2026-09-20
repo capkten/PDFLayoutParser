@@ -234,7 +234,7 @@ def _raw_position(record: Mapping[str, Any], length: int, path: str) -> List[int
 
 def _character_to_rust_input(character: Any, index: int) -> Dict[str, Any]:
     character = _require_mapping(character, f"span.chars[{index}]")
-    _raw_position(character, 4, f"span.chars[{index}]")
+    raw_source_position = _raw_position(character, 4, f"span.chars[{index}]")
     return {
         "schema_version": 1,
         "text": _required_string(_required_field(character, "c", f"span.chars[{index}]"), f"span.chars[{index}].c"),
@@ -243,6 +243,7 @@ def _character_to_rust_input(character: Any, index: int) -> Dict[str, Any]:
             _required_field(character, "source_order", f"span.chars[{index}]"),
             f"span.chars[{index}].source_order",
         ),
+        "raw_source_position": raw_source_position,
     }
 
 
@@ -349,7 +350,7 @@ def _drawing_line_items(
 def _drawing_to_rust_input(drawing: Any, index: int) -> Dict[str, Any]:
     path = f"drawing[{index}]"
     drawing = _require_mapping(drawing, path)
-    _raw_position(drawing, 1, path)
+    raw_source_position = _raw_position(drawing, 1, path)
     items = _require_sequence(_required_field(drawing, "items", path), f"{path}.items")
     width = _optional_float(drawing, "width", path)
     known = {
@@ -362,6 +363,7 @@ def _drawing_to_rust_input(drawing: Any, index: int) -> Dict[str, Any]:
         "kind": _required_string(
             _required_field(drawing, "type", path), f"{path}.type"
         ),
+        "raw_source_position": raw_source_position,
         "lines": _drawing_line_items(items, width, path),
         "rect": _rect_input(_required_field(drawing, "rect", path), f"{path}.rect"),
         "fill": None if drawing.get("fill") is None else _snapshot_value(drawing["fill"], f"{path}.fill"),
@@ -391,7 +393,7 @@ def _region_to_rust_input(region: Any, source_order: int, allowed: bool) -> Dict
 def _word_to_rust_input(word: Any, index: int) -> Dict[str, Any]:
     path = f"word[{index}]"
     word = _require_mapping(word, path)
-    _raw_position(word, 3, path)
+    raw_source_position = _raw_position(word, 3, path)
     return {
         "schema_version": 1,
         "text": _required_string(_required_field(word, "text", path), f"{path}.text"),
@@ -399,6 +401,7 @@ def _word_to_rust_input(word: Any, index: int) -> Dict[str, Any]:
         "order": _required_int(_required_field(word, "source_order", path), f"{path}.source_order"),
         "block": _required_int(_required_field(word, "block_index", path), f"{path}.block_index"),
         "line": _required_int(_required_field(word, "line_index", path), f"{path}.line_index"),
+        "raw_source_position": raw_source_position,
     }
 
 
