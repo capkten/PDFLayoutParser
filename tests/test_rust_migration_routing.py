@@ -534,6 +534,25 @@ def test_recover_native_text_input_requires_matching_snapshot_digest():
     assert stage["input_snapshot_digest"] == digest
 
 
+def test_recover_native_text_input_accepts_nonzero_page_origin_mapping_with_digest():
+    fixture = _snapshot_fixture()
+    fixture["geometry"] = dict(fixture["geometry"], y0=25.0, y1=105.0)
+    snapshot = type("Snapshot", (), {})()
+    for key, value in fixture.items():
+        setattr(snapshot, key, value)
+
+    snapshot_dto = rust_adapter.page_snapshot_to_rust_input(snapshot)
+    assert snapshot_dto["page_y0"] == 25.0
+    digest = rust_adapter.page_snapshot_digest(snapshot_dto)
+
+    stage = rust_adapter.recover_native_text_input(
+        {**snapshot_dto, "input_snapshot_digest": digest}
+    )
+
+    assert stage["input_snapshot_digest"] == digest
+    assert digest == rust_adapter.page_snapshot_digest(snapshot_dto)
+
+
 def test_stage_input_digest_wrapper_uses_direct_rust_binding(monkeypatch):
     observed = {}
 

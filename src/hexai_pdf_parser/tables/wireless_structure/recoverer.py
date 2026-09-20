@@ -610,7 +610,7 @@ def _recover_cells_from_rust(
     if rows <= 0 or columns <= 0 or not cells:
         raise ValueError("Rust native recovery returned an empty grid")
     return rows, columns, _rust_cells_to_project(
-        cells, rows, columns, fallback_bbox=region_bbox
+        cells, rows, columns
     )
 
 

@@ -112,7 +112,6 @@ def _rust_cells_to_project(
     raw_cells: Sequence[Dict[str, Any]],
     rows: int,
     columns: int,
-    fallback_bbox: BBox | None = None,
 ) -> List[Cell]:
     if rows <= 0 or columns <= 0:
         raise ValueError("Rust grid dimensions must be positive")
@@ -154,7 +153,7 @@ def _rust_cells_to_project(
                 text=str(item.get("text", "")).strip(),
                 row_index=row,
                 col_index=column,
-                bbox=_rust_bbox(item.get("rect", item.get("bbox"))),
+                bbox=_rust_bbox(item.get("rect")),
                 rowspan=rowspan,
                 colspan=colspan,
             )
@@ -1028,7 +1027,7 @@ def _table_from_rust_candidate(candidate: Dict[str, Any]) -> Table:
     columns = int(candidate["cols"])
     bbox = _rust_bbox(candidate.get("rect"))
     cells = _rust_cells_to_project(
-        candidate.get("cells", []), rows, columns, fallback_bbox=bbox
+        candidate.get("cells", []), rows, columns
     )
     confidence = candidate.get("confidence")
     return Table(

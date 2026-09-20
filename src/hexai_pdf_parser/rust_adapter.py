@@ -636,7 +636,6 @@ def recover_cells_from_snapshot(
         raw_cells,
         rows,
         cols,
-        fallback_bbox=region,
     )
     if rows <= 0 or cols <= 0 or not cells:
         raise ValueError("Rust native recovery returned an empty grid")
@@ -650,7 +649,7 @@ def recover_native_text_input(
     region: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Return raw spans only from a validated, digest-bearing snapshot input."""
-    expected_keys = {
+    required_keys = {
         "schema_version",
         "page_index",
         "page",
@@ -662,6 +661,7 @@ def recover_native_text_input(
         "excluded_regions",
         "extraction_options",
     }
+    allowed_keys = required_keys | {"page_y0"}
     if isinstance(snapshot, Mapping):
         owned = _snapshot_value(snapshot, "snapshot_input")
         if "input_snapshot_digest" not in owned:
@@ -676,7 +676,7 @@ def recover_native_text_input(
             if explicit_digest != input_digest:
                 raise ValueError("input_snapshot_digest values do not match")
         snapshot_dto = owned
-        if set(snapshot_dto) != expected_keys:
+        if not required_keys.issubset(snapshot_dto) or not set(snapshot_dto) <= allowed_keys:
             raise ValueError("snapshot input must contain exactly the validated PageSnapshotDto fields")
     else:
         if input_snapshot_digest is None:
