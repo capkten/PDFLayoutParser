@@ -3065,6 +3065,8 @@ mod tests {
             },
             atoms,
             bands,
+            atom_evidence: None,
+            band_evidence: None,
             config: StructureConfig {
                 schema_version: 1,
                 line_tolerance: 2.0,
@@ -3214,6 +3216,8 @@ mod tests {
                     order: 1,
                 },
             ],
+            atom_evidence: None,
+            band_evidence: None,
             config: StructureConfig {
                 schema_version: 1,
                 line_tolerance: 2.0,
@@ -3280,6 +3284,8 @@ mod tests {
             },
             atoms,
             bands,
+            atom_evidence: None,
+            band_evidence: None,
             config: StructureConfig {
                 schema_version: 1,
                 line_tolerance: 2.0,
@@ -3336,6 +3342,8 @@ mod tests {
                     order: 1,
                 },
             ],
+            atom_evidence: None,
+            band_evidence: None,
             config: StructureConfig {
                 schema_version: 1,
                 line_tolerance: 2.0,
@@ -3407,6 +3415,8 @@ mod tests {
                     order: 2,
                 },
             ],
+            atom_evidence: None,
+            band_evidence: None,
             config: StructureConfig {
                 schema_version: 1,
                 line_tolerance: 2.0,
@@ -3471,6 +3481,8 @@ mod tests {
                     order: 1,
                 },
             ],
+            atom_evidence: None,
+            band_evidence: None,
             config: StructureConfig {
                 schema_version: 1,
                 line_tolerance: 2.0,
@@ -3536,6 +3548,8 @@ mod tests {
                     order: 1,
                 },
             ],
+            atom_evidence: None,
+            band_evidence: None,
             config: StructureConfig {
                 schema_version: 1,
                 line_tolerance: 2.0,
@@ -3598,6 +3612,8 @@ mod tests {
                     order: 1,
                 },
             ],
+            atom_evidence: None,
+            band_evidence: None,
             config: StructureConfig {
                 schema_version: 1,
                 line_tolerance: 2.0,
@@ -3674,6 +3690,8 @@ mod tests {
             },
             atoms,
             bands,
+            atom_evidence: None,
+            band_evidence: None,
             config: StructureConfig {
                 schema_version: 1,
                 line_tolerance: 2.0,
@@ -3744,6 +3762,8 @@ mod tests {
             },
             atoms,
             bands,
+            atom_evidence: None,
+            band_evidence: None,
             config: StructureConfig {
                 schema_version: 1,
                 line_tolerance: 2.0,
@@ -3811,6 +3831,8 @@ mod tests {
                     order: 1,
                 },
             ],
+            atom_evidence: None,
+            band_evidence: None,
             config: StructureConfig {
                 schema_version: 1,
                 line_tolerance: 2.0,
@@ -3875,6 +3897,8 @@ mod tests {
                     order: 1,
                 },
             ],
+            atom_evidence: None,
+            band_evidence: None,
             config: StructureConfig {
                 schema_version: 1,
                 line_tolerance: 2.0,

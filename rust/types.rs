@@ -1181,20 +1181,14 @@ pub struct AtomDto {
 
 impl AtomDto {
     pub fn from_py(dict: &Bound<'_, PyDict>) -> PyResult<Self> {
-        let sv: i64 = get_req(dict, "schema_version")?.extract()?;
+        let sv = required_i64(dict, "schema_version")?;
         check_schema_version(sv)?;
-        let text: String = get_req(dict, "text")?.extract()?;
+        let text = required_string(dict, "text")?;
         let rect = Rect4::from_py(&get_req(dict, "rect")?.downcast::<PyDict>()?.clone())?;
-        let run_refs: Vec<i64> = get_req(dict, "run_refs")?.extract()?;
-        let row_hint: Option<i64> = match get_opt(dict, "row_hint")? {
-            Some(rh) => Some(rh.extract()?),
-            None => None,
-        };
-        let col_hint: Option<i64> = match get_opt(dict, "col_hint")? {
-            Some(ch) => Some(ch.extract()?),
-            None => None,
-        };
-        let order: i64 = get_req(dict, "order")?.extract()?;
+        let run_refs = required_i64_list(dict, "run_refs")?;
+        let row_hint = optional_i64(dict, "row_hint")?;
+        let col_hint = optional_i64(dict, "col_hint")?;
+        let order = required_i64(dict, "order")?;
         Ok(Self {
             schema_version: sv,
             text,
@@ -1230,12 +1224,15 @@ pub struct ColumnBandDto {
 
 impl ColumnBandDto {
     pub fn from_py(dict: &Bound<'_, PyDict>) -> PyResult<Self> {
-        let sv: i64 = get_req(dict, "schema_version")?.extract()?;
+        let sv = required_i64(dict, "schema_version")?;
         check_schema_version(sv)?;
         let x0 = extract_finite_f64(&get_req(dict, "x0")?, "x0")?;
         let x1 = extract_finite_f64(&get_req(dict, "x1")?, "x1")?;
-        let source_atoms: Vec<i64> = get_req(dict, "source_atoms")?.extract()?;
-        let order: i64 = get_req(dict, "order")?.extract()?;
+        if x0 >= x1 {
+            return Err(PyValueError::new_err("Column band requires x0 < x1"));
+        }
+        let source_atoms = required_i64_list(dict, "source_atoms")?;
+        let order = required_i64(dict, "order")?;
         Ok(Self {
             schema_version: sv,
             x0,
@@ -1965,29 +1962,168 @@ impl NativeRecoveryOutput {
     }
 }
 
+fn aligned_evidence<T>(values: Vec<Option<T>>, field_name: &str) -> PyResult<Option<Vec<T>>> {
+    if values.iter().all(Option::is_none) {
+        return Ok(None);
+    }
+    if values.iter().any(Option::is_none) {
+        return Err(PyValueError::new_err(format!(
+            "{} evidence must be present for every item",
+            field_name
+        )));
+    }
+    Ok(Some(
+        values
+            .into_iter()
+            .map(|value| value.expect("checked aligned evidence"))
+            .collect(),
+    ))
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct NativeRegionInput {
     pub schema_version: i64,
     pub region: RegionDto,
     pub atoms: Vec<AtomDto>,
     pub bands: Vec<ColumnBandDto>,
+    pub atom_evidence: Option<Vec<AtomEvidenceDto>>,
+    pub band_evidence: Option<Vec<BandEvidenceDto>>,
     pub config: StructureConfig,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AtomEvidenceDto {
+    pub flow_start: i64,
+    pub flow_end: i64,
+    pub source_blocks: Vec<i64>,
+    pub source_line_start: i64,
+    pub source_line_end: i64,
+    pub source_position_known: bool,
+    pub column_id: Option<i64>,
+}
+
+impl AtomEvidenceDto {
+    fn from_py(dict: &Bound<'_, PyDict>) -> PyResult<Option<Self>> {
+        let present = [
+            "flow_start",
+            "flow_end",
+            "source_blocks",
+            "source_line_start",
+            "source_line_end",
+            "source_position_known",
+            "column_id",
+        ]
+        .iter()
+        .try_fold(false, |present, key| -> PyResult<bool> {
+            Ok(present || dict.contains(*key)?)
+        })?;
+        if !present {
+            return Ok(None);
+        }
+        Ok(Some(Self {
+            flow_start: required_i64(dict, "flow_start")?,
+            flow_end: required_i64(dict, "flow_end")?,
+            source_blocks: required_i64_list(dict, "source_blocks")?,
+            source_line_start: required_i64(dict, "source_line_start")?,
+            source_line_end: required_i64(dict, "source_line_end")?,
+            source_position_known: required_bool(dict, "source_position_known")?,
+            column_id: optional_i64(dict, "column_id")?.map(|value| {
+                if value < 0 {
+                    return Err(PyValueError::new_err("Field 'column_id' must be non-negative"));
+                }
+                Ok(value)
+            }).transpose()?,
+        }))
+    }
+
+    fn to_py<'py>(&self, py: Python<'py>, dict: &Bound<'py, PyDict>) -> PyResult<()> {
+        dict.set_item("flow_start", self.flow_start)?;
+        dict.set_item("flow_end", self.flow_end)?;
+        dict.set_item("source_blocks", &self.source_blocks)?;
+        dict.set_item("source_line_start", self.source_line_start)?;
+        dict.set_item("source_line_end", self.source_line_end)?;
+        dict.set_item("source_position_known", self.source_position_known)?;
+        dict.set_item("column_id", self.column_id)?;
+        let _ = py;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct BandEvidenceDto {
+    pub id: i64,
+    pub kind: Option<String>,
+    pub support: i64,
+    pub y_support: i64,
+    pub parent_x0: Option<f64>,
+    pub parent_x1: Option<f64>,
+    pub parent_leaf_count: Option<i64>,
+}
+
+impl BandEvidenceDto {
+    fn from_py(dict: &Bound<'_, PyDict>) -> PyResult<Option<Self>> {
+        let present = ["id", "kind", "support", "y_support", "parent_x0", "parent_x1", "parent_leaf_count"]
+            .iter()
+            .try_fold(false, |present, key| -> PyResult<bool> {
+                Ok(present || dict.contains(*key)?)
+            })?;
+        if !present {
+            return Ok(None);
+        }
+        Ok(Some(Self {
+            id: required_i64(dict, "id")?,
+            kind: optional_string(dict, "kind")?,
+            support: required_i64(dict, "support")?,
+            y_support: required_i64(dict, "y_support")?,
+            parent_x0: optional_f64(dict, "parent_x0")?,
+            parent_x1: optional_f64(dict, "parent_x1")?,
+            parent_leaf_count: optional_i64(dict, "parent_leaf_count")?,
+        }))
+    }
+
+    fn to_py<'py>(&self, py: Python<'py>, dict: &Bound<'py, PyDict>) -> PyResult<()> {
+        dict.set_item("id", self.id)?;
+        dict.set_item("kind", self.kind.as_deref())?;
+        dict.set_item("support", self.support)?;
+        dict.set_item("y_support", self.y_support)?;
+        dict.set_item("parent_x0", self.parent_x0)?;
+        dict.set_item("parent_x1", self.parent_x1)?;
+        dict.set_item("parent_leaf_count", self.parent_leaf_count)?;
+        let _ = py;
+        Ok(())
+    }
 }
 
 impl NativeRegionInput {
     pub fn from_py(dict: &Bound<'_, PyDict>) -> PyResult<Self> {
-        let sv: i64 = get_req(dict, "schema_version")?.extract()?;
+        let sv = required_i64(dict, "schema_version")?;
         check_schema_version(sv)?;
         let region = RegionDto::from_py(&get_req(dict, "region")?.downcast::<PyDict>()?.clone())?;
         let atoms_list: Bound<'_, PyList> = get_req(dict, "atoms")?.extract()?;
         let mut atoms = Vec::with_capacity(atoms_list.len());
+        let mut atom_evidence = Vec::with_capacity(atoms_list.len());
         for a in atoms_list.iter() {
-            atoms.push(AtomDto::from_py(&a.downcast::<PyDict>()?.clone())?);
+            let atom = a.downcast::<PyDict>()?.clone();
+            atoms.push(AtomDto::from_py(&atom)?);
+            atom_evidence.push(AtomEvidenceDto::from_py(&atom)?);
         }
         let bands_list: Bound<'_, PyList> = get_req(dict, "bands")?.extract()?;
         let mut bands = Vec::with_capacity(bands_list.len());
+        let mut band_evidence = Vec::with_capacity(bands_list.len());
         for b in bands_list.iter() {
-            bands.push(ColumnBandDto::from_py(&b.downcast::<PyDict>()?.clone())?);
+            let band = b.downcast::<PyDict>()?.clone();
+            bands.push(ColumnBandDto::from_py(&band)?);
+            band_evidence.push(BandEvidenceDto::from_py(&band)?);
+        }
+        for (band_index, band) in bands.iter().enumerate() {
+            for source_atom in &band.source_atoms {
+                if *source_atom < 0 || (*source_atom as usize) >= atoms.len() {
+                    return Err(PyValueError::new_err(format!(
+                        "bands[{}].source_atoms contains an out-of-range atom reference",
+                        band_index
+                    )));
+                }
+            }
         }
         let config =
             StructureConfig::from_py(&get_req(dict, "config")?.downcast::<PyDict>()?.clone())?;
@@ -1996,6 +2132,8 @@ impl NativeRegionInput {
             region,
             atoms,
             bands,
+            atom_evidence: aligned_evidence(atom_evidence, "atoms")?,
+            band_evidence: aligned_evidence(band_evidence, "bands")?,
             config,
         })
     }
@@ -2008,10 +2146,26 @@ impl NativeRegionInput {
         for a in &self.atoms {
             al.append(a.to_py(py)?)?;
         }
+        if let Some(evidence) = &self.atom_evidence {
+            if evidence.len() != self.atoms.len() {
+                return Err(PyValueError::new_err("Atom evidence length must match atoms"));
+            }
+            for (item, evidence) in al.iter().zip(evidence) {
+                evidence.to_py(py, &item.downcast::<PyDict>()?.clone())?;
+            }
+        }
         d.set_item("atoms", al)?;
         let bl = PyList::empty_bound(py);
         for b in &self.bands {
             bl.append(b.to_py(py)?)?;
+        }
+        if let Some(evidence) = &self.band_evidence {
+            if evidence.len() != self.bands.len() {
+                return Err(PyValueError::new_err("Band evidence length must match bands"));
+            }
+            for (item, evidence) in bl.iter().zip(evidence) {
+                evidence.to_py(py, &item.downcast::<PyDict>()?.clone())?;
+            }
         }
         d.set_item("bands", bl)?;
         d.set_item("config", self.config.to_py(py)?)?;
@@ -3006,5 +3160,173 @@ pub fn roundtrip_dto_py<'py>(
             "Unknown dto_type '{}'",
             other
         ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pyo3::types::PyList;
+
+    fn base_native_region<'py>(py: Python<'py>) -> Bound<'py, PyDict> {
+        let input = PyDict::new_bound(py);
+        let region = PyDict::new_bound(py);
+        let rect = PyDict::new_bound(py);
+        rect.set_item("schema_version", 1).unwrap();
+        rect.set_item("x0", 0.0).unwrap();
+        rect.set_item("y0", 0.0).unwrap();
+        rect.set_item("x1", 100.0).unwrap();
+        rect.set_item("y1", 100.0).unwrap();
+        region.set_item("schema_version", 1).unwrap();
+        region.set_item("rect", rect).unwrap();
+        region.set_item("source_order", 0).unwrap();
+        region.set_item("allowed", true).unwrap();
+
+        let atom = PyDict::new_bound(py);
+        atom.set_item("schema_version", 1).unwrap();
+        atom.set_item("text", "项目").unwrap();
+        let atom_rect = PyDict::new_bound(py);
+        atom_rect.set_item("schema_version", 1).unwrap();
+        atom_rect.set_item("x0", 10.0).unwrap();
+        atom_rect.set_item("y0", 10.0).unwrap();
+        atom_rect.set_item("x1", 40.0).unwrap();
+        atom_rect.set_item("y1", 20.0).unwrap();
+        atom.set_item("rect", atom_rect).unwrap();
+        atom.set_item("run_refs", PyList::new_bound(py, [0])).unwrap();
+        atom.set_item("row_hint", 0).unwrap();
+        atom.set_item("col_hint", 0).unwrap();
+        atom.set_item("order", 0).unwrap();
+        let atoms = PyList::empty_bound(py);
+        atoms.append(atom).unwrap();
+
+        let band = PyDict::new_bound(py);
+        band.set_item("schema_version", 1).unwrap();
+        band.set_item("x0", 0.0).unwrap();
+        band.set_item("x1", 50.0).unwrap();
+        band.set_item("source_atoms", PyList::new_bound(py, [0])).unwrap();
+        band.set_item("order", 0).unwrap();
+        let bands = PyList::empty_bound(py);
+        bands.append(band).unwrap();
+
+        let config = PyDict::new_bound(py);
+        config.set_item("schema_version", 1).unwrap();
+        config.set_item("line_tolerance", 2.0).unwrap();
+        config.set_item("row_tolerance", 2.0).unwrap();
+        config.set_item("column_tolerance", 2.0).unwrap();
+        config.set_item("span_tolerance", 2.0).unwrap();
+        config.set_item("numeric_tolerance", 2.0).unwrap();
+
+        input.set_item("schema_version", 1).unwrap();
+        input.set_item("region", region).unwrap();
+        input.set_item("atoms", atoms).unwrap();
+        input.set_item("bands", bands).unwrap();
+        input.set_item("config", config).unwrap();
+        input
+    }
+
+    fn assert_value_error(result: PyResult<NativeRegionInput>, py: Python<'_>) {
+        let error = result.expect_err("invalid DTO input must fail");
+        assert_eq!(error.get_type_bound(py).name().unwrap(), "ValueError");
+    }
+
+    #[test]
+    fn native_region_without_evidence_keeps_legacy_shape() {
+        Python::with_gil(|py| {
+            let input = base_native_region(py);
+            let dto = NativeRegionInput::from_py(&input).unwrap();
+            assert!(dto.atom_evidence.is_none());
+            assert!(dto.band_evidence.is_none());
+
+            let output = dto.to_py(py).unwrap();
+            let atoms_value = output.get_item("atoms").unwrap().unwrap();
+            let atoms = atoms_value.downcast::<PyList>().unwrap();
+            let atom_value = atoms.get_item(0).unwrap();
+            let atom = atom_value.downcast::<PyDict>().unwrap();
+            assert!(!atom.contains("flow_start").unwrap());
+            assert!(!atom.contains("unknown_debug_field").unwrap());
+        });
+    }
+
+    #[test]
+    fn native_region_roundtrips_aligned_owned_evidence_and_drops_unknown_fields() {
+        Python::with_gil(|py| {
+            let input = base_native_region(py);
+            let atoms_value = input.get_item("atoms").unwrap().unwrap();
+            let atoms = atoms_value.downcast::<PyList>().unwrap();
+            let atom_value = atoms.get_item(0).unwrap();
+            let atom = atom_value.downcast::<PyDict>().unwrap();
+            atom.set_item("flow_start", 0).unwrap();
+            atom.set_item("flow_end", 1).unwrap();
+            atom.set_item("source_blocks", PyList::new_bound(py, [14])).unwrap();
+            atom.set_item("source_line_start", 3).unwrap();
+            atom.set_item("source_line_end", 3).unwrap();
+            atom.set_item("source_position_known", true).unwrap();
+            atom.set_item("column_id", 0).unwrap();
+            atom.set_item("unknown_debug_field", "ignored").unwrap();
+
+            let bands_value = input.get_item("bands").unwrap().unwrap();
+            let bands = bands_value.downcast::<PyList>().unwrap();
+            let band_value = bands.get_item(0).unwrap();
+            let band = band_value.downcast::<PyDict>().unwrap();
+            band.set_item("id", 0).unwrap();
+            band.set_item("kind", "body").unwrap();
+            band.set_item("support", 3).unwrap();
+            band.set_item("y_support", 3).unwrap();
+            band.set_item("parent_x0", 0.0).unwrap();
+            band.set_item("parent_x1", 50.0).unwrap();
+            band.set_item("parent_leaf_count", 1).unwrap();
+
+            let dto = NativeRegionInput::from_py(&input).unwrap();
+            assert_eq!(dto.atom_evidence.as_ref().unwrap().len(), 1);
+            assert_eq!(dto.band_evidence.as_ref().unwrap().len(), 1);
+            let output = dto.to_py(py).unwrap();
+            let output_atoms_value = output.get_item("atoms").unwrap().unwrap();
+            let output_atoms = output_atoms_value.downcast::<PyList>().unwrap();
+            let output_atom_value = output_atoms.get_item(0).unwrap();
+            let output_atom = output_atom_value.downcast::<PyDict>().unwrap();
+            assert_eq!(output_atom.get_item("flow_start").unwrap().unwrap().extract::<i64>().unwrap(), 0);
+            assert!(!output_atom.contains("unknown_debug_field").unwrap());
+        });
+    }
+
+    #[test]
+    fn native_region_rejects_partial_or_invalid_evidence_and_references() {
+        Python::with_gil(|py| {
+            let input = base_native_region(py);
+            let atoms_value = input.get_item("atoms").unwrap().unwrap();
+            let atoms = atoms_value.downcast::<PyList>().unwrap();
+            let atom_value = atoms.get_item(0).unwrap();
+            let atom = atom_value.downcast::<PyDict>().unwrap();
+            atom.set_item("flow_start", 0).unwrap();
+            assert_value_error(NativeRegionInput::from_py(&input), py);
+
+            atom.del_item("flow_start").unwrap();
+            let bands_value = input.get_item("bands").unwrap().unwrap();
+            let bands = bands_value.downcast::<PyList>().unwrap();
+            let band_value = bands.get_item(0).unwrap();
+            let band = band_value.downcast::<PyDict>().unwrap();
+            band.set_item("source_atoms", PyList::new_bound(py, [1])).unwrap();
+            assert_value_error(NativeRegionInput::from_py(&input), py);
+
+            band.set_item("source_atoms", PyList::new_bound(py, [0])).unwrap();
+            band.set_item("x0", f64::NAN).unwrap();
+            assert_value_error(NativeRegionInput::from_py(&input), py);
+        });
+    }
+
+    #[test]
+    fn atom_and_band_dtos_reject_non_core_types() {
+        Python::with_gil(|py| {
+            let input = base_native_region(py);
+            let atoms_value = input.get_item("atoms").unwrap().unwrap();
+            let atoms = atoms_value.downcast::<PyList>().unwrap();
+            let atom_value = atoms.get_item(0).unwrap();
+            let atom = atom_value.downcast::<PyDict>().unwrap();
+            atom.set_item("text", 7).unwrap();
+            assert_value_error(
+                AtomDto::from_py(&atom).map(|_| NativeRegionInput::from_py(&input).unwrap()),
+                py,
+            );
+        });
     }
 }
