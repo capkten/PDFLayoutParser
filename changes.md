@@ -2,6 +2,13 @@
 
 ## 2026-09-20
 
+- 修复 `table_visualizer.py` 在渲染无 span 的跨页无线表格/续表时未绘制蓝色单元格网格线、导致看起来“没有单元格结构”的问题：
+  - **根因与调用位置**：`src/hexai_pdf_parser/debug/table_visualizer.py::_compute_cell_grid_rects()` 原先在判断表格是否已有物理网格时，包含一段激进的提前返回逻辑：`if not has_span and (table.source in (...) or len(table.cells) == table.rows * table.cols): return [(c, fitz.Rect(c.bbox))]`。当跨页无线表格（如查询明细续表，`37x4` 共 148 个单元格）没有包含 `rowspan > 1` 或 `colspan > 1` 时，`has_span` 为 `False`，单元格总数恰好等于 `rows * cols`，导致错误命中该分支，直接将文字紧凑包围盒 `c.bbox` 当作了 `grid_rect`。随后 `draw_tables_on_page()` 在同一位置先画蓝色框再被绿色文字框覆盖，完全失去了向外延伸计算行列中线并绘制整行整列蓝色网格线的效果。
+  - **判定与修复**：限制提前返回仅对真正具备物理几何交点格子的有线表格（`table.source in ("line_projection", "PyMuPDF.find_tables")` 且 `len(cells) == rows * cols`）生效；对于任何无线表格（如 `personal_query_recovery`、`wireless*`、`text_alignment` 等），始终执行中线推断与二维网格扩展，确保绘制出标准的蓝色单元格分隔线。
+  - **测试与验证**：在 `tests/test_table_visualizer.py` 中新增 `test_personal_query_recovery_continuation_table_uses_inferred_grid_rects` 单元测试通过；可视化测试用例全部通过（`9 passed`）。
+  - **页面级验证**：重新渲染 `test_test_2_PDFsam_0a1968f2-c6d7-42a0-9581-b49ade1fdc6f` 第 1 页及所有续表页面，视觉核验确认全部 37 行 × 4 列的蓝色网格线恢复正常，与红框、绿色文字块层次分明。
+
+
 - 修复个人信用报告结果导出时二次死板 `(y0, x0)` 排序破坏已推断阅读顺序、导致段落序号后置或连续出现多个序号的问题：
   - **根因与调用链**：在 `PersonalCreditReportPipeline` 主流程中，`LayoutBuilder.sort_layout_elements()` 已经通过 `sort_by_reading_order()` 完成了自然阅读顺序推断，并利用行聚类机制正确容忍了汉字正文与西文数字序号在字体顶边上的微小基线差（0.5pt ~ 2.7pt），在底层赋予了正确的 `element.order`。然而在 `src/hexai_pdf_parser/extractors/personal_credit_report.py::_document_result()` 序列化导出 blocks 阶段，使用 `key=lambda element: (element.bbox.y0, element.bbox.x0, element.bbox.y1, element.bbox.x1)` 强行执行了二次简单浮点数升序排序。由于正文汉字 top 略微偏高（如 `541.08 < 541.58`），二次排序直接将右侧正文文本排在左侧数字序号前面；随后某项序号 top 与正文相等或序号排前时，又导致上一个序号与当前序号连续紧挨着输出。
   - **判定与修复**：在 `personal_credit_report.py::_document_result()` 中移除粗暴的 `(element.bbox.y0, element.bbox.x0, ...)` 二次排序，直接按底层已排好的 `element.order`（即自然阅读顺序）提取 elements。
