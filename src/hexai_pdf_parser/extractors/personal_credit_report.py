@@ -364,12 +364,7 @@ def _document_result(document: Document) -> dict:
         blocks = []
         ordered_elements = sorted(
             page.layout_elements,
-            key=lambda element: (
-                element.bbox.y0,
-                element.bbox.x0,
-                element.bbox.y1,
-                element.bbox.x1,
-            ),
+            key=lambda element: element.order,
         )
         for element in ordered_elements:
             if element.type == "text":
