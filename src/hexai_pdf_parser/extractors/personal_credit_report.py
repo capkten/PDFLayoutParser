@@ -235,7 +235,24 @@ def _make_query_table(
         if recovered_rows and any((item[0] + item[2]) / 2.0 >= 243.0 for item in row):
             recovered_rows.append(row)
 
-    if not recovered_rows or not any(_is_query_record_row(row) for row in recovered_rows):
+    if not recovered_rows:
+        if header_index is None or len(header_cells) != len(_QUERY_HEADERS):
+            return None
+        return Table(
+            bbox=BBox(
+                min(cell.bbox.x0 for cell in header_cells),
+                min(cell.bbox.y0 for cell in header_cells),
+                max(cell.bbox.x1 for cell in header_cells),
+                max(cell.bbox.y1 for cell in header_cells),
+            ),
+            rows=1,
+            cols=4,
+            cells=header_cells,
+            confidence=0.95,
+            source="personal_query_recovery",
+        )
+
+    if not any(_is_query_record_row(row) for row in recovered_rows):
         return None
 
     cells = list(header_cells)

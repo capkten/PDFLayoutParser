@@ -1,6 +1,25 @@
 # Changes
 
+## 2026-09-20
+
+- 修复个人信用报告等包含大面积背景图/水印的页面中，自然阅读顺序被打散导致列表序号集中前置、与正文条目解耦错位的问题：
+  - **根因与调用链**：在 `LayoutBuilder.build()` 中，页面提取到的全页背景图片（如 BBox `[1.0, 41.0, 401.0, 841.0]`）直接包装为 `LayoutElement` 与文本块、表格混合传入 `sort_by_reading_order()`。由于该背景图纵跨整页高度，遮断了外层递归 XY-Cut 在 Y 轴上的全部投影间隙（`y_cuts` 为空），导致算法被迫降级进入行聚类 `_sort_items_by_row_reading_order()`；在行聚类中，背景图的高度覆盖全页，导致整页所有文本项（如 111 个文本元素）全部满足垂直 overlap 条件而被误并入同一个虚拟“行”中；该“行”随后按 `x0`（左到右）排序，最终将左侧整列的全部序号（`4.`、`5.`...`57.`，`x0≈36`）集中排在了右侧所有贷款文本段落（`x0≈51`）的前面，造成严重语义错乱。
+  - **判定与修改**：
+    - 在 `LayoutBuilder.sort_layout_elements()` 中新增 `_is_background_image()` 识别大面积背景图/水印（高度覆盖页面内容高度 40% 以上且在垂直空间覆盖 4 个以上独立文本行），在版面布局排序时将其从正文流动元素（Text、Table、普通插图）中抽离；正文流动元素按 `sort_by_reading_order()` 顺畅进行自然的 XY-Cut 及行级排序，排序完成后背景图作为页面底层元素排在前面，不干扰正文阅读顺序。
+    - 在 `reading_order.py::_sort_items_by_row_reading_order()` 中为行内垂直重叠合并增加高度比例保护：当两个元素高度比例超过 3.0 倍时拒绝合并入同一行文本，防止异常大尺寸块在极端降级情况下吞并所有文本行。
+  - **测试与验证**：在 `tests/test_background_image_reading_order.py` 中新增全高背景图下悬挂缩进列表序号与正文同行保持对应的 TDD 测试用例；阅读顺序测试集（`7 passed`）、个人信用报告测试集（`13 passed`）及有线表格测试集全部通过，`git diff --check` 0 错误。
+  - **页面级验证**：在独立输出目录 `D:\codes\PDFLayoutParser\output\demo_fixed\` 中重新运行 `demo.py` 解析两个贷款 PDF 文件（`2_PDFsam_3e8ccb25-0108-449d-a8a4-04646b5d6b36-贷款38-45.pdf` 与 `2_PDFsam_a05ac4e5-2b5a-413c-9dbc-441cf5ad2c72-贷款.pdf`）。生成的 `output.md` 与 `output.json` 中，原本集中堆叠在顶部的 50 余个孤立序号彻底恢复为其对应的各个贷款记录前置标题（如 `4.` 对应 `2025年05月10日重庆京东盛际...`），跨页与章节标题顺序严丝合缝。
+
+- 修复/同步个人信用报告跨页孤立表头未被识别为单行表格的问题：
+  - **根因与调用位置**：在 `personal_credit_report.py::_make_query_table()` 中，原本规则要求 `recovered_rows` 必须包含至少一行数据行（`_is_query_record_row()`）。当页面底部（如 `2_PDFsam_0a1968f2-c6d7-42a0-9581-b49ade1fdc6f.pdf` 第 0 页底部）因排版分页仅印出“机构查询记录明细”及四列文字表头（“编号”、“查询日期”、“查询机构”、“查询原因”）而无数据行时，`recovered_rows` 为空导致直接返回 `None`。
+  - **判定与修复**：当 `not recovered_rows` 但存在完整的 4 列合法表头时，构建生成规范的 `1x4`、source 为 `personal_query_recovery` 的单行表格。
+  - **测试与验证**：在 `tests/test_personal_credit_report.py` 中新增 `test_make_query_tables_keeps_header_only_cross_page_continuation` 测试（`PASSED`）；重新解析 `2_PDFsam_0a1968f2...` 第 0 页，核验确认 Table 4 正确生成，可视化 PNG 中红框完整包围该表头，并精确划分为 4 个独立单元格。
+
 ## 2026-09-18
+
+- 修复个人信用报告第二页（解析索引 `1`）跨页机构查询无线表格的候选切分。根因是 `src/hexai_pdf_parser/tables/wireless_table_recovery.py::merge_wrapped_rows()` 将与上一行唯一机构列带水平重叠、但整体几何上居中的单字段续写误判为标题，随后 `_table_runs()` 切断候选，`_prepend_headers()` 又可能将残留续写补成伪表头。现在仅当单字段续写同时满足“与已有字段存在正面积水平重叠、原有几何居中、间距接近、非数字且非字段标题”等条件时，才将其文本、Span 来源和 bbox 并入对应 `TextStrip`；列间仅有 `±8pt` 近邻而没有实际重叠，或无法唯一定位的真实居中标题继续独立保留。修复停留在无线候选生成阶段，继续使用 native-span 数据，不回读 `page.get_text("words")`，不回退 `extract_zebra()` 或 legacy 重建，也未修改逻辑网格、跨度和空槽位处理。
+  - 页面级验证输入为 `D:\codes\PDFLayoutParser\个人信用报告\test\test\2_PDFsam_a1e4baf2-5f46-4f6b-865d-2d9240362880.pdf`，修复后独立输出为 `D:\codes\PDFLayoutParser\.worktrees\fix-cross-page-wireless-table-20260918\output\cross_page_wireless_table_continuation_20260918_v2\`。第二页机构查询表恢复为 `wireless_span_recovery`、`12x4`、48 个 Cell，编号 `8..19` 完整，48 个逻辑槽位唯一占用；下方本人查询记录保持独立的 `wireless_span_recovery`、`3x4` 表。页面级命令退出码为 `0`，最新 PNG 视觉核验确认机构表为一个连续表格、续写仍在机构列内，且与本人查询表没有误并。
+  - 测试验证：`tests/test_wireless_table_recovery.py`、`tests/test_wireless_structure_recoverer.py`、`tests/test_wireless_structure_grid.py`、`tests/test_wireless_structure_columns.py`、`tests/test_wireless_structure_merges.py`、`tests/test_unify_wireless_recovery.py` 共 `118 passed`；`git diff --check` 无输出。目标 PDF 回归现在使用与 `test_single.py` 相同的 `PDFParser` + ML 模型入口，个人查询表验收为实际输出的 `3x4`。全量 `pytest -q` 的收集仍有 3 个既有错误：缺少 `hexai_pdf_parser.camelot_stream_demo`、`extract_model_profile` 和 `hexai_pdf_parser.layout_model_utils`，未归因于本次修改。
 
 - 修复 `table_visualizer.py` 在相邻列水平投影重叠或存在左伸条目（如右列 `see` 交叉引用）时垂直列分隔线塌陷、导致左列长文本条目被竖线横切的问题：
   - **根因与调用位置**：`src/hexai_pdf_parser/debug/table_visualizer.py::_compute_cell_grid_rects()` 在计算相邻列垂直分割边界 `boundary` 时，原先简单采用 `boundary = (col_rights[c_cur] + col_lefts[c_nxt]) / 2.0` 并执行极端钳位 `boundary = min(boundary, col_lefts[c_nxt])`。在 `glossary_ec.pdf` 第 52 页（印刷页 51）等双语词典无线表格中，由于前两行存在 `see` 交叉引用条目合并至右列（`see exchange traded note`，其起始 `x0 = 269.9`，而右列主流释义起始 `x0 = 319.0`），导致右列的全局最小 `col_lefts[1] = 269.9`。极端钳位直接将列分割线强制拉平至 `x = 269.9`。而左列第 4、7、9、10、11、12、14 行等 7 处长英文条目宽度延伸至 `x = 282.0 ~ 294.0`，导致原本仅在 `294.0 ~ 319.0` 之间存在的视觉安全走廊被破坏，垂直蓝色网格线直接横穿左列 7 处长英文单词。
