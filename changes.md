@@ -10,6 +10,11 @@
   - **测试与验证**：在 `tests/test_background_image_reading_order.py` 中新增全高背景图下悬挂缩进列表序号与正文同行保持对应的 TDD 测试用例；阅读顺序测试集（`7 passed`）、个人信用报告测试集（`13 passed`）及有线表格测试集全部通过，`git diff --check` 0 错误。
   - **页面级验证**：在独立输出目录 `D:\codes\PDFLayoutParser\output\demo_fixed\` 中重新运行 `demo.py` 解析两个贷款 PDF 文件（`2_PDFsam_3e8ccb25-0108-449d-a8a4-04646b5d6b36-贷款38-45.pdf` 与 `2_PDFsam_a05ac4e5-2b5a-413c-9dbc-441cf5ad2c72-贷款.pdf`）。生成的 `output.md` 与 `output.json` 中，原本集中堆叠在顶部的 50 余个孤立序号彻底恢复为其对应的各个贷款记录前置标题（如 `4.` 对应 `2025年05月10日重庆京东盛际...`），跨页与章节标题顺序严丝合缝。
 
+- 修复/同步个人信用报告跨页孤立表头未被识别为单行表格的问题：
+  - **根因与调用位置**：在 `personal_credit_report.py::_make_query_table()` 中，原本规则要求 `recovered_rows` 必须包含至少一行数据行（`_is_query_record_row()`）。当页面底部（如 `2_PDFsam_0a1968f2-c6d7-42a0-9581-b49ade1fdc6f.pdf` 第 0 页底部）因排版分页仅印出“机构查询记录明细”及四列文字表头（“编号”、“查询日期”、“查询机构”、“查询原因”）而无数据行时，`recovered_rows` 为空导致直接返回 `None`。
+  - **判定与修复**：当 `not recovered_rows` 但存在完整的 4 列合法表头时，构建生成规范的 `1x4`、source 为 `personal_query_recovery` 的单行表格。
+  - **测试与验证**：在 `tests/test_personal_credit_report.py` 中新增 `test_make_query_tables_keeps_header_only_cross_page_continuation` 测试（`PASSED`）；重新解析 `2_PDFsam_0a1968f2...` 第 0 页，核验确认 Table 4 正确生成，可视化 PNG 中红框完整包围该表头，并精确划分为 4 个独立单元格。
+
 ## 2026-09-18
 
 - 修复个人信用报告第二页（解析索引 `1`）跨页机构查询无线表格的候选切分。根因是 `src/hexai_pdf_parser/tables/wireless_table_recovery.py::merge_wrapped_rows()` 将与上一行唯一机构列带水平重叠、但整体几何上居中的单字段续写误判为标题，随后 `_table_runs()` 切断候选，`_prepend_headers()` 又可能将残留续写补成伪表头。现在仅当单字段续写同时满足“与已有字段存在正面积水平重叠、原有几何居中、间距接近、非数字且非字段标题”等条件时，才将其文本、Span 来源和 bbox 并入对应 `TextStrip`；列间仅有 `±8pt` 近邻而没有实际重叠，或无法唯一定位的真实居中标题继续独立保留。修复停留在无线候选生成阶段，继续使用 native-span 数据，不回读 `page.get_text("words")`，不回退 `extract_zebra()` 或 legacy 重建，也未修改逻辑网格、跨度和空槽位处理。

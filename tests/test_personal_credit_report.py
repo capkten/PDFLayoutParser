@@ -45,6 +45,29 @@ def test_make_query_tables_with_synthetic_page():
     doc.close()
 
 
+def test_make_query_tables_keeps_header_only_cross_page_continuation():
+    doc = fitz.open()
+    page = doc.new_page(width=595, height=842)
+    page.insert_text((260, 80), "机构查询记录明细", fontsize=10, fontname="china-s")
+    page.insert_text((50, 100), "编号", fontsize=10, fontname="china-s")
+    page.insert_text((150, 100), "查询日期", fontsize=10, fontname="china-s")
+    page.insert_text((260, 100), "查询机构", fontsize=10, fontname="china-s")
+    page.insert_text((420, 100), "查询原因", fontsize=10, fontname="china-s")
+
+    tables = _make_query_tables(page)
+
+    assert len(tables) == 1
+    assert tables[0].rows == 1
+    assert tables[0].cols == 4
+    assert [cell.text for cell in tables[0].cells] == [
+        "编号",
+        "查询日期",
+        "查询机构",
+        "查询原因",
+    ]
+    doc.close()
+
+
 def test_is_numbered_prose_candidate_rejects_two_column_split_prose():
     """Verify that _is_numbered_prose_candidate detects paragraphs even when split into 2 columns with each cell < 50 chars."""
     from hexai_pdf_parser.core.models import BBox, Cell, Table
