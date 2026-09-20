@@ -11,6 +11,7 @@ from hexai_pdf_parser.core.models import BBox, Cell
 from hexai_pdf_parser.tables.wireless_table_recovery import (
     _rust_cells_to_project,
     collect_native_spans,
+    collect_native_spans_from_snapshot,
 )
 
 from .columns import (
@@ -95,12 +96,14 @@ def _commit_header_spans_or_keep_base(
     return base if _has_occupancy_conflict(proposed) else proposed
 
 
-def _recover_cells_from_region_python(
-    page: fitz.Page,
+def _recover_cells_from_snapshot_python(
+    snapshot: Any,
     region_bbox: BBox,
 ) -> tuple[int, int, list[Cell]]:
     try:
-        native_spans = collect_native_spans(page, allowed_regions=[region_bbox])
+        native_spans = list(
+            collect_native_spans_from_snapshot(snapshot, allowed_regions=[region_bbox])
+        )
         spans = region_spans(native_spans, region_bbox)
         output_mode = infer_output_order_mode(spans)
         atoms = build_text_runs(spans, output_mode=output_mode)
@@ -157,6 +160,23 @@ def _recover_cells_from_region_python(
         return 0, 0, []
 
 
+def _recover_cells_from_region_python(
+    page: fitz.Page | Any,
+    region_bbox: BBox,
+) -> tuple[int, int, list[Cell]]:
+    if hasattr(page, "schema_version") and hasattr(page, "text_blocks"):
+        snapshot = page
+    else:
+        from hexai_pdf_parser.pdf_snapshot import capture_page_snapshot
+
+        snapshot = capture_page_snapshot(
+            page,
+            page_index=getattr(page, "number", 0),
+            allowed_regions=[region_bbox],
+        )
+    return _recover_cells_from_snapshot_python(snapshot, region_bbox)
+
+
 def _recover_cells_from_rust(
     output: dict[str, Any],
     region_bbox: BBox,
@@ -186,14 +206,27 @@ def _recover_cells_from_rust(
 
 
 def recover_cells_from_region(
-    page: fitz.Page,
+    page: fitz.Page | Any,
     region_bbox: BBox,
 ) -> tuple[int, int, list[Cell]]:
     """Recover Chinese/mixed wireless cells from one trusted table region."""
+    if hasattr(page, "schema_version") and hasattr(page, "text_blocks"):
+        snapshot = page
+    else:
+        from hexai_pdf_parser.pdf_snapshot import capture_page_snapshot
+
+        snapshot = capture_page_snapshot(
+            page,
+            page_index=getattr(page, "number", 0),
+            allowed_regions=[region_bbox],
+        )
+
     mode = rust_adapter.get_rust_mode("wireless_structure")
     if mode in ("rust", "shadow"):
         def _recover_cells_from_region_rust():
-            native_spans = collect_native_spans(page, allowed_regions=[region_bbox])
+            native_spans = list(
+                collect_native_spans_from_snapshot(snapshot, allowed_regions=[region_bbox])
+            )
             spans = region_spans(native_spans, region_bbox)
             output_mode = infer_output_order_mode(spans)
             atoms = build_text_runs(spans, output_mode=output_mode)
@@ -225,9 +258,9 @@ def recover_cells_from_region(
 
         return rust_adapter.run_python_or_rust(
             mode=mode,
-            python_fn=lambda: _recover_cells_from_region_python(page, region_bbox),
+            python_fn=lambda: _recover_cells_from_snapshot_python(snapshot, region_bbox),
             rust_fn=_recover_cells_from_region_rust,
             path="wireless_structure.recover_cells_from_region",
         )
     else:
-        return _recover_cells_from_region_python(page, region_bbox)
+        return _recover_cells_from_snapshot_python(snapshot, region_bbox)
