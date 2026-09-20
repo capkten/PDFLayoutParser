@@ -269,6 +269,7 @@ def _snapshot_fixture():
                 "block_index": 0,
                 "line_index": 0,
                 "word_index": 2,
+                "raw_source_position": (0, 0, 2),
                 "source_order": 7,
             },
         ),
@@ -285,6 +286,8 @@ def _snapshot_fixture():
                     ("l", (0.0, 0.0), (120.0, 0.0)),
                     ("re", (0.0, 0.0, 120.0, 20.0), 1),
                 ),
+                "raw_source_position": (0,),
+                "source_order": 0,
                 "seqno": 9,
                 "level": 2,
             },
@@ -356,7 +359,7 @@ def test_page_snapshot_contract_roundtrips_and_rust_digest_matches_python():
         dto, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False
     ).encode("utf-8")
     expected = hashlib.sha256(canonical).hexdigest()
-    assert expected == "a05f7956e7e0e9b6c00e66ec81be00e43636beaac436248bef2f623a96b60e16"
+    assert expected == "9e30199c1a491478fb1a9869c8c06b48be377feae96727deaae6cef8c74d2635"
     assert rust_adapter.stage_input_digest(dto) == expected
     assert rust_adapter.page_snapshot_digest(dto) == expected
 
@@ -381,10 +384,166 @@ def test_page_snapshot_contract_rejects_missing_schema_type_and_nonfinite_values
 
 def test_stage_dto_declares_stage_and_snapshot_digest():
     snapshot_dto = rust_adapter.page_snapshot_to_rust_input(_snapshot_object())
+    digest = rust_adapter.page_snapshot_digest(snapshot_dto)
     stage = rust_adapter.recover_native_text_input(
-        snapshot_dto, region=snapshot_dto["allowed_regions"][0]
+        {**snapshot_dto, "input_snapshot_digest": digest},
+        region=snapshot_dto["allowed_regions"][0],
     )
 
     assert stage["stage"] == "recover_native_text_input"
-    assert stage["input_snapshot_digest"] == rust_adapter.stage_input_digest(snapshot_dto)
+    assert stage["input_snapshot_digest"] == digest
     assert stage["spans"] == snapshot_dto["spans"]
+
+
+def test_page_snapshot_adapter_rejects_missing_and_wrong_typed_nested_fields():
+    cases = []
+
+    missing_block_lines = _snapshot_fixture()
+    missing_block = dict(missing_block_lines["text_blocks"][0])
+    missing_block.pop("lines")
+    missing_block_lines["text_blocks"] = (missing_block,)
+    cases.append(missing_block_lines)
+
+    wrong_span_chars = _snapshot_fixture()
+    wrong_span_chars["spans"] = (dict(wrong_span_chars["spans"][0]),)
+    wrong_span_chars["spans"][0]["chars"] = "not-a-sequence"
+    cases.append(wrong_span_chars)
+
+    missing_word_text = _snapshot_fixture()
+    missing_word_text["words"] = (dict(missing_word_text["words"][0]),)
+    missing_word_text["words"][0].pop("text")
+    cases.append(missing_word_text)
+
+    wrong_drawing_items = _snapshot_fixture()
+    wrong_drawing_items["drawings"] = (dict(wrong_drawing_items["drawings"][0]),)
+    wrong_drawing_items["drawings"][0]["items"] = "not-a-sequence"
+    cases.append(wrong_drawing_items)
+
+    wrong_region = _snapshot_fixture()
+    wrong_region["allowed_regions"] = (None,)
+    cases.append(wrong_region)
+
+    wrong_options = _snapshot_fixture()
+    wrong_options["extraction_options"] = []
+    cases.append(wrong_options)
+
+    for fixture in cases:
+        snapshot = type("Snapshot", (), {})()
+        for key, value in fixture.items():
+            setattr(snapshot, key, value)
+        with pytest.raises(ValueError):
+            rust_adapter.page_snapshot_to_rust_input(snapshot)
+
+
+def test_page_snapshot_adapter_rejects_nonfinite_nested_values_without_coercion():
+    fixture = _snapshot_fixture()
+    fixture["text_blocks"] = (dict(fixture["text_blocks"][0]),)
+    fixture["text_blocks"][0]["lines"] = (dict(fixture["text_blocks"][0]["lines"][0]),)
+    fixture["text_blocks"][0]["lines"][0]["spans"] = (
+        dict(fixture["text_blocks"][0]["lines"][0]["spans"][0]),
+    )
+    fixture["text_blocks"][0]["lines"][0]["spans"][0]["size"] = float("inf")
+    snapshot = type("Snapshot", (), {})()
+    for key, value in fixture.items():
+        setattr(snapshot, key, value)
+
+    with pytest.raises(ValueError):
+        rust_adapter.page_snapshot_to_rust_input(snapshot)
+
+
+def test_page_snapshot_adapter_preserves_raw_positions_and_structured_drawing_lines():
+    dto = rust_adapter.page_snapshot_to_rust_input(_snapshot_object())
+
+    assert dto["text_blocks"][0]["source_position"] == [0]
+    assert dto["text_blocks"][0]["lines"][0]["source_position"] == [0, 0]
+    assert dto["text_blocks"][0]["lines"][0]["spans"][0]["raw_source_position"] == [
+        0,
+        0,
+        0,
+    ]
+    assert dto["spans"][0]["raw_source_position"] == [0, 0, 0]
+    assert len(dto["drawings"][0]["lines"]) == 2
+    assert dto["drawings"][0]["lines"][0]["rect"] == {
+        "schema_version": 1,
+        "x0": 0.0,
+        "y0": 0.0,
+        "x1": 120.0,
+        "y1": 0.0,
+    }
+
+
+def test_page_snapshot_adapter_requires_source_order_instead_of_fallback_indices():
+    fixture = _snapshot_fixture()
+    fixture["words"] = (dict(fixture["words"][0]),)
+    fixture["words"][0].pop("source_order")
+    snapshot = type("Snapshot", (), {})()
+    for key, value in fixture.items():
+        setattr(snapshot, key, value)
+
+    with pytest.raises(ValueError):
+        rust_adapter.page_snapshot_to_rust_input(snapshot)
+
+
+def test_recover_native_text_input_requires_matching_snapshot_digest():
+    snapshot_dto = rust_adapter.page_snapshot_to_rust_input(_snapshot_object())
+    digest = rust_adapter.page_snapshot_digest(snapshot_dto)
+    validated_input = {**snapshot_dto, "input_snapshot_digest": digest}
+
+    with pytest.raises(ValueError, match="input_snapshot_digest"):
+        rust_adapter.recover_native_text_input(snapshot_dto)
+    with pytest.raises(ValueError, match="input_snapshot_digest"):
+        rust_adapter.recover_native_text_input(
+            {**validated_input, "input_snapshot_digest": "0" * 64}
+        )
+
+    stage = rust_adapter.recover_native_text_input(
+        validated_input, region=snapshot_dto["allowed_regions"][0]
+    )
+    assert stage["stage"] == "recover_native_text_input"
+    assert stage["input_snapshot_digest"] == digest
+
+
+def test_stage_input_digest_wrapper_uses_direct_rust_binding(monkeypatch):
+    observed = {}
+
+    def fake_stage_digest(data):
+        observed["data"] = data
+        return "rust-stage-digest"
+
+    monkeypatch.setattr(rust_adapter._pdf_fast, "stage_input_digest", fake_stage_digest)
+
+    assert rust_adapter.stage_input_digest({"unicode": "甲✨"}) == "rust-stage-digest"
+    assert observed["data"] == {"unicode": "甲✨"}
+
+
+def test_direct_rust_stage_digest_matches_python_wrapper_for_fixed_unicode_fixture():
+    stage_input = {
+        "stage": "recover_native_text_input",
+        "unicode": "甲✨",
+        "nested": {"z": [3, 2, 1], "a": {"β": "值"}},
+    }
+    reordered = {
+        "nested": {"a": {"β": "值"}, "z": [3, 2, 1]},
+        "unicode": "甲✨",
+        "stage": "recover_native_text_input",
+    }
+
+    direct = rust_adapter._pdf_fast.stage_input_digest(stage_input)
+    assert direct == rust_adapter._pdf_fast.stage_input_digest(reordered)
+    assert rust_adapter.stage_input_digest(reordered) == direct
+    assert direct == "53e4488a7f0d3a4af575f9bbddda272af8d6bba4f60b2578c47c0031a65a0364"
+
+    with pytest.raises(ValueError):
+        rust_adapter.stage_input_digest({"bad": float("nan")})
+
+
+def test_page_snapshot_adapter_and_stage_output_are_recursively_unaliased():
+    snapshot = _snapshot_object()
+    dto = rust_adapter.page_snapshot_to_rust_input(snapshot)
+    dto["text_blocks"][0]["lines"][0]["spans"][0]["characters"][0]["text"] = "changed"
+    dto["drawings"][0]["items"][0][1][0] = 999.0
+    dto["extraction_options"]["options"]["rawdict"]["selected"]["kwargs"]["flags"] = 99
+
+    assert snapshot.text_blocks[0]["lines"][0]["spans"][0]["chars"][0]["c"] == "甲"
+    assert snapshot.drawings[0]["items"][0][1][0] == 0.0
+    assert snapshot.extraction_options["rawdict"]["selected"]["kwargs"]["flags"] == 2

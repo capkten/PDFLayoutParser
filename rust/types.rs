@@ -745,10 +745,31 @@ impl NativeSpanDto {
     }
 }
 
-/// Snapshot input uses the same owned span representation as the native text
-/// stages.  Keep the explicit input name at the snapshot boundary while
-/// retaining the historical NativeSpanDto API for existing callers.
-pub type NativeSpanInputDto = NativeSpanDto;
+/// Snapshot input extends the native span representation with the complete
+/// raw source position captured from PyMuPDF.  Native text stages keep using
+/// NativeSpanDto, whose historical block/line source position is sufficient
+/// for their current algorithms.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NativeSpanInputDto {
+    pub span: NativeSpanDto,
+    pub raw_source_position: Vec<i64>,
+}
+
+impl NativeSpanInputDto {
+    pub fn from_py(dict: &Bound<'_, PyDict>) -> PyResult<Self> {
+        let raw_source_position = required_i64_list(dict, "raw_source_position")?;
+        Ok(Self {
+            span: NativeSpanDto::from_py(dict)?,
+            raw_source_position,
+        })
+    }
+
+    pub fn to_py<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let dict = self.span.to_py(py)?;
+        dict.set_item("raw_source_position", &self.raw_source_position)?;
+        Ok(dict)
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct TextLineDto {
