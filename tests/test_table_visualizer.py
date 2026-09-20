@@ -24,6 +24,27 @@ def test_complete_wireless_recovery_table_still_uses_inferred_grid_rects():
     assert first.x1 > table.cells[0].bbox.x1
 
 
+def test_personal_query_recovery_continuation_table_uses_inferred_grid_rects():
+    table = Table(
+        bbox=BBox(0, 0, 100, 40),
+        rows=2,
+        cols=2,
+        source="personal_query_recovery",
+        cells=[
+            Cell("1", 0, 0, BBox(10, 5, 20, 10)),
+            Cell("2026.01.01", 0, 1, BBox(50, 5, 90, 10)),
+            Cell("2", 1, 0, BBox(10, 25, 20, 30)),
+            Cell("2026.02.01", 1, 1, BBox(50, 25, 90, 30)),
+        ],
+    )
+
+    rects = _compute_cell_grid_rects(table)
+
+    first = rects[0][1]
+    assert (first.x0, first.y0) == (0, 0)
+    assert first.x1 > table.cells[0].bbox.x1
+
+
 def test_line_projection_visualization_draws_physical_segments_not_cell_rects():
     finishes = []
 

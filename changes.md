@@ -2,6 +2,13 @@
 
 ## 2026-09-20
 
+- 修复 `table_visualizer.py` 在渲染无 span 的跨页无线表格/续表时未绘制蓝色单元格网格线、导致看起来“没有单元格结构”的问题：
+  - **根因与调用位置**：`src/hexai_pdf_parser/debug/table_visualizer.py::_compute_cell_grid_rects()` 原先在判断表格是否已有物理网格时，包含一段激进的提前返回逻辑：`if not has_span and (table.source in (...) or len(table.cells) == table.rows * table.cols): return [(c, fitz.Rect(c.bbox))]`。当跨页无线表格（如查询明细续表，`37x4` 共 148 个单元格）没有包含 `rowspan > 1` 或 `colspan > 1` 时，`has_span` 为 `False`，单元格总数恰好等于 `rows * cols`，导致错误命中该分支，直接将文字紧凑包围盒 `c.bbox` 当作了 `grid_rect`。随后 `draw_tables_on_page()` 在同一位置先画蓝色框再被绿色文字框覆盖，完全失去了向外延伸计算行列中线并绘制整行整列蓝色网格线的效果。
+  - **判定与修复**：限制提前返回仅对真正具备物理几何交点格子的有线表格（`table.source in ("line_projection", "PyMuPDF.find_tables")` 且 `len(cells) == rows * cols`）生效；对于任何无线表格（如 `personal_query_recovery`、`wireless*`、`text_alignment` 等），始终执行中线推断与二维网格扩展，确保绘制出标准的蓝色单元格分隔线。
+  - **测试与验证**：在 `tests/test_table_visualizer.py` 中新增 `test_personal_query_recovery_continuation_table_uses_inferred_grid_rects` 单元测试通过；可视化测试用例全部通过（`9 passed`）。
+  - **页面级验证**：重新渲染 `test_test_2_PDFsam_0a1968f2-c6d7-42a0-9581-b49ade1fdc6f` 第 1 页及所有续表页面，视觉核验确认全部 37 行 × 4 列的蓝色网格线恢复正常，与红框、绿色文字块层次分明。
+
+
 - 修复个人信用报告结果导出时二次死板 `(y0, x0)` 排序破坏已推断阅读顺序、导致段落序号后置或连续出现多个序号的问题：
   - **根因与调用链**：在 `PersonalCreditReportPipeline` 主流程中，`LayoutBuilder.sort_layout_elements()` 已经通过 `sort_by_reading_order()` 完成了自然阅读顺序推断，并利用行聚类机制正确容忍了汉字正文与西文数字序号在字体顶边上的微小基线差（0.5pt ~ 2.7pt），在底层赋予了正确的 `element.order`。然而在 `src/hexai_pdf_parser/extractors/personal_credit_report.py::_document_result()` 序列化导出 blocks 阶段，使用 `key=lambda element: (element.bbox.y0, element.bbox.x0, element.bbox.y1, element.bbox.x1)` 强行执行了二次简单浮点数升序排序。由于正文汉字 top 略微偏高（如 `541.08 < 541.58`），二次排序直接将右侧正文文本排在左侧数字序号前面；随后某项序号 top 与正文相等或序号排前时，又导致上一个序号与当前序号连续紧挨着输出。
   - **判定与修复**：在 `personal_credit_report.py::_document_result()` 中移除粗暴的 `(element.bbox.y0, element.bbox.x0, ...)` 二次排序，直接按底层已排好的 `element.order`（即自然阅读顺序）提取 elements。
@@ -688,3 +695,31 @@
 
 - 新增 `scripts/run_pdf_diff_review.ps1` 真实审阅运行入口：固定默认的实际输出、测试集和 review 目录，同时允许通过参数覆盖；使用主项目 Python 调用 `build_review()` 生成分类摘要、JSON、HTML 和合成 PNG，不修改原始 PDF、标签或真实 E2E 输出。
 - 修正 `build_review()` 与 Markdown golden comparator 的判定口径：分类、文本 diff 和搜索索引统一先调用 `normalize_markdown()`，移除图片行并归一化空白，避免把资源路径差异误判为正文/格式差异；manifest 标记为 `excluded` 的页面不进入差异审阅列表。真实 `fix/zh_all_table_pages.pdf` 快照复核结果为 1023 页，其中 901 页相同、1 页排除、121 页待审阅；分类为正文 97、混合 10、表格结构 8、表格数量 3、表格文本 1、资源缺失 2。分类 JSON 和离线网页只载入 121 个差异页，合成图与两侧 PNG 资源保留在 `output/fix_zh_all_table_pages_review_20260914/review/`。
+
+## 2026-09-20
+
+- 修复个人信用报告中“机构查询记录明细”与“个人/本人查询记录明细”表格仅提取表头一行、明细记录全部丢失的问题。
+- 根因分析：
+  1. `_is_query_record_row` 中编号匹配 `re.fullmatch(r"\d+", item[4])` 未 strip，而合并后的 span 文本常带尾随空格（如 `"1 "`），导致全数字匹配失败；
+  2. 日期判定硬编码 `item[0] >= 120`，而真实 PDF 中四位年份日期的实际起点在 `100.7 ~ 115.8`，导致所有日期行被拒绝；
+  3. 列边界硬编码固定阈值，在不同版面下难以自适应。
+  上述判定失败导致所有数据行未被提取为表格行，误触发了“跨页续表仅有表头”的兜底分支，输出 `rows=1` 表格，所有明细行被退回为散落文本段落。
+- 判定条件与实现：
+  1. `_is_query_record_row` 增加文本 `.strip()`，将日期起点放宽至 `item[0] >= 90`（同时包含“年”），查询原因起点设为 `item[0] >= 340`；
+  2. 优先依据表头四列中心坐标动态计算列分界 `boundaries`，无表头时使用自适应默认值 `[95.0, 220.0, 355.0]`；
+  3. 机构/原因换行续行边界对齐到 `boundaries[1]`，续行累加前序单元格增加空值安全防护。
+- 保持不回读 words 约束：继续消费上层基于 span 合并的行块，不新增多余底层 words 重建。
+- 测试结果：`tests/test_personal_credit_report.py` 10 项测试全部通过（10 passed）。
+- 页面输出核对路径：`output/verified_demo/个人信用报告(本人简版)` 与 `output/verified_demo/个人征信报告（简版）(1)`，两份报告各 5 页已完成端到端解析，机构查询与本人查询明细表格行列及单元格恢复完整，散落文本段落已清除，可视化 PNG 标注完全贴合。
+
+- 增强个人信用报告定制逻辑：将“机构查询记录明细”和“本人查询记录明细”作为 Row 0（`colspan=4`）纳入表格内。
+- 设计与实现：
+  1. `_make_query_tables` 识别紧邻前置的 section title 行，将其文字及水平边界作为表格 Row 0；
+  2. 原表头行（编号、查询日期、查询机构、查询原因）统一作为 Row 1，明细数据行从 Row 2 开始递增；
+  3. `_trim_query_table` 增加放行逻辑：当表头位于 Row 1 且 Row 0 为机构/本人查询记录明细时保留标题行，避免被误裁；
+  4. `PersonalCreditReportTableExtractor.extract` 保证用精准恢复的 `query_tables` 替换粗糙的候选表格；
+  5. 保持不回读 words 约束，继续消费原生 span 组合数据。
+- 测试结果：`tests/test_personal_credit_report.py` 11 项测试全部通过（11 passed）。
+- 页面输出核对路径：`output/verified_title_demo/个人信用报告(本人简版)` 与 `output/verified_title_demo/个人征信报告（简版）(1)`，两份报告 Markdown 和 PNG 均已确认表格首行为 `colspan=4` 的明细标题。
+
+
