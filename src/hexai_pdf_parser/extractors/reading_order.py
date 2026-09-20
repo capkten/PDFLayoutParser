@@ -127,8 +127,14 @@ def _sort_items_by_row_reading_order(
         min_h = min(h_row, h_item)
 
         # Same line condition: vertical overlap >= 30% of shorter item or center distance <= 40%
-        is_intersect = (overlap > 0 and (overlap >= 0.3 * min_h or overlap >= 2.0)) or (
-            abs(((b.y0 + b.y1) / 2.0) - ((row_y0 + row_y1) / 2.0)) <= 0.4 * min_h
+        # Guard: elements with extreme height disparity (e.g. ratio > 3.0) must not merge into the same text row
+        height_ratio = max(h_row, h_item) / min_h
+        is_intersect = (
+            height_ratio <= 3.0
+            and (
+                (overlap > 0 and (overlap >= 0.3 * min_h or overlap >= 2.0))
+                or (abs(((b.y0 + b.y1) / 2.0) - ((row_y0 + row_y1) / 2.0)) <= 0.4 * min_h)
+            )
         )
 
         if is_intersect:

@@ -66,15 +66,69 @@ class LayoutBuilder:
 
         return self.sort_layout_elements(combined)
 
-    @staticmethod
+    @classmethod
     def sort_layout_elements(
+        cls,
         elements: List[LayoutElement],
     ) -> List[LayoutElement]:
         """Sort layout elements in page reading order and renumber them."""
-        sorted_elements = sort_by_reading_order(elements)
-        for order, element in enumerate(sorted_elements):
+        bg_elements: List[LayoutElement] = []
+        flow_elements: List[LayoutElement] = []
+
+        for element in elements:
+            if cls._is_background_image(element, elements):
+                bg_elements.append(element)
+            else:
+                flow_elements.append(element)
+
+        sorted_flow = sort_by_reading_order(flow_elements)
+
+        # Place background/watermark elements at the beginning (sorted by y0, x0)
+        bg_elements.sort(key=lambda e: (e.bbox.y0, e.bbox.x0))
+        all_sorted = bg_elements + sorted_flow
+
+        for order, element in enumerate(all_sorted):
             element.order = order
-        return sorted_elements
+        return all_sorted
+
+    @staticmethod
+    def _is_background_image(
+        element: LayoutElement,
+        all_elements: List[LayoutElement],
+    ) -> bool:
+        """Check if an image element is a full-page/large background or watermark.
+
+        Background images span across a large portion of the page height and
+        vertically overlap many text elements, which would otherwise ruin
+        recursive XY-cut and line clustering of body text.
+        """
+        if element.type != "image":
+            return False
+
+        b = element.bbox
+        h = b.y1 - b.y0
+        if h < 150.0:
+            return False
+
+        all_y0 = min(e.bbox.y0 for e in all_elements)
+        all_y1 = max(e.bbox.y1 for e in all_elements)
+        total_h = all_y1 - all_y0
+        if total_h <= 0:
+            return False
+
+        height_ratio = h / total_h
+        if height_ratio < 0.4:
+            return False
+
+        overlapping_texts = 0
+        for other in all_elements:
+            if other is not element and other.type == "text":
+                ob = other.bbox
+                overlap_y = min(b.y1, ob.y1) - max(b.y0, ob.y0)
+                if overlap_y >= 0.5 * (ob.y1 - ob.y0):
+                    overlapping_texts += 1
+
+        return overlapping_texts >= 4
 
     def _inside_any_table(self, bbox, tables: List[Table]) -> bool:
         """Check if *bbox* is a table duplicate or substantially covered.

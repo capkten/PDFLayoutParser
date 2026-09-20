@@ -1,5 +1,15 @@
 # Changes
 
+## 2026-09-20
+
+- 修复个人信用报告等包含大面积背景图/水印的页面中，自然阅读顺序被打散导致列表序号集中前置、与正文条目解耦错位的问题：
+  - **根因与调用链**：在 `LayoutBuilder.build()` 中，页面提取到的全页背景图片（如 BBox `[1.0, 41.0, 401.0, 841.0]`）直接包装为 `LayoutElement` 与文本块、表格混合传入 `sort_by_reading_order()`。由于该背景图纵跨整页高度，遮断了外层递归 XY-Cut 在 Y 轴上的全部投影间隙（`y_cuts` 为空），导致算法被迫降级进入行聚类 `_sort_items_by_row_reading_order()`；在行聚类中，背景图的高度覆盖全页，导致整页所有文本项（如 111 个文本元素）全部满足垂直 overlap 条件而被误并入同一个虚拟“行”中；该“行”随后按 `x0`（左到右）排序，最终将左侧整列的全部序号（`4.`、`5.`...`57.`，`x0≈36`）集中排在了右侧所有贷款文本段落（`x0≈51`）的前面，造成严重语义错乱。
+  - **判定与修改**：
+    - 在 `LayoutBuilder.sort_layout_elements()` 中新增 `_is_background_image()` 识别大面积背景图/水印（高度覆盖页面内容高度 40% 以上且在垂直空间覆盖 4 个以上独立文本行），在版面布局排序时将其从正文流动元素（Text、Table、普通插图）中抽离；正文流动元素按 `sort_by_reading_order()` 顺畅进行自然的 XY-Cut 及行级排序，排序完成后背景图作为页面底层元素排在前面，不干扰正文阅读顺序。
+    - 在 `reading_order.py::_sort_items_by_row_reading_order()` 中为行内垂直重叠合并增加高度比例保护：当两个元素高度比例超过 3.0 倍时拒绝合并入同一行文本，防止异常大尺寸块在极端降级情况下吞并所有文本行。
+  - **测试与验证**：在 `tests/test_background_image_reading_order.py` 中新增全高背景图下悬挂缩进列表序号与正文同行保持对应的 TDD 测试用例；阅读顺序测试集（`7 passed`）、个人信用报告测试集（`13 passed`）及有线表格测试集全部通过，`git diff --check` 0 错误。
+  - **页面级验证**：在独立输出目录 `D:\codes\PDFLayoutParser\output\demo_fixed\` 中重新运行 `demo.py` 解析两个贷款 PDF 文件（`2_PDFsam_3e8ccb25-0108-449d-a8a4-04646b5d6b36-贷款38-45.pdf` 与 `2_PDFsam_a05ac4e5-2b5a-413c-9dbc-441cf5ad2c72-贷款.pdf`）。生成的 `output.md` 与 `output.json` 中，原本集中堆叠在顶部的 50 余个孤立序号彻底恢复为其对应的各个贷款记录前置标题（如 `4.` 对应 `2025年05月10日重庆京东盛际...`），跨页与章节标题顺序严丝合缝。
+
 ## 2026-09-18
 
 - 修复个人信用报告第二页（解析索引 `1`）跨页机构查询无线表格的候选切分。根因是 `src/hexai_pdf_parser/tables/wireless_table_recovery.py::merge_wrapped_rows()` 将与上一行唯一机构列带水平重叠、但整体几何上居中的单字段续写误判为标题，随后 `_table_runs()` 切断候选，`_prepend_headers()` 又可能将残留续写补成伪表头。现在仅当单字段续写同时满足“与已有字段存在正面积水平重叠、原有几何居中、间距接近、非数字且非字段标题”等条件时，才将其文本、Span 来源和 bbox 并入对应 `TextStrip`；列间仅有 `±8pt` 近邻而没有实际重叠，或无法唯一定位的真实居中标题继续独立保留。修复停留在无线候选生成阶段，继续使用 native-span 数据，不回读 `page.get_text("words")`，不回退 `extract_zebra()` 或 legacy 重建，也未修改逻辑网格、跨度和空槽位处理。
