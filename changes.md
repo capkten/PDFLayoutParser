@@ -2,6 +2,14 @@
 
 ## 2026-09-20
 
+- 修复个人信用报告结果导出时二次死板 `(y0, x0)` 排序破坏已推断阅读顺序、导致段落序号后置或连续出现多个序号的问题：
+  - **根因与调用链**：在 `PersonalCreditReportPipeline` 主流程中，`LayoutBuilder.sort_layout_elements()` 已经通过 `sort_by_reading_order()` 完成了自然阅读顺序推断，并利用行聚类机制正确容忍了汉字正文与西文数字序号在字体顶边上的微小基线差（0.5pt ~ 2.7pt），在底层赋予了正确的 `element.order`。然而在 `src/hexai_pdf_parser/extractors/personal_credit_report.py::_document_result()` 序列化导出 blocks 阶段，使用 `key=lambda element: (element.bbox.y0, element.bbox.x0, element.bbox.y1, element.bbox.x1)` 强行执行了二次简单浮点数升序排序。由于正文汉字 top 略微偏高（如 `541.08 < 541.58`），二次排序直接将右侧正文文本排在左侧数字序号前面；随后某项序号 top 与正文相等或序号排前时，又导致上一个序号与当前序号连续紧挨着输出。
+  - **判定与修复**：在 `personal_credit_report.py::_document_result()` 中移除粗暴的 `(element.bbox.y0, element.bbox.x0, ...)` 二次排序，直接按底层已排好的 `element.order`（即自然阅读顺序）提取 elements。
+  - **测试与验证**：在 `tests/test_personal_credit_report.py` 中新增 `test_document_result_preserves_layout_reading_order_over_raw_y0`（顶边微差正例单元测试）与 `test_parse_personal_credit_report_preserves_loan_numbering_order`（PDF 真实样本端到端端回归测试）；测试集全部通过（`9 passed`），`git diff --check` 0 错误。
+  - **页面级验证**：重跑 `2_PDFsam_3e8ccb25-0108-449d-a8a4-04646b5d6b36-贷款38-45.pdf` 与 `2_PDFsam_a05ac4e5-2b5a-413c-9dbc-441cf5ad2c72-贷款.pdf` 至独立输出目录 `D:\codes\PDFLayoutParser\output\personal_credit_order_fixed_20260920\`。所有页面 blocks 检查中连续序号错误为 0，序号后置错误为 0，全部序号与正文段落严格匹配。
+
+
+
 - 修复个人信用报告等包含大面积背景图/水印的页面中，自然阅读顺序被打散导致列表序号集中前置、与正文条目解耦错位的问题：
   - **根因与调用链**：在 `LayoutBuilder.build()` 中，页面提取到的全页背景图片（如 BBox `[1.0, 41.0, 401.0, 841.0]`）直接包装为 `LayoutElement` 与文本块、表格混合传入 `sort_by_reading_order()`。由于该背景图纵跨整页高度，遮断了外层递归 XY-Cut 在 Y 轴上的全部投影间隙（`y_cuts` 为空），导致算法被迫降级进入行聚类 `_sort_items_by_row_reading_order()`；在行聚类中，背景图的高度覆盖全页，导致整页所有文本项（如 111 个文本元素）全部满足垂直 overlap 条件而被误并入同一个虚拟“行”中；该“行”随后按 `x0`（左到右）排序，最终将左侧整列的全部序号（`4.`、`5.`...`57.`，`x0≈36`）集中排在了右侧所有贷款文本段落（`x0≈51`）的前面，造成严重语义错乱。
   - **判定与修改**：

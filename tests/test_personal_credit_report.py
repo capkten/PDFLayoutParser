@@ -184,3 +184,72 @@ def test_page_003_query_tables_do_not_contain_titles():
         assert "查询日期" in row0_text
 
 
+def test_document_result_preserves_layout_reading_order_over_raw_y0():
+    """Verify that _document_result uses element.order instead of raw (y0, x0) sorting.
+
+    When glyph bounding boxes cause the text top (y0=541.08) to be slightly higher than
+    the number top (y0=541.58), raw (y0, x0) sort incorrectly places text before number.
+    """
+    from hexai_pdf_parser.core.models import BBox, Document, LayoutElement, Page
+    from hexai_pdf_parser.extractors.personal_credit_report import _document_result
+
+    # Order 0: "39." with y0=541.58
+    elem_num = LayoutElement(
+        type="text",
+        bbox=BBox(36.0, 541.58, 48.64, 550.58),
+        order=0,
+        content="39.",
+    )
+    # Order 1: Text with y0=541.08 (< 541.58)
+    elem_text = LayoutElement(
+        type="text",
+        bbox=BBox(50.95, 541.08, 479.05, 550.08),
+        order=1,
+        content="2020年12月18日南京银行股份有限公司常州分行发放的20,000元（人民币）其他贷款，2021年09月已结清。",
+    )
+
+    page = Page(index=0, size={"width": 595.0, "height": 842.0}, rotation=0)
+    page.layout_elements = [elem_num, elem_text]
+    doc = Document(file_name="test.pdf", page_count=1, pages=[page])
+
+    result = _document_result(doc)
+    blocks = result["pages"][0]["blocks"]
+
+    assert len(blocks) == 2
+    assert blocks[0]["content"] == "39.", f"Expected '39.' first, but got: {blocks[0]['content']}"
+    assert "2020年12月18日" in blocks[1]["content"]
+
+
+def test_parse_personal_credit_report_preserves_loan_numbering_order():
+    """End-to-end test on the loan PDF sample to ensure no consecutive numbers and no number-after-text."""
+    import os
+    import re
+    from hexai_pdf_parser.extractors.personal_credit_report import parse_personal_credit_report
+
+    pdf_path = os.path.join(
+        "D:\\codes\\PDFLayoutParser",
+        "个人信用报告",
+        "test",
+        "test",
+        "2_PDFsam_3e8ccb25-0108-449d-a8a4-04646b5d6b36-贷款38-45.pdf",
+    )
+    if not os.path.exists(pdf_path):
+        pytest.skip(f"Test file not found: {pdf_path}")
+
+    res = parse_personal_credit_report(pdf_path, use_ml_table_detector=False)
+    blocks = res["pages"][0]["blocks"]
+
+    prev_num = None
+    for i, b in enumerate(blocks):
+        txt = b["content"].strip()
+        is_num = bool(re.match(r"^\d+\.$", txt))
+        assert not (is_num and prev_num), f"Found consecutive numbers: '{prev_num}' and '{txt}' at block {i}"
+        prev_num = txt if is_num else None
+
+    # Check specifically around 38-45 that 39. comes before the loan text
+    for i, b in enumerate(blocks):
+        if b["content"].strip() == "39.":
+            assert i + 1 < len(blocks)
+            next_content = blocks[i + 1]["content"]
+            assert "2020年12月18日" in next_content, f"Expected 2020年12月18日 after 39., got {next_content}"
+            break
