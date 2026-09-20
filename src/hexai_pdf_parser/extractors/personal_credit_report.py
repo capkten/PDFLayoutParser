@@ -73,7 +73,7 @@ def _query_regions(page: fitz.Page) -> Optional[List[BBox]]:
 
 
 def _trim_query_table(table: Table) -> Table:
-    """Drop section-title rows before the four-column query header."""
+    """Drop arbitrary title rows before header, keeping query section titles in table."""
     header_row = None
     for row_index in range(table.rows):
         cells_in_row = [cell for cell in table.cells if cell.row_index == row_index]
@@ -84,14 +84,23 @@ def _trim_query_table(table: Table) -> Table:
     if header_row is None or header_row == 0:
         return table
 
+    keep_from_row = header_row
+    if header_row == 1:
+        row0_text = "".join(cell.text.replace(" ", "") for cell in table.cells if cell.row_index == 0)
+        if _INSTITUTION_TITLE in row0_text or any(pt in row0_text for pt in _PERSONAL_TITLES):
+            keep_from_row = 0
+
+    if keep_from_row == 0:
+        return table
+
     cells = []
     for cell in table.cells:
-        if cell.row_index < header_row:
+        if cell.row_index < keep_from_row:
             continue
-        cell.row_index -= header_row
+        cell.row_index -= keep_from_row
         cells.append(cell)
     table.cells = cells
-    table.rows -= header_row
+    table.rows -= keep_from_row
     if cells:
         table.bbox = BBox(
             min(cell.bbox.x0 for cell in cells),
@@ -166,6 +175,7 @@ def _make_query_table(
     *,
     header_index: int | None = None,
     end_index: int | None = None,
+    section_index: int | None = None,
 ) -> Table | None:
     """Recover one four-column institution-query table directly from page words."""
     rows = _query_rows(page)
@@ -200,7 +210,21 @@ def _make_query_table(
             if header == item[4]
         ]
 
-    region_start_index = header_index if header_index is not None else start_index
+    section_title: str | None = None
+    section_bbox: BBox | None = None
+    if section_index is not None and section_index < (header_index or start_index):
+        s_row = rows[section_index]
+        s_text = "".join(item[4] for item in s_row).strip()
+        if _INSTITUTION_TITLE in s_text or any(pt in s_text for pt in _PERSONAL_TITLES):
+            section_title = s_text
+            section_bbox = BBox(
+                min(item[0] for item in s_row),
+                min(item[1] for item in s_row),
+                max(item[2] for item in s_row),
+                max(item[3] for item in s_row),
+            )
+
+    region_start_index = section_index if section_title is not None else (header_index if header_index is not None else start_index)
     region_start = min(item[1] for item in rows[region_start_index])
     region_end = max(item[3] for item in rows[end_index - 1])
     merged_rows = _query_rows(
@@ -244,16 +268,26 @@ def _make_query_table(
     if not recovered_rows:
         if header_index is None or len(header_cells) != len(_QUERY_HEADERS):
             return None
+        cells: list[Cell] = []
+        cur_row = 0
+        if section_title and section_bbox:
+            t_x0 = min(cell.bbox.x0 for cell in header_cells)
+            t_x1 = max(cell.bbox.x1 for cell in header_cells)
+            cells.append(Cell(text=section_title, row_index=0, col_index=0, colspan=4, bbox=BBox(t_x0, section_bbox.y0, t_x1, section_bbox.y1)))
+            cur_row = 1
+        for cell in header_cells:
+            cell.row_index = cur_row
+            cells.append(cell)
         return Table(
             bbox=BBox(
-                min(cell.bbox.x0 for cell in header_cells),
-                min(cell.bbox.y0 for cell in header_cells),
-                max(cell.bbox.x1 for cell in header_cells),
-                max(cell.bbox.y1 for cell in header_cells),
+                min(cell.bbox.x0 for cell in cells),
+                min(cell.bbox.y0 for cell in cells),
+                max(cell.bbox.x1 for cell in cells),
+                max(cell.bbox.y1 for cell in cells),
             ),
-            rows=1,
+            rows=cur_row + 1,
             cols=4,
-            cells=header_cells,
+            cells=cells,
             confidence=0.95,
             source="personal_query_recovery",
         )
@@ -261,8 +295,29 @@ def _make_query_table(
     if not any(_is_query_record_row(row) for row in recovered_rows):
         return None
 
-    cells = list(header_cells)
-    row_number = 1 if header_index is not None else 0
+    cells: list[Cell] = []
+    cur_row = 0
+    if section_title and section_bbox:
+        t_x0 = min(min(item[0] for item in row) for row in recovered_rows)
+        t_x1 = max(max(item[2] for item in row) for row in recovered_rows)
+        if header_cells:
+            t_x0 = min(t_x0, min(c.bbox.x0 for c in header_cells))
+            t_x1 = max(t_x1, max(c.bbox.x1 for c in header_cells))
+        cells.append(Cell(
+            text=section_title,
+            row_index=0,
+            col_index=0,
+            colspan=4,
+            bbox=BBox(t_x0, section_bbox.y0, t_x1, section_bbox.y1),
+        ))
+        cur_row = 1
+
+    if header_cells:
+        for c in header_cells:
+            c.row_index = cur_row
+            cells.append(c)
+        cur_row += 1
+
     for row in recovered_rows:
         by_col: dict[int, list[tuple[float, float, float, float, str]]] = {index: [] for index in range(4)}
         for item in row:
@@ -271,13 +326,13 @@ def _make_query_table(
             by_col[col_index].append(item)
 
         if not by_col[0]:
-            if row_number <= 1:
+            if cur_row <= (1 if section_title else 0):
                 continue
             continuation_items = by_col[2] + by_col[3]
             continuation = _join_query_items(continuation_items)
             if continuation:
                 target_col = 3 if by_col[3] else 2
-                previous = next((cell for cell in cells if cell.row_index == row_number - 1 and cell.col_index == target_col), None)
+                previous = next((cell for cell in cells if cell.row_index == cur_row - 1 and cell.col_index == target_col), None)
                 if previous is not None:
                     previous.text += continuation
                     previous.bbox = BBox(previous.bbox.x0, previous.bbox.y0, max(previous.bbox.x1, max(item[2] for item in continuation_items)), max(previous.bbox.y1, max(item[3] for item in continuation_items)))
@@ -300,12 +355,12 @@ def _make_query_table(
                 x1 = boundaries[col_index] if col_index < 3 else page.rect.width
                 bbox = BBox(x0, row_y0, x1, row_y1)
                 text = ""
-            cells.append(Cell(text, row_number, col_index, bbox))
-        row_number += 1
+            cells.append(Cell(text, cur_row, col_index, bbox))
+        cur_row += 1
 
-    if row_number <= (1 if header_index is not None else 0):
+    if cur_row <= (2 if (section_title and header_cells) else (1 if (section_title or header_cells) else 0)):
         return None
-    all_cells = [cell for cell in cells if cell.text or cell.row_index == 0]
+    all_cells = [cell for cell in cells if cell.text or cell.row_index <= (1 if section_title else 0)]
     return Table(
         bbox=BBox(
             min(cell.bbox.x0 for cell in all_cells),
@@ -313,7 +368,7 @@ def _make_query_table(
             max(cell.bbox.x1 for cell in all_cells),
             max(cell.bbox.y1 for cell in all_cells),
         ),
-        rows=row_number,
+        rows=cur_row,
         cols=4,
         cells=all_cells,
         confidence=0.95,
@@ -344,10 +399,16 @@ def _make_query_tables(page: fitz.Page) -> list[Table]:
             for index in [*header_indices, *section_indices, len(rows)]
             if index > header_index
         ]
+        prev_headers = [h for h in header_indices if h < header_index]
+        prev_header_bound = max(prev_headers) if prev_headers else -1
+        poss_sections = [s for s in section_indices if prev_header_bound < s < header_index]
+        section_index = max(poss_sections) if poss_sections else None
+
         table = _make_query_table(
             page,
             header_index=header_index,
             end_index=min(next_boundaries),
+            section_index=section_index,
         )
         if table is not None:
             tables.append(table)
@@ -545,8 +606,16 @@ class PersonalCreditReportTableExtractor(TableExtractor):
         ]
 
     def extract(self, page: fitz.Page, *args, **kwargs) -> List[Table]:
-        """Ensure query tables do not retain leading section-title rows."""
+        """Ensure query tables retain section-title rows and replace rough candidates."""
         tables = super().extract(page, *args, **kwargs)
+        query_tables = _make_query_tables(page)
+        if query_tables:
+            tables = [
+                table
+                for table in tables
+                if not any(_table_overlaps(table, query) for query in query_tables)
+            ]
+            tables.extend(query_tables)
         return [_trim_query_table(table) for table in tables]
 
 

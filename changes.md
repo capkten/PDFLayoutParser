@@ -705,3 +705,14 @@
 - 测试结果：`tests/test_personal_credit_report.py` 10 项测试全部通过（10 passed）。
 - 页面输出核对路径：`output/verified_demo/个人信用报告(本人简版)` 与 `output/verified_demo/个人征信报告（简版）(1)`，两份报告各 5 页已完成端到端解析，机构查询与本人查询明细表格行列及单元格恢复完整，散落文本段落已清除，可视化 PNG 标注完全贴合。
 
+- 增强个人信用报告定制逻辑：将“机构查询记录明细”和“本人查询记录明细”作为 Row 0（`colspan=4`）纳入表格内。
+- 设计与实现：
+  1. `_make_query_tables` 识别紧邻前置的 section title 行，将其文字及水平边界作为表格 Row 0；
+  2. 原表头行（编号、查询日期、查询机构、查询原因）统一作为 Row 1，明细数据行从 Row 2 开始递增；
+  3. `_trim_query_table` 增加放行逻辑：当表头位于 Row 1 且 Row 0 为机构/本人查询记录明细时保留标题行，避免被误裁；
+  4. `PersonalCreditReportTableExtractor.extract` 保证用精准恢复的 `query_tables` 替换粗糙的候选表格；
+  5. 保持不回读 words 约束，继续消费原生 span 组合数据。
+- 测试结果：`tests/test_personal_credit_report.py` 11 项测试全部通过（11 passed）。
+- 页面输出核对路径：`output/verified_title_demo/个人信用报告(本人简版)` 与 `output/verified_title_demo/个人征信报告（简版）(1)`，两份报告 Markdown 和 PNG 均已确认表格首行为 `colspan=4` 的明细标题。
+
+
