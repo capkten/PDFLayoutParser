@@ -73,11 +73,8 @@ def _compute_cell_grid_rects(table: Table) -> list[tuple[Cell, fitz.Rect]]:
     has_span = any(c.rowspan > 1 or c.colspan > 1 for c in table.cells)
     if (
         not has_span
-        and table.source != "wireless_span_recovery"
-        and (
-            table.source in ("line_projection", "zebra_background", "wireless", "ml_detection")
-            or len(table.cells) == table.rows * table.cols
-        )
+        and table.source in ("line_projection", "PyMuPDF.find_tables")
+        and len(table.cells) == table.rows * table.cols
     ):
         return [(c, fitz.Rect(c.bbox.x0, c.bbox.y0, c.bbox.x1, c.bbox.y1)) for c in table.cells]
 
