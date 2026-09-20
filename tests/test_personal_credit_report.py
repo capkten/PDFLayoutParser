@@ -182,6 +182,38 @@ def test_page_003_query_tables_do_not_contain_titles():
         assert "明细" not in row0_text, f"Row 0 should not contain section title, but got: {row0_text}"
         assert "编号" in row0_text
         assert "查询日期" in row0_text
+        assert qt.rows > 1, f"Query table should contain detail rows, but got rows={qt.rows}"
+
+
+def test_query_tables_detail_rows_extracted_on_personal_credit_report_samples():
+    """Verify that query tables have detail rows extracted on both credit report samples."""
+    import os
+    from hexai_pdf_parser.extractors.personal_credit_report import (
+        PersonalCreditReportTableExtractor,
+    )
+
+    pdf_files = [
+        os.path.join("D:\\codes\\PDFLayoutParser", "个人信用报告", "个人信用报告(本人简版).pdf"),
+        os.path.join("D:\\codes\\PDFLayoutParser", "个人信用报告", "个人征信报告（简版）(1).pdf"),
+    ]
+    for pdf_path in pdf_files:
+        assert os.path.exists(pdf_path), f"File missing: {pdf_path}"
+        doc = fitz.open(pdf_path)
+        page = doc[3]  # Page 4 (0-indexed 3)
+        extractor = PersonalCreditReportTableExtractor(use_ml_table_detector=False)
+        tables = extractor.extract(page)
+        query_tables = [
+            t for t in tables
+            if any("查询原因" in c.text or "查询机构" in c.text for c in t.cells)
+        ]
+        assert len(query_tables) == 2, f"Expected 2 query tables in {pdf_path}, got {len(query_tables)}"
+        for qt in query_tables:
+            assert qt.rows > 1, f"Expected table to contain detail rows in {pdf_path}, but got rows={qt.rows}"
+            # Check row 1 has a number in col 0
+            row1_col0 = [c for c in qt.cells if c.row_index == 1 and c.col_index == 0]
+            assert len(row1_col0) == 1
+            assert row1_col0[0].text.strip() == "1", f"Expected row 1 col 0 to be '1', got: {row1_col0[0].text}"
+
 
 
 def test_document_result_preserves_layout_reading_order_over_raw_y0():

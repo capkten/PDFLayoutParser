@@ -154,10 +154,10 @@ def _join_query_items(items: list[tuple[float, float, float, float, str]]) -> st
 
 def _is_query_record_row(row: list[tuple[float, float, float, float, str]]) -> bool:
     """Return True for a row with the four query-record column anchors."""
-    texts = [item[4] for item in row]
-    has_number = any(item[0] < 110 and re.fullmatch(r"\d+", item[4]) for item in row)
-    has_date = any(item[0] >= 120 and item[0] < 240 and "年" in text for item, text in zip(row, texts))
-    has_reason = any(item[0] >= 350 for item in row)
+    texts = [item[4].strip() for item in row]
+    has_number = any(item[0] < 110 and re.fullmatch(r"\d+", text) for item, text in zip(row, texts))
+    has_date = any(item[0] >= 90 and item[0] < 240 and "年" in text for item, text in zip(row, texts))
+    has_reason = any(item[0] >= 340 for item in row)
     return has_number and has_date and has_reason
 
 
@@ -223,7 +223,13 @@ def _make_query_table(
     rows = merged_rows
     end_index = len(rows)
 
-    boundaries = [120.0, 243.0, 410.0]
+    if len(header_cells) == 4:
+        h_sorted = sorted(header_cells, key=lambda c: c.col_index)
+        h_centers = [(c.bbox.x0 + c.bbox.x1) / 2.0 for c in h_sorted]
+        boundaries = [(h_centers[i] + h_centers[i + 1]) / 2.0 for i in range(3)]
+    else:
+        boundaries = [95.0, 220.0, 355.0]
+
     recovered_rows: list[list[tuple[float, float, float, float, str]]] = []
     for row in rows[start_index:end_index]:
         row_text = "".join(item[4] for item in row)
@@ -232,7 +238,7 @@ def _make_query_table(
         if _is_query_record_row(row):
             recovered_rows.append(row)
             continue
-        if recovered_rows and any((item[0] + item[2]) / 2.0 >= 243.0 for item in row):
+        if recovered_rows and any((item[0] + item[2]) / 2.0 >= boundaries[1] for item in row):
             recovered_rows.append(row)
 
     if not recovered_rows:
@@ -271,9 +277,10 @@ def _make_query_table(
             continuation = _join_query_items(continuation_items)
             if continuation:
                 target_col = 3 if by_col[3] else 2
-                previous = next(cell for cell in cells if cell.row_index == row_number - 1 and cell.col_index == target_col)
-                previous.text += continuation
-                previous.bbox = BBox(previous.bbox.x0, previous.bbox.y0, max(previous.bbox.x1, max(item[2] for item in continuation_items)), max(previous.bbox.y1, max(item[3] for item in continuation_items)))
+                previous = next((cell for cell in cells if cell.row_index == row_number - 1 and cell.col_index == target_col), None)
+                if previous is not None:
+                    previous.text += continuation
+                    previous.bbox = BBox(previous.bbox.x0, previous.bbox.y0, max(previous.bbox.x1, max(item[2] for item in continuation_items)), max(previous.bbox.y1, max(item[3] for item in continuation_items)))
             continue
 
         row_y0 = min(item[1] for item in row)
