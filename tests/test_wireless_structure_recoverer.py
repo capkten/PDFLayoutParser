@@ -5,6 +5,7 @@ import pytest
 
 from hexai_pdf_parser import rust_adapter
 from hexai_pdf_parser.core.models import BBox, Cell
+from hexai_pdf_parser.pdf_snapshot import PageSnapshot
 from hexai_pdf_parser.tables.wireless_table_recovery import (
     NativeSpan,
     WirelessRecovery,
@@ -53,41 +54,89 @@ def _rust_sentinel_candidate(text="RUST_SENTINEL"):
     }
 
 
-def test_recover_cells_from_region_consumes_rust_sentinel(monkeypatch):
-    region = BBox(0, 0, 160, 70)
-    monkeypatch.setenv("PDF_RUST_MODE", "rust")
-    monkeypatch.setattr(
-        recoverer,
-        "_recover_cells_from_region_python",
-        lambda page, region_bbox: (1, 1, [Cell("PYTHON_BASELINE", 0, 0, region)]),
+def test_recover_cells_from_region_compares_direct_snapshot_python_and_rust(monkeypatch):
+    region = BBox(0, 0, 260, 100)
+
+    def make_span(text, x0, y0, position):
+        return {
+            "text": text,
+            "bbox": (x0, y0, x0 + max(8, len(text) * 8), y0 + 12),
+            "font": "SimSun",
+            "size": 10.0,
+            "flags": 0,
+            "chars": tuple(
+                {
+                    "c": character,
+                    "bbox": (x0 + i * 8, y0, x0 + (i + 1) * 8, y0 + 12),
+                    "raw_source_position": (*position, i),
+                    "source_order": i,
+                }
+                for i, character in enumerate(text)
+            ),
+            "raw_source_position": position,
+            "source_order": position[2],
+        }
+
+    labels = (
+        ("项目", "金额", "比例"),
+        ("收入", "100", "10%"),
+        ("支出", "200", "20%"),
     )
-    monkeypatch.setattr(
-        recoverer,
-        "collect_native_spans",
-        lambda page, allowed_regions: [],
+    lines = tuple(
+        {
+            "bbox": (0, 10 + row * 25, 260, 22 + row * 25),
+            "raw_source_position": (0, row),
+            "source_order": row,
+            "spans": tuple(
+                make_span(text, 10 + column * 80, 10 + row * 25, (0, row, column))
+                for column, text in enumerate(values)
+            ),
+        }
+        for row, values in enumerate(labels)
     )
-    monkeypatch.setattr(
-        recoverer.rust_adapter,
-        "recover_native_region",
-        lambda input_dto: {
-            "schema_version": 1,
-            "grid": {
-                "schema_version": 1,
-                "rows": 1,
-                "cols": 1,
-                "row_edges": [0.0, 20.0],
-                "col_edges": [0.0, 40.0],
-                "occupancy": [[0]],
-            },
-            "cells": [_rust_sentinel_cell()],
-            "diagnostics": [],
+    snapshot = PageSnapshot(
+        schema_version=1,
+        version=1,
+        page_index=0,
+        geometry={
+            "rect": (0.0, 0.0, 260.0, 100.0),
+            "x0": 0.0,
+            "y0": 0.0,
+            "x1": 260.0,
+            "y1": 100.0,
+            "width": 260.0,
+            "height": 100.0,
+            "rotation": 0,
         },
+        text_blocks=({
+            "type": 0,
+            "bbox": (0.0, 10.0, 260.0, 82.0),
+            "raw_source_position": (0,),
+            "source_order": 0,
+            "lines": lines,
+        },),
+        spans=tuple(span for line in lines for span in line["spans"]),
+        characters=(),
+        words=(),
+        drawings=(),
+        allowed_regions=(),
+        excluded_regions=(),
+        extraction_options={},
+        summary={},
     )
 
-    rows, columns, cells = recover_cells_from_region(object(), region)
+    expected = recoverer._recover_cells_from_snapshot_python(snapshot, region)
+    monkeypatch.setenv("PDF_RUST_MODE", "rust")
+    actual = recover_cells_from_region(snapshot, region)
 
-    assert (rows, columns) == (1, 1)
-    assert [cell.text for cell in cells] == ["RUST_SENTINEL"]
+    def signature(result):
+        rows, columns, cells = result
+        return rows, columns, [
+            (cell.row_index, cell.col_index, cell.rowspan, cell.colspan, cell.text)
+            for cell in cells
+        ]
+
+    assert signature(actual) == signature(expected)
 
 
 def test_recover_wireless_tables_consumes_rust_sentinel(monkeypatch):
