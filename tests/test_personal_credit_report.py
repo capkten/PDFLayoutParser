@@ -317,3 +317,32 @@ def test_parse_personal_credit_report_preserves_loan_numbering_order():
             next_content = blocks[i + 1]["content"]
             assert "2020年12月18日" in next_content, f"Expected 2020年12月18日 after 39., got {next_content}"
             break
+
+
+def test_query_continuation_table_before_header_extracted():
+    """Verify that continuation rows before a new section header are recovered as a lead table."""
+    import os
+    from hexai_pdf_parser.extractors.personal_credit_report import PersonalCreditReportTableExtractor
+
+    pdf_path = os.path.join(
+        "D:\\codes\\PDFLayoutParser",
+        "个人信用报告",
+        "test",
+        "test",
+        "3_PDFsam_2ceb8bbe-ca9f-4811-95db-a85df90a1f1b.pdf",
+    )
+    if not os.path.exists(pdf_path):
+        pytest.skip(f"Test file not found: {pdf_path}")
+
+    doc = fitz.open(pdf_path)
+    page = doc[2]  # Page 3
+    extractor = PersonalCreditReportTableExtractor(use_ml_table_detector=False)
+    tables = extractor.extract(page)
+
+    # Should find 2 tables on page 2: lead continuation table (26 rows) and personal query table (5 rows)
+    assert len(tables) == 2, f"Expected 2 tables on page 2, got {len(tables)}"
+    assert tables[0].rows == 26
+    assert tables[0].cells[0].text.strip() == "36"
+    assert tables[1].rows == 5
+    assert tables[1].cells[0].text.strip() == "个人查询记录明细"
+
