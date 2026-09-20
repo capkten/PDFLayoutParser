@@ -1184,7 +1184,7 @@ impl AtomDto {
         let sv = required_i64(dict, "schema_version")?;
         check_schema_version(sv)?;
         let text = required_string(dict, "text")?;
-        let rect = Rect4::from_py(&get_req(dict, "rect")?.downcast::<PyDict>()?.clone())?;
+        let rect = Rect4::from_py(&required_dict(dict, "rect")?)?;
         let run_refs = required_i64_list(dict, "run_refs")?;
         let row_hint = optional_i64(dict, "row_hint")?;
         let col_hint = optional_i64(dict, "col_hint")?;
@@ -1691,7 +1691,7 @@ impl Default for StructureConfig {
 
 impl StructureConfig {
     pub fn from_py(dict: &Bound<'_, PyDict>) -> PyResult<Self> {
-        let sv: i64 = get_req(dict, "schema_version")?.extract()?;
+        let sv = required_i64(dict, "schema_version")?;
         check_schema_version(sv)?;
         let line_tolerance =
             extract_finite_f64(&get_req(dict, "line_tolerance")?, "line_tolerance")?;
@@ -3370,6 +3370,33 @@ mod tests {
             atoms.append(PyList::empty_bound(py)).unwrap();
             input.set_item("atoms", atoms).unwrap();
             assert_value_error(NativeRegionInput::from_py(&input), py);
+        });
+    }
+
+    #[test]
+    fn atom_rect_and_config_schema_reject_wrong_types_as_value_error() {
+        with_test_python(|py| {
+            let input = base_native_region(py);
+            let atoms_value = input.get_item("atoms").unwrap().unwrap();
+            let atoms = atoms_value.downcast::<PyList>().unwrap();
+            let atom_value = atoms.get_item(0).unwrap();
+            let atom = atom_value.downcast::<PyDict>().unwrap();
+            atom.set_item("rect", PyList::empty_bound(py)).unwrap();
+            let error = AtomDto::from_py(&atom).expect_err("invalid atom rect must fail");
+            assert_eq!(error.get_type_bound(py).name().unwrap(), "ValueError");
+
+            let input = base_native_region(py);
+            let config_value = input.get_item("config").unwrap().unwrap();
+            let config = config_value.downcast::<PyDict>().unwrap();
+            config.set_item("schema_version", true).unwrap();
+            let error = StructureConfig::from_py(&config)
+                .expect_err("boolean schema_version must fail");
+            assert_eq!(error.get_type_bound(py).name().unwrap(), "ValueError");
+
+            config.set_item("schema_version", "1").unwrap();
+            let error = StructureConfig::from_py(&config)
+                .expect_err("string schema_version must fail");
+            assert_eq!(error.get_type_bound(py).name().unwrap(), "ValueError");
         });
     }
 }
