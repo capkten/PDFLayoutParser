@@ -224,37 +224,7 @@ def recover_cells_from_region(
     mode = rust_adapter.get_rust_mode("wireless_structure")
     if mode in ("rust", "shadow"):
         def _recover_cells_from_region_rust():
-            native_spans = list(
-                collect_native_spans_from_snapshot(snapshot, allowed_regions=[region_bbox])
-            )
-            spans = region_spans(native_spans, region_bbox)
-            output_mode = infer_output_order_mode(spans)
-            atoms = build_text_runs(spans, output_mode=output_mode)
-            bands = infer_column_bands(atoms, region_bbox)
-            bands = prune_paired_cjk_artifact_bands(atoms, bands)
-            bands = prune_sparse_alignment_artifact_bands(atoms, bands)
-            rust_input = {
-                "schema_version": 1,
-                "region": {
-                    "schema_version": 1,
-                    "rect": {"schema_version": 1, "x0": float(region_bbox.x0), "y0": float(region_bbox.y0), "x1": float(region_bbox.x1), "y1": float(region_bbox.y1)},
-                    "source_order": 0,
-                    "allowed": True,
-                },
-                "atoms": atoms,
-                "bands": bands,
-                "config": {
-                    "schema_version": 1,
-                    "line_tolerance": 2.0,
-                    "row_tolerance": 2.0,
-                    "column_tolerance": 2.0,
-                    "span_tolerance": 2.0,
-                    "numeric_tolerance": 2.0,
-                },
-            }
-            return _recover_cells_from_rust(
-                rust_adapter.recover_native_region(rust_input), region_bbox
-            )
+            return rust_adapter.recover_cells_from_snapshot(snapshot, region_bbox)
 
         return rust_adapter.run_python_or_rust(
             mode=mode,
