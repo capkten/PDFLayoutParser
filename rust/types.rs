@@ -2098,20 +2098,26 @@ impl NativeRegionInput {
     pub fn from_py(dict: &Bound<'_, PyDict>) -> PyResult<Self> {
         let sv = required_i64(dict, "schema_version")?;
         check_schema_version(sv)?;
-        let region = RegionDto::from_py(&get_req(dict, "region")?.downcast::<PyDict>()?.clone())?;
-        let atoms_list: Bound<'_, PyList> = get_req(dict, "atoms")?.extract()?;
+        let region = RegionDto::from_py(&required_dict(dict, "region")?)?;
+        let atoms_list = required_list(dict, "atoms")?;
         let mut atoms = Vec::with_capacity(atoms_list.len());
         let mut atom_evidence = Vec::with_capacity(atoms_list.len());
         for a in atoms_list.iter() {
-            let atom = a.downcast::<PyDict>()?.clone();
+            let atom = a
+                .downcast::<PyDict>()
+                .map_err(|_| PyValueError::new_err("Field 'atoms' items must be objects"))?
+                .clone();
             atoms.push(AtomDto::from_py(&atom)?);
             atom_evidence.push(AtomEvidenceDto::from_py(&atom)?);
         }
-        let bands_list: Bound<'_, PyList> = get_req(dict, "bands")?.extract()?;
+        let bands_list = required_list(dict, "bands")?;
         let mut bands = Vec::with_capacity(bands_list.len());
         let mut band_evidence = Vec::with_capacity(bands_list.len());
         for b in bands_list.iter() {
-            let band = b.downcast::<PyDict>()?.clone();
+            let band = b
+                .downcast::<PyDict>()
+                .map_err(|_| PyValueError::new_err("Field 'bands' items must be objects"))?
+                .clone();
             bands.push(ColumnBandDto::from_py(&band)?);
             band_evidence.push(BandEvidenceDto::from_py(&band)?);
         }
@@ -2125,8 +2131,7 @@ impl NativeRegionInput {
                 }
             }
         }
-        let config =
-            StructureConfig::from_py(&get_req(dict, "config")?.downcast::<PyDict>()?.clone())?;
+        let config = StructureConfig::from_py(&required_dict(dict, "config")?)?;
         Ok(Self {
             schema_version: sv,
             region,
@@ -3167,6 +3172,17 @@ pub fn roundtrip_dto_py<'py>(
 mod tests {
     use super::*;
     use pyo3::types::PyList;
+    use std::sync::Once;
+
+    static PYTHON_INIT: Once = Once::new();
+
+    fn with_test_python<F, R>(f: F) -> R
+    where
+        F: for<'py> FnOnce(Python<'py>) -> R,
+    {
+        PYTHON_INIT.call_once(|| pyo3::prepare_freethreaded_python());
+        Python::with_gil(f)
+    }
 
     fn base_native_region<'py>(py: Python<'py>) -> Bound<'py, PyDict> {
         let input = PyDict::new_bound(py);
@@ -3231,7 +3247,7 @@ mod tests {
 
     #[test]
     fn native_region_without_evidence_keeps_legacy_shape() {
-        Python::with_gil(|py| {
+        with_test_python(|py| {
             let input = base_native_region(py);
             let dto = NativeRegionInput::from_py(&input).unwrap();
             assert!(dto.atom_evidence.is_none());
@@ -3249,7 +3265,7 @@ mod tests {
 
     #[test]
     fn native_region_roundtrips_aligned_owned_evidence_and_drops_unknown_fields() {
-        Python::with_gil(|py| {
+        with_test_python(|py| {
             let input = base_native_region(py);
             let atoms_value = input.get_item("atoms").unwrap().unwrap();
             let atoms = atoms_value.downcast::<PyList>().unwrap();
@@ -3291,7 +3307,7 @@ mod tests {
 
     #[test]
     fn native_region_rejects_partial_or_invalid_evidence_and_references() {
-        Python::with_gil(|py| {
+        with_test_python(|py| {
             let input = base_native_region(py);
             let atoms_value = input.get_item("atoms").unwrap().unwrap();
             let atoms = atoms_value.downcast::<PyList>().unwrap();
@@ -3316,7 +3332,7 @@ mod tests {
 
     #[test]
     fn atom_and_band_dtos_reject_non_core_types() {
-        Python::with_gil(|py| {
+        with_test_python(|py| {
             let input = base_native_region(py);
             let atoms_value = input.get_item("atoms").unwrap().unwrap();
             let atoms = atoms_value.downcast::<PyList>().unwrap();
@@ -3327,6 +3343,33 @@ mod tests {
                 AtomDto::from_py(&atom).map(|_| NativeRegionInput::from_py(&input).unwrap()),
                 py,
             );
+        });
+    }
+
+    #[test]
+    fn native_region_rejects_wrong_container_types_as_value_error() {
+        with_test_python(|py| {
+            let input = base_native_region(py);
+            input.set_item("region", PyList::empty_bound(py)).unwrap();
+            assert_value_error(NativeRegionInput::from_py(&input), py);
+
+            let input = base_native_region(py);
+            input.set_item("atoms", PyDict::new_bound(py)).unwrap();
+            assert_value_error(NativeRegionInput::from_py(&input), py);
+
+            let input = base_native_region(py);
+            input.set_item("bands", PyDict::new_bound(py)).unwrap();
+            assert_value_error(NativeRegionInput::from_py(&input), py);
+
+            let input = base_native_region(py);
+            input.set_item("config", PyList::empty_bound(py)).unwrap();
+            assert_value_error(NativeRegionInput::from_py(&input), py);
+
+            let input = base_native_region(py);
+            let atoms = PyList::empty_bound(py);
+            atoms.append(PyList::empty_bound(py)).unwrap();
+            input.set_item("atoms", atoms).unwrap();
+            assert_value_error(NativeRegionInput::from_py(&input), py);
         });
     }
 }
