@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import re
 import bisect
+from pathlib import Path
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
@@ -902,6 +903,139 @@ class TableExtractor:
             )
 
         return structures
+
+    @staticmethod
+    def _coerce_to_bbox(
+        table_bbox: Any, page: fitz.Page
+    ) -> Optional[BBox]:
+        """Convert various bbox representations to a BBox object in page points."""
+        if isinstance(table_bbox, BBox):
+            return table_bbox
+        if isinstance(table_bbox, (list, tuple)) and len(table_bbox) >= 4:
+            return BBox(
+                float(table_bbox[0]),
+                float(table_bbox[1]),
+                float(table_bbox[2]),
+                float(table_bbox[3]),
+            )
+        if isinstance(table_bbox, dict):
+            w, h = float(page.rect.width), float(page.rect.height)
+            x0 = float(table_bbox.get("x0", 0.0))
+            y0 = float(table_bbox.get("y0", 0.0))
+            x1 = float(table_bbox.get("x1", 0.0))
+            y1 = float(table_bbox.get("y1", 0.0))
+            if (
+                0.0 <= x0 <= 1.0
+                and 0.0 <= y0 <= 1.0
+                and 0.0 <= x1 <= 1.0
+                and 0.0 <= y1 <= 1.0
+                and w > 1.0
+                and h > 1.0
+            ):
+                x0 *= w
+                y0 *= h
+                x1 *= w
+                y1 *= h
+            return BBox(x0, y0, x1, y1)
+        if (
+            hasattr(table_bbox, "x0")
+            and hasattr(table_bbox, "y0")
+            and hasattr(table_bbox, "x1")
+            and hasattr(table_bbox, "y1")
+        ):
+            return BBox(
+                float(table_bbox.x0),
+                float(table_bbox.y0),
+                float(table_bbox.x1),
+                float(table_bbox.y1),
+            )
+        return None
+
+    def extract_table_in_region(
+        self,
+        page: fitz.Page,
+        table_bbox: BBox | tuple[float, float, float, float] | list[float] | dict,
+        confidence: Optional[float] = None,
+        page_language: Optional[str] = None,
+    ) -> Optional[Table]:
+        """Extract a single table from a designated bounding box.
+
+        This method bypasses full-page candidate scanning and ML object detection.
+        It directly evaluates the specified region using:
+        1. Wired table extraction (vector lines and grid topology).
+        2. Wireless table structure recovery (native-span structure recovery).
+
+        Args:
+            page: The PyMuPDF Page object.
+            table_bbox: Target region as BBox, tuple/list (x0, y0, x1, y1),
+                or dict with x0, y0, x1, y1 (supports 0~1 normalized coordinates).
+            confidence: Optional confidence override.
+            page_language: Optional language ("zh", "en", "mixed"). If None, auto-detected.
+
+        Returns:
+            The extracted Table or None if no valid table structure was found.
+        """
+        normalize_page_rotation(page)
+        bbox = self._coerce_to_bbox(table_bbox, page)
+        if bbox is None:
+            return None
+
+        if page_language is None:
+            from hexai_pdf_parser.extractors.language_detector import detect_page_language
+
+            page_language = detect_page_language(page)
+
+        # 1. Try wired table extraction inside the region
+        try:
+            wired_tables = self._wired_extractor.extract(
+                page,
+                table_bbox=bbox,
+                confidence=confidence,
+            )
+        except Exception:
+            wired_tables = []
+
+        valid_wired = [
+            t for t in wired_tables if t.cols > 1 and t.rows >= 1 and len(t.cells) > 0
+        ]
+        if valid_wired:
+            table = max(valid_wired, key=lambda t: (len(t.cells), t.rows * t.cols))
+            if page_language in {"zh", "mixed"}:
+                table = self._recover_hybrid_wired_table(page, table, page_language)
+                table = normalize_table_headers(table, page)
+                table = normalize_complex_financial_header(table, page)
+            if self._table_config and self._table_config.profiles:
+                applied = self._apply_layout_rules(page, [table])
+                if applied:
+                    table = applied[0]
+            return self._clamp_table_to_page(table, page)
+
+        # 2. Fallback to wireless table structure recovery
+        try:
+            wireless_tables = self._wireless_extractor.extract(
+                page,
+                table_bbox=bbox,
+                confidence=confidence,
+                page_language=page_language,
+            )
+        except Exception:
+            wireless_tables = []
+
+        valid_wireless = [
+            t for t in wireless_tables if t.cols > 1 and t.rows >= 1 and len(t.cells) > 0
+        ]
+        if valid_wireless:
+            table = max(valid_wireless, key=lambda t: (len(t.cells), t.rows * t.cols))
+            if page_language in {"zh", "mixed"}:
+                table = normalize_table_headers(table, page)
+                table = normalize_complex_financial_header(table, page)
+            if self._table_config and self._table_config.profiles:
+                applied = self._apply_layout_rules(page, [table])
+                if applied:
+                    table = applied[0]
+            return self._clamp_table_to_page(table, page)
+
+        return None
 
     def _extract_english(
         self,
@@ -5426,3 +5560,60 @@ class TableExtractor:
             )
 
         return tables
+
+
+def extract_table_from_region(
+    source: str | Path | fitz.Page | fitz.Document,
+    table_bbox: BBox | tuple[float, float, float, float] | list[float] | dict,
+    page_index: int = 0,
+    *,
+    table_config: Optional[TableConfig] = None,
+    confidence: Optional[float] = None,
+    page_language: Optional[str] = None,
+) -> Optional[Table]:
+    """Extract a table from a specified region without running ML table detection.
+
+    Args:
+        source: PDF file path (str or Path), fitz.Page, or fitz.Document.
+        table_bbox: Bounding box of the table (BBox, tuple, list, or dict).
+        page_index: 0-based page index (used when source is file path or Document).
+        table_config: Optional TableConfig.
+        confidence: Optional confidence score.
+        page_language: Optional language code ("zh", "en", "mixed").
+
+    Returns:
+        The extracted Table, or None if no table was recognized.
+    """
+    extractor = TableExtractor(
+        table_config=table_config,
+        use_ml_table_detector=False,
+    )
+
+    if isinstance(source, fitz.Page):
+        return extractor.extract_table_in_region(
+            source,
+            table_bbox=table_bbox,
+            confidence=confidence,
+            page_language=page_language,
+        )
+
+    if isinstance(source, fitz.Document):
+        page = source[page_index]
+        return extractor.extract_table_in_region(
+            page,
+            table_bbox=table_bbox,
+            confidence=confidence,
+            page_language=page_language,
+        )
+
+    doc = fitz.open(str(source))
+    try:
+        page = doc[page_index]
+        return extractor.extract_table_in_region(
+            page,
+            table_bbox=table_bbox,
+            confidence=confidence,
+            page_language=page_language,
+        )
+    finally:
+        doc.close()
