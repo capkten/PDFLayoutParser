@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import math
 import re
+from collections.abc import Mapping
 from typing import Any
 
 import fitz
@@ -158,32 +159,109 @@ def _native_validate_span_bbox(span: Any) -> None:
     )
 
 
+def _native_validate_snapshot_span_bboxes(snapshot: Any) -> None:
+    text_blocks = getattr(snapshot, "text_blocks", _MISSING)
+    if text_blocks is _MISSING:
+        raise KeyError("snapshot.text_blocks")
+    if not isinstance(text_blocks, (list, tuple)):
+        raise TypeError("snapshot.text_blocks must be a list or tuple")
+    for block_index, block in enumerate(text_blocks):
+        if not isinstance(block, Mapping):
+            raise TypeError(f"text_blocks[{block_index}] must be an object")
+        if "type" not in block:
+            raise KeyError(f"text_blocks[{block_index}].type")
+        block_type = block["type"]
+        if isinstance(block_type, bool) or not isinstance(block_type, int):
+            raise TypeError(f"text_blocks[{block_index}].type must be an integer")
+        if block_type != 0:
+            continue
+        if "lines" not in block:
+            raise KeyError(f"text_blocks[{block_index}].lines")
+        lines = block["lines"]
+        if not isinstance(lines, (list, tuple)):
+            raise TypeError(f"text_blocks[{block_index}].lines must be a list or tuple")
+        for line_index, line in enumerate(lines):
+            if not isinstance(line, Mapping):
+                raise TypeError(
+                    f"text_blocks[{block_index}].lines[{line_index}] must be an object"
+                )
+            if "spans" not in line:
+                raise KeyError(
+                    f"text_blocks[{block_index}].lines[{line_index}].spans"
+                )
+            spans = line["spans"]
+            if not isinstance(spans, (list, tuple)):
+                raise TypeError(
+                    f"text_blocks[{block_index}].lines[{line_index}].spans "
+                    "must be a list or tuple"
+                )
+            for span_index, span in enumerate(spans):
+                if not isinstance(span, Mapping):
+                    raise TypeError(
+                        "text_blocks[{}].lines[{}].spans[{}] must be an object".format(
+                            block_index, line_index, span_index
+                        )
+                    )
+                if "bbox" not in span:
+                    raise KeyError(
+                        "text_blocks[{}].lines[{}].spans[{}].bbox".format(
+                            block_index, line_index, span_index
+                        )
+                    )
+                _native_rect_from_bbox(
+                    span["bbox"],
+                    "text_blocks[{}].lines[{}].spans[{}].bbox".format(
+                        block_index, line_index, span_index
+                    ),
+                )
+
+
 def _native_strict_int_list(value: Any, field_name: str) -> list[int]:
     if not isinstance(value, (list, tuple)):
         raise TypeError(f"{field_name} must be a list of integers")
-    return [
+    result = [
         _native_strict_int(item, f"{field_name}[{index}]")
         for index, item in enumerate(value)
     ]
+    if any(item < 0 for item in result):
+        raise ValueError(f"{field_name} must contain non-negative integers")
+    return result
 
 
-def _native_run_refs(atom: dict[str, Any], atom_index: int) -> list[int]:
-    references = atom.get("span_refs")
-    if isinstance(references, (list, tuple)):
+def _native_run_refs(
+    atom: dict[str, Any],
+    atom_index: int,
+    valid_span_orders: set[int] | None = None,
+) -> list[int]:
+    if "span_refs" in atom:
+        references = atom["span_refs"]
+        if not isinstance(references, (list, tuple)):
+            raise TypeError("span_refs must be a list or tuple")
         parsed = []
-        for reference in references:
+        for reference_index, reference in enumerate(references):
             if not isinstance(reference, str):
-                continue
+                raise TypeError(f"span_refs[{reference_index}] must be a string")
             match = _SPAN_REF.fullmatch(reference)
-            if match is not None:
-                parsed.append(int(match.group(1)))
-        if parsed:
-            return parsed
+            if match is None:
+                raise ValueError(
+                    f"span_refs[{reference_index}] must match S<number> or S<number>.<fragment>"
+                )
+            order = int(match.group(1))
+            if valid_span_orders is not None and order not in valid_span_orders:
+                raise ValueError(f"span_refs[{reference_index}] has unknown span order {order}")
+            parsed.append(order)
+        return parsed
 
     for key in ("native_span_order", "span_order"):
         value = atom.get(key, _MISSING)
-        if value is not _MISSING and isinstance(value, int) and not isinstance(value, bool) and value >= 0:
-            return [value]
+        if value is _MISSING:
+            continue
+        value = _native_strict_int(value, key)
+        if value < 0:
+            raise ValueError(f"{key} must be non-negative")
+        if valid_span_orders is not None and value not in valid_span_orders:
+            raise ValueError(f"{key} has unknown span order {value}")
+        return [value]
     return [atom_index]
 
 
@@ -196,6 +274,15 @@ def _native_optional_int(
     return _native_strict_int(value, field_name)
 
 
+def _native_optional_nonnegative_int(
+    atom: dict[str, Any], field_name: str, default: int | None = None
+) -> int | None:
+    value = _native_optional_int(atom, field_name, default)
+    if value is not None and value < 0:
+        raise ValueError(f"{field_name} must be non-negative")
+    return value
+
+
 def _native_atom_evidence(
     atom: dict[str, Any], atom_index: int
 ) -> dict[str, Any]:
@@ -203,6 +290,10 @@ def _native_atom_evidence(
         atom.get("flow_start", atom_index), "flow_start"
     )
     flow_end = _native_strict_int(atom.get("flow_end", flow_start), "flow_end")
+    if flow_start < 0 or flow_end < 0:
+        raise ValueError("flow evidence must be non-negative")
+    if flow_end < flow_start:
+        raise ValueError("flow_end must be greater than or equal to flow_start")
     source_blocks = _native_strict_int_list(
         atom.get("source_blocks", []), "source_blocks"
     )
@@ -212,12 +303,16 @@ def _native_atom_evidence(
     source_line_end = _native_strict_int(
         atom.get("source_line_end", source_line_start), "source_line_end"
     )
+    if source_line_start < 0 or source_line_end < 0:
+        raise ValueError("source line evidence must be non-negative")
+    if source_line_end < source_line_start:
+        raise ValueError(
+            "source_line_end must be greater than or equal to source_line_start"
+        )
     source_position_known = _native_strict_bool(
         atom.get("source_position_known", False), "source_position_known"
     )
-    column_id = _native_optional_int(atom, "column_id")
-    if column_id is not None and column_id < 0:
-        raise ValueError("column_id must be non-negative")
+    column_id = _native_optional_nonnegative_int(atom, "column_id")
     return {
         "flow_start": flow_start,
         "flow_end": flow_end,
@@ -229,19 +324,21 @@ def _native_atom_evidence(
     }
 
 
-def _native_atom_core(atom: dict[str, Any], atom_index: int) -> dict[str, Any]:
+def _native_atom_core(
+    atom: dict[str, Any], atom_index: int, valid_span_orders: set[int] | None = None
+) -> dict[str, Any]:
     text = atom["text"]
     if not isinstance(text, str):
         raise TypeError("text must be a string")
     rect = _native_rect_from_bbox(atom["bbox"], "bbox")
     evidence = _native_atom_evidence(atom, atom_index)
-    row_hint = _native_optional_int(atom, "row_hint")
+    row_hint = _native_optional_nonnegative_int(atom, "row_hint")
     column_id = evidence["column_id"]
     return {
         "schema_version": 1,
         "text": text,
         "rect": rect,
-        "run_refs": _native_run_refs(atom, atom_index),
+        "run_refs": _native_run_refs(atom, atom_index, valid_span_orders),
         "row_hint": row_hint,
         "col_hint": column_id,
         "order": evidence["flow_start"],
@@ -251,18 +348,28 @@ def _native_atom_core(atom: dict[str, Any], atom_index: int) -> dict[str, Any]:
 
 def _native_band_evidence(band: dict[str, Any], band_index: int) -> dict[str, Any]:
     band_id = _native_strict_int(band.get("id", band_index + 1), "id")
+    if band_id < 0:
+        raise ValueError("id must be non-negative")
     kind = band.get("kind")
     if kind is not None and not isinstance(kind, str):
         raise TypeError("kind must be a string or None")
     support = _native_strict_int(band.get("support", 0), "support")
     y_support = _native_strict_int(band.get("y_support", 0), "y_support")
+    if support < 0 or y_support < 0:
+        raise ValueError("support evidence must be non-negative")
     parent_x0 = band.get("parent_x0")
     parent_x1 = band.get("parent_x1")
     if parent_x0 is not None:
         parent_x0 = _native_strict_finite_float(parent_x0, "parent_x0")
     if parent_x1 is not None:
         parent_x1 = _native_strict_finite_float(parent_x1, "parent_x1")
+    if (parent_x0 is None) != (parent_x1 is None):
+        raise ValueError("parent_x0 and parent_x1 must be provided together")
+    if parent_x0 is not None and parent_x0 >= parent_x1:
+        raise ValueError("parent_x0 must be less than parent_x1")
     parent_leaf_count = _native_optional_int(band, "parent_leaf_count")
+    if parent_leaf_count is not None and parent_leaf_count <= 0:
+        raise ValueError("parent_leaf_count must be positive")
     return {
         "id": band_id,
         "kind": kind,
@@ -297,10 +404,12 @@ def _native_band_core(
 
 
 def _normalize_native_region_atoms_and_bands(
-    atoms: list[dict[str, Any]], bands: list[dict[str, Any]]
+    atoms: list[dict[str, Any]],
+    bands: list[dict[str, Any]],
+    valid_span_orders: set[int] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     normalized_atoms = [
-        _native_atom_core(atom, atom_index)
+        _native_atom_core(atom, atom_index, valid_span_orders)
         for atom_index, atom in enumerate(atoms)
     ]
     normalized_bands = [
@@ -327,6 +436,8 @@ def _prepare_native_region_from_snapshot(
 ) -> _PreparedNativeRegion | None:
     """Build the shared Python-derived input for the next native transition."""
     region_rect = _native_region_rect(region_bbox)
+    if validate_spans:
+        _native_validate_snapshot_span_bboxes(snapshot)
     native_spans = list(
         collect_native_spans_from_snapshot(snapshot, allowed_regions=[region_bbox])
     )
@@ -354,7 +465,9 @@ def _prepare_native_region_from_snapshot(
     python_atoms = [dict(atom) for atom in atoms]
     python_bands = [dict(band) for band in bands]
     normalized_atoms, normalized_bands = _normalize_native_region_atoms_and_bands(
-        python_atoms, python_bands
+        python_atoms,
+        python_bands,
+        {span.order for span in native_spans} if validate_spans else None,
     )
     rust_input = {
         "schema_version": 1,

@@ -480,3 +480,196 @@ def test_native_region_builder_rejects_non_finite_region_rect():
             _snapshot_for_rows((("项目", "金额"), ("甲", "10"))),
             BBox(float("nan"), 0.0, 240.0, 80.0),
         )
+
+
+def test_native_region_builder_rejects_non_finite_snapshot_span_bbox_before_filter():
+    snapshot = _snapshot_for_rows((("项目", "金额"), ("甲", "10")))
+    block = dict(snapshot.text_blocks[0])
+    line = dict(block["lines"][0])
+    span = dict(line["spans"][0])
+    span["bbox"] = (float("nan"), 10.0, 40.0, 20.0)
+    line["spans"] = (span, *line["spans"][1:])
+    block["lines"] = (line, *block["lines"][1:])
+    object.__setattr__(snapshot, "text_blocks", (block,))
+
+    with pytest.raises((ValueError, TypeError)):
+        recoverer._build_native_region_input_from_snapshot(
+            snapshot, BBox(0.0, 0.0, 240.0, 80.0)
+        )
+
+
+@pytest.mark.parametrize(
+    ("span_refs", "error"),
+    [
+        (["not-a-span-ref"], ValueError),
+        ([7], TypeError),
+        (["S9"], ValueError),
+    ],
+)
+def test_native_region_builder_rejects_present_malformed_or_unknown_span_refs(
+    monkeypatch, span_refs, error
+):
+    raw_atom = {
+        "text": "项目",
+        "bbox": [10.0, 10.0, 40.0, 20.0],
+        "flow_start": 0,
+        "flow_end": 0,
+        "span_refs": span_refs,
+        "source_blocks": [0],
+        "source_line_start": 0,
+        "source_line_end": 0,
+        "source_position_known": True,
+        "column_id": 0,
+    }
+    raw_span = NativeSpan(
+        text="项目",
+        bbox=BBox(10.0, 10.0, 40.0, 20.0),
+        font="SimSun",
+        size=10.0,
+        order=0,
+    )
+    raw_bands = [
+        {"id": 1, "x0": 0.0, "x1": 100.0, "support": 1, "y_support": 1},
+        {"id": 2, "x0": 100.0, "x1": 200.0, "support": 1, "y_support": 1},
+    ]
+    monkeypatch.setattr(
+        recoverer,
+        "collect_native_spans_from_snapshot",
+        lambda *args, **kwargs: (raw_span,),
+    )
+    monkeypatch.setattr(
+        recoverer, "build_text_runs", lambda spans, output_mode: [raw_atom]
+    )
+    monkeypatch.setattr(
+        recoverer, "infer_column_bands", lambda atoms, bbox: raw_bands
+    )
+    monkeypatch.setattr(
+        recoverer, "prune_paired_cjk_artifact_bands", lambda atoms, bands: bands
+    )
+    monkeypatch.setattr(
+        recoverer,
+        "prune_sparse_alignment_artifact_bands",
+        lambda atoms, bands: bands,
+    )
+    monkeypatch.setattr(
+        recoverer, "merge_same_band_native_line_runs", lambda atoms, bands: atoms
+    )
+    monkeypatch.setattr(recoverer, "refine_leaf_bands", lambda atoms, bands: (bands, None))
+    monkeypatch.setattr(
+        recoverer, "rescue_sparse_body_bands", lambda atoms, bands, cutoff: bands
+    )
+    monkeypatch.setattr(
+        recoverer,
+        "rescue_header_only_note_bands",
+        lambda atoms, bands, cutoff: bands,
+    )
+    monkeypatch.setattr(
+        recoverer,
+        "rescue_header_only_leaf_bands",
+        lambda atoms, bands, cutoff: bands,
+    )
+    monkeypatch.setattr(recoverer, "annotate_columns", lambda *args: None)
+
+    with pytest.raises(error):
+        recoverer._build_native_region_input_from_snapshot(
+            _snapshot_for_rows((("项目", "金额"),)),
+            BBox(0.0, 0.0, 240.0, 80.0),
+        )
+
+
+def _native_atom_for_evidence_validation():
+    return {
+        "text": "项目",
+        "bbox": [10.0, 10.0, 40.0, 20.0],
+        "flow_start": 0,
+        "flow_end": 0,
+        "span_refs": ["S0"],
+        "source_blocks": [0],
+        "source_line_start": 0,
+        "source_line_end": 0,
+        "source_position_known": True,
+        "row_hint": 0,
+        "column_id": 0,
+    }
+
+
+def _native_band_for_evidence_validation():
+    return {
+        "id": 0,
+        "x0": 0.0,
+        "x1": 100.0,
+        "support": 1,
+        "y_support": 1,
+    }
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("flow_start", -1),
+        ("flow_end", -1),
+        ("source_blocks", [-1]),
+        ("source_line_start", -1),
+        ("source_line_end", -1),
+        ("row_hint", -1),
+        ("column_id", -1),
+    ],
+)
+def test_native_region_rejects_negative_atom_evidence(field, value):
+    atom = _native_atom_for_evidence_validation()
+    atom[field] = value
+
+    with pytest.raises(ValueError):
+        recoverer._normalize_native_region_atoms_and_bands(
+            [atom], [_native_band_for_evidence_validation()]
+        )
+
+
+def test_native_region_rejects_reversed_atom_evidence_ranges():
+    atom = _native_atom_for_evidence_validation()
+    atom["flow_start"] = 2
+    atom["flow_end"] = 1
+    atom["source_line_start"] = 2
+    atom["source_line_end"] = 1
+
+    with pytest.raises(ValueError):
+        recoverer._normalize_native_region_atoms_and_bands(
+            [atom], [_native_band_for_evidence_validation()]
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("id", -1),
+        ("support", -1),
+        ("y_support", -1),
+        ("parent_leaf_count", 0),
+    ],
+)
+def test_native_region_rejects_invalid_band_evidence(field, value):
+    band = _native_band_for_evidence_validation()
+    band[field] = value
+
+    with pytest.raises(ValueError):
+        recoverer._normalize_native_region_atoms_and_bands(
+            [_native_atom_for_evidence_validation()], [band]
+        )
+
+
+@pytest.mark.parametrize(
+    "band_update",
+    [
+        {"parent_x0": 20.0},
+        {"parent_x1": 20.0},
+        {"parent_x0": 30.0, "parent_x1": 20.0},
+    ],
+)
+def test_native_region_rejects_invalid_band_parent_geometry(band_update):
+    band = _native_band_for_evidence_validation()
+    band.update(band_update)
+
+    with pytest.raises(ValueError):
+        recoverer._normalize_native_region_atoms_and_bands(
+            [_native_atom_for_evidence_validation()], [band]
+        )

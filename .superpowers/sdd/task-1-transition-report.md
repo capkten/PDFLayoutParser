@@ -75,3 +75,54 @@ Rust library：
 
 不提交 `tests/test_wireless_extractor_split.py` 或
 `tests/test_wireless_structure_recoverer.py`。
+
+## Reviewer corrected findings 与本次修订
+
+独立 Luna reviewer 已更正此前的误判：Rust DTO evidence 与 Python raw
+oracle 分离是正确的，`_PreparedNativeRegion` 保留 Python atoms/bands、Rust
+payload 只传 normalized core/evidence 的设计继续保留。本次仅处理 reviewer
+确认的两个 Important finding：
+
+1. Rust-facing snapshot builder 必须在
+   `collect_native_spans_from_snapshot()` 之前扫描
+   `text_blocks/type=0/lines/spans`。现在 `_native_validate_snapshot_span_bboxes()`
+   对缺 key、容器/对象错误、非有限坐标、反向坐标和零面积直接抛出
+   `KeyError`、`TypeError` 或 `ValueError`，因此 allowed-region 中心点过滤不能
+   再把坏 span 静默变成合法空结果。校验只由 `validate_spans=True` 的 Rust-facing
+   builder 调用；Python oracle 仍保留 route-level empty-result policy。
+2. `_native_run_refs()` 对 present `span_refs` 不再 fallback：字段必须是 list/tuple，
+   每个元素必须匹配 `S<number>` 或 `S<number>.<fragment>`。Rust-facing builder
+   将 native spans 的实际 `order` 集合传入并拒绝未知 base order。evidence 现在
+   严格校验整数/布尔/容器类型，拒绝负 flow/source/row/band 序号，约束
+   `flow_end >= flow_start`、`source_line_end >= source_line_start`，并校验
+   `parent_x0/parent_x1` 成对且 `x0 < x1`、`parent_leaf_count > 0`。
+
+## 本次 TDD RED/GREEN
+
+新增 transition 边界覆盖：真实 `PageSnapshot` 实例中的 NaN span bbox、present
+malformed/unknown `span_refs`、负 flow/source/row/band evidence、反向 evidence
+范围、非法 parent geometry。RED 首次运行选中 19 个边界用例，结果为 `18 failed`
+和 `1 passed`；首个失败是 NaN span 在 collector 中心点过滤后未抛异常。修复后
+同一组边界为 `19 passed, 14 deselected`，transition 文件全量为 `33 passed`。
+
+验证了 bridge 不读取 `page.get_text("words")`；Rust bridge 只消费 PageSnapshot、
+native spans、atoms、bands 和 DTO evidence。由于 Python oracle 仍须保持原有
+route-level empty-result policy，未启用 Rust-facing `validate_spans` 时不传递
+native order 集合；此私有 shared preparation 路径仍执行 run-ref 格式、类型和
+非负校验，而 unknown order 只在 Rust-facing builder 能取得实际 native order
+集合时严格拒绝。该限制没有放宽 Rust-facing contract。
+
+## 最终验证计数
+
+```text
+pytest tests/test_rust_native_region_transition.py \
+  tests/test_pdf_fast_dto.py tests/test_rust_migration_routing.py \
+  tests/test_wireless_structure_recoverer.py: 99 passed
+cargo test --lib: 50 passed; 0 failed
+git diff --check: passed
+```
+
+本次没有执行页面级 PDF/PNG 重跑；任务范围是 bridge transition validation，且
+没有修改 `wireless_table_recovery.py`。最终提交仍只包含 recoverer.py、
+`tests/test_rust_native_region_transition.py` 和本报告；review package、brief
+文件以及两个用户已有 dirty 测试均保留未提交。
