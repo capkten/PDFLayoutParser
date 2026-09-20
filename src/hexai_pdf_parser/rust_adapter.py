@@ -555,6 +555,67 @@ def collect_native_spans_from_snapshot(
     return tuple(converted)
 
 
+def recover_cells_from_snapshot(
+    snapshot: Any,
+    region: Any,
+) -> tuple[int, int, list[Any]]:
+    """Recover table structure (rows, cols, cells) directly from snapshot using Rust kernel."""
+    from hexai_pdf_parser.models import BBox, Cell
+
+    snapshot_dto = (
+        page_snapshot_to_rust_input(snapshot)
+        if not isinstance(snapshot, Mapping) or "schema_version" not in snapshot
+        else dict(snapshot)
+    )
+
+    if isinstance(region, Mapping):
+        reg_dict = {
+            "schema_version": 1,
+            "x0": float(region["x0"]),
+            "y0": float(region["y0"]),
+            "x1": float(region["x1"]),
+            "y1": float(region["y1"]),
+        }
+    elif hasattr(region, "x0"):
+        reg_dict = {
+            "schema_version": 1,
+            "x0": float(region.x0),
+            "y0": float(region.y0),
+            "x1": float(region.x1),
+            "y1": float(region.y1),
+        }
+    else:
+        reg_dict = {
+            "schema_version": 1,
+            "x0": float(region[0]),
+            "y0": float(region[1]),
+            "x1": float(region[2]),
+            "y1": float(region[3]),
+        }
+
+    raw_output = _pdf_fast.recover_cells_from_snapshot(snapshot_dto, reg_dict)
+    grid = raw_output.get("grid", {}).get("grid", {})
+    rows = int(grid.get("rows", 0))
+    cols = int(grid.get("cols", 0))
+    raw_cells = raw_output.get("cells", [])
+
+    cells = []
+    for c in raw_cells:
+        rect = c["rect"]
+        cells.append(
+            Cell(
+                text=str(c.get("text", "")).strip(),
+                row_index=int(c["row"]),
+                col_index=int(c["col"]),
+                bbox=BBox(rect["x0"], rect["y0"], rect["x1"], rect["y1"]),
+                rowspan=int(c.get("rowspan", 1)),
+                colspan=int(c.get("colspan", 1)),
+            )
+        )
+    cells.sort(key=lambda item: (item.row_index, item.col_index))
+    return rows, cols, cells
+
+
 def recover_native_text_input(
     snapshot: Any,
     *,

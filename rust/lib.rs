@@ -314,6 +314,18 @@ fn collect_native_spans_from_snapshot_binding<'py>(
     Ok(result)
 }
 
+#[pyfunction(name = "recover_cells_from_snapshot")]
+fn recover_cells_from_snapshot_binding<'py>(
+    py: Python<'py>,
+    snapshot_dict: &Bound<'py, PyDict>,
+    region_dict: &Bound<'py, PyDict>,
+) -> PyResult<Bound<'py, PyDict>> {
+    let snapshot = types::PageSnapshotDto::from_py(snapshot_dict)?;
+    let region = types::Rect4::from_py(region_dict)?;
+    let output = wireless_structure::recover_cells_from_snapshot(&snapshot, &region);
+    output.to_py(py)
+}
+
 #[pyfunction(name = "page_snapshot_digest")]
 fn page_snapshot_digest_binding<'py>(
     py: Python<'py>,
@@ -903,6 +915,10 @@ fn _pdf_fast(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(roundtrip_dto_binding, module)?)?;
     module.add_function(wrap_pyfunction!(
         collect_native_spans_from_snapshot_binding,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        recover_cells_from_snapshot_binding,
         module
     )?)?;
     module.add_function(wrap_pyfunction!(page_snapshot_digest_binding, module)?)?;

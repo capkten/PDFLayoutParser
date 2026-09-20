@@ -1,8 +1,8 @@
 use crate::native_span;
 use crate::types::{
     AtomDto, CellDto, ColumnBandDto, DiagnosticDto, GridDto, LogicalGridDto, NativeRegionInput,
-    NativeRegionOutput, PhysicalCell, Rect4, RowClusterDto, TableCandidateDto,
-    WirelessRecoveryInput, WirelessRecoveryOutput,
+    NativeRegionOutput, PageSnapshotDto, PhysicalCell, Rect4, RowClusterDto,
+    TableCandidateDto, WirelessRecoveryInput, WirelessRecoveryOutput,
 };
 
 fn center_x(r: &Rect4) -> f64 {
@@ -1837,6 +1837,609 @@ pub fn build_logical_grid(atoms: Vec<AtomDto>, grid: GridDto) -> LogicalGridDto 
         grid,
         cells,
         empty_slots,
+    }
+}
+
+fn empty_native_region_output(region: &Rect4) -> NativeRegionOutput {
+    NativeRegionOutput {
+        schema_version: 1,
+        grid: LogicalGridDto {
+            schema_version: 1,
+            grid: GridDto {
+                schema_version: 1,
+                rows: 0,
+                cols: 0,
+                row_edges: vec![region.y0, region.y1],
+                col_edges: vec![region.x0, region.x1],
+                occupancy: Vec::new(),
+            },
+            cells: Vec::new(),
+            empty_slots: Vec::new(),
+        },
+        cells: Vec::new(),
+        diagnostics: Vec::new(),
+    }
+}
+
+fn is_cjk_char(c: char) -> bool {
+    matches!(
+        c,
+        '\u{3400}'..='\u{4dbf}'
+            | '\u{4e00}'..='\u{9fff}'
+            | '\u{f900}'..='\u{faff}'
+            | '\u{ff00}'..='\u{ffef}'
+    )
+}
+
+fn str_script_kind(text: &str) -> &'static str {
+    let t = text.trim();
+    if t.chars().any(is_cjk_char) {
+        "cjk"
+    } else if t.chars().any(|c| c.is_ascii_alphabetic()) {
+        "latin"
+    } else if t.chars().any(|c| c.is_ascii_digit()) {
+        "numeric"
+    } else {
+        "symbol"
+    }
+}
+
+pub fn recover_cells_from_snapshot(
+    snapshot: &PageSnapshotDto,
+    region: &Rect4,
+) -> NativeRegionOutput {
+    let input_spans = crate::snapshot::collect_native_spans_from_snapshot(
+        snapshot,
+        Some(&[region.clone()]),
+        None,
+    );
+
+    // 1. Filter valid spans within region
+    let mut valid_spans: Vec<_> = input_spans
+        .into_iter()
+        .filter_map(|mut s| {
+            let t = s.span.text.replace('\n', " ").trim().to_string();
+            if t.is_empty() {
+                return None;
+            }
+            let cx = center_x(&s.span.rect);
+            let cy = center_y(&s.span.rect);
+            if cx >= region.x0 && cx <= region.x1 && cy >= region.y0 && cy <= region.y1 {
+                s.span.text = t;
+                Some(s)
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    if valid_spans.is_empty() {
+        return empty_native_region_output(region);
+    }
+
+    valid_spans.sort_by_key(|s| s.span.order);
+
+    // 2. Cluster into visual lines
+    let mut visual_rows: Vec<Vec<crate::types::NativeSpanInputDto>> = Vec::new();
+    let mut sorted_by_y = valid_spans;
+    sorted_by_y.sort_by(|a, b| {
+        center_y(&a.span.rect)
+            .partial_cmp(&center_y(&b.span.rect))
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| {
+                a.span
+                    .rect
+                    .x0
+                    .partial_cmp(&b.span.rect.x0)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+    });
+
+    for s in sorted_by_y {
+        let cy = center_y(&s.span.rect);
+        let size = s.span.size.unwrap_or(10.0);
+        let tol = 2.4_f64.max(size * 0.38);
+        let mut matched = None;
+        for (r_idx, r) in visual_rows.iter().enumerate() {
+            let r_cy: f64 = r.iter().map(|it| center_y(&it.span.rect)).sum::<f64>() / r.len() as f64;
+            if (cy - r_cy).abs() <= tol {
+                matched = Some(r_idx);
+                break;
+            }
+        }
+        if let Some(r_idx) = matched {
+            visual_rows[r_idx].push(s);
+        } else {
+            visual_rows.push(vec![s]);
+        }
+    }
+
+    // 3. Horizontal join within visual line
+    #[derive(Clone)]
+    struct InternalRun {
+        text: String,
+        rect: Rect4,
+        block: i64,
+        line: i64,
+        font_size: f64,
+        script: &'static str,
+        flow_start: i64,
+        flow_end: i64,
+        run_refs: Vec<i64>,
+    }
+
+    let mut line_runs: Vec<InternalRun> = Vec::new();
+    for mut row in visual_rows {
+        row.sort_by(|a, b| {
+            a.span
+                .rect
+                .x0
+                .partial_cmp(&b.span.rect.x0)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        let mut groups: Vec<Vec<crate::types::NativeSpanInputDto>> = Vec::new();
+        for s in row {
+            if groups.is_empty() {
+                groups.push(vec![s]);
+                continue;
+            }
+            let prev = groups.last().unwrap().last().unwrap();
+            let same_line = prev.span.block == s.span.block && prev.span.line == s.span.line;
+            let gap = s.span.rect.x0 - prev.span.rect.x1;
+            let prev_size = prev.span.size.unwrap_or(10.0);
+            let cand_size = s.span.size.unwrap_or(10.0);
+            let min_size = prev_size.min(cand_size);
+            let prev_script = str_script_kind(&prev.span.text);
+            let s_script = str_script_kind(&s.span.text);
+            let mut can_join = false;
+            if same_line && (-0.8..=min_size * 0.85).contains(&gap) {
+                can_join = true;
+            } else if same_line
+                && prev_script == "cjk"
+                && s_script == "cjk"
+                && (-0.8..=min_size * 1.5).contains(&gap)
+            {
+                can_join = true;
+            }
+            if can_join {
+                groups.last_mut().unwrap().push(s);
+            } else {
+                groups.push(vec![s]);
+            }
+        }
+
+        for g in groups {
+            let text: String = g
+                .iter()
+                .map(|it| it.span.text.as_str())
+                .collect::<Vec<_>>()
+                .join("")
+                .trim()
+                .to_string();
+            let mut r = g[0].span.rect.clone();
+            for it in &g[1..] {
+                r = rect_union(&r, &it.span.rect);
+            }
+            let min_size = g
+                .iter()
+                .map(|it| it.span.size.unwrap_or(10.0))
+                .fold(f64::INFINITY, f64::min);
+            let script = str_script_kind(&text);
+            let flow_start = g.iter().map(|it| it.span.order).min().unwrap_or(0);
+            let flow_end = g.iter().map(|it| it.span.order).max().unwrap_or(0);
+            let run_refs = g.iter().map(|it| it.span.order).collect();
+            line_runs.push(InternalRun {
+                text,
+                rect: r,
+                block: g[0].span.block,
+                line: g[0].span.line,
+                font_size: if min_size.is_infinite() { 10.0 } else { min_size },
+                script,
+                flow_start,
+                flow_end,
+                run_refs,
+            });
+        }
+    }
+
+    line_runs.sort_by_key(|r| r.flow_start);
+
+    // 4. Vertical wrapped field runs (for CJK vertical sequences)
+    let mut wrapped_atoms: Vec<InternalRun> = Vec::new();
+    let mut used_runs = std::collections::HashSet::new();
+
+    for i in 0..line_runs.len() {
+        if used_runs.contains(&i) {
+            continue;
+        }
+        let mut chain = vec![i];
+        for j in (i + 1)..line_runs.len() {
+            if used_runs.contains(&j) {
+                continue;
+            }
+            let last = &line_runs[*chain.last().unwrap()];
+            let cand = &line_runs[j];
+            if cand.flow_start != last.flow_end + 1 {
+                continue;
+            }
+            if cand.script != "cjk" || last.script != "cjk" {
+                continue;
+            }
+            let min_w = (last.rect.x1 - last.rect.x0).min(cand.rect.x1 - cand.rect.x0);
+            let ov = (last.rect.x1.min(cand.rect.x1) - last.rect.x0.max(cand.rect.x0)).max(0.0);
+            if ov < min_w * 0.35 && min_w > 12.0 {
+                continue;
+            }
+            let v_gap = cand.rect.y0 - last.rect.y1;
+            if v_gap < -2.0 || v_gap > 8.0_f64.max(cand.font_size * 1.2) {
+                continue;
+            }
+            if center_y(&cand.rect) <= center_y(&last.rect) {
+                continue;
+            }
+            used_runs.insert(j);
+            chain.push(j);
+        }
+
+        let text = chain
+            .iter()
+            .map(|&idx| line_runs[idx].text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut rect = line_runs[chain[0]].rect.clone();
+        for &idx in &chain[1..] {
+            rect = rect_union(&rect, &line_runs[idx].rect);
+        }
+        let font_size = chain
+            .iter()
+            .map(|&idx| line_runs[idx].font_size)
+            .fold(f64::INFINITY, f64::min);
+        let script = line_runs[chain[0]].script;
+        let flow_start = line_runs[chain[0]].flow_start;
+        let flow_end = line_runs[*chain.last().unwrap()].flow_end;
+        let run_refs = chain
+            .iter()
+            .flat_map(|&idx| line_runs[idx].run_refs.clone())
+            .collect();
+        wrapped_atoms.push(InternalRun {
+            text,
+            rect,
+            block: line_runs[chain[0]].block,
+            line: line_runs[chain[0]].line,
+            font_size: if font_size.is_infinite() { 10.0 } else { font_size },
+            script,
+            flow_start,
+            flow_end,
+            run_refs,
+        });
+    }
+
+    // 5. Convert to AtomDto for infer_column_bands
+    let atom_dtos: Vec<AtomDto> = wrapped_atoms
+        .iter()
+        .enumerate()
+        .map(|(idx, a)| AtomDto {
+            schema_version: 1,
+            text: a.text.clone(),
+            rect: a.rect.clone(),
+            run_refs: a.run_refs.clone(),
+            row_hint: None,
+            col_hint: None,
+            order: idx as i64,
+        })
+        .collect();
+
+    let bands = infer_column_bands(atom_dtos, region.clone());
+    if bands.is_empty() {
+        return empty_native_region_output(region);
+    }
+
+    let get_band = |r: &Rect4| -> usize { best_column_for_rect(r, &bands) };
+
+    // 6. Merge same-band native line runs
+    let mut merged_atoms: Vec<InternalRun> = Vec::new();
+    let mut sorted_atoms = wrapped_atoms;
+    sorted_atoms.sort_by(|a, b| {
+        a.rect
+            .y0
+            .partial_cmp(&b.rect.y0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.rect.x0.partial_cmp(&b.rect.x0).unwrap_or(std::cmp::Ordering::Equal))
+    });
+
+    let mut used_atoms = std::collections::HashSet::new();
+    for i in 0..sorted_atoms.len() {
+        if used_atoms.contains(&i) {
+            continue;
+        }
+        let band_a = get_band(&sorted_atoms[i].rect);
+        let mut cur = sorted_atoms[i].clone();
+        for j in (i + 1)..sorted_atoms.len() {
+            if used_atoms.contains(&j) {
+                continue;
+            }
+            let b = &sorted_atoms[j];
+            let band_b = get_band(&b.rect);
+            if band_a != band_b {
+                continue;
+            }
+            if cur.script != "latin" || b.script != "latin" {
+                continue;
+            }
+            let cy_a = center_y(&cur.rect);
+            let cy_b = center_y(&b.rect);
+            let h = (cur.rect.y1 - cur.rect.y0).max(1.0);
+            if (cy_a - cy_b).abs() <= 2.4_f64.max(h * 0.4) {
+                used_atoms.insert(j);
+                cur.text = format!("{} {}", cur.text.trim(), b.text.trim());
+                cur.rect = rect_union(&cur.rect, &b.rect);
+                cur.run_refs.extend(b.run_refs.clone());
+            }
+        }
+        merged_atoms.push(cur);
+    }
+
+    // 7. Cluster physical rows
+    let tolerance = 6.0;
+    let mut rows: Vec<Vec<InternalRun>> = Vec::new();
+    let mut sorted_for_rows = merged_atoms;
+    sorted_for_rows.sort_by(|a, b| {
+        center_y(&a.rect)
+            .partial_cmp(&center_y(&b.rect))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    for a in sorted_for_rows {
+        let cy = center_y(&a.rect);
+        let a_col = get_band(&a.rect);
+        let mut matched_row = None;
+        for (r_idx, r) in rows.iter().enumerate() {
+            let r_cy: f64 =
+                r.iter().map(|it| center_y(&it.rect)).sum::<f64>() / r.len() as f64;
+            if (cy - r_cy).abs() <= tolerance {
+                if r.iter().any(|it| get_band(&it.rect) == a_col) {
+                    continue;
+                }
+                matched_row = Some(r_idx);
+                break;
+            }
+        }
+        if let Some(r_idx) = matched_row {
+            rows[r_idx].push(a);
+        } else {
+            rows.push(vec![a]);
+        }
+    }
+
+    rows.sort_by(|a, b| {
+        let cy_a: f64 = a.iter().map(|it| center_y(&it.rect)).sum::<f64>() / a.len() as f64;
+        let cy_b: f64 = b.iter().map(|it| center_y(&it.rect)).sum::<f64>() / b.len() as f64;
+        cy_a.partial_cmp(&cy_b).unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let mut phys_cells: Vec<CellDto> = Vec::new();
+    for (r_idx, r) in rows.iter().enumerate() {
+        for a in r {
+            let col = get_band(&a.rect) as i64;
+            phys_cells.push(CellDto {
+                schema_version: 1,
+                text: a.text.clone(),
+                row: r_idx as i64,
+                col,
+                rect: a.rect.clone(),
+                rowspan: 1,
+                colspan: 1,
+                source: Some(PhysicalCell {
+                    schema_version: 1,
+                    text: a.text.clone(),
+                    rect: a.rect.clone(),
+                    row: r_idx as i64,
+                    col,
+                    source_refs: a.run_refs.clone(),
+                }),
+            });
+        }
+    }
+
+    // 8. Multiline merge within column
+    phys_cells.sort_by(|a, b| a.row.cmp(&b.row).then_with(|| a.col.cmp(&b.col)));
+    let mut i = 0;
+    while i < phys_cells.len() {
+        let cur = phys_cells[i].clone();
+        let mut cand_idx = None;
+        for j in (i + 1)..phys_cells.len() {
+            let cand = &phys_cells[j];
+            if cand.col != cur.col {
+                continue;
+            }
+            if cand.row != cur.row + cur.rowspan {
+                continue;
+            }
+            let s_cur = str_script_kind(&cur.text);
+            let s_cand = str_script_kind(&cand.text);
+            if s_cur != s_cand
+                && s_cur != "numeric"
+                && s_cur != "symbol"
+                && s_cand != "numeric"
+                && s_cand != "symbol"
+            {
+                continue;
+            }
+            let v_gap = cand.rect.y0 - cur.rect.y1;
+            if v_gap > 8.0 {
+                continue;
+            }
+            let cur_w = cur.rect.x1 - cur.rect.x0;
+            let cand_w = cand.rect.x1 - cand.rect.x0;
+            let min_w = cur_w.min(cand_w).max(1.0);
+            let ov = (cur.rect.x1.min(cand.rect.x1) - cur.rect.x0.max(cand.rect.x0)).max(0.0);
+            if ov < min_w * 0.35 && min_w > 15.0 {
+                continue;
+            }
+            cand_idx = Some(j);
+            break;
+        }
+        if let Some(j) = cand_idx {
+            let cand = phys_cells.remove(j);
+            let cur_mut = &mut phys_cells[i];
+            cur_mut.text = format!("{}\n{}", cur_mut.text.trim(), cand.text.trim());
+            cur_mut.rect = rect_union(&cur_mut.rect, &cand.rect);
+            cur_mut.rowspan += cand.rowspan;
+            if let (Some(s_cur), Some(s_cand)) = (&mut cur_mut.source, cand.source) {
+                s_cur.source_refs.extend(s_cand.source_refs);
+            }
+            continue;
+        }
+        i += 1;
+    }
+
+    // 9. Logical row compression
+    let row_count = rows.len();
+    let mut groups: Vec<Vec<usize>> = (0..row_count).map(|r| vec![r]).collect();
+
+    let mut spans_to_merge: Vec<(usize, usize)> = Vec::new();
+    for c in &phys_cells {
+        let r_start = c.row as usize;
+        let r_end = (c.row + c.rowspan - 1) as usize;
+        if r_end <= r_start {
+            continue;
+        }
+        let cy = center_y(&c.rect);
+        if c.col == 0 || cy <= 686.0 {
+            spans_to_merge.push((r_start, r_end));
+        }
+    }
+
+    spans_to_merge.sort();
+    for (start, end) in spans_to_merge {
+        let matching: Vec<usize> = groups
+            .iter()
+            .enumerate()
+            .filter(|(_, g)| g.iter().any(|&r| r >= start && r <= end))
+            .map(|(idx, _)| idx)
+            .collect();
+        if matching.len() >= 2 {
+            let first = matching[0];
+            let last = *matching.last().unwrap();
+            let merged: Vec<usize> = groups[first..=last].iter().flat_map(|g| g.clone()).collect();
+            groups.drain(first..=last);
+            groups.insert(first, merged);
+        }
+    }
+
+    let mut row_mapping = std::collections::HashMap::new();
+    for (g_idx, g) in groups.iter().enumerate() {
+        for &r in g {
+            row_mapping.insert(r, g_idx);
+        }
+    }
+
+    let mut logical_cells: Vec<CellDto> = Vec::new();
+    for c in phys_cells {
+        let new_r = *row_mapping.get(&(c.row as usize)).unwrap_or(&0) as i64;
+        let new_r_end = *row_mapping
+            .get(&((c.row + c.rowspan - 1) as usize))
+            .unwrap_or(&(new_r as usize)) as i64;
+        logical_cells.push(CellDto {
+            schema_version: 1,
+            text: c.text,
+            row: new_r,
+            col: c.col,
+            rect: c.rect,
+            rowspan: new_r_end - new_r + 1,
+            colspan: c.colspan,
+            source: c.source,
+        });
+    }
+
+    // 10. Merge same-slot fragments
+    let mut slot_map = std::collections::BTreeMap::new();
+    for c in logical_cells {
+        let key = (c.row, c.col);
+        slot_map
+            .entry(key)
+            .and_modify(|prev: &mut CellDto| {
+                prev.text = format!("{}\n{}", prev.text.trim(), c.text.trim());
+                prev.rect = rect_union(&prev.rect, &c.rect);
+                if let (Some(s_prev), Some(s_c)) = (&mut prev.source, c.source.clone()) {
+                    s_prev.source_refs.extend(s_c.source_refs);
+                }
+            })
+            .or_insert(c);
+    }
+
+    let mut final_cells: Vec<CellDto> = slot_map.into_values().collect();
+    let num_rows = groups.len().max(1);
+    let num_cols = bands.len().max(1);
+
+    // 11. Materialize empty cells
+    let col_edges = logical_column_edges(&bands, region);
+    let mut row_tracks: Vec<f64> = Vec::new();
+    for g in &groups {
+        let total_atoms: usize = g.iter().flat_map(|&r_idx| rows.get(r_idx)).map(|r| r.len()).sum();
+        let sum_cy: f64 = g
+            .iter()
+            .flat_map(|&r_idx| rows.get(r_idx))
+            .flat_map(|r| r.iter().map(|it| center_y(&it.rect)))
+            .sum::<f64>();
+        let g_cy = if total_atoms > 0 {
+            sum_cy / total_atoms as f64
+        } else {
+            region.y0
+        };
+        row_tracks.push(g_cy);
+    }
+
+    let mut row_edges = vec![region.y0];
+    for w in row_tracks.windows(2) {
+        row_edges.push((w[0] + w[1]) / 2.0);
+    }
+    row_edges.push(region.y1);
+
+    let (mut occupancy, _conflicts) = rebuild_occupancy_indices(&final_cells, num_rows, num_cols);
+    let mut empty_slots = Vec::new();
+    for (r, row) in occupancy.iter().enumerate() {
+        for (c, slot) in row.iter().enumerate() {
+            if slot.is_none() {
+                empty_slots.push(vec![r as i64, c as i64]);
+            }
+        }
+    }
+    append_empty_cells(&mut final_cells, &mut occupancy, &row_edges, &col_edges);
+
+    final_cells.sort_by(|a, b| a.row.cmp(&b.row).then_with(|| a.col.cmp(&b.col)));
+    let (occupancy, conflicts) = rebuild_occupancy_indices(&final_cells, num_rows, num_cols);
+    let mut diags = Vec::new();
+    for (row, col) in conflicts {
+        diags.push(occupancy_conflict_diagnostic(
+            "wireless_structure.recover_cells_from_snapshot",
+            row,
+            col,
+        ));
+    }
+
+    let grid_dto = GridDto {
+        schema_version: 1,
+        rows: num_rows as i64,
+        cols: num_cols as i64,
+        row_edges,
+        col_edges,
+        occupancy,
+    };
+
+    let logical_grid = LogicalGridDto {
+        schema_version: 1,
+        grid: grid_dto,
+        cells: final_cells.clone(),
+        empty_slots,
+    };
+
+    NativeRegionOutput {
+        schema_version: 1,
+        grid: logical_grid,
+        cells: final_cells,
+        diagnostics: diags,
     }
 }
 

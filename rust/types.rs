@@ -1639,6 +1639,19 @@ pub struct StructureConfig {
     pub numeric_tolerance: f64,
 }
 
+impl Default for StructureConfig {
+    fn default() -> Self {
+        Self {
+            schema_version: 1,
+            line_tolerance: 2.0,
+            row_tolerance: 2.0,
+            column_tolerance: 2.0,
+            span_tolerance: 2.0,
+            numeric_tolerance: 2.0,
+        }
+    }
+}
+
 impl StructureConfig {
     pub fn from_py(dict: &Bound<'_, PyDict>) -> PyResult<Self> {
         let sv: i64 = get_req(dict, "schema_version")?.extract()?;
