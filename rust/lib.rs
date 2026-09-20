@@ -4,6 +4,7 @@ use pyo3::types::{PyBytes, PyDict, PyList, PyModule, PyTuple};
 pub mod english_wireless;
 pub mod geometry;
 pub mod native_span;
+pub mod snapshot;
 pub mod table_normalization;
 pub mod types;
 pub mod wired;
@@ -271,6 +272,46 @@ fn canonical_digest<'py>(py: Python<'py>, data: &Bound<'py, PyDict>) -> PyResult
         .call0()?
         .extract()?;
     Ok(digest)
+}
+
+#[pyfunction(name = "collect_native_spans_from_snapshot")]
+#[pyo3(signature = (snapshot_dict, allowed_regions=None, excluded_regions=None))]
+fn collect_native_spans_from_snapshot_binding<'py>(
+    py: Python<'py>,
+    snapshot_dict: &Bound<'py, PyDict>,
+    allowed_regions: Option<&Bound<'py, PyList>>,
+    excluded_regions: Option<&Bound<'py, PyList>>,
+) -> PyResult<Bound<'py, PyList>> {
+    let snapshot = types::PageSnapshotDto::from_py(snapshot_dict)?;
+    let parse_regions = |list_opt: Option<&Bound<'py, PyList>>| -> PyResult<Option<Vec<Rect4>>> {
+        match list_opt {
+            Some(list) => {
+                let mut rects = Vec::with_capacity(list.len());
+                for item in list.iter() {
+                    let d = item.downcast::<PyDict>().map_err(|_| {
+                        pyo3::exceptions::PyValueError::new_err("Region item must be a dict")
+                    })?;
+                    rects.push(Rect4::from_py(&d)?);
+                }
+                Ok(Some(rects))
+            }
+            None => Ok(None),
+        }
+    };
+    let allowed = parse_regions(allowed_regions)?;
+    let excluded = parse_regions(excluded_regions)?;
+
+    let spans = snapshot::collect_native_spans_from_snapshot(
+        &snapshot,
+        allowed.as_deref(),
+        excluded.as_deref(),
+    );
+
+    let result = PyList::empty_bound(py);
+    for s in spans {
+        result.append(s.to_py(py)?)?;
+    }
+    Ok(result)
 }
 
 #[pyfunction(name = "page_snapshot_digest")]
@@ -860,6 +901,10 @@ fn _pdf_fast(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(assign_text_to_line_cells_binding, module)?)?;
     module.add_function(wrap_pyfunction!(extract_wired_region_binding, module)?)?;
     module.add_function(wrap_pyfunction!(roundtrip_dto_binding, module)?)?;
+    module.add_function(wrap_pyfunction!(
+        collect_native_spans_from_snapshot_binding,
+        module
+    )?)?;
     module.add_function(wrap_pyfunction!(page_snapshot_digest_binding, module)?)?;
     module.add_function(wrap_pyfunction!(stage_input_digest_binding, module)?)?;
     module.add_function(wrap_pyfunction!(infer_header_structure_binding, module)?)?;

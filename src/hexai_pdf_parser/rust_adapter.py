@@ -1,7 +1,7 @@
 import os
 import math
 import traceback
-from typing import Any, Dict, List, Mapping, Optional, Tuple, Union
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
 from . import _pdf_fast
 
@@ -365,7 +365,10 @@ def _drawing_to_rust_input(drawing: Any, index: int) -> Dict[str, Any]:
         ),
         "raw_source_position": raw_source_position,
         "lines": _drawing_line_items(items, width, path),
-        "rect": _rect_input(_required_field(drawing, "rect", path), f"{path}.rect"),
+        "rect": _rect_input(
+            drawing.get("rect") or drawing.get("scissor") or (0.0, 0.0, 0.0, 0.0),
+            f"{path}.rect",
+        ),
         "fill": None if drawing.get("fill") is None else _snapshot_value(drawing["fill"], f"{path}.fill"),
         "stroke": None if drawing.get("stroke") is None else _snapshot_value(drawing["stroke"], f"{path}.stroke"),
         "clip": None if drawing.get("clip") is None else _rect_input(drawing["clip"], f"{path}.clip"),
@@ -463,6 +466,93 @@ def stage_input_digest(stage_dto: Mapping[str, Any]) -> str:
 def page_snapshot_digest(snapshot_dto: Mapping[str, Any]) -> str:
     """Validate and hash a normalized PageSnapshotDto through Rust."""
     return _pdf_fast.page_snapshot_digest(dict(snapshot_dto))
+
+
+def collect_native_spans_from_snapshot(
+    snapshot: Any,
+    excluded_regions: Optional[Sequence[Any]] = None,
+    allowed_regions: Optional[Sequence[Any]] = None,
+) -> tuple[Any, ...]:
+    """Extract and spatially filter native spans directly using the Rust kernel."""
+    from hexai_pdf_parser.models import BBox
+    from hexai_pdf_parser.tables.wireless_table_recovery import NativeSpan
+
+    snapshot_dto = (
+        page_snapshot_to_rust_input(snapshot)
+        if not isinstance(snapshot, Mapping) or "schema_version" not in snapshot
+        else dict(snapshot)
+    )
+
+    def _to_rect_list(regions):
+        if not regions:
+            return None
+        rects = []
+        for r in regions:
+            if isinstance(r, Mapping):
+                rects.append(
+                    {
+                        "schema_version": 1,
+                        "x0": float(r["x0"]),
+                        "y0": float(r["y0"]),
+                        "x1": float(r["x1"]),
+                        "y1": float(r["y1"]),
+                    }
+                )
+            elif hasattr(r, "x0"):
+                rects.append(
+                    {
+                        "schema_version": 1,
+                        "x0": float(r.x0),
+                        "y0": float(r.y0),
+                        "x1": float(r.x1),
+                        "y1": float(r.y1),
+                    }
+                )
+            else:
+                rects.append(
+                    {
+                        "schema_version": 1,
+                        "x0": float(r[0]),
+                        "y0": float(r[1]),
+                        "x1": float(r[2]),
+                        "y1": float(r[3]),
+                    }
+                )
+        return rects
+
+    allowed_dicts = _to_rect_list(allowed_regions)
+    excluded_dicts = _to_rect_list(excluded_regions)
+    raw_spans = _pdf_fast.collect_native_spans_from_snapshot(
+        snapshot_dto, allowed_dicts, excluded_dicts
+    )
+    converted = []
+    for s in raw_spans:
+        rect = s["rect"]
+        characters = [
+            (
+                c["text"],
+                BBox(c["rect"]["x0"], c["rect"]["y0"], c["rect"]["x1"], c["rect"]["y1"]),
+            )
+            for c in s.get("characters", [])
+        ]
+        raw_pos = s.get("raw_source_position")
+        source_pos = (
+            (int(raw_pos[0]), int(raw_pos[1]), int(raw_pos[2]))
+            if raw_pos and len(raw_pos) >= 3
+            else (int(s.get("block", 0)), int(s.get("line", 0)), 0)
+        )
+        converted.append(
+            NativeSpan(
+                text=s["text"],
+                bbox=BBox(rect["x0"], rect["y0"], rect["x1"], rect["y1"]),
+                font=s.get("font"),
+                size=s.get("size"),
+                order=int(s["order"]),
+                characters=characters,
+                source_position=source_pos,
+            )
+        )
+    return tuple(converted)
 
 
 def recover_native_text_input(
