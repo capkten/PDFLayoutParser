@@ -506,7 +506,7 @@ def _capture_glyph_bbox(font: Any, char_value: Any) -> tuple[float, float, float
             _finite_float(getattr(glyph, name))
             for name in ("x0", "y0", "x1", "y1")
         )  # type: ignore[return-value]
-    except (AttributeError, TypeError, ValueError, OverflowError, RuntimeError):
+    except Exception:
         return None
 
 
@@ -537,7 +537,7 @@ def _raw_span(
     if isinstance(font_name, str) and font_name:
         try:
             font = fitz.Font(font_name)
-        except (TypeError, ValueError, RuntimeError):
+        except Exception:
             font = None
     chars = [
         _raw_char(
