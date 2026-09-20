@@ -6,6 +6,7 @@ from hexai_pdf_parser.rust_adapter import (
     select_candidates,
     recover_wireless_tables,
 )
+from hexai_pdf_parser.tables.wireless_table_recovery import _wireless_recovery_from_rust
 
 
 def _rect(x0, y0, x1, y1):
@@ -151,3 +152,9 @@ class TestRecoverWirelessTables:
 
         page = PageSpy()
         assert 'words' not in page.calls
+
+    def test_rust_candidate_conversion_rejects_zero_by_zero_grid(self):
+        candidate = _candidate(0, 0, 100, 100, 0, 0, [])
+
+        with pytest.raises(ValueError, match="positive"):
+            _wireless_recovery_from_rust({"candidates": [candidate], "diagnostics": []})

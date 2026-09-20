@@ -90,7 +90,7 @@ class WirelessRecovery:
     diagnostics: Dict[str, Any]
 
 
-def _rust_bbox(value: Any, fallback: BBox | None = None) -> BBox:
+def _rust_bbox(value: Any) -> BBox:
     if isinstance(value, dict):
         return BBox(
             float(value["x0"]),
@@ -105,8 +105,6 @@ def _rust_bbox(value: Any, fallback: BBox | None = None) -> BBox:
             float(value[2]),
             float(value[3]),
         )
-    if fallback is not None:
-        return fallback
     raise ValueError("Rust cell output is missing a rectangle")
 
 
@@ -116,8 +114,8 @@ def _rust_cells_to_project(
     columns: int,
     fallback_bbox: BBox | None = None,
 ) -> List[Cell]:
-    if rows < 0 or columns < 0:
-        raise ValueError("Rust grid dimensions must be non-negative")
+    if rows <= 0 or columns <= 0:
+        raise ValueError("Rust grid dimensions must be positive")
 
     occupied: set[tuple[int, int]] = set()
     converted: List[Cell] = []
@@ -126,8 +124,10 @@ def _rust_cells_to_project(
             raise TypeError("Rust cell output must contain mappings")
         row = int(item["row"])
         column = int(item["col"])
-        rowspan = max(1, int(item.get("rowspan", 1)))
-        colspan = max(1, int(item.get("colspan", 1)))
+        rowspan = int(item.get("rowspan", 1))
+        colspan = int(item.get("colspan", 1))
+        if rowspan <= 0 or colspan <= 0:
+            raise ValueError("Rust cell spans must be positive")
         if (
             row < 0
             or column < 0
@@ -146,7 +146,7 @@ def _rust_cells_to_project(
                 text=str(item.get("text", "")).strip(),
                 row_index=row,
                 col_index=column,
-                bbox=_rust_bbox(item.get("rect", item.get("bbox")), fallback_bbox),
+                bbox=_rust_bbox(item.get("rect", item.get("bbox"))),
                 rowspan=rowspan,
                 colspan=colspan,
             )

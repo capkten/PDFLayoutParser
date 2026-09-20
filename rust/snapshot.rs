@@ -40,22 +40,21 @@ pub fn collect_native_spans_from_snapshot(
     excluded_regions: Option<&[Rect4]>,
 ) -> Vec<NativeSpanInputDto> {
     let page_height = snapshot.page.height;
-    let page_y0 = 0.0_f64;
+    let page_y0 = snapshot.page_y0;
 
     let mut spans: Vec<NativeSpanInputDto> = Vec::new();
     let mut order: i64 = 0;
 
     for (block_index, block) in snapshot.text_blocks.iter().enumerate() {
+        if block.block_type != Some(0) {
+            continue;
+        }
         for (line_index, line) in block.lines.iter().enumerate() {
             // Reconstruct line text
             let mut line_text = String::new();
             for item in &line.spans {
-                if !item.span.characters.is_empty() {
-                    for c in &item.span.characters {
-                        line_text.push_str(&c.text);
-                    }
-                } else {
-                    line_text.push_str(&item.span.text);
+                for c in &item.span.characters {
+                    line_text.push_str(&c.text);
                 }
             }
 
@@ -64,15 +63,12 @@ pub fn collect_native_spans_from_snapshot(
             }
 
             for (span_index, item) in line.spans.iter().enumerate() {
-                let text = if !item.span.characters.is_empty() {
-                    let mut s = String::new();
-                    for c in &item.span.characters {
-                        s.push_str(&c.text);
-                    }
-                    s
-                } else {
-                    item.span.text.clone()
-                };
+                let text: String = item
+                    .span
+                    .characters
+                    .iter()
+                    .map(|character| character.text.as_str())
+                    .collect();
 
                 if text.trim().is_empty() {
                     continue;

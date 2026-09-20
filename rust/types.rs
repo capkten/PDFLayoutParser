@@ -184,6 +184,14 @@ fn optional_i64(dict: &Bound<'_, PyDict>, key: &str) -> PyResult<Option<i64>> {
     })
 }
 
+fn optional_f64(dict: &Bound<'_, PyDict>, key: &str) -> PyResult<Option<f64>> {
+    let value = match get_opt(dict, key)? {
+        Some(value) => value,
+        None => return Ok(None),
+    };
+    extract_finite_f64(&value, key).map(Some)
+}
+
 fn optional_string(dict: &Bound<'_, PyDict>, key: &str) -> PyResult<Option<String>> {
     let value = match get_opt(dict, key)? {
         Some(value) => value,
@@ -852,6 +860,7 @@ impl TextLineDto {
 #[derive(Debug, Clone, PartialEq)]
 pub struct TextBlockDto {
     pub schema_version: i64,
+    pub block_type: Option<i64>,
     pub rect: Rect4,
     pub lines: Vec<TextLineDto>,
     pub source_position: Vec<i64>,
@@ -862,8 +871,27 @@ impl TextBlockDto {
     pub fn from_py(dict: &Bound<'_, PyDict>) -> PyResult<Self> {
         let schema_version = required_i64(dict, "schema_version")?;
         check_schema_version(schema_version)?;
+        let block_type = match dict.get_item("type")? {
+            None => Some(0),
+            Some(value) if value.is_none() => None,
+            Some(value) => {
+                if value.is_instance_of::<PyBool>() {
+                    return Err(PyValueError::new_err("Field 'type' must be an integer"));
+                }
+                Some(value.extract::<i64>().map_err(|_| {
+                    PyValueError::new_err("Field 'type' must be an integer")
+                })?)
+            }
+        };
         let rect = Rect4::from_py(&required_dict(dict, "rect")?)?;
-        let line_list = required_list(dict, "lines")?;
+        let line_list = if block_type == Some(0) {
+            required_list(dict, "lines")?
+        } else {
+            match dict.get_item("lines")? {
+                Some(value) if !value.is_none() => value.downcast::<PyList>()?.clone(),
+                _ => PyList::empty_bound(dict.py()),
+            }
+        };
         let mut lines = Vec::with_capacity(line_list.len());
         for item in line_list.iter() {
             let line = item.downcast::<PyDict>().map_err(|_| {
@@ -873,6 +901,7 @@ impl TextBlockDto {
         }
         Ok(Self {
             schema_version,
+            block_type,
             rect,
             lines,
             source_position: required_i64_list(dict, "source_position")?,
@@ -883,6 +912,11 @@ impl TextBlockDto {
     pub fn to_py<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         let dict = PyDict::new_bound(py);
         dict.set_item("schema_version", self.schema_version)?;
+        match self.block_type {
+            Some(value) if value != 0 => dict.set_item("type", value)?,
+            None => dict.set_item("type", py.None())?,
+            _ => {}
+        }
         dict.set_item("rect", self.rect.to_py(py)?)?;
         let lines = PyList::empty_bound(py);
         for line in &self.lines {
@@ -932,6 +966,7 @@ pub struct PageSnapshotDto {
     pub schema_version: i64,
     pub page_index: i64,
     pub page: PageDto,
+    pub page_y0: f64,
     pub text_blocks: Vec<TextBlockDto>,
     pub spans: Vec<NativeSpanInputDto>,
     pub words: Vec<WordDto>,
@@ -951,6 +986,7 @@ impl PageSnapshotDto {
         check_schema_version(schema_version)?;
         let page_index = required_i64(dict, "page_index")?;
         let page = PageDto::from_py(&required_dict(dict, "page")?)?;
+        let page_y0 = optional_f64(dict, "page_y0")?.unwrap_or(0.0);
 
         let text_block_list = required_list(dict, "text_blocks")?;
         let mut text_blocks = Vec::with_capacity(text_block_list.len());
@@ -1012,6 +1048,7 @@ impl PageSnapshotDto {
             schema_version,
             page_index,
             page,
+            page_y0,
             text_blocks,
             spans,
             words,
@@ -1029,6 +1066,9 @@ impl PageSnapshotDto {
         dict.set_item("schema_version", self.schema_version)?;
         dict.set_item("page_index", self.page_index)?;
         dict.set_item("page", self.page.to_py(py)?)?;
+        if self.page_y0 != 0.0 {
+            dict.set_item("page_y0", self.page_y0)?;
+        }
 
         let text_blocks = PyList::empty_bound(py);
         for value in &self.text_blocks {

@@ -33,11 +33,11 @@ def _span(text: str, x0: float, y0: float, position: tuple[int, int, int]) -> di
     }
 
 
-def _snapshot_with_text_blocks(*blocks: dict) -> PageSnapshot:
+def _snapshot_with_text_blocks(*blocks: dict, y0: float = 0.0, height: float = 100.0) -> PageSnapshot:
     spans = tuple(
         span
         for block in blocks
-        for line in block["lines"]
+        for line in block.get("lines", ())
         for span in line["spans"]
     )
     return PageSnapshot(
@@ -45,13 +45,13 @@ def _snapshot_with_text_blocks(*blocks: dict) -> PageSnapshot:
         version=1,
         page_index=0,
         geometry={
-            "rect": (0.0, 0.0, 300.0, 100.0),
+            "rect": (0.0, y0, 300.0, y0 + height),
             "x0": 0.0,
-            "y0": 0.0,
+            "y0": y0,
             "x1": 300.0,
-            "y1": 100.0,
+            "y1": y0 + height,
             "width": 300.0,
-            "height": 100.0,
+            "height": height,
             "rotation": 0,
         },
         text_blocks=tuple(blocks),
@@ -104,10 +104,85 @@ def test_snapshot_native_span_collection_skips_non_text_blocks_in_both_paths():
     assert [span.text for span in rust_spans] == ["保留"]
 
 
+def test_snapshot_native_span_collection_does_not_fallback_to_span_text_without_chars():
+    span = _span("不应使用", 10.0, 10.0, (0, 0, 0))
+    span["chars"] = ()
+    text_block = {
+        "type": 0,
+        "bbox": (10.0, 10.0, 80.0, 24.0),
+        "raw_source_position": (0,),
+        "source_order": 0,
+        "lines": ({
+            "bbox": (10.0, 10.0, 80.0, 24.0),
+            "raw_source_position": (0, 0),
+            "source_order": 0,
+            "spans": (span,),
+        },),
+    }
+    snapshot = _snapshot_with_text_blocks(text_block)
+
+    assert python_collect_native_spans(snapshot) == ()
+    assert rust_adapter.collect_native_spans_from_snapshot(snapshot) == ()
+
+
+def test_snapshot_native_span_collection_skips_explicit_none_block_type_in_both_paths():
+    block = {
+        "type": None,
+        "bbox": (10.0, 10.0, 80.0, 24.0),
+        "raw_source_position": (0,),
+        "source_order": 0,
+        "lines": ({
+            "bbox": (10.0, 10.0, 80.0, 24.0),
+            "raw_source_position": (0, 0),
+            "source_order": 0,
+            "spans": (_span("不应进入", 10.0, 10.0, (0, 0, 0)),),
+        },),
+    }
+    snapshot = _snapshot_with_text_blocks(block)
+
+    assert python_collect_native_spans(snapshot) == ()
+    assert rust_adapter.collect_native_spans_from_snapshot(snapshot) == ()
+
+
+def test_snapshot_native_span_collection_accepts_non_text_block_without_lines():
+    block = {
+        "type": 1,
+        "bbox": (10.0, 10.0, 80.0, 24.0),
+        "raw_source_position": (0,),
+        "source_order": 0,
+    }
+    snapshot = _snapshot_with_text_blocks(block)
+
+    assert python_collect_native_spans(snapshot) == ()
+    assert rust_adapter.collect_native_spans_from_snapshot(snapshot) == ()
+
+
+def test_snapshot_native_span_collection_nonzero_origin_uses_snapshot_y_origin_for_footer_filter():
+    footer = {
+        "type": 0,
+        "bbox": (10.0, 0.0, 180.0, 12.0),
+        "raw_source_position": (0,),
+        "source_order": 0,
+        "lines": ({
+            "bbox": (10.0, 0.0, 180.0, 12.0),
+            "raw_source_position": (0, 0),
+            "source_order": 0,
+            "spans": (_span("第 1 页 / 共 2 页", 10.0, 0.0, (0, 0, 0)),),
+        },),
+    }
+    snapshot = _snapshot_with_text_blocks(footer, y0=-100.0, height=100.0)
+
+    assert python_collect_native_spans(snapshot) == ()
+    assert rust_adapter.collect_native_spans_from_snapshot(snapshot) == ()
+    assert rust_adapter.page_snapshot_to_rust_input(snapshot)["page_y0"] == -100.0
+
+
 @pytest.mark.parametrize(
-    ("cells", "failure_reason"),
+    ("rows", "cols", "cells", "failure_reason"),
     [
         (
+            1,
+            1,
             [
                 {
                     "row": 1,
@@ -120,17 +195,80 @@ def test_snapshot_native_span_collection_skips_non_text_blocks_in_both_paths():
             ],
             "outside its grid",
         ),
-        ([], "unmaterialized"),
+        (1, 1, [], "unmaterialized"),
+        (0, 1, [], "positive|empty grid"),
+        (-1, 1, [], "positive|non-negative"),
+        (
+            1,
+            1,
+            [{
+                "row": 0,
+                "col": 0,
+                "rowspan": 0,
+                "colspan": 1,
+                "text": "非法跨度",
+                "rect": {"x0": 0.0, "y0": 0.0, "x1": 10.0, "y1": 10.0},
+            }],
+            "positive",
+        ),
+        (
+            1,
+            1,
+            [{
+                "row": 0,
+                "col": 0,
+                "rowspan": 1,
+                "colspan": 0,
+                "text": "非法跨度",
+                "rect": {"x0": 0.0, "y0": 0.0, "x1": 10.0, "y1": 10.0},
+            }],
+            "positive",
+        ),
+        (
+            1,
+            1,
+            [
+                {
+                    "row": 0,
+                    "col": 0,
+                    "rowspan": 1,
+                    "colspan": 1,
+                    "text": "A",
+                    "rect": {"x0": 0.0, "y0": 0.0, "x1": 10.0, "y1": 10.0},
+                },
+                {
+                    "row": 0,
+                    "col": 0,
+                    "rowspan": 1,
+                    "colspan": 1,
+                    "text": "B",
+                    "rect": {"x0": 0.0, "y0": 0.0, "x1": 10.0, "y1": 10.0},
+                },
+            ],
+            "occupancy conflict",
+        ),
+        (
+            1,
+            1,
+            [{
+                "row": 0,
+                "col": 0,
+                "rowspan": 1,
+                "colspan": 1,
+                "text": "缺少矩形",
+            }],
+            "missing a rectangle",
+        ),
     ],
 )
 def test_snapshot_adapter_rejects_invalid_rust_grid_output(
-    monkeypatch, cells, failure_reason
+    monkeypatch, rows, cols, cells, failure_reason
 ):
     class FakeRustExtension:
         @staticmethod
         def recover_cells_from_snapshot(snapshot, region):
             return {
-                "grid": {"grid": {"rows": 1, "cols": 1}},
+                "grid": {"grid": {"rows": rows, "cols": cols}},
                 "cells": cells,
             }
 

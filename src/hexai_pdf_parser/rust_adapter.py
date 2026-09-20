@@ -295,8 +295,19 @@ def _text_block_to_rust_input(block: Any, index: int) -> Dict[str, Any]:
     path = f"block[{index}]"
     block = _require_mapping(block, path)
     position = _raw_position(block, 1, path)
-    lines = _require_sequence(_required_field(block, "lines", path), f"{path}.lines")
-    return {
+    if "type" not in block:
+        block_type = 0
+    elif block["type"] is None:
+        block_type = None
+    else:
+        block_type = _required_int(block["type"], f"{path}.type")
+    line_value = (
+        _required_field(block, "lines", path)
+        if block_type == 0
+        else block.get("lines", ())
+    )
+    lines = _require_sequence(line_value, f"{path}.lines")
+    result = {
         "schema_version": 1,
         "rect": _rect_input(_required_field(block, "bbox", path), f"{path}.bbox"),
         "lines": [
@@ -305,6 +316,11 @@ def _text_block_to_rust_input(block: Any, index: int) -> Dict[str, Any]:
         "source_position": position,
         "source_order": _required_int(_required_field(block, "source_order", path), f"{path}.source_order"),
     }
+    if block_type is None:
+        result["type"] = None
+    elif block_type != 0:
+        result["type"] = block_type
+    return result
 
 
 def _drawing_line_items(
@@ -420,6 +436,7 @@ def page_snapshot_to_rust_input(snapshot: Any) -> Dict[str, Any]:
         "height": _finite_float(_required_field(geometry, "height", "snapshot.geometry"), "snapshot.geometry.height"),
         "rotation": _required_int(_required_field(geometry, "rotation", "snapshot.geometry"), "snapshot.geometry.rotation"),
     }
+    page_y0 = _finite_float(geometry.get("y0", 0.0), "snapshot.geometry.y0")
     blocks = _require_sequence(_snapshot_field(snapshot, "text_blocks"), "snapshot.text_blocks")
     spans = _require_sequence(_snapshot_field(snapshot, "spans"), "snapshot.spans")
     words = _require_sequence(_snapshot_field(snapshot, "words"), "snapshot.words")
@@ -429,7 +446,7 @@ def page_snapshot_to_rust_input(snapshot: Any) -> Dict[str, Any]:
     extraction_options = _require_mapping(
         _snapshot_field(snapshot, "extraction_options"), "snapshot.extraction_options"
     )
-    return {
+    result = {
         "schema_version": 1,
         "page_index": _required_int(_snapshot_field(snapshot, "page_index"), "snapshot.page_index"),
         "page": page,
@@ -455,6 +472,9 @@ def page_snapshot_to_rust_input(snapshot: Any) -> Dict[str, Any]:
             "options": _snapshot_value(extraction_options, "snapshot.extraction_options"),
         },
     }
+    if page_y0 != 0.0:
+        result["page_y0"] = page_y0
+    return result
 
 
 def stage_input_digest(stage_dto: Mapping[str, Any]) -> str:
@@ -560,7 +580,8 @@ def recover_cells_from_snapshot(
     region: Any,
 ) -> tuple[int, int, list[Any]]:
     """Recover table structure (rows, cols, cells) directly from snapshot using Rust kernel."""
-    from hexai_pdf_parser.models import BBox, Cell
+    from hexai_pdf_parser.models import BBox
+    from hexai_pdf_parser.tables.wireless_table_recovery import _rust_cells_to_project
 
     snapshot_dto = (
         page_snapshot_to_rust_input(snapshot)
@@ -594,25 +615,31 @@ def recover_cells_from_snapshot(
         }
 
     raw_output = _pdf_fast.recover_cells_from_snapshot(snapshot_dto, reg_dict)
-    grid = raw_output.get("grid", {}).get("grid", {})
+    if not isinstance(raw_output, Mapping):
+        raise TypeError("Rust native recovery output must be a mapping")
+    grid_output = raw_output.get("grid", {})
+    if not isinstance(grid_output, Mapping):
+        raise TypeError("Rust native recovery grid must be a mapping")
+    grid = grid_output.get("grid", grid_output)
+    if not isinstance(grid, Mapping):
+        raise TypeError("Rust native recovery inner grid must be a mapping")
     rows = int(grid.get("rows", 0))
     cols = int(grid.get("cols", 0))
-    raw_cells = raw_output.get("cells", [])
-
-    cells = []
-    for c in raw_cells:
-        rect = c["rect"]
-        cells.append(
-            Cell(
-                text=str(c.get("text", "")).strip(),
-                row_index=int(c["row"]),
-                col_index=int(c["col"]),
-                bbox=BBox(rect["x0"], rect["y0"], rect["x1"], rect["y1"]),
-                rowspan=int(c.get("rowspan", 1)),
-                colspan=int(c.get("colspan", 1)),
-            )
-        )
-    cells.sort(key=lambda item: (item.row_index, item.col_index))
+    diagnostics = raw_output.get("diagnostics", ())
+    if any(
+        isinstance(item, Mapping) and item.get("status") == "occupancy_conflict"
+        for item in diagnostics
+    ):
+        raise ValueError("Rust native recovery reported an occupancy conflict")
+    raw_cells = raw_output.get("cells", grid_output.get("cells", []))
+    cells = _rust_cells_to_project(
+        raw_cells,
+        rows,
+        cols,
+        fallback_bbox=region,
+    )
+    if rows <= 0 or cols <= 0 or not cells:
+        raise ValueError("Rust native recovery returned an empty grid")
     return rows, cols, cells
 
 
