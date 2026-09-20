@@ -158,3 +158,39 @@ class TestRecoverWirelessTables:
 
         with pytest.raises(ValueError, match="positive"):
             _wireless_recovery_from_rust({"candidates": [candidate], "diagnostics": []})
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("row", -0.5),
+            ("row", 0.0),
+            ("row", False),
+            ("col", -0.5),
+            ("col", 0.0),
+            ("col", False),
+            ("rowspan", -0.5),
+            ("rowspan", 1.0),
+            ("rowspan", False),
+            ("colspan", -0.5),
+            ("colspan", 1.0),
+            ("colspan", False),
+        ],
+    )
+    def test_rust_candidate_conversion_rejects_non_strict_integer_grid_fields(
+        self, field, value
+    ):
+        cell = {
+            "schema_version": 1,
+            "text": "A",
+            "row": 0,
+            "col": 0,
+            "rect": _rect(0, 0, 100, 100),
+            "rowspan": 1,
+            "colspan": 1,
+            "source": None,
+        }
+        cell[field] = value
+        candidate = _candidate(0, 0, 100, 100, 1, 1, [cell])
+
+        with pytest.raises(TypeError, match="strict integer"):
+            _wireless_recovery_from_rust({"candidates": [candidate], "diagnostics": []})

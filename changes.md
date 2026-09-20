@@ -1,5 +1,13 @@
 # Changes
 
+## 2026-09-21
+
+- Repair Sprint 003：收紧 Rust 无线结构输出的 Cell 网格边界。
+  - **根因与调用位置**：`src/hexai_pdf_parser/tables/wireless_table_recovery.py` 的 `_rust_cells_to_project()` 在读取 `row`、`col`、`rowspan`、`colspan` 时先调用 `int()`，导致 `-0.5`、整数值浮点数或 `bool` 可能被截断或当作整数进入公开 `Cell`。这是 Rust 输出验证边界的问题，不是 Python 无线结构算法的行为调整。
+  - **判定条件**：四个 Cell 网格字段现在必须是严格的 Python `int`；`bool`、`float`、字符串及其他可截断类型直接拒绝。既有正跨度、越界、缺失 bbox、occupancy conflict 和未覆盖槽位校验继续执行，默认 Python 路由、shadow 返回 Python 及 Rust 异常 fallback 不变。
+  - **测试与验证**：新增 12 个非整数/`bool` RED 用例；Generator 报告修复前 `12 failed`，修复后 focused `12 passed`。独立 Luna Evaluator 复核为无 Critical/Important。新鲜运行 `tests/test_pdf_fast_shared_recovery.py` 为 `19 passed`，相关 Snapshot/无线结构/路由回归合计 `87 passed`；`cargo test --lib` 为 `44 passed`，`cargo check` 和 `git diff --check` 通过。
+  - **限制**：`cargo fmt --check` 仍报告既有 `rust/lib.rs`、`rust/types.rs`、`rust/wireless_structure.rs` 的基线格式差异，本修复未格式化这些无关代码。中文/混合无线结构的完整 Python/Rust 字段级 parity、真实页面 JSON/PNG 验收仍未完成，默认路由保持 Python。
+
 ## 2026-09-17
 
 - Sprint 012：完成端到端前后 Benchmark、页面视觉检验、全量 Rust 解析验证和发布物构建。

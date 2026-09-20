@@ -122,10 +122,18 @@ def _rust_cells_to_project(
     for item in raw_cells:
         if not isinstance(item, dict):
             raise TypeError("Rust cell output must contain mappings")
-        row = int(item["row"])
-        column = int(item["col"])
-        rowspan = int(item.get("rowspan", 1))
-        colspan = int(item.get("colspan", 1))
+        grid_values = {
+            "row": item["row"],
+            "col": item["col"],
+            "rowspan": item.get("rowspan", 1),
+            "colspan": item.get("colspan", 1),
+        }
+        if any(type(value) is not int for value in grid_values.values()):
+            raise TypeError("Rust cell grid fields must be strict integer values")
+        row = grid_values["row"]
+        column = grid_values["col"]
+        rowspan = grid_values["rowspan"]
+        colspan = grid_values["colspan"]
         if rowspan <= 0 or colspan <= 0:
             raise ValueError("Rust cell spans must be positive")
         if (
