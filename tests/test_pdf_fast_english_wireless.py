@@ -451,3 +451,44 @@ def test_build_legacy_text_alignment():
     group_cell = next((c for c in cells if "本年金额" in c["text"]), None)
     assert group_cell is not None
     assert group_cell["colspan"] >= 2
+
+
+def test_english_horizontal_lines_from_snapshot_drawings():
+    """Verify that _english_horizontal_lines directly consumes PageSnapshot.drawings without calling get_drawings."""
+    from hexai_pdf_parser.tables.extractors.english_table_extractor import EnglishTableExtractor
+
+    # Create synthetic snapshot with tuple drawings
+    synthetic_drawings = (
+        {
+            "items": [
+                ("re", (10.0, 49.5, 300.0, 50.5), 1),
+            ],
+            "fill": None,
+            "color": (0.0, 0.0, 0.0),
+        },
+        {
+            "items": [
+                ("l", (10.0, 100.0), (300.0, 100.0)),
+            ],
+            "fill": None,
+            "color": (0.0, 0.0, 0.0),
+        },
+        # Invisible white line that should be filtered out
+        {
+            "items": [
+                ("re", (10.0, 149.0, 300.0, 151.0), 1),
+            ],
+            "fill": (1.0, 1.0, 1.0),
+            "color": (1.0, 1.0, 1.0),
+        },
+    )
+
+    class MockSnapshot:
+        drawings = synthetic_drawings
+
+        def get_drawings(self):
+            raise AssertionError("get_drawings must not be called when snapshot.drawings exists!")
+
+    lines = EnglishTableExtractor._english_horizontal_lines(MockSnapshot())
+    assert lines == [50.0, 100.0]
+

@@ -123,13 +123,19 @@ class EnglishTableExtractor(BaseTableExtractor):
         }
 
     @staticmethod
-    def _english_horizontal_lines(page: Optional[fitz.Page]) -> List[float]:
+    def _english_horizontal_lines(page: Optional[Any]) -> List[float]:
         """把可见的长水平 drawing 转成 Rust 行边界吸附坐标。"""
         if page is None:
             return []
-        try:
-            drawings = page.get_drawings()
-        except Exception:
+        drawings = []
+        if hasattr(page, "drawings") and page.drawings is not None:
+            drawings = page.drawings
+        elif hasattr(page, "get_drawings"):
+            try:
+                drawings = page.get_drawings()
+            except Exception:
+                drawings = []
+        else:
             return []
 
         lines: List[float] = []
@@ -139,14 +145,23 @@ class EnglishTableExtractor(BaseTableExtractor):
             for item in drawing.get("items", []):
                 kind = item[0]
                 if kind == "l":
-                    y = float(item[1].y)
-                    width = abs(float(item[2].x) - float(item[1].x))
+                    pt1 = item[1]
+                    pt2 = item[2]
+                    y = float(pt1[1]) if isinstance(pt1, (tuple, list)) else float(pt1.y)
+                    x1 = float(pt1[0]) if isinstance(pt1, (tuple, list)) else float(pt1.x)
+                    x2 = float(pt2[0]) if isinstance(pt2, (tuple, list)) else float(pt2.x)
+                    width = abs(x2 - x1)
                     height = 0.0
                 elif kind == "re":
                     rect = item[1]
-                    y = (float(rect.y0) + float(rect.y1)) / 2.0
-                    width = float(rect.width)
-                    height = float(rect.height)
+                    if isinstance(rect, (tuple, list)):
+                        y = (float(rect[1]) + float(rect[3])) / 2.0
+                        width = abs(float(rect[2]) - float(rect[0]))
+                        height = abs(float(rect[3]) - float(rect[1]))
+                    else:
+                        y = (float(rect.y0) + float(rect.y1)) / 2.0
+                        width = float(rect.width)
+                        height = float(rect.height)
                 else:
                     continue
                 if height <= 2.5 and width >= 15.0:
