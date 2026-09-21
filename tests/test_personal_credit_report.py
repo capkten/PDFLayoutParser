@@ -319,6 +319,59 @@ def test_parse_personal_credit_report_preserves_loan_numbering_order():
             break
 
 
+def test_native_layout_bbox_credit_card_continuations_precede_next_number():
+    """Keep wrapped credit-card text before the following numbered item."""
+    import os
+
+    from hexai_pdf_parser.extractors.personal_credit_report import (
+        parse_personal_credit_report,
+    )
+
+    pdf_path = os.path.join(
+        "C:\\Users\\23662",
+        "xwechat_files",
+        "wxid_gi29mv53wwtn22_e71e",
+        "msg",
+        "file",
+        "2026-09",
+        "1_PDFsam_11.pdf",
+    )
+    if not os.path.exists(pdf_path):
+        pytest.skip(f"Test file not found: {pdf_path}")
+
+    result = parse_personal_credit_report(
+        pdf_path,
+        page_indices=[0],
+        use_ml_table_detector=False,
+    )
+    blocks = [
+        block
+        for block in result["pages"][0]["blocks"]
+        if block["type"] == "text"
+    ]
+
+    first_continuation = next(
+        index for index, block in enumerate(blocks) if "160,000" in block["content"]
+    )
+    second_item = next(
+        index for index, block in enumerate(blocks) if block["content"].strip() == "2."
+    )
+
+    assert first_continuation < second_item
+    continuation_bbox = blocks[first_continuation]["bbox"]
+    assert continuation_bbox[3] - continuation_bbox[1] < 15.0
+
+    eighth_item_text = next(
+        index for index, block in enumerate(blocks) if "42,000" in block["content"]
+    )
+    ninth_item = next(
+        index for index, block in enumerate(blocks) if block["content"].strip() == "9."
+    )
+    assert eighth_item_text < ninth_item
+    eighth_bbox = blocks[eighth_item_text]["bbox"]
+    assert eighth_bbox[3] - eighth_bbox[1] < 15.0
+
+
 def test_query_continuation_table_before_header_extracted():
     """Verify that continuation rows before a new section header are recovered as a lead table."""
     import os
@@ -381,5 +434,3 @@ def test_query_continuation_table_absorbs_wrapped_text():
     p2_blocks = res["pages"][1]["blocks"]
     isolated_si_blocks = [b for b in p2_blocks if b["type"] == "text" and b["content"].strip() == "司"]
     assert len(isolated_si_blocks) == 0, f"Found isolated '司' block: {isolated_si_blocks}"
-
-
