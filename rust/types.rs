@@ -232,6 +232,61 @@ fn required_i64_list(dict: &Bound<'_, PyDict>, key: &str) -> PyResult<Vec<i64>> 
         .collect()
 }
 
+fn optional_string_list(dict: &Bound<'_, PyDict>, key: &str) -> PyResult<Vec<Option<String>>> {
+    let list = required_list(dict, key)?;
+    list.iter()
+        .enumerate()
+        .map(|(index, value)| {
+            if value.is_none() {
+                return Ok(None);
+            }
+            value.extract::<String>().map(Some).map_err(|_| {
+                PyValueError::new_err(format!(
+                    "Field '{}[{}]' must be a string or null",
+                    key, index
+                ))
+            })
+        })
+        .collect()
+}
+
+fn optional_f64_list(dict: &Bound<'_, PyDict>, key: &str) -> PyResult<Vec<Option<f64>>> {
+    let list = required_list(dict, key)?;
+    list.iter()
+        .enumerate()
+        .map(|(index, value)| {
+            if value.is_none() {
+                return Ok(None);
+            }
+            extract_finite_f64(&value, &format!("{}[{}]", key, index)).map(Some)
+        })
+        .collect()
+}
+
+fn optional_i64_list(dict: &Bound<'_, PyDict>, key: &str) -> PyResult<Vec<Option<i64>>> {
+    let list = required_list(dict, key)?;
+    list.iter()
+        .enumerate()
+        .map(|(index, value)| {
+            if value.is_none() {
+                return Ok(None);
+            }
+            if value.is_instance_of::<PyBool>() {
+                return Err(PyValueError::new_err(format!(
+                    "Field '{}[{}]' must be an integer or null",
+                    key, index
+                )));
+            }
+            value.extract::<i64>().map(Some).map_err(|_| {
+                PyValueError::new_err(format!(
+                    "Field '{}[{}]' must be an integer or null",
+                    key, index
+                ))
+            })
+        })
+        .collect()
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct PageDto {
     pub schema_version: i64,
@@ -1124,6 +1179,91 @@ impl PageSnapshotDto {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct TextRunEvidenceDto {
+    pub schema_version: i64,
+    pub source_positions: Vec<SourcePositionDto>,
+    pub fonts: Vec<Option<String>>,
+    pub sizes: Vec<Option<f64>>,
+    pub flags: Vec<Option<i64>>,
+}
+
+impl TextRunEvidenceDto {
+    pub fn from_py(dict: &Bound<'_, PyDict>) -> PyResult<Self> {
+        let schema_version = required_i64(dict, "schema_version")?;
+        check_schema_version(schema_version)?;
+        let source_list = required_list(dict, "source_positions")?;
+        let mut source_positions = Vec::with_capacity(source_list.len());
+        for (index, value) in source_list.iter().enumerate() {
+            let source = value.downcast::<PyDict>().map_err(|_| {
+                PyValueError::new_err(format!(
+                    "Field 'source_positions[{}]' must be an object",
+                    index
+                ))
+            })?;
+            source_positions.push(SourcePositionDto::from_py(&source.clone())?);
+        }
+        let fonts = optional_string_list(dict, "fonts")?;
+        let sizes = optional_f64_list(dict, "sizes")?;
+        let flags = optional_i64_list(dict, "flags")?;
+        let expected_len = source_positions.len();
+        for (field_name, actual_len) in [
+            ("fonts", fonts.len()),
+            ("sizes", sizes.len()),
+            ("flags", flags.len()),
+        ] {
+            if actual_len != expected_len {
+                return Err(PyValueError::new_err(format!(
+                    "Field '{}' evidence length {} does not match source_positions length {}",
+                    field_name, actual_len, expected_len
+                )));
+            }
+        }
+        Ok(Self {
+            schema_version,
+            source_positions,
+            fonts,
+            sizes,
+            flags,
+        })
+    }
+
+    pub fn to_py<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let d = PyDict::new_bound(py);
+        d.set_item("schema_version", self.schema_version)?;
+        let source_positions = PyList::empty_bound(py);
+        for position in &self.source_positions {
+            source_positions.append(position.to_py(py)?)?;
+        }
+        d.set_item("source_positions", source_positions)?;
+        let fonts = PyList::empty_bound(py);
+        for font in &self.fonts {
+            match font {
+                Some(value) => fonts.append(value)?,
+                None => fonts.append(py.None())?,
+            }
+        }
+        d.set_item("fonts", fonts)?;
+        let sizes = PyList::empty_bound(py);
+        for size in &self.sizes {
+            match size {
+                Some(value) => sizes.append(value)?,
+                None => sizes.append(py.None())?,
+            }
+        }
+        d.set_item("sizes", sizes)?;
+        let flags = PyList::empty_bound(py);
+        for flag in &self.flags {
+            match flag {
+                Some(value) => flags.append(value)?,
+                None => flags.append(py.None())?,
+            }
+        }
+        d.set_item("flags", flags)?;
+        Ok(d)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct TextRunDto {
     pub schema_version: i64,
     pub text: String,
@@ -1132,6 +1272,7 @@ pub struct TextRunDto {
     pub source_start: i64,
     pub source_end: i64,
     pub order: i64,
+    pub evidence: Option<TextRunEvidenceDto>,
 }
 
 impl TextRunDto {
@@ -1144,6 +1285,12 @@ impl TextRunDto {
         let source_start: i64 = get_req(dict, "source_start")?.extract()?;
         let source_end: i64 = get_req(dict, "source_end")?.extract()?;
         let order: i64 = get_req(dict, "order")?.extract()?;
+        let evidence = match get_opt(dict, "evidence")? {
+            Some(value) => Some(TextRunEvidenceDto::from_py(
+                &value.downcast::<PyDict>()?.clone(),
+            )?),
+            None => None,
+        };
         Ok(Self {
             schema_version: sv,
             text,
@@ -1152,6 +1299,7 @@ impl TextRunDto {
             source_start,
             source_end,
             order,
+            evidence,
         })
     }
 
@@ -1164,6 +1312,9 @@ impl TextRunDto {
         d.set_item("source_start", self.source_start)?;
         d.set_item("source_end", self.source_end)?;
         d.set_item("order", self.order)?;
+        if let Some(evidence) = &self.evidence {
+            d.set_item("evidence", evidence.to_py(py)?)?;
+        }
         Ok(d)
     }
 }

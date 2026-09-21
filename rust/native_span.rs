@@ -1,6 +1,6 @@
 use crate::types::{
     AtomDto, NativeRecoveryInput, NativeRecoveryOutput, NativeSpanDto, OutputOrderMode, Rect4,
-    TableCandidateDto, TextRunDto,
+    TableCandidateDto, TextRunDto, TextRunEvidenceDto,
 };
 
 const SPACED_CJK_WORD_WHITELIST: &[(&str, &str)] = &[
@@ -212,6 +212,13 @@ pub fn build_text_runs(spans: Vec<NativeSpanDto>, region: Rect4) -> Vec<TextRunD
             let span_refs = group.iter().map(|s| s.order).collect();
             let source_start = group.iter().map(|s| s.order).min().unwrap_or(0);
             let source_end = group.iter().map(|s| s.order).max().unwrap_or(0);
+            let evidence = TextRunEvidenceDto {
+                schema_version: 1,
+                source_positions: group.iter().map(|s| s.source_position.clone()).collect(),
+                fonts: group.iter().map(|s| s.font.clone()).collect(),
+                sizes: group.iter().map(|s| s.size).collect(),
+                flags: group.iter().map(|s| s.flags).collect(),
+            };
 
             runs.push(TextRunDto {
                 schema_version: 1,
@@ -227,6 +234,7 @@ pub fn build_text_runs(spans: Vec<NativeSpanDto>, region: Rect4) -> Vec<TextRunD
                 source_start,
                 source_end,
                 order: run_order,
+                evidence: Some(evidence),
             });
             run_order += 1;
         }
