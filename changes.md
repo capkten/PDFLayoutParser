@@ -8,6 +8,12 @@
   - **测试与验证**：新增真实 Python/Rust helper 的 `基2` 正例、字号阈值反例和 x 走廊反例；RED 为 `1 failed, 1 passed, 11 deselected`，GREEN focused 为 `2 passed, 11 deselected`。differential/text-runs 回归为 `58 passed`，packed numeric 专项、`cargo test --lib native_span` 和 `git diff --check` 均通过。
   - **限制**：本 bounded slice 只覆盖 synthetic native-span/text-run 语义，未修改 Python 生产路由、column/grid/header、wrapped merge、alignment corridor、`build_atoms` 或 Rust wireless structure，也未进行页面级 PDF/PNG 重跑；默认 Python 路由保持不变。
 
+- Task 3B superscript review fix：补齐 superscript 分支绕过 placeholder/numeric veto 的边界。
+  - **根因与调用位置**：`rust/native_span.rs::build_text_runs()` 新增 superscript 分支后，较小的数字或 dash placeholder 可能在 Python `_can_join()` 的前置 veto 之前被合并；但 numeric-gap veto 不能无条件放入 Rust 普通 join 链，否则会破坏既有普通 numeric span 合并合同。
+  - **判定条件**：placeholder 使用 Python separator/placeholder 字符和 1-3 字符规则，并保留 gap 不超过 1.0 的 inline-punctuation 例外；numeric text 使用与 Python `\d` 对齐的 decimal digit 白名单和数字格式；numeric-gap veto 只在严格 `0.82`/x-corridor superscript 条件命中时阻断，普通同字号 numeric join 和 packed fragment veto 保持不变。
+  - **测试与验证**：新增 `1`+小号 `2`、`基`+小号 `-` 的真实 Python/Rust 反例；RED 为 `1 failed, 13 deselected`，fresh superscript focused GREEN 为 `3 passed, 11 deselected`，differential/text-runs 为 `59 passed`，packed numeric 为 `20 passed`，`cargo test --lib native_span` 为 `4 passed`，`git diff --check` 通过；Python binding 通过 `maturin develop --release` 重建后验证。
+  - **限制**：本修复仍只覆盖 synthetic native-span/text-run 语义，不进入 wrapped merge、alignment corridor、column/grid/header、页面级 JSON/PNG 或默认 Rust route 切换。
+
 - Repair Sprint 003：收紧 Rust 无线结构输出的 Cell 网格边界。
   - **根因与调用位置**：`src/hexai_pdf_parser/tables/wireless_table_recovery.py` 的 `_rust_cells_to_project()` 在读取 `row`、`col`、`rowspan`、`colspan` 时先调用 `int()`，导致 `-0.5`、整数值浮点数或 `bool` 可能被截断或当作整数进入公开 `Cell`。这是 Rust 输出验证边界的问题，不是 Python 无线结构算法的行为调整。
   - **判定条件**：四个 Cell 网格字段现在必须是严格的 Python `int`；`bool`、`float`、字符串及其他可截断类型直接拒绝。既有正跨度、越界、缺失 bbox、occupancy conflict 和未覆盖槽位校验继续执行，默认 Python 路由、shadow 返回 Python 及 Rust 异常 fallback 不变。

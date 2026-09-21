@@ -665,6 +665,37 @@ def test_superscript_inline_gap_rejects_threshold_and_corridor_variants():
         assert [run["text"] for run in rust_runs] == ["基", "2"]
 
 
+def test_superscript_inline_gap_respects_placeholder_and_numeric_vetoes():
+    fixture = _load_fixture()
+    base = next(
+        vector
+        for vector in fixture["vectors"]
+        if vector["fixture"] == "superscript_inline_gap"
+    )
+
+    cases = (("numeric_pair", "1", "2"), ("placeholder_candidate", "基", "-"))
+    for _, previous_text, candidate_text in cases:
+        vector = deepcopy(base)
+        previous = vector["spans"][0]
+        candidate = vector["spans"][1]
+        previous["text"] = previous_text
+        previous["char_boxes"][0]["text"] = previous_text
+        candidate["text"] = candidate_text
+        candidate["char_boxes"][0]["text"] = candidate_text
+
+        python_runs = _python_runs(vector, fixture["region"])
+        rust_runs = _rust_runs(vector, fixture["region"])
+
+        assert [run["text"] for run in python_runs] == [
+            previous_text,
+            candidate_text,
+        ]
+        assert [run["text"] for run in rust_runs] == [
+            previous_text,
+            candidate_text,
+        ]
+
+
 def test_complete_ledger_is_locked_by_count_summary_and_digest():
     ledger = build_differential_ledger(_load_fixture())
     serialized = json.dumps(

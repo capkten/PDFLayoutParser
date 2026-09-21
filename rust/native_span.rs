@@ -67,6 +67,17 @@ fn is_separator_span(text: &str) -> bool {
     })
 }
 
+fn is_placeholder_text(text: &str) -> bool {
+    let compact: Vec<char> = text
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect();
+    (1..=3).contains(&compact.len())
+        && compact
+            .iter()
+            .all(|character| matches!(*character, '-' | '—' | '–'))
+}
+
 #[derive(Debug, Clone)]
 struct PreparedSpan {
     span: NativeSpanDto,
@@ -147,6 +158,55 @@ fn is_python_decimal_digit(character: char) -> bool {
     PYTHON_DECIMAL_DIGIT_RANGES
         .iter()
         .any(|&(start, end)| (start..=end).contains(&codepoint))
+}
+
+fn is_python_numeric_text(text: &str) -> bool {
+    let chars: Vec<char> = text.trim().chars().collect();
+    if chars.is_empty() {
+        return false;
+    }
+
+    let mut start = 0;
+    let mut end = chars.len();
+    if chars.first() == Some(&'(') {
+        start += 1;
+    }
+    if chars.last() == Some(&')') {
+        end -= 1;
+    }
+    if start >= end {
+        return false;
+    }
+
+    let body = &chars[start..end];
+    let mut index = 0;
+    if body
+        .get(index)
+        .is_some_and(|character| matches!(*character, '+' | '-' | '–' | '—' | '−'))
+    {
+        index += 1;
+    }
+    if index >= body.len() || !is_python_decimal_digit(body[index]) {
+        return false;
+    }
+    index += 1;
+    while index < body.len() && (is_python_decimal_digit(body[index]) || body[index] == ',') {
+        index += 1;
+    }
+    if index < body.len() && body[index] == '.' {
+        index += 1;
+        let decimal_start = index;
+        while index < body.len() && is_python_decimal_digit(body[index]) {
+            index += 1;
+        }
+        if decimal_start == index {
+            return false;
+        }
+    }
+    if index < body.len() && body[index] == '%' {
+        index += 1;
+    }
+    index == body.len()
 }
 
 fn is_packed_numeric_char(character: char) -> bool {
@@ -401,6 +461,29 @@ pub fn build_text_runs(spans: Vec<NativeSpanDto>, region: Rect4) -> Vec<TextRunD
                     && span.split
                     && prev.order == candidate.order
                     && previous.fragment_count == span.fragment_count;
+                let previous_is_placeholder = is_placeholder_text(&prev.text);
+                let candidate_is_placeholder = is_placeholder_text(&candidate.text);
+                let previous_is_numeric = is_python_numeric_text(&prev.text);
+                let candidate_is_numeric = is_python_numeric_text(&candidate.text);
+                let has_substantive_text = groups.iter().flatten().any(|item| {
+                    let text = item.span.text.trim();
+                    !text.is_empty() && !is_placeholder_text(text) && !is_python_numeric_text(text)
+                });
+                let inline_punctuation = same_line
+                    && gap <= 1.0
+                    && (!previous_is_placeholder || has_substantive_text)
+                    && (prev.text.trim().chars().count() == 1
+                        || candidate.text.trim().chars().count() == 1);
+                let placeholder_veto = (previous_is_placeholder && candidate_is_numeric)
+                    || (previous_is_numeric && candidate_is_placeholder)
+                    || (previous_is_placeholder && candidate_is_placeholder)
+                    || (gap > 0.0
+                        && !inline_punctuation
+                        && (previous_is_placeholder || candidate_is_placeholder));
+                let superscript = cand_size < prev_size * 0.82
+                    && prev.rect.x1 - prev_size * 0.9 <= candidate.rect.x0
+                    && candidate.rect.x0 <= prev.rect.x1 + prev_size * 0.45;
+                let numeric_gap_veto = gap > 0.8 && previous_is_numeric && candidate_is_numeric;
 
                 if same_source_fragments {
                     false
@@ -410,10 +493,11 @@ pub fn build_text_runs(spans: Vec<NativeSpanDto>, region: Rect4) -> Vec<TextRunD
                     > 2.4_f64.max(min_size * 0.38)
                 {
                     false
-                } else if cand_size < prev_size * 0.82
-                    && prev.rect.x1 - prev_size * 0.9 <= candidate.rect.x0
-                    && candidate.rect.x0 <= prev.rect.x1 + prev_size * 0.45
-                {
+                } else if placeholder_veto {
+                    false
+                } else if superscript && numeric_gap_veto {
+                    false
+                } else if superscript {
                     true
                 } else if is_whitelisted_cjk_pair(&prev.text, &candidate.text) {
                     same_line && (-0.8..=min_size * 2.5).contains(&gap)
