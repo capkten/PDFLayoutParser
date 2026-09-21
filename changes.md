@@ -2,6 +2,13 @@
 
 ## 2026-09-20
 
+- 修复个人信用报告跨页机构查询续表在同一页紧接新的小节标题（如“个人查询记录明细”）时，位于新表头之前的前置续表行被漏提取的问题：
+  - **根因与调用位置**：`src/hexai_pdf_parser/extractors/personal_credit_report.py::_make_query_tables()` 原先仅从页面中识别到的各个 `header_indices` 起始点向下截取表格。当页面上半部分为上一页延续下来的机构查询数据行（如序号 36~61 共 26 行），而页面下半部分才出现新表头（如“个人查询记录明细”）时，第一个表头索引 `header_indices[0] > 0`。原逻辑直接忽略了首个表头之前的所有数据行，导致上半部分续表完全未被提取为表格。
+  - **判定与修复**：在 `_make_query_tables()` 中增加前置续表（lead table）探测逻辑：当第一个表头之前存在数据行且无表头时，以 `is_continuation=True` 调用 `_make_query_table(page, end_index=first_bound)`，直接将顶部连续数据行恢复为一个规范的 `26x4` 跨页续表。
+  - **测试与验证**：在 `tests/test_personal_credit_report.py` 中新增 `test_query_continuation_table_before_header_extracted` 测试通过，12 项测试全部通过（`12 passed`）。
+  - **页面级验证**：重新渲染 `test_test_3_PDFsam_2ceb8bbe-ca9f-4811-95db-a85df90a1f1b` 第 2 页，视觉核验确认该页成功切分出两个完整表格：上方为 `26x4` 的机构查询续表（带完整红框与蓝色内线），下方为 `5x4` 的个人查询明细表格（带跨列标题与蓝色内线）。
+
+
 - 修复 `table_visualizer.py` 在渲染无 span 的跨页无线表格/续表时未绘制蓝色单元格网格线、导致看起来“没有单元格结构”的问题：
   - **根因与调用位置**：`src/hexai_pdf_parser/debug/table_visualizer.py::_compute_cell_grid_rects()` 原先在判断表格是否已有物理网格时，包含一段激进的提前返回逻辑：`if not has_span and (table.source in (...) or len(table.cells) == table.rows * table.cols): return [(c, fitz.Rect(c.bbox))]`。当跨页无线表格（如查询明细续表，`37x4` 共 148 个单元格）没有包含 `rowspan > 1` 或 `colspan > 1` 时，`has_span` 为 `False`，单元格总数恰好等于 `rows * cols`，导致错误命中该分支，直接将文字紧凑包围盒 `c.bbox` 当作了 `grid_rect`。随后 `draw_tables_on_page()` 在同一位置先画蓝色框再被绿色文字框覆盖，完全失去了向外延伸计算行列中线并绘制整行整列蓝色网格线的效果。
   - **判定与修复**：限制提前返回仅对真正具备物理几何交点格子的有线表格（`table.source in ("line_projection", "PyMuPDF.find_tables")` 且 `len(cells) == rows * cols`）生效；对于任何无线表格（如 `personal_query_recovery`、`wireless*`、`text_alignment` 等），始终执行中线推断与二维网格扩展，确保绘制出标准的蓝色单元格分隔线。

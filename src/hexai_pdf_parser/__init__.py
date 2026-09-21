@@ -117,7 +117,10 @@ from hexai_pdf_parser.core.models import (
 from hexai_pdf_parser.extractors.text_extractor import TextExtractor
 from hexai_pdf_parser.extractors.language_detector import detect_page_language
 from hexai_pdf_parser.extractors.page_classifier import classify_page_type, is_scanned_page
-from hexai_pdf_parser.tables.table_extractor import TableExtractor
+from hexai_pdf_parser.tables.table_extractor import (
+    TableExtractor,
+    extract_table_from_region,
+)
 from hexai_pdf_parser.tables.extractors import (
     ChineseTableExtractor,
     EnglishTableExtractor,
@@ -180,6 +183,7 @@ __all__ = [
     # Extractors & Builders
     "TextExtractor",
     "TableExtractor",
+    "extract_table_from_region",
     "EnglishTableExtractor",
     "ChineseTableExtractor",
     "ImageExtractor",

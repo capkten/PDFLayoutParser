@@ -172,14 +172,14 @@ def _is_query_record_row(row: list[tuple[float, float, float, float, str]]) -> b
 
 def _make_query_table(
     page: fitz.Page,
-    *,
     header_index: int | None = None,
     end_index: int | None = None,
     section_index: int | None = None,
+    is_continuation: bool = False,
 ) -> Table | None:
     """Recover one four-column institution-query table directly from page words."""
     rows = _query_rows(page)
-    if header_index is None:
+    if not is_continuation and header_index is None:
         for index, row in enumerate(rows):
             row_text = "".join(item[4] for item in row)
             if all(header in row_text for header in _QUERY_HEADERS):
@@ -187,8 +187,9 @@ def _make_query_table(
                 break
 
     if header_index is None:
-        record_indices = [index for index, row in enumerate(rows) if _is_query_record_row(row)]
-        if len(record_indices) < 2:
+        target_rows = rows[:end_index] if end_index is not None else rows
+        record_indices = [index for index, row in enumerate(target_rows) if _is_query_record_row(row)]
+        if len(record_indices) < 1:
             return None
         start_index = record_indices[0]
         end_index = record_indices[-1] + 1
@@ -393,6 +394,14 @@ def _make_query_tables(page: fitz.Page) -> list[Table]:
         return [table] if table is not None else []
 
     tables = []
+    first_header = header_indices[0]
+    prev_sections = [s for s in section_indices if s < first_header]
+    first_bound = min(prev_sections) if prev_sections else first_header
+    if first_bound > 0:
+        lead_table = _make_query_table(page, end_index=first_bound, is_continuation=True)
+        if lead_table is not None:
+            tables.append(lead_table)
+
     for header_index in header_indices:
         next_boundaries = [
             index

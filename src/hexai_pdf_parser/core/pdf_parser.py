@@ -503,22 +503,18 @@ class PDFParser:
             pdf_doc = _fitz.open(pdf_path)
             try:
                 extractor = TableExtractor(
-                    ml_model_path=self._ml_model_path,
-                    ml_confidence=self._ml_confidence,
+                    use_ml_table_detector=False,
                 )
                 results: list[Table] = []
                 for r in regions:
                     page_idx = r["page_index"]
                     page_handle = pdf_doc[page_idx]
-                    tables = extractor.extract(page_handle)
-                    # Filter tables that intersect with the region
-                    matched = [
-                        t for t in tables
-                        if self._bbox_intersects(t.bbox, r)
-                    ]
+                    r_bbox = BBox(r["x0"], r["y0"], r["x1"], r["y1"])
+                    table = extractor.extract_table_in_region(page_handle, r_bbox)
                     if is_single:
-                        return matched[0] if matched else None
-                    results.extend(matched)
+                        return table
+                    if table is not None:
+                        results.append(table)
                 return results
             finally:
                 pdf_doc.close()
