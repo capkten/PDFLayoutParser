@@ -49,7 +49,7 @@ REQUIRED_FIXTURES = {
     "independent_fields_counterexample",
     "single_field_control",
 }
-EXPECTED_LEDGER_SHA256 = "d1b0b788c4f2facf50ca56426e4c3594c199bbe9c66e786c806bd39d4cdb2574"
+EXPECTED_LEDGER_SHA256 = "8358c75e03dc5e12086127a75cc9b4ed94e7d829ea63ccefc0f06ac09d701fcc"
 EXPECTED_FIXTURE_COUNTS = {
     "alignment_corridor_veto": 266,
     "cjk_non_whitelist_spacing": 14,
@@ -60,25 +60,25 @@ EXPECTED_FIXTURE_COUNTS = {
     "single_field_control": 7,
     "source_block_line_noncontinuous": 14,
     "superscript_inline_gap": 7,
-    "vertical_wrapped_witness": 99,
+    "vertical_wrapped_witness": 14,
 }
 EXPECTED_FIELD_COUNTS = {
-    "bbox": 32,
-    "errors": 32,
-    "flow/order": 58,
-    "font/script": 45,
-    "grouping": 32,
-    "ordering": 34,
-    "presence": 36,
-    "source continuity": 58,
-    "span/run refs": 58,
-    "text": 32,
-    "value": 32,
+    "bbox": 24,
+    "errors": 24,
+    "flow/order": 52,
+    "font/script": 38,
+    "grouping": 24,
+    "ordering": 24,
+    "presence": 26,
+    "source continuity": 52,
+    "span/run refs": 52,
+    "text": 24,
+    "value": 24,
 }
 EXPECTED_CLASS_COUNTS = {
     "defect": 218,
-    "requires_adaptation": 102,
-    "unsupported": 129,
+    "requires_adaptation": 28,
+    "unsupported": 118,
 }
 
 
@@ -574,7 +574,6 @@ def test_differential_ledger_is_field_level_repeatable_and_explicit():
         if item["fixture"] == "superscript_inline_gap"
         and item["field"] in SEMANTIC_FIELDS
     }
-    assert {"grouping", "text"} <= by_fixture["vertical_wrapped_witness"]
     assert any(
         item["fixture"] == "alignment_corridor_veto"
         and item["classification"] == "defect"
@@ -590,6 +589,7 @@ def test_differential_ledger_is_field_level_repeatable_and_explicit():
         }
         for control in {item["fixture"] for item in first}
     }
+    assert not semantic_mismatches.get("vertical_wrapped_witness", set())
     for control in {
         "empty_whitespace_and_separator",
         "cjk_whitelist_spacing",
@@ -696,12 +696,150 @@ def test_superscript_inline_gap_respects_placeholder_and_numeric_vetoes():
         ]
 
 
+def test_wrapped_field_merge_matches_python_and_preserves_owned_evidence():
+    fixture = _load_fixture()
+    vector = next(
+        vector
+        for vector in fixture["vectors"]
+        if vector["fixture"] == "vertical_wrapped_witness"
+    )
+
+    python_runs = _python_runs(vector, fixture["region"])
+    rust_runs = _rust_runs(vector, fixture["region"])
+
+    expected_text = ["第一行\n第二行\n第三行", "右侧字段"]
+    assert [run["text"] for run in python_runs] == expected_text
+    assert [run["text"] for run in rust_runs] == expected_text
+
+    merged = rust_runs[0]
+    assert merged["rect"] == {
+        "schema_version": 1,
+        "x0": 100.0,
+        "y0": 10.0,
+        "x1": 160.0,
+        "y1": 48.0,
+    }
+    assert merged["span_refs"] == [0, 1, 2]
+    assert merged["source_start"] == 0
+    assert merged["source_end"] == 2
+    assert merged["evidence"] == {
+        "schema_version": 1,
+        "source_positions": [
+            {"schema_version": 1, "block": 0, "line": 0},
+            {"schema_version": 1, "block": 0, "line": 1},
+            {"schema_version": 1, "block": 0, "line": 2},
+        ],
+        "fonts": ["SimSun", "SimSun", "SimSun"],
+        "sizes": [10.0, 10.0, 10.0],
+        "flags": [0, 0, 0],
+    }
+
+
+def test_wrapped_field_merge_requires_witness_and_oracle_geometry():
+    fixture = _load_fixture()
+    base = next(
+        vector
+        for vector in fixture["vectors"]
+        if vector["fixture"] == "vertical_wrapped_witness"
+    )
+
+    variants = []
+    without_witness = deepcopy(base)
+    without_witness["spans"] = without_witness["spans"][:3]
+    variants.append(without_witness)
+
+    incompatible_font = deepcopy(base)
+    incompatible_font["spans"][1]["font"] = "SimSun-Bold"
+    variants.append(incompatible_font)
+
+    excessive_gap = deepcopy(base)
+    excessive_gap["spans"][1]["bbox"] = [100.0, 34.1, 160.0, 44.1]
+    for char in excessive_gap["spans"][1]["char_boxes"]:
+        char["bbox"][1] += 10.1
+        char["bbox"][3] += 10.1
+    variants.append(excessive_gap)
+
+    insufficient_overlap = deepcopy(base)
+    insufficient_overlap["spans"][1]["bbox"] = [170.0, 24.0, 230.0, 34.0]
+    for char in insufficient_overlap["spans"][1]["char_boxes"]:
+        char["bbox"][0] += 70.0
+        char["bbox"][2] += 70.0
+    variants.append(insufficient_overlap)
+
+    for vector in variants:
+        python_runs = _python_runs(vector, fixture["region"])
+        rust_runs = _rust_runs(vector, fixture["region"])
+        assert all("\n" not in run["text"] for run in python_runs)
+        assert all("\n" not in run["text"] for run in rust_runs)
+
+
+def test_wrapped_field_merge_rejects_noncontinuous_source_control():
+    fixture = _load_fixture()
+    vector = next(
+        vector
+        for vector in fixture["vectors"]
+        if vector["fixture"] == "source_block_line_noncontinuous"
+    )
+
+    python_runs = _python_runs(vector, fixture["region"])
+    rust_runs = _rust_runs(vector, fixture["region"])
+
+    assert [run["text"] for run in python_runs] == ["甲", "乙"]
+    assert [run["text"] for run in rust_runs] == ["甲", "乙"]
+
+
+def test_wrapped_field_merge_rejects_noncontinuous_source_in_fallback_pair():
+    fixture = _load_fixture()
+    base_spans = [
+        {
+            "text": "右侧字段",
+            "bbox": [240.0, 0.0, 300.0, 40.0],
+            "font": "SimSun",
+            "size": 10.0,
+            "order": 0,
+            "source_position": [1, 0, 0],
+            "char_boxes": [
+                {"text": char, "bbox": [240.0 + index * 15.0, 0.0, 255.0 + index * 15.0, 40.0]}
+                for index, char in enumerate("右侧字段")
+            ],
+        },
+        {
+            "text": "其",
+            "bbox": [100.0, 10.0, 110.0, 20.0],
+            "font": "SimSun",
+            "size": 10.0,
+            "order": 1,
+            "source_position": [22, 0, 0],
+            "char_boxes": [{"text": "其", "bbox": [100.0, 10.0, 110.0, 20.0]}],
+        },
+        {
+            "text": "他",
+            "bbox": [100.0, 24.0, 110.0, 34.0],
+            "font": "SimSun",
+            "size": 10.0,
+            "order": 2,
+            "source_position": [22, 1, 0],
+            "char_boxes": [{"text": "他", "bbox": [100.0, 24.0, 110.0, 34.0]}],
+        },
+    ]
+    for position in ([22, 2, 0], [23, 1, 0]):
+        vector = {
+            "fixture": "fallback_source_control",
+            "spans": deepcopy(base_spans),
+        }
+        vector["spans"][2]["source_position"] = list(position)
+        python_runs = _python_runs(vector, fixture["region"])
+        rust_runs = _rust_runs(vector, fixture["region"])
+        assert "其\n他" not in {run["text"] for run in python_runs}
+        assert "其\n他" not in {run["text"] for run in rust_runs}
+
+
 def test_complete_ledger_is_locked_by_count_summary_and_digest():
     ledger = build_differential_ledger(_load_fixture())
     serialized = json.dumps(
         ledger, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     ).encode("utf-8")
-    assert len(ledger) == 449
+    assert len(ledger) == 364
     assert dict(Counter(item["fixture"] for item in ledger)) == EXPECTED_FIXTURE_COUNTS
     assert dict(Counter(item["field"] for item in ledger)) == EXPECTED_FIELD_COUNTS
     assert dict(Counter(item["classification"] for item in ledger)) == EXPECTED_CLASS_COUNTS

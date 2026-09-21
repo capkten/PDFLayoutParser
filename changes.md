@@ -2,6 +2,8 @@
 
 ## 2026-09-21
 
+- Task 3B wrapped merge bounded slice：补齐 Rust `build_text_runs()` 的 wrapped field 合并语义。根因是 Rust 在完成同一视觉行 run 后直接返回，未执行 Python oracle 的 `_merge_wrapped_field_runs()`；现在仅在返回前按 native flow 连续、数字/占位符 veto、字体粗细与字号兼容、下方几何、横向重叠和右侧 multiline witness 判定，并保留 strong native vertical pair fallback。链式合并逐个相邻 pair 检查，合并文本、bbox、span refs、source bounds 和完整 evidence；不回读 `fitz.Page`/`page.get_text("words")`，不修改 Python 生产路径、route、alignment corridor、`build_atoms` 后逻辑或用户 dirty 文件。differential ledger 更新为 `364` 条，SHA256 为 `8358c75e03dc5e12086127a75cc9b4ed94e7d829ea63ccefc0f06ac09d701fcc`；最终 differential `18 passed`、wrapped focused `4 passed`、`cargo test --lib native_span` 为 `4 passed`、`git diff --check` 通过。
+
 - Task 3B bounded slice：迁移 Rust native span 的 superscript inline gap 合并规则。
   - **根因与调用位置**：`rust/native_span.rs` 的 `build_text_runs()` 仅按同一 native line 的普通字距、CJK 白名单字距和连续 source fragment 规则合并；小字号 superscript 即使位于前一 span 的右侧走廊内，也因 source line 不同而被拆成两个 run。
   - **判定条件**：在现有 source-fragment、`$` 和垂直中心 veto 之后，严格使用 `candidate.size < previous.size * 0.82`，以及 `previous.x1 - previous.size * 0.9 <= candidate.x0 <= previous.x1 + previous.size * 0.45`；不放宽普通 gap、不增大 CJK gap、不添加业务文字特判。packed numeric fragment veto、span refs、source bounds、bbox 和 evidence 保持不变。

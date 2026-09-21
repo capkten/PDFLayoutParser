@@ -348,6 +348,328 @@ fn split_packed_numeric_span(span: NativeSpanDto) -> Vec<PreparedSpan> {
     fragments
 }
 
+fn run_font_size(run: &TextRunDto) -> f64 {
+    run.evidence
+        .as_ref()
+        .and_then(|evidence| evidence.sizes.first().copied().flatten())
+        .unwrap_or(10.0)
+}
+
+fn run_is_bold(run: &TextRunDto) -> bool {
+    run.evidence
+        .as_ref()
+        .and_then(|evidence| evidence.fonts.first())
+        .and_then(|font| font.as_deref())
+        .map(|font| font.to_ascii_lowercase().contains("bold"))
+        .unwrap_or(false)
+}
+
+fn run_source_bounds(run: &TextRunDto) -> Option<(Vec<i64>, i64, i64)> {
+    let evidence = run.evidence.as_ref()?;
+    if evidence.source_positions.is_empty() {
+        return None;
+    }
+    let mut blocks = Vec::new();
+    let mut line_start = i64::MAX;
+    let mut line_end = i64::MIN;
+    for position in &evidence.source_positions {
+        if !blocks.contains(&position.block) {
+            blocks.push(position.block);
+        }
+        line_start = line_start.min(position.line);
+        line_end = line_end.max(position.line);
+    }
+    blocks.sort_unstable();
+    Some((blocks, line_start, line_end))
+}
+
+fn horizontal_overlap(left: &Rect4, right: &Rect4) -> f64 {
+    (left.x1.min(right.x1) - left.x0.max(right.x0)).max(0.0)
+}
+
+fn right_witnesses<'a>(
+    chain: &[TextRunDto],
+    candidate: &TextRunDto,
+    runs: &'a [TextRunDto],
+    require_flow_after: bool,
+    minimum_horizontal_gap: f64,
+    vertical_margin: f64,
+) -> Vec<&'a TextRunDto> {
+    let y0 = chain
+        .first()
+        .map(|run| run.rect.y0.min(candidate.rect.y0))
+        .unwrap_or(candidate.rect.y0)
+        - vertical_margin;
+    let y1 = chain
+        .last()
+        .map(|run| run.rect.y1.max(candidate.rect.y1))
+        .unwrap_or(candidate.rect.y1)
+        + run_font_size(candidate).max(10.0) * 4.0;
+    let x1 = chain
+        .iter()
+        .map(|run| run.rect.x1)
+        .chain(std::iter::once(candidate.rect.x1))
+        .fold(f64::NEG_INFINITY, f64::max);
+    runs.iter()
+        .filter(|run| {
+            let in_chain = chain.iter().any(|item| item.order == run.order);
+            let after_candidate = run.source_start > candidate.source_end;
+            !in_chain
+                && run.order != candidate.order
+                && (!require_flow_after || after_candidate)
+                && run.rect.x0 >= x1 + minimum_horizontal_gap
+                && y1.min(run.rect.y1) > y0.max(run.rect.y0)
+        })
+        .collect()
+}
+
+fn is_strong_native_vertical_pair(previous: &TextRunDto, candidate: &TextRunDto) -> bool {
+    let previous_text = previous.text.trim();
+    let candidate_text = candidate.text.trim();
+    if !is_single_cjk(previous_text) || !is_single_cjk(candidate_text) {
+        return false;
+    }
+    let Some((previous_blocks, previous_start, previous_end)) = run_source_bounds(previous) else {
+        return false;
+    };
+    let Some((candidate_blocks, candidate_start, candidate_end)) = run_source_bounds(candidate) else {
+        return false;
+    };
+    if previous_blocks.len() != 1
+        || previous_blocks != candidate_blocks
+        || previous_start != previous_end
+        || candidate_start != candidate_end
+        || candidate_start != previous_end + 1
+    {
+        return false;
+    }
+
+    let minimum_font_size = run_font_size(previous).min(run_font_size(candidate));
+    if minimum_font_size <= 0.0
+        || run_is_bold(previous) != run_is_bold(candidate)
+        || (run_font_size(previous) - run_font_size(candidate)).abs()
+            > 0.5_f64.max(minimum_font_size * 0.1)
+    {
+        return false;
+    }
+
+    let tolerance = 1.0_f64.max(minimum_font_size * 0.12);
+    (previous.rect.x0 - candidate.rect.x0).abs() <= tolerance
+        && (previous.rect.x1 - candidate.rect.x1).abs() <= tolerance
+        && candidate.rect.y0 >= previous.rect.y1
+        && candidate.rect.y0 - previous.rect.y1 <= 6.0_f64.max(minimum_font_size)
+        && candidate.rect.y0 > previous.rect.y0
+}
+
+fn is_multiline_witness(run: &TextRunDto) -> bool {
+    let font_size = run_font_size(run);
+    font_size > 0.0
+        && run.rect.y1 - run.rect.y0 >= (font_size * 1.5).max(font_size + 3.0)
+}
+
+fn has_multiline_right_witness(
+    chain: &[TextRunDto],
+    candidate: &TextRunDto,
+    runs: &[TextRunDto],
+) -> bool {
+    let font_size = run_font_size(chain.last().unwrap_or(candidate)).min(run_font_size(candidate));
+    if font_size <= 0.0 {
+        return false;
+    }
+    let witnesses = right_witnesses(
+        chain,
+        candidate,
+        runs,
+        false,
+        6.0_f64.max(font_size * 0.6),
+        2.0_f64.max(font_size * 0.8),
+    );
+    for seed in &witnesses {
+        let seed_width = seed.rect.x1 - seed.rect.x0;
+        let mut group: Vec<&TextRunDto> = witnesses
+            .iter()
+            .copied()
+            .filter(|item| {
+                horizontal_overlap(&seed.rect, &item.rect)
+                    >= 2.0_f64.max(seed_width.min(item.rect.x1 - item.rect.x0) * 0.45)
+            })
+            .collect();
+        group.sort_by(|left, right| {
+            left.rect
+                .y0
+                .partial_cmp(&right.rect.y0)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        if group.len() == 1 && !is_multiline_witness(group[0]) {
+            continue;
+        }
+        if group.windows(2).any(|pair| {
+            pair[1].rect.y0 - pair[0].rect.y1 > 4.0_f64.max(font_size * 0.5)
+        }) {
+            continue;
+        }
+        let group_y0 = group.iter().map(|item| item.rect.y0).fold(f64::INFINITY, f64::min);
+        let group_y1 = group.iter().map(|item| item.rect.y1).fold(f64::NEG_INFINITY, f64::max);
+        if group_y0 <= chain.last().unwrap().rect.y0 - 2.0_f64.max(font_size * 0.5)
+            && candidate.rect.y1 >= group_y1 - font_size
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn is_wrapped_chain_pair(
+    chain: &[TextRunDto],
+    candidate: &TextRunDto,
+    runs: &[TextRunDto],
+) -> bool {
+    let left = chain.last().unwrap();
+    if left.text.trim_end().ends_with([':', '：'])
+        || candidate.source_start != left.source_end + 1
+    {
+        return false;
+    }
+    let base_bold = run_is_bold(chain.first().unwrap());
+    if run_is_bold(left) != run_is_bold(candidate) && base_bold != run_is_bold(candidate) {
+        return false;
+    }
+    if (run_font_size(left) - run_font_size(candidate)).abs() > 1.0
+        || is_python_numeric_text(left.text.trim())
+        || is_python_numeric_text(candidate.text.trim())
+        || is_placeholder_text(left.text.trim())
+        || is_placeholder_text(candidate.text.trim())
+    {
+        return false;
+    }
+
+    let left_center = center_y(&left.rect);
+    let candidate_center = center_y(&candidate.rect);
+    if candidate_center <= left_center || candidate.rect.y0 < left.rect.y1 {
+        return false;
+    }
+    let minimum_width = (left.rect.x1 - left.rect.x0).min(candidate.rect.x1 - candidate.rect.x0);
+    if horizontal_overlap(&left.rect, &candidate.rect) < minimum_width * 0.45
+        || candidate.rect.y0 - left.rect.y1
+            > 6.0_f64.max(run_font_size(left).min(run_font_size(candidate)))
+    {
+        return false;
+    }
+
+    if !right_witnesses(chain, candidate, runs, true, 8.0, 2.0).is_empty() {
+        return true;
+    }
+    is_strong_native_vertical_pair(left, candidate)
+        && has_multiline_right_witness(chain, candidate, runs)
+}
+
+fn merge_run_chain(chain: &[TextRunDto]) -> TextRunDto {
+    let first = chain.first().expect("wrapped chain must not be empty");
+    let mut source_positions = Vec::new();
+    let mut fonts = Vec::new();
+    let mut sizes = Vec::new();
+    let mut flags = Vec::new();
+    let mut fragment_indices = Vec::new();
+    let mut fragment_counts = Vec::new();
+    let mut has_fragment_evidence = true;
+    for run in chain {
+        if let Some(evidence) = &run.evidence {
+            source_positions.extend(evidence.source_positions.clone());
+            fonts.extend(evidence.fonts.clone());
+            sizes.extend(evidence.sizes.clone());
+            flags.extend(evidence.flags.clone());
+            match (
+                &evidence.source_fragment_indices,
+                &evidence.source_fragment_counts,
+            ) {
+                (Some(indices), Some(counts)) => {
+                    fragment_indices.extend(indices.clone());
+                    fragment_counts.extend(counts.clone());
+                }
+                _ => has_fragment_evidence = false,
+            }
+        } else {
+            has_fragment_evidence = false;
+        }
+    }
+    let evidence = if source_positions.is_empty() {
+        None
+    } else {
+        Some(TextRunEvidenceDto {
+            schema_version: first
+                .evidence
+                .as_ref()
+                .map(|evidence| evidence.schema_version)
+                .unwrap_or(1),
+            source_positions,
+            fonts,
+            sizes,
+            flags,
+            source_fragment_indices: has_fragment_evidence.then_some(fragment_indices),
+            source_fragment_counts: has_fragment_evidence.then_some(fragment_counts),
+        })
+    };
+    TextRunDto {
+        schema_version: first.schema_version,
+        text: chain
+            .iter()
+            .map(|run| run.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        rect: Rect4 {
+            schema_version: first.rect.schema_version,
+            x0: chain.iter().map(|run| run.rect.x0).fold(f64::INFINITY, f64::min),
+            y0: chain.iter().map(|run| run.rect.y0).fold(f64::INFINITY, f64::min),
+            x1: chain.iter().map(|run| run.rect.x1).fold(f64::NEG_INFINITY, f64::max),
+            y1: chain.iter().map(|run| run.rect.y1).fold(f64::NEG_INFINITY, f64::max),
+        },
+        span_refs: chain
+            .iter()
+            .flat_map(|run| run.span_refs.iter().copied())
+            .collect(),
+        source_start: chain.iter().map(|run| run.source_start).min().unwrap_or(0),
+        source_end: chain.iter().map(|run| run.source_end).max().unwrap_or(0),
+        order: first.order,
+        evidence,
+    }
+}
+
+fn merge_wrapped_field_runs(mut runs: Vec<TextRunDto>) -> Vec<TextRunDto> {
+    if runs.len() < 2 {
+        return runs;
+    }
+    runs.sort_by(|left, right| {
+        left.source_start
+            .cmp(&right.source_start)
+            .then(left.source_end.cmp(&right.source_end))
+            .then(left.order.cmp(&right.order))
+    });
+    let mut result = Vec::new();
+    let mut index = 0;
+    while index < runs.len() {
+        let mut chain = vec![runs[index].clone()];
+        let mut cursor = index + 1;
+        while cursor < runs.len() && is_wrapped_chain_pair(&chain, &runs[cursor], &runs) {
+            chain.push(runs[cursor].clone());
+            cursor += 1;
+        }
+        if chain.len() == 1 {
+            result.push(runs[index].clone());
+            index += 1;
+        } else {
+            result.push(merge_run_chain(&chain));
+            index = cursor;
+        }
+    }
+    result.sort_by(|left, right| {
+        left.source_start
+            .cmp(&right.source_start)
+            .then(left.source_end.cmp(&right.source_end))
+            .then(left.order.cmp(&right.order))
+    });
+    result
+}
+
 pub fn build_text_runs(spans: Vec<NativeSpanDto>, region: Rect4) -> Vec<TextRunDto> {
     if spans.is_empty() {
         return Vec::new();
@@ -578,7 +900,7 @@ pub fn build_text_runs(spans: Vec<NativeSpanDto>, region: Rect4) -> Vec<TextRunD
         }
     }
 
-    runs
+    merge_wrapped_field_runs(runs)
 }
 
 pub fn build_atoms(runs: Vec<TextRunDto>, _region: Option<Rect4>) -> Vec<AtomDto> {
