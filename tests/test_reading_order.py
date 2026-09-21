@@ -121,3 +121,72 @@ class TestReadingOrder:
         sorted_elements = sort_by_reading_order([r2, l1, r1, l3, r3, l2])
         contents = [e.content for e in sorted_elements]
         assert contents == ["Left 1", "Left 2", "Left 3", "Right 1", "Right 2", "Right 3"]
+
+    def test_numbered_bullet_with_tall_prose_not_absorbed_by_prev_line(self):
+        """Numbered bullet and its tall body text should not be absorbed into prev line or inverted."""
+        prev_line = LayoutElement(
+            type="text",
+            bbox=BBox(46.10, 605.33, 300.0, 614.33),
+            order=0,
+            content="7_prev_line",
+        )
+        bullet_8 = LayoutElement(
+            type="text",
+            bbox=BBox(36.0, 618.8310546875, 43.785003662109375, 627.8310546875),
+            order=1,
+            content="8.",
+        )
+        prose_8 = LayoutElement(
+            type="text",
+            bbox=BBox(46.09999084472656, 610.7689819335938, 555.2149658203125, 636.490966796875),
+            order=2,
+            content="2017年07月05日招商银行...",
+        )
+        tail_8 = LayoutElement(
+            type="text",
+            bbox=BBox(46.0999755859375, 638.0, 100.0, 647.0),
+            order=3,
+            content="度0。",
+        )
+
+        # Shuffle and sort
+        sorted_elements = sort_by_reading_order([prose_8, tail_8, bullet_8, prev_line])
+        contents = [e.content for e in sorted_elements]
+        assert contents == ["7_prev_line", "8.", "2017年07月05日招商银行...", "度0。"]
+
+    def test_sub_threshold_vertical_overlap_does_not_merge_lines(self):
+        """Small vertical overlap (e.g. 2.5pt < 40% of line height) must NOT merge distinct lines."""
+        line1 = LayoutElement(
+            type="text",
+            bbox=BBox(50.0, 100.0, 200.0, 110.0),
+            order=0,
+            content="Line 1",
+        )
+        # Line 2 overlaps line 1 by 2.0pt (108.0 to 110.0), height 10.0, overlap ratio 20%
+        line2 = LayoutElement(
+            type="text",
+            bbox=BBox(50.0, 108.0, 200.0, 118.0),
+            order=1,
+            content="Line 2",
+        )
+        sorted_elements = sort_by_reading_order([line2, line1])
+        assert [e.content for e in sorted_elements] == ["Line 1", "Line 2"]
+
+    def test_same_line_pixel_jitter_merges_and_sorts_left_to_right(self):
+        """Elements on same line with 2-3px jitter but >=45% overlap should merge and sort left-to-right."""
+        label = LayoutElement(
+            type="text",
+            bbox=BBox(30.0, 200.0, 60.0, 212.0),
+            order=0,
+            content="Label:",
+        )
+        # Value has slightly different font metrics (y: 202..214, 2px lower, 10px overlap / 12px min_h = 83%)
+        val = LayoutElement(
+            type="text",
+            bbox=BBox(65.0, 202.0, 150.0, 214.0),
+            order=1,
+            content="Value 123",
+        )
+        sorted_elements = sort_by_reading_order([val, label])
+        assert [e.content for e in sorted_elements] == ["Label:", "Value 123"]
+

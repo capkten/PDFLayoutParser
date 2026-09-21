@@ -126,14 +126,17 @@ def _sort_items_by_row_reading_order(
         h_item = max(1.0, b.y1 - b.y0)
         min_h = min(h_row, h_item)
 
-        # Same line condition: vertical overlap >= 30% of shorter item or center distance <= 40%
-        # Guard: elements with extreme height disparity (e.g. ratio > 3.0) must not merge into the same text row
+        # Same line condition:
+        # 1. Require substantial relative vertical overlap (>= 45% of shorter item),
+        #    strictly rejecting small accidental boundary touches (eliminates hardcoded overlap >= 2.0).
+        # 2. Or require close vertical center distance (<= 35% of shorter item) for slight baseline jitter.
+        # 3. Guard against extreme height disparities (height_ratio <= 3.0).
         height_ratio = max(h_row, h_item) / min_h
         is_intersect = (
             height_ratio <= 3.0
             and (
-                (overlap > 0 and (overlap >= 0.3 * min_h or overlap >= 2.0))
-                or (abs(((b.y0 + b.y1) / 2.0) - ((row_y0 + row_y1) / 2.0)) <= 0.4 * min_h)
+                (overlap > 0 and overlap >= 0.45 * min_h)
+                or (abs(((b.y0 + b.y1) / 2.0) - ((row_y0 + row_y1) / 2.0)) <= 0.35 * min_h)
             )
         )
 
@@ -157,6 +160,7 @@ def _sort_items_by_row_reading_order(
     for r in rows:
         out_res.extend(r)
     return out_res
+
 
 
 def _recursive_xy_cut(
