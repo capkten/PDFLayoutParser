@@ -29,6 +29,14 @@ def _span(text, boxes, *, size=10.0):
     }
 
 
+def _span_with_order(text, boxes, order):
+    span = _span(text, boxes)
+    span["order"] = order
+    span["source_position"]["line"] = 0
+    span["line"] = 0
+    return span
+
+
 def test_rust_native_span_splits_packed_numeric_fields_with_owned_fragment_evidence():
     spans = [
         _span(
@@ -117,6 +125,36 @@ def test_rust_native_span_refuses_single_tight_or_malformed_candidates():
     assert [run["text"] for run in malformed] == ["100 200"]
 
 
+def test_rust_native_span_matches_python_decimal_digit_whitelist():
+    decimal_digits = _run_texts("١ ٢")
+    numeric_symbols = _run_texts("² ³")
+
+    assert [run["text"] for run in decimal_digits] == ["١", "٢"]
+    assert [run["text"] for run in numeric_symbols] == ["² ³"]
+
+
+def test_rust_native_span_normalizes_newline_before_character_box_validation():
+    runs = _run_texts("100\n200")
+
+    assert [run["text"] for run in runs] == ["100 200"]
+    assert "source_fragment_indices" not in runs[0]["evidence"]
+    assert "source_fragment_counts" not in runs[0]["evidence"]
+
+
+def test_rust_native_span_keeps_ordinary_numeric_join_rule_but_not_fragments():
+    ordinary = rust_adapter.build_text_runs(
+        [
+            _span_with_order("10", [("1", 10.0, 15.0), ("0", 15.0, 20.0)], 0),
+            _span_with_order("20", [("2", 22.0, 27.0), ("0", 27.0, 32.0)], 1),
+        ],
+        {"schema_version": 1, "x0": 0.0, "y0": 0.0, "x1": 100.0, "y1": 50.0},
+    )
+    fragments = _run_texts("100   200")
+
+    assert [run["text"] for run in ordinary] == ["1020"]
+    assert [run["text"] for run in fragments] == ["100", "200"]
+
+
 def _text_run(evidence):
     return {
         "schema_version": 1,
@@ -148,10 +186,37 @@ def test_text_run_fragment_evidence_roundtrip_is_owned_and_aligned():
     assert rust_adapter.roundtrip_dto("text_run", _text_run(evidence))["evidence"] == evidence
 
 
+def test_text_run_unsplit_evidence_shape_stays_unchanged():
+    evidence = {
+        "schema_version": 1,
+        "source_positions": [{"schema_version": 1, "block": 0, "line": 0}],
+        "fonts": ["SimSun"],
+        "sizes": [10.0],
+        "flags": [0],
+    }
+
+    assert rust_adapter.roundtrip_dto("text_run", _text_run(evidence)) == _text_run(evidence)
+
+
+def test_text_run_none_fragment_fields_are_omitted_when_both_absent():
+    evidence = _valid_fragment_evidence()
+    evidence["source_fragment_indices"] = None
+    evidence["source_fragment_counts"] = None
+
+    result = rust_adapter.roundtrip_dto("text_run", _text_run(evidence))
+
+    assert "source_fragment_indices" not in result["evidence"]
+    assert "source_fragment_counts" not in result["evidence"]
+
+
 @pytest.mark.parametrize(
     "mutate",
     [
         lambda evidence: evidence.pop("source_fragment_counts"),
+        lambda evidence: evidence.update(source_fragment_indices=None),
+        lambda evidence: evidence.update(source_fragment_counts=None),
+        lambda evidence: evidence.update(source_fragment_indices=1),
+        lambda evidence: evidence.update(source_fragment_counts=(2,)),
         lambda evidence: evidence.update(source_fragment_indices=["bad"]),
         lambda evidence: evidence.update(source_fragment_indices=[-1]),
         lambda evidence: evidence.update(source_fragment_indices=[2]),

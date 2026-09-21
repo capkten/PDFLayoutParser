@@ -75,27 +75,84 @@ struct PreparedSpan {
     split: bool,
 }
 
+const PYTHON_DECIMAL_DIGIT_RANGES: &[(u32, u32)] = &[
+    (0x30, 0x39),
+    (0x660, 0x669),
+    (0x6F0, 0x6F9),
+    (0x7C0, 0x7C9),
+    (0x966, 0x96F),
+    (0x9E6, 0x9EF),
+    (0xA66, 0xA6F),
+    (0xAE6, 0xAEF),
+    (0xB66, 0xB6F),
+    (0xBE6, 0xBEF),
+    (0xC66, 0xC6F),
+    (0xCE6, 0xCEF),
+    (0xD66, 0xD6F),
+    (0xDE6, 0xDEF),
+    (0xE50, 0xE59),
+    (0xED0, 0xED9),
+    (0xF20, 0xF29),
+    (0x1040, 0x1049),
+    (0x1090, 0x1099),
+    (0x17E0, 0x17E9),
+    (0x1810, 0x1819),
+    (0x1946, 0x194F),
+    (0x19D0, 0x19D9),
+    (0x1A80, 0x1A89),
+    (0x1A90, 0x1A99),
+    (0x1B50, 0x1B59),
+    (0x1BB0, 0x1BB9),
+    (0x1C40, 0x1C49),
+    (0x1C50, 0x1C59),
+    (0xA620, 0xA629),
+    (0xA8D0, 0xA8D9),
+    (0xA900, 0xA909),
+    (0xA9D0, 0xA9D9),
+    (0xA9F0, 0xA9F9),
+    (0xAA50, 0xAA59),
+    (0xABF0, 0xABF9),
+    (0xFF10, 0xFF19),
+    (0x104A0, 0x104A9),
+    (0x10D30, 0x10D39),
+    (0x11066, 0x1106F),
+    (0x110F0, 0x110F9),
+    (0x11136, 0x1113F),
+    (0x111D0, 0x111D9),
+    (0x112F0, 0x112F9),
+    (0x11450, 0x11459),
+    (0x114D0, 0x114D9),
+    (0x11650, 0x11659),
+    (0x116C0, 0x116C9),
+    (0x11730, 0x11739),
+    (0x118E0, 0x118E9),
+    (0x11950, 0x11959),
+    (0x11C50, 0x11C59),
+    (0x11D50, 0x11D59),
+    (0x11DA0, 0x11DA9),
+    (0x11F50, 0x11F59),
+    (0x16A60, 0x16A69),
+    (0x16AC0, 0x16AC9),
+    (0x16B50, 0x16B59),
+    (0x1D7CE, 0x1D7FF),
+    (0x1E140, 0x1E149),
+    (0x1E2F0, 0x1E2F9),
+    (0x1E4F0, 0x1E4F9),
+    (0x1E950, 0x1E959),
+    (0x1FBF0, 0x1FBF9),
+];
+
+fn is_python_decimal_digit(character: char) -> bool {
+    let codepoint = character as u32;
+    PYTHON_DECIMAL_DIGIT_RANGES
+        .iter()
+        .any(|&(start, end)| (start..=end).contains(&codepoint))
+}
+
 fn is_packed_numeric_char(character: char) -> bool {
     character.is_whitespace()
-        || matches!(
-            character,
-            '0'..='9' | ',' | '.' | '(' | ')' | '%' | '+' | '-' | '–' | '—' | '−'
-        )
-}
-
-fn is_numeric_field_text(text: &str) -> bool {
-    let trimmed = text.trim();
-    !trimmed.is_empty()
-        && trimmed.chars().any(|character| character.is_ascii_digit())
-        && trimmed.chars().all(is_packed_numeric_char)
-}
-
-fn is_placeholder_text(text: &str) -> bool {
-    let trimmed = text.trim();
-    (1..=3).contains(&trimmed.chars().count())
-        && trimmed
-            .chars()
-            .all(|character| matches!(character, '-' | '–' | '—' | '−'))
+        || is_python_decimal_digit(character)
+        || matches!(character, ',' | '.' | '(' | ')' | '%' | '+' | '-' | '–' | '—' | '−')
 }
 
 fn prepared_unsplit(span: NativeSpanDto) -> PreparedSpan {
@@ -105,6 +162,11 @@ fn prepared_unsplit(span: NativeSpanDto) -> PreparedSpan {
         fragment_count: 1,
         split: false,
     }
+}
+
+fn normalize_span_text(mut span: NativeSpanDto) -> NativeSpanDto {
+    span.text = span.text.replace('\n', " ");
+    span
 }
 
 fn split_packed_numeric_span(span: NativeSpanDto) -> Vec<PreparedSpan> {
@@ -234,6 +296,7 @@ pub fn build_text_runs(spans: Vec<NativeSpanDto>, region: Rect4) -> Vec<TextRunD
     // 1. 过滤中心点在 region 范围内的非空 span，并排除长度大于 3 的纯线分隔符
     let mut valid_spans: Vec<PreparedSpan> = spans
         .into_iter()
+        .map(normalize_span_text)
         .filter(|s| {
             let t = s.text.trim();
             if t.is_empty() {
@@ -323,7 +386,8 @@ pub fn build_text_runs(spans: Vec<NativeSpanDto>, region: Rect4) -> Vec<TextRunD
             }
 
             let can_join = {
-                let prev = &groups.last().unwrap().last().unwrap().span;
+                let previous = groups.last().unwrap().last().unwrap();
+                let prev = &previous.span;
                 let candidate = &span.span;
                 let gap = candidate.rect.x0 - prev.rect.x1;
                 let prev_size = prev.size.unwrap_or(10.0);
@@ -333,19 +397,14 @@ pub fn build_text_runs(spans: Vec<NativeSpanDto>, region: Rect4) -> Vec<TextRunD
                     prev.block == candidate.block
                         && prev.line == candidate.line
                         && candidate.order >= prev.order;
-                let prev_is_placeholder = is_placeholder_text(&prev.text);
-                let candidate_is_placeholder = is_placeholder_text(&candidate.text);
-                let prev_is_numeric = is_numeric_field_text(&prev.text);
-                let candidate_is_numeric = is_numeric_field_text(&candidate.text);
+                let same_source_fragments = previous.split
+                    && span.split
+                    && prev.order == candidate.order
+                    && previous.fragment_count == span.fragment_count;
 
-                if prev.text == "$" || candidate.text == "$" {
+                if same_source_fragments {
                     false
-                } else if (prev_is_placeholder && candidate_is_numeric)
-                    || (prev_is_numeric && candidate_is_placeholder)
-                    || (prev_is_placeholder && candidate_is_placeholder)
-                {
-                    false
-                } else if prev_is_numeric && candidate_is_numeric && gap > 0.8 {
+                } else if prev.text == "$" || candidate.text == "$" {
                     false
                 } else if (center_y(&prev.rect) - center_y(&candidate.rect)).abs()
                     > 2.4_f64.max(min_size * 0.38)
