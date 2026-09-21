@@ -135,15 +135,17 @@ def test_extract_table_from_region_top_level_various_formats(tmp_path: Path):
     table_bbox = _create_wired_table_pdf(pdf_path)
 
     # 1. Using pdf_path + BBox
-    table1 = extract_table_from_region(str(pdf_path), table_bbox)
-    assert table1 is not None
-    assert table1.rows == 3
+    res1 = extract_table_from_region(str(pdf_path), table_bbox)
+    assert res1.code == 1
+    assert res1.message == "table extracted"
+    assert res1.data is not None
+    assert res1.data.rows == 3
 
     # 2. Using tuple (x0, y0, x1, y1)
     bbox_tuple = (table_bbox.x0, table_bbox.y0, table_bbox.x1, table_bbox.y1)
-    table2 = extract_table_from_region(str(pdf_path), bbox_tuple)
-    assert table2 is not None
-    assert table2.rows == 3
+    res2 = extract_table_from_region(str(pdf_path), bbox_tuple)
+    assert res2.code == 1
+    assert res2.data.rows == 3
 
     # 3. Using normalized dict (0~1)
     # Page size is 500x400
@@ -153,16 +155,28 @@ def test_extract_table_from_region_top_level_various_formats(tmp_path: Path):
         "x1": table_bbox.x1 / 500.0,
         "y1": table_bbox.y1 / 400.0,
     }
-    table3 = extract_table_from_region(str(pdf_path), norm_dict)
-    assert table3 is not None
-    assert table3.rows == 3
+    res3 = extract_table_from_region(str(pdf_path), norm_dict)
+    assert res3.code == 1
+    assert res3.data.rows == 3
 
     # 4. Using fitz.Page directly
     doc = fitz.open(str(pdf_path))
-    table4 = extract_table_from_region(doc[0], table_bbox)
-    assert table4 is not None
-    assert table4.rows == 3
+    res4 = extract_table_from_region(doc[0], table_bbox)
+    assert res4.code == 1
+    assert res4.data.rows == 3
     doc.close()
+
+    # 5. Empty region returning code=0
+    res_empty = extract_table_from_region(str(pdf_path), (400, 300, 490, 390))
+    assert res_empty.code == 0
+    assert res_empty.message == "no table found in region"
+    assert res_empty.data is None
+
+    # 6. Error returning code=-1
+    res_err = extract_table_from_region("invalid_path_not_exists.pdf", (0, 0, 100, 100))
+    assert res_err.code == -1
+    assert res_err.data is None
+    assert "No such file" in res_err.message or "cannot open" in res_err.message or res_err.message
 
 
 def test_pdf_parser_extract_table_in_region_integration(tmp_path: Path):
@@ -199,11 +213,13 @@ def test_extract_table_in_region_english(tmp_path: Path):
     doc.save(str(pdf_path))
     doc.close()
 
-    table = extract_table_from_region(
+    res = extract_table_from_region(
         str(pdf_path),
         (50, 60, 420, 180),
         confidence=0.95,
     )
+    assert res.code == 1
+    table = res.data
     assert table is not None
     assert table.cols == 3
     assert table.rows >= 2

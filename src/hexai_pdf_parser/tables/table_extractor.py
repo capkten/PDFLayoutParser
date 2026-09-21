@@ -38,7 +38,15 @@ from typing import Any, Dict, List, Optional, Tuple
 import fitz
 import copy
 
-from hexai_pdf_parser.core.models import BBox, Cell, CellStructure, Table, TableStructure, TextBlock
+from hexai_pdf_parser.core.models import (
+    ApiResult,
+    BBox,
+    Cell,
+    CellStructure,
+    Table,
+    TableStructure,
+    TextBlock,
+)
 from hexai_pdf_parser.page_normalizer import normalize_page_rotation
 
 # Pre-compiled regex for numeric token classification (used per-word)
@@ -5570,7 +5578,7 @@ def extract_table_from_region(
     table_config: Optional[TableConfig] = None,
     confidence: Optional[float] = None,
     page_language: Optional[str] = None,
-) -> Optional[Table]:
+) -> ApiResult:
     """Extract a table from a specified region without running ML table detection.
 
     Args:
@@ -5582,38 +5590,51 @@ def extract_table_from_region(
         page_language: Optional language code ("zh", "en", "mixed").
 
     Returns:
-        The extracted Table, or None if no table was recognized.
+        ApiResult:
+        - code=1, message="table extracted", data=Table if a table is found.
+        - code=0, message="no table found in region", data=None if no table is found.
+        - code=-1, message=str(exc), data=None if an exception occurs.
     """
-    extractor = TableExtractor(
-        table_config=table_config,
-        use_ml_table_detector=False,
-    )
-
-    if isinstance(source, fitz.Page):
-        return extractor.extract_table_in_region(
-            source,
-            table_bbox=table_bbox,
-            confidence=confidence,
-            page_language=page_language,
+    def _do():
+        extractor = TableExtractor(
+            table_config=table_config,
+            use_ml_table_detector=False,
         )
 
-    if isinstance(source, fitz.Document):
-        page = source[page_index]
-        return extractor.extract_table_in_region(
-            page,
-            table_bbox=table_bbox,
-            confidence=confidence,
-            page_language=page_language,
-        )
+        if isinstance(source, fitz.Page):
+            return extractor.extract_table_in_region(
+                source,
+                table_bbox=table_bbox,
+                confidence=confidence,
+                page_language=page_language,
+            )
 
-    doc = fitz.open(str(source))
+        if isinstance(source, fitz.Document):
+            page = source[page_index]
+            return extractor.extract_table_in_region(
+                page,
+                table_bbox=table_bbox,
+                confidence=confidence,
+                page_language=page_language,
+            )
+
+        doc = fitz.open(str(source))
+        try:
+            page = doc[page_index]
+            return extractor.extract_table_in_region(
+                page,
+                table_bbox=table_bbox,
+                confidence=confidence,
+                page_language=page_language,
+            )
+        finally:
+            doc.close()
+
     try:
-        page = doc[page_index]
-        return extractor.extract_table_in_region(
-            page,
-            table_bbox=table_bbox,
-            confidence=confidence,
-            page_language=page_language,
-        )
-    finally:
-        doc.close()
+        table = _do()
+        if table is not None:
+            return ApiResult(code=1, message="table extracted", data=table)
+        return ApiResult(code=0, message="no table found in region", data=None)
+    except Exception as exc:
+        return ApiResult(code=-1, message=str(exc), data=None)
+
