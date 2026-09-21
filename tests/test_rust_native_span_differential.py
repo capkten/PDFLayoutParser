@@ -49,7 +49,7 @@ REQUIRED_FIXTURES = {
     "independent_fields_counterexample",
     "single_field_control",
 }
-EXPECTED_LEDGER_SHA256 = "8358c75e03dc5e12086127a75cc9b4ed94e7d829ea63ccefc0f06ac09d701fcc"
+EXPECTED_LEDGER_SHA256 = "2d139ae83aba7551db0d29a34d19225cee689dfd950fa3456122d8a0056ace76"
 EXPECTED_FIXTURE_COUNTS = {
     "alignment_corridor_veto": 266,
     "cjk_non_whitelist_spacing": 14,
@@ -735,6 +735,68 @@ def test_wrapped_field_merge_matches_python_and_preserves_owned_evidence():
     }
 
 
+def test_wrapped_field_merge_ignores_filtered_source_gap():
+    fixture = _load_fixture()
+    base = next(
+        vector
+        for vector in fixture["vectors"]
+        if vector["fixture"] == "vertical_wrapped_witness"
+    )
+    vector = deepcopy(base)
+    for span in vector["spans"][1:]:
+        span["order"] += 1
+    vector["spans"].insert(
+        1,
+        {
+            "text": "区域外来源间隔",
+            "bbox": [400.0, 24.0, 460.0, 34.0],
+            "font": "SimSun",
+            "size": 10.0,
+            "order": 1,
+            "source_position": [9, 9, 0],
+            "char_boxes": [
+                {
+                    "text": char,
+                    "bbox": [400.0 + index * 10.0, 24.0, 410.0 + index * 10.0, 34.0],
+                }
+                for index, char in enumerate("区域外来源间隔")
+            ],
+        },
+    )
+
+    python_runs = _python_runs(vector, fixture["region"])
+    rust_runs = _rust_runs(vector, fixture["region"])
+
+    assert [run["text"] for run in python_runs] == [
+        "第一行\n第二行\n第三行",
+        "右侧字段",
+    ]
+    assert [run["text"] for run in rust_runs] == [run["text"] for run in python_runs]
+
+    merged = rust_runs[0]
+    assert merged["rect"] == {
+        "schema_version": 1,
+        "x0": 100.0,
+        "y0": 10.0,
+        "x1": 160.0,
+        "y1": 48.0,
+    }
+    assert merged["span_refs"] == [0, 2, 3]
+    assert merged["source_start"] == 0
+    assert merged["source_end"] == 3
+    assert merged["evidence"] == {
+        "schema_version": 1,
+        "source_positions": [
+            {"schema_version": 1, "block": 0, "line": 0},
+            {"schema_version": 1, "block": 0, "line": 1},
+            {"schema_version": 1, "block": 0, "line": 2},
+        ],
+        "fonts": ["SimSun", "SimSun", "SimSun"],
+        "sizes": [10.0, 10.0, 10.0],
+        "flags": [0, 0, 0],
+    }
+
+
 def test_wrapped_field_merge_requires_witness_and_oracle_geometry():
     fixture = _load_fixture()
     base = next(
@@ -769,8 +831,10 @@ def test_wrapped_field_merge_requires_witness_and_oracle_geometry():
     for vector in variants:
         python_runs = _python_runs(vector, fixture["region"])
         rust_runs = _rust_runs(vector, fixture["region"])
+        assert [run["text"] for run in rust_runs] == [
+            run["text"] for run in python_runs
+        ]
         assert all("\n" not in run["text"] for run in python_runs)
-        assert all("\n" not in run["text"] for run in rust_runs)
 
 
 def test_wrapped_field_merge_rejects_noncontinuous_source_control():
@@ -830,8 +894,10 @@ def test_wrapped_field_merge_rejects_noncontinuous_source_in_fallback_pair():
         vector["spans"][2]["source_position"] = list(position)
         python_runs = _python_runs(vector, fixture["region"])
         rust_runs = _rust_runs(vector, fixture["region"])
+        assert [run["text"] for run in rust_runs] == [
+            run["text"] for run in python_runs
+        ]
         assert "其\n他" not in {run["text"] for run in python_runs}
-        assert "其\n他" not in {run["text"] for run in rust_runs}
 
 
 def test_complete_ledger_is_locked_by_count_summary_and_digest():

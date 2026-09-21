@@ -111,3 +111,75 @@ wrapped 修复后实际 ledger：
 - 本报告
 
 用户已有 dirty 文件保持未修改；未添加 broad ignore、未放宽 normalizer、未改变 mismatch classification 来掩盖差异。提交前再次检查只暂存上述四个文件。
+
+## Review fix：filtered-source-gap
+
+### 根因
+
+原实现把 `source_start/source_end` 同时用于 wrapped helper 的局部排序、相邻连续性和
+witness-after 判断。`source_start/source_end` 是原始 span order 的公开来源边界；当中间
+span 被 region 过滤后，它们不再表示 Python oracle 的连续 flow。该复现会使 Python 合并
+三行，而旧 Rust 仅合并后两行。
+
+### Fix RED
+
+先新增 `test_wrapped_field_merge_ignores_filtered_source_gap`：在 wrapped spans 中插入
+一个 source order 位于中间、bbox 位于 region 外的 span，并断言文本、bbox、span refs、
+source bounds 和 evidence。运行：
+
+```powershell
+$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; $env:PYTHONPATH='D:\codes\PDFLayoutParser-Fast\.worktrees\rust-migration-replan\src'; & 'C:\Users\23662\AppData\Local\Programs\Python\Python312\Scripts\pytest.exe' -q tests/test_rust_native_span_differential.py -k filtered_source_gap
+```
+
+真实输出：`1 failed, 18 deselected`。失败显示旧 Rust 输出三个 run，而 Python 输出左侧
+三行 wrapped run 和右侧独立字段，确认回归测试捕获目标缺陷。
+
+### 最小修复与 GREEN
+
+`build_text_runs()` 在 wrapped merge 前按已有 `source_start/source_end/order` 对已过滤的
+run 建立连续 `run.order`。wrapped helper 的排序、相邻 pair 连续性、witness-after 和
+chain membership 仅使用该连续 `order`；`source_start/source_end` 仍只作为原始来源边界
+输出。没有修改 Python 生产路径、route、alignment corridor 或后续 atom/column/grid/header
+逻辑。反例测试同时断言 Python/Rust 文本结构列表相等。
+
+GREEN focused：`pytest -q tests/test_rust_native_span_differential.py -k wrapped`，真实输出：
+`5 passed, 14 deselected`。
+
+### 最终验证
+
+`maturin develop --release`：`Finished release profile [optimized]`、`Built wheel`、
+`Installed hexai_pdf_parser-1.1.1`，退出码 `0`；pip 输出既有 invalid distribution
+`~ydantic` 警告。
+
+组合回归命令：
+
+```powershell
+$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; $env:PYTHONPATH='D:\codes\PDFLayoutParser-Fast\.worktrees\rust-migration-replan\src'; & 'C:\Users\23662\AppData\Local\Programs\Python\Python312\Scripts\pytest.exe' -q tests/test_rust_native_span_differential.py tests/test_wireless_structure_text_runs.py tests/test_rust_native_span_packed_numeric.py
+```
+
+真实输出：`84 passed in 2.49s`。
+
+`cargo test --lib native_span` 真实输出：`4 passed; 0 failed; 0 ignored; 0 measured; 46 filtered out`。
+
+`git diff --check` 真实输出：无输出，退出码 `0`。
+
+修复后 ledger 仍为 `364` 条，fixture/field/classification 计数不变；因 flow/order 结果按
+过滤后序列变化，最终 SHA256 为
+`2d139ae83aba7551db0d29a34d19225cee689dfd950fa3456122d8a0056ace76`。
+
+### 修复范围自审
+
+- 修改仅涉及 `rust/native_span.rs`、`tests/test_rust_native_span_differential.py`、`changes.md` 和本报告。
+- 未修改用户 dirty 文件 `tests/test_wireless_extractor_split.py`、`tests/test_wireless_structure_recoverer.py`。
+- 未改变 source bounds 的公开语义；未回读 `fitz.Page` 或 `page.get_text("words")`。
+- wrapped、witness、geometry、packed numeric、superscript、placeholder 和 normal numeric join 回归均通过。
+
+## 当前交付状态补充
+
+按 bounded review 交付要求停止后续长测试。此前带临时过滤后 run 重编号的版本曾得到
+focused `5 passed, 14 deselected` 和组合 `84 passed`；为遵守“直接使用
+build_text_runs 已分配的 run.order”的最小化约束，移除了该额外重编号后，最终源码的
+focused 命令重新运行结果为 `4 failed, 1 passed, 14 deselected`。失败原因是当前
+`run.order` 仍按视觉行构造，在右侧同 y 行插入时不等于过滤后的 source-flow ordinal；
+因此最终组合回归、cargo 和最终构建安装未在该最终源码状态下重新完成。该未完成状态和
+concern 已如实保留，未宣称最终 GREEN。

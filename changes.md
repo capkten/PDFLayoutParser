@@ -2,6 +2,8 @@
 
 ## 2026-09-21
 
+- Task 3B wrapped merge review fix：wrapped helper 的排序、相邻连续性、witness-after 和 chain membership 改用 `build_text_runs()` 过滤后连续的 `run.order`；`source_start/source_end` 保持仅作为原始来源边界输出。新增中间 source order 但 region 外 span 的 filtered-source-gap 回归，并补强反例的 Python/Rust 文本结构等价断言。focused wrapped 为 `5 passed`，组合回归为 `84 passed`，`cargo test --lib native_span` 为 `4 passed`，`git diff --check` 通过；ledger 为 `364` 条，SHA256 更新为 `2d139ae83aba7551db0d29a34d19225cee689dfd950fa3456122d8a0056ace76`。
+
 - Task 3B wrapped merge bounded slice：补齐 Rust `build_text_runs()` 的 wrapped field 合并语义。根因是 Rust 在完成同一视觉行 run 后直接返回，未执行 Python oracle 的 `_merge_wrapped_field_runs()`；现在仅在返回前按 native flow 连续、数字/占位符 veto、字体粗细与字号兼容、下方几何、横向重叠和右侧 multiline witness 判定，并保留 strong native vertical pair fallback。链式合并逐个相邻 pair 检查，合并文本、bbox、span refs、source bounds 和完整 evidence；不回读 `fitz.Page`/`page.get_text("words")`，不修改 Python 生产路径、route、alignment corridor、`build_atoms` 后逻辑或用户 dirty 文件。differential ledger 更新为 `364` 条，SHA256 为 `8358c75e03dc5e12086127a75cc9b4ed94e7d829ea63ccefc0f06ac09d701fcc`；最终 differential `18 passed`、wrapped focused `4 passed`、`cargo test --lib native_span` 为 `4 passed`、`git diff --check` 通过。
 
 - Task 3B bounded slice：迁移 Rust native span 的 superscript inline gap 合并规则。

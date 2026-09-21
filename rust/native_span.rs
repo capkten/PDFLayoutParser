@@ -413,7 +413,7 @@ fn right_witnesses<'a>(
     runs.iter()
         .filter(|run| {
             let in_chain = chain.iter().any(|item| item.order == run.order);
-            let after_candidate = run.source_start > candidate.source_end;
+            let after_candidate = run.order > candidate.order;
             !in_chain
                 && run.order != candidate.order
                 && (!require_flow_after || after_candidate)
@@ -526,7 +526,7 @@ fn is_wrapped_chain_pair(
 ) -> bool {
     let left = chain.last().unwrap();
     if left.text.trim_end().ends_with([':', '：'])
-        || candidate.source_start != left.source_end + 1
+        || candidate.order != left.order + 1
     {
         return false;
     }
@@ -638,12 +638,7 @@ fn merge_wrapped_field_runs(mut runs: Vec<TextRunDto>) -> Vec<TextRunDto> {
     if runs.len() < 2 {
         return runs;
     }
-    runs.sort_by(|left, right| {
-        left.source_start
-            .cmp(&right.source_start)
-            .then(left.source_end.cmp(&right.source_end))
-            .then(left.order.cmp(&right.order))
-    });
+    runs.sort_by_key(|run| run.order);
     let mut result = Vec::new();
     let mut index = 0;
     while index < runs.len() {
@@ -661,12 +656,7 @@ fn merge_wrapped_field_runs(mut runs: Vec<TextRunDto>) -> Vec<TextRunDto> {
             index = cursor;
         }
     }
-    result.sort_by(|left, right| {
-        left.source_start
-            .cmp(&right.source_start)
-            .then(left.source_end.cmp(&right.source_end))
-            .then(left.order.cmp(&right.order))
-    });
+    result.sort_by_key(|run| run.order);
     result
 }
 
