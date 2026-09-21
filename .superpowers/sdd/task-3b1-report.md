@@ -70,6 +70,52 @@ cargo fmt --check
 - `cargo fmt --check` 的仓库基线失败需要单独治理；不能在本任务中修改禁止文件。
 - 独立 reviewer 仍需在本提交上复核后，才能进入后续 packed numeric/superscript/wrapped semantic slice。
 
+## Reviewer 修复轮次
+
+独立 Luna reviewer 发现并要求修复：
+
+1. `TextRunDto::from_py` 原先只校验 evidence 内部列表等长，未校验 `source_positions.len() == span_refs.len()`。
+2. evidence 非有限 size 需要同时覆盖 NaN 与 Inf。
+3. legacy-shape 兼容断言应归入 evidence focused test，恢复 `tests/test_pdf_fast_dto.py` 的既有文件范围。
+
+修复前 RED 使用同一 focused 命令：
+
+```powershell
+$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'
+$env:PYTHONPATH=(Resolve-Path 'src').Path
+& 'C:\Users\23662\AppData\Local\Programs\Python\Python312\Scripts\pytest.exe' -q tests/test_rust_native_span_evidence.py tests/test_pdf_fast_dto.py
+```
+
+结果：`1 failed, 26 passed`；唯一失败为 `span_refs` 长度 2 而 evidence 长度 1 未拒绝。NaN 用例在修复前已通过，说明现有 finite 校验有效但缺少明确回归覆盖。
+
+修复后 GREEN：
+
+```text
+27 passed in 0.56s
+```
+
+最终回归命令与输出：
+
+```powershell
+cargo test --lib native_span
+```
+
+`4 passed, 0 failed`。
+
+```powershell
+$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'
+$env:PYTHONPATH=(Resolve-Path 'src').Path
+& 'C:\Users\23662\AppData\Local\Programs\Python\Python312\Scripts\pytest.exe' -q tests/test_rust_native_span_differential.py
+```
+
+`11 passed`；564-record ledger 与原 digest 未变化。
+
+```powershell
+git diff --check
+```
+
+通过。legacy-shape 断言现位于 `tests/test_rust_native_span_evidence.py`，`tests/test_pdf_fast_dto.py` 已恢复为 reviewer 前内容。
+
 ## 工作区保护
 
 `tests/test_wireless_extractor_split.py` 和 `tests/test_wireless_structure_recoverer.py` 的用户 dirty 改动已保留，未修改或清理。

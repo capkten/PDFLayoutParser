@@ -1291,6 +1291,15 @@ impl TextRunDto {
             )?),
             None => None,
         };
+        if let Some(evidence) = &evidence {
+            if evidence.source_positions.len() != span_refs.len() {
+                return Err(PyValueError::new_err(format!(
+                    "TextRun evidence length {} does not match span_refs length {}",
+                    evidence.source_positions.len(),
+                    span_refs.len()
+                )));
+            }
+        }
         Ok(Self {
             schema_version: sv,
             text,

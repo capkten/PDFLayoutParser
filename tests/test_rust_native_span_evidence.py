@@ -109,6 +109,33 @@ def test_text_run_evidence_roundtrip_preserves_owned_lists():
     assert rust_adapter.roundtrip_dto("text_run", _text_run_with_evidence(evidence))["evidence"] == evidence
 
 
+def test_text_run_dto_legacy_shape_unchanged_without_evidence():
+    data = {
+        "schema_version": 1,
+        "text": "合计",
+        "rect": {"schema_version": 1, "x0": 10.0, "y0": 10.0, "x1": 50.0, "y1": 20.0},
+        "span_refs": [0, 1],
+        "source_start": 0,
+        "source_end": 1,
+        "order": 0,
+    }
+
+    assert rust_adapter.roundtrip_dto("text_run", data) == data
+
+
+def test_text_run_rejects_evidence_cardinality_mismatch():
+    evidence = {
+        "schema_version": 1,
+        "source_positions": [{"schema_version": 1, "block": 0, "line": 0}],
+        "fonts": ["SimSun"],
+        "sizes": [10.0],
+        "flags": [0],
+    }
+
+    with pytest.raises(ValueError, match=r"span_refs|evidence"):
+        rust_adapter.roundtrip_dto("text_run", _text_run_with_evidence(evidence))
+
+
 @pytest.mark.parametrize(
     ("evidence", "message"),
     [
@@ -138,6 +165,16 @@ def test_text_run_evidence_roundtrip_preserves_owned_lists():
                 "source_positions": [{"schema_version": 1, "block": 0, "line": 0}],
                 "fonts": ["SimSun"],
                 "sizes": [math.inf],
+                "flags": [0],
+            },
+            "sizes",
+        ),
+        (
+            {
+                "schema_version": 1,
+                "source_positions": [{"schema_version": 1, "block": 0, "line": 0}],
+                "fonts": ["SimSun"],
+                "sizes": [math.nan],
                 "flags": [0],
             },
             "sizes",

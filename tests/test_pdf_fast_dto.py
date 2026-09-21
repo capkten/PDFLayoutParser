@@ -136,19 +136,6 @@ def test_native_span_dto_optional_fields_null():
     assert result["characters"] == []
 
 
-def test_text_run_dto_legacy_shape_unchanged_without_evidence():
-    data = {
-        "schema_version": 1,
-        "text": "合计",
-        "rect": {"schema_version": 1, "x0": 10.0, "y0": 10.0, "x1": 50.0, "y1": 20.0},
-        "span_refs": [0, 1],
-        "source_start": 0,
-        "source_end": 1,
-        "order": 0,
-    }
-    assert roundtrip_dto("text_run", data) == data
-
-
 def test_cell_and_logical_grid_roundtrip_empty_slots():
     data = {
         "schema_version": 1,
