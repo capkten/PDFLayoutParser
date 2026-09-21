@@ -119,3 +119,46 @@ git diff --check
 ## 工作区保护
 
 `tests/test_wireless_extractor_split.py` 和 `tests/test_wireless_structure_recoverer.py` 的用户 dirty 改动已保留，未修改或清理。
+
+## 最终独立复审
+
+Review range：`fa547c5..5829deb`。独立 `gpt-5.6-luna` reviewer 判定：Spec Compliance ✅，Task quality ✅ Approved。
+
+- 本范围只恢复 `tests/test_pdf_fast_dto.py:139-149` 的完整 no-evidence `TextRunDto` round-trip shape/value 断言，共 13 行新增。
+- reviewer 确认 `evidence` 字段被明确排除，旧 DTO 字段集合和值由 exact dictionary equality 锁定。
+- focused verification：`1 passed`；`git diff --check`：通过。
+- 未发现 Critical、Important 或 Minor issue。
+- reviewer 说明 evidence producer/validation 不在本次恢复提交范围内；它们仍由前述 3B-1 实现与本报告记录的 focused tests 覆盖。
+
+因此 Task 3B-1 已封存；下一 bounded slice 为 packed numeric split。不要在该 slice 通过之前进入 superscript、wrapped merge、alignment corridor 或 column/grid/header。
+
+## 交接前 fresh verification（2026-09-21）
+
+为核对恢复 legacy-shape 测试后的最终工作区，重新运行：
+
+```powershell
+$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'
+$env:PYTHONPATH=(Resolve-Path 'src').Path
+& 'C:\Users\23662\AppData\Local\Programs\Python\Python312\Scripts\pytest.exe' -q tests/test_rust_native_span_evidence.py tests/test_pdf_fast_dto.py
+```
+
+结果：`28 passed`。
+
+```powershell
+& 'C:\Users\23662\AppData\Local\Programs\Python\Python312\Scripts\pytest.exe' -q tests/test_rust_native_span_differential.py
+```
+
+结果：`11 passed`。
+
+```powershell
+& 'C:\Users\23662\AppData\Local\Programs\Python\Python312\Scripts\pytest.exe' -q tests/test_wireless_structure_text_runs.py tests/test_wireless_structure_columns.py
+```
+
+结果：`54 passed`。
+
+```powershell
+cargo test --lib native_span
+git diff --check
+```
+
+结果：Rust `4 passed`；`git diff --check` 通过。

@@ -2,7 +2,7 @@
 
 ## 状态
 
-Task 3B-1 Generator 实现完成，已按独立 `gpt-5.6-luna` reviewer 的 Needs fixes 反馈完成修复，等待 reviewer re-check。当前提交只覆盖 text-run source/font/size/flags evidence，不改变 Rust 行聚类、join、拆分、wrapped merge 或默认路由。
+Task 3B-1 Generator 实现完成，并已通过独立 `gpt-5.6-luna` reviewer re-check（`fa547c5..5829deb`，Approved）。当前提交只覆盖 text-run source/font/size/flags evidence，不改变 Rust 行聚类、join、拆分、wrapped merge 或默认路由。
 
 ## 实现摘要
 
@@ -16,12 +16,28 @@ Task 3B-1 Generator 实现完成，已按独立 `gpt-5.6-luna` reviewer 的 Need
 
 - 初始 RED：focused pytest 为 `6 failed, 19 passed`，失败明确为 evidence 缺失/非法 evidence 未拒绝。
 - Reviewer 修复 RED：`1 failed, 26 passed`，唯一失败为 span/evidence cardinality mismatch 未拒绝。
-- 修复后 GREEN：`tests/test_rust_native_span_evidence.py tests/test_pdf_fast_dto.py` 为 `27 passed`。
+- 修复后 GREEN：`tests/test_rust_native_span_evidence.py tests/test_pdf_fast_dto.py` 在恢复 legacy-shape 测试前为 `27 passed`；恢复后 fresh verification 为 `28 passed`。
 - `cargo test --lib native_span`：`4 passed, 0 failed`。
 - Task 3A differential：`11 passed`；564-record ledger 和 SHA-256 digest 未变。
 - `git diff --check`：通过。
 - `cargo fmt --check`：因仓库既有跨文件格式差异退出码 1；本 slice 未修改禁止文件。
 
+## 独立复审
+
+- Review range：`fa547c5..5829deb`
+- Verdict：Spec Compliance ✅；Task quality ✅ Approved
+- Reviewer 确认 `tests/test_pdf_fast_dto.py:139-149` 恢复了完整 no-evidence `TextRunDto` round-trip shape/value 断言；本提交只改该测试文件，共 13 行新增。
+- Reviewer focused verification：`1 passed`；`git diff --check`：通过。
+- 未发现 Critical、Important 或 Minor issue。evidence producer/validation 属于前一实现范围，本复审确认其不被本恢复提交改变。
+
+## 交接前 fresh verification
+
+- evidence + legacy-shape focused pytest：`28 passed`
+- Task 3A differential：`11 passed`
+- 相关 text-run/columns Python 回归：`54 passed`
+- `cargo test --lib native_span`：`4 passed`
+- `git diff --check`：通过
+
 ## 后续边界
 
-`build_atoms` 的 metadata 继续留给后续 slice。packed numeric、superscript、wrapped merge、alignment corridor、column/grid/header 均未启动；独立 reviewer re-check 批准前不得进入这些语义规则。`cargo fmt --check` 仍受仓库既有跨文件格式差异影响，未在本任务中修改禁止文件。
+`build_atoms` 的 metadata 继续留给后续 slice。packed numeric、superscript、wrapped merge、alignment corridor、column/grid/header 均未启动；下一 bounded slice 为 packed numeric split，仍须先 RED、再最小 GREEN、focused regression 和独立 Luna review。`cargo fmt --check` 仍受仓库既有跨文件格式差异影响，未在本任务中修改禁止文件。
