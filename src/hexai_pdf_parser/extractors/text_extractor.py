@@ -4,6 +4,7 @@ Extracts a hierarchical text structure (blocks -> lines -> words -> chars)
 from a PyMuPDF ``fitz.Page``.
 """
 
+from statistics import median
 from typing import Dict, List, Tuple
 
 import fitz
@@ -120,7 +121,8 @@ class TextExtractor:
         it can combine unrelated visual lines.  Final layout text is rebuilt
         from individual PDF lines and excludes words assigned to tables.
         """
-        page_dict = page.get_text("dict", flags=fitz.TEXT_PRESERVE_WHITESPACE)
+        page_dict = page.get_text("rawdict", flags=fitz.TEXT_PRESERVE_WHITESPACE)
+        char_layout_profiles = self._build_char_layout_profiles(page_dict)
         blocks: List[Block] = []
 
         for block_dict in page_dict.get("blocks", []):
@@ -129,7 +131,10 @@ class TextExtractor:
 
             block_lines: List[Block] = []
             for line_dict in block_dict.get("lines", []):
-                words = self._words_from_spans(line_dict.get("spans", []))
+                words = self._words_from_raw_spans(
+                    line_dict.get("spans", []),
+                    char_layout_profiles,
+                )
                 if not words:
                     continue
 
@@ -149,6 +154,185 @@ class TextExtractor:
             blocks.extend(merged_block_lines)
 
         return sort_by_reading_order(blocks)
+
+    @staticmethod
+    def _char_style_key(char_dict: dict, span_dict: dict | None = None) -> Tuple[object, object, object]:
+        """Return the style fields used to compare native character geometry."""
+        span_dict = span_dict or {}
+        return (
+            char_dict.get("font", span_dict.get("font")),
+            char_dict.get("size", span_dict.get("size")),
+            char_dict.get("flags", span_dict.get("flags")),
+        )
+
+    def _build_char_layout_profiles(self, page_dict: dict) -> Dict[Tuple[object, object, object], dict]:
+        """Build robust vertical references for styles with enough native chars."""
+        samples: Dict[Tuple[object, object, object], dict] = {}
+        for block_dict in page_dict.get("blocks", []):
+            if block_dict.get("type") != 0:
+                continue
+            for line_dict in block_dict.get("lines", []):
+                for span_dict in line_dict.get("spans", []):
+                    for char_dict in span_dict.get("chars", []):
+                        bbox = char_dict.get("bbox")
+                        origin = char_dict.get("origin")
+                        if not bbox or not origin or len(bbox) < 4 or len(origin) < 2:
+                            continue
+                        style_key = self._char_style_key(char_dict, span_dict)
+                        profile = samples.setdefault(
+                            style_key,
+                            {"top_offsets": [], "bottom_offsets": [], "heights": []},
+                        )
+                        origin_y = float(origin[1])
+                        y0 = float(bbox[1])
+                        y1 = float(bbox[3])
+                        profile["top_offsets"].append(y0 - origin_y)
+                        profile["bottom_offsets"].append(y1 - origin_y)
+                        profile["heights"].append(y1 - y0)
+
+        profiles: Dict[Tuple[object, object, object], dict] = {}
+        for style_key, profile in samples.items():
+            if len(profile["heights"]) < 4:
+                continue
+            profiles[style_key] = {
+                "top_offset": median(profile["top_offsets"]),
+                "bottom_offset": median(profile["bottom_offsets"]),
+                "height": median(profile["heights"]),
+            }
+        return profiles
+
+    @staticmethod
+    def _layout_char_bbox(
+        char_dict: dict,
+        span_dict: dict,
+        profile: dict | None,
+        line_baseline_y: float | None,
+        baseline_stable: bool,
+    ) -> BBox:
+        """Return a derived layout bbox while leaving the native bbox untouched."""
+        raw_bbox = BBox(*char_dict["bbox"])
+        if not profile or not baseline_stable:
+            return raw_bbox
+
+        origin = char_dict.get("origin")
+        if not origin or len(origin) < 2 or line_baseline_y is None:
+            return raw_bbox
+
+        raw_height = raw_bbox.y1 - raw_bbox.y0
+        reference_height = profile["height"]
+        if raw_height <= 0 or reference_height <= 0:
+            return raw_bbox
+
+        height_ratio = max(raw_height, reference_height) / min(raw_height, reference_height)
+        if height_ratio < 1.8 or raw_height <= reference_height:
+            return raw_bbox
+
+        origin_y = float(origin[1])
+        if abs(origin_y - line_baseline_y) > max(0.75, reference_height * 0.2):
+            return raw_bbox
+
+        return BBox(
+            raw_bbox.x0,
+            origin_y + profile["top_offset"],
+            raw_bbox.x1,
+            origin_y + profile["bottom_offset"],
+        )
+
+    def _words_from_raw_spans(
+        self,
+        spans: List[dict],
+        char_layout_profiles: Dict[Tuple[object, object, object], dict],
+    ) -> List[Word]:
+        """Build layout words from rawdict chars and derived character bboxes."""
+        raw_chars_by_span: List[Tuple[dict, List[dict]]] = []
+        line_origins: List[float] = []
+        for span_dict in spans:
+            raw_chars = span_dict.get("chars", [])
+            raw_chars_by_span.append((span_dict, raw_chars))
+            for char_dict in raw_chars:
+                origin = char_dict.get("origin")
+                if origin and len(origin) >= 2:
+                    line_origins.append(float(origin[1]))
+
+        line_baseline_y = median(line_origins) if line_origins else None
+        baseline_stable = bool(line_origins) and (
+            max(line_origins) - min(line_origins) <= 0.75
+        )
+        words: List[Word] = []
+        for span_dict, raw_chars in raw_chars_by_span:
+            span_text = "".join(char_dict.get("c", "") for char_dict in raw_chars)
+            if not span_text:
+                span_text = span_dict.get("text", "")
+            if not span_text.strip():
+                continue
+
+            span_font = span_dict.get("font")
+            span_size = span_dict.get("size")
+            span_flags = span_dict.get("flags")
+            chars: List[Char] = []
+            layout_bboxes: List[BBox] = []
+            for char_dict in raw_chars:
+                style_key = self._char_style_key(char_dict, span_dict)
+                layout_bbox = self._layout_char_bbox(
+                    char_dict,
+                    span_dict,
+                    char_layout_profiles.get(style_key),
+                    line_baseline_y,
+                    baseline_stable,
+                )
+                layout_bboxes.append(layout_bbox)
+                chars.append(
+                    Char(
+                        text=char_dict.get("c", ""),
+                        bbox=BBox(*char_dict["bbox"]),
+                        font=char_dict.get("font", span_font),
+                        size=char_dict.get("size", span_size),
+                        flags=char_dict.get("flags", span_flags),
+                    )
+                )
+
+            if not raw_chars and span_text:
+                span_bbox = span_dict.get("bbox")
+                if span_bbox:
+                    span_box = BBox(*span_bbox)
+                    char_width = (span_box.x1 - span_box.x0) / len(span_text)
+                    for index, char_text in enumerate(span_text):
+                        char_bbox = BBox(
+                            span_box.x0 + index * char_width,
+                            span_box.y0,
+                            span_box.x0 + (index + 1) * char_width,
+                            span_box.y1,
+                        )
+                        layout_bboxes.append(char_bbox)
+                        chars.append(
+                            Char(
+                                text=char_text,
+                                bbox=char_bbox,
+                                font=span_font,
+                                size=span_size,
+                                flags=span_flags,
+                            )
+                        )
+
+            if not layout_bboxes:
+                span_bbox = span_dict.get("bbox")
+                if not span_bbox:
+                    continue
+                layout_bboxes = [BBox(*span_bbox)]
+
+            words.append(
+                Word(
+                    text=span_text,
+                    bbox=BBox(
+                        min(bbox.x0 for bbox in layout_bboxes),
+                        min(bbox.y0 for bbox in layout_bboxes),
+                        max(bbox.x1 for bbox in layout_bboxes),
+                        max(bbox.y1 for bbox in layout_bboxes),
+                    ),
+                    chars=chars,
+                )
+            )
+        return words
 
     def _merge_same_visual_lines(self, line_blocks: List[Block]) -> List[Block]:
         """Merge line blocks that visually belong to the same line (e.g. justified words separated by PyMuPDF)."""

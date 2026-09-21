@@ -1,5 +1,12 @@
 # Changes
 
+## 2026-09-21
+
+- 修复表外正文使用大 Span 框参与阅读顺序时的异常跨行问题。根因位于 `src/hexai_pdf_parser/extractors/text_extractor.py::TextExtractor.extract_layout_blocks()`：原路径通过 `dict` 的 Span bbox 构造 `Word/Line/Block` 布局框；用户 PDF 中同一字体、字号的少数字符原生 bbox 高度异常（约 `25.72pt`，正常值约 `9pt`），大框与下一编号行重叠后被 `reading_order.py` 误聚为同一行。
+- 现在表外最终布局读取 `rawdict` 原生字符，按字体、字号和 flags 建立垂直偏移中位数参考；只有同样式样本充足、当前行 origin 基线稳定且字符高度明显偏大的情况下，才为布局计算派生字符框。派生框保留原始 x 坐标，`Word/Line/Block` 使用派生框；`Word.chars[*].bbox` 仍保留 PDF 原始坐标，真实字号差异和基线不稳定的上标/下标回退原框。表格提取路径、`extract_blocks()` 和既有结构恢复均未改变，未新增表外的 `page.get_text("words")` 二次重建。
+- 新增异常高度正例、真实字号差异反例、缺少 `chars` 时的 Span 文本回退和用户 PDF 回归：`tests/test_text_extractor.py tests/test_layout_mapper.py tests/test_models.py` 为 `32 passed`，`tests/test_personal_credit_report.py` 为 `14 passed`。用户 PDF 中第 1 条续行位于 `2.` 之前、第 8 条续行位于 `9.` 之前，修正后续行布局框高度约 `9pt`。
+- 页面级输出位于 `D:\codes\PDFLayoutParser\.worktrees\recompute-layout-bbox\output\single_page_page_000_native_layout_bbox\`：`pages/page-000.json` 与 `tables/page-000.png` 已核对；表格数量和来源保持为 2 张 `line_projection`（`2x1`、`6x5`），视觉检查确认表格边界未吸收右侧正文。
+
 ## 2026-09-20
 
 - 修复个人信用报告跨页机构查询续表在同一页紧接新的小节标题（如“个人查询记录明细”）时，位于新表头之前的前置续表行被漏提取的问题：
@@ -728,5 +735,3 @@
   5. 保持不回读 words 约束，继续消费原生 span 组合数据。
 - 测试结果：`tests/test_personal_credit_report.py` 11 项测试全部通过（11 passed）。
 - 页面输出核对路径：`output/verified_title_demo/个人信用报告(本人简版)` 与 `output/verified_title_demo/个人征信报告（简版）(1)`，两份报告 Markdown 和 PNG 均已确认表格首行为 `colspan=4` 的明细标题。
-
-

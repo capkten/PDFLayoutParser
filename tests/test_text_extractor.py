@@ -4,13 +4,177 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import fitz
 
 from hexai_pdf_parser.models import BBox, Block, Table
 from hexai_pdf_parser.text_extractor import TextExtractor
 from tests.conftest import make_text_pdf
 
 
+def _raw_char(char, x, y0, y1, origin_y, *, font="SourceHanSerifCN-Regular", size=9, flags=0):
+    return {
+        "c": char,
+        "bbox": (x, y0, x + 8, y1),
+        "origin": (x, origin_y),
+        "font": font,
+        "size": size,
+        "flags": flags,
+    }
+
+
+def _rawdict_page(blocks):
+    def get_text(mode, *args, **kwargs):
+        assert mode == "rawdict"
+        assert kwargs["flags"] == fitz.TEXT_PRESERVE_WHITESPACE
+        return {"blocks": blocks}
+
+    return SimpleNamespace(
+        get_text=get_text,
+    )
+
+
 class TestTextExtractor:
+    def test_native_character_layout_bbox_rejects_anomalous_height_for_order(self):
+        font = "SourceHanSerifCN-Regular"
+        normal_chars = [
+            _raw_char(
+                chr(ord("a") + index),
+                10 + index * 8,
+                0,
+                10,
+                10,
+                font=font,
+            )
+            for index in range(12)
+        ]
+        anomalous_char = _raw_char(
+            "M",
+            106,
+            -3,
+            25,
+            10,
+            font=font,
+        )
+        next_line_chars = [
+            _raw_char("2", 10, 15, 25, 25, font=font),
+            _raw_char(".", 18, 15, 25, 25, font=font),
+        ]
+        page = _rawdict_page(
+            [
+                {
+                    "type": 0,
+                    "lines": [
+                        {
+                            "spans": [
+                                {
+                                    "bbox": (10, -3, 114, 25),
+                                    "font": font,
+                                    "size": 9,
+                                    "flags": 0,
+                                    "chars": normal_chars + [anomalous_char],
+                                }
+                            ]
+                        },
+                        {
+                            "spans": [
+                                {
+                                    "bbox": (10, 15, 26, 25),
+                                    "font": font,
+                                    "size": 9,
+                                    "flags": 0,
+                                    "chars": next_line_chars,
+                                }
+                            ]
+                        },
+                    ],
+                }
+            ]
+        )
+
+        blocks = TextExtractor().extract_layout_blocks(page, [])
+
+        assert [block.text for block in blocks] == ["abcdefghijklM", "2."]
+        word = blocks[0].lines[0].words[0]
+        assert word.chars[-1].bbox.y0 == -3
+        assert word.chars[-1].bbox.y1 == 25
+        assert word.bbox.y0 == 0
+        assert word.bbox.y1 == 10
+        assert blocks[0].lines[0].bbox.y0 == 0
+        assert blocks[0].lines[0].bbox.y1 == 10
+        assert blocks[0].bbox.y0 == 0
+        assert blocks[0].bbox.y1 == 10
+
+    def test_native_character_layout_bbox_preserves_real_larger_font_height(self):
+        page = _rawdict_page(
+            [
+                {
+                    "type": 0,
+                    "lines": [
+                        {
+                            "spans": [
+                                {
+                                    "bbox": (10, 0, 26, 9),
+                                    "font": "SourceHanSerifCN-Regular",
+                                    "size": 9,
+                                    "flags": 0,
+                                    "chars": [
+                                        _raw_char("a", 10, 0, 9, 9, size=9),
+                                        _raw_char("b", 18, 0, 9, 9, size=9),
+                                    ],
+                                },
+                                {
+                                    "bbox": (40, -5, 56, 14),
+                                    "font": "SourceHanSerifCN-Regular",
+                                    "size": 14,
+                                    "flags": 0,
+                                    "chars": [
+                                        _raw_char("X", 40, -5, 14, 9, size=14),
+                                        _raw_char("Y", 48, -5, 14, 9, size=14),
+                                    ],
+                                },
+                            ]
+                        }
+                    ],
+                }
+            ]
+        )
+
+        blocks = TextExtractor().extract_layout_blocks(page, [])
+
+        assert len(blocks) == 1
+        assert [word.text for word in blocks[0].lines[0].words] == ["ab", "XY"]
+        assert blocks[0].lines[0].words[1].bbox.y1 - blocks[0].lines[0].words[1].bbox.y0 == 19
+
+    def test_native_character_layout_falls_back_to_span_text_without_chars(self):
+        page = _rawdict_page(
+            [
+                {
+                    "type": 0,
+                    "lines": [
+                        {
+                            "spans": [
+                                {
+                                    "text": "fallback",
+                                    "bbox": (10, 0, 74, 9),
+                                    "font": "SourceHanSerifCN-Regular",
+                                    "size": 9,
+                                    "flags": 0,
+                                }
+                            ]
+                        }
+                    ],
+                }
+            ]
+        )
+
+        blocks = TextExtractor().extract_layout_blocks(page, [])
+
+        word = blocks[0].lines[0].words[0]
+        assert word.text == "fallback"
+        assert len(word.chars) == len(word.text)
+        assert word.bbox.y0 == 0
+        assert word.bbox.y1 == 9
+
     def test_extract_layout_blocks_orders_lines_and_excludes_tables(self, tmp_dir):
         pdf_path = Path(tmp_dir) / "layout-lines.pdf"
 
