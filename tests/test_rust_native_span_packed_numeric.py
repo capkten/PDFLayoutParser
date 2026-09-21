@@ -141,6 +141,17 @@ def test_rust_native_span_normalizes_newline_before_character_box_validation():
     assert "source_fragment_counts" not in runs[0]["evidence"]
 
 
+def test_rust_native_span_trims_outer_whitespace_on_character_box_refusal():
+    runs = _run_texts(
+        " 100 200 ",
+        [("1", 10.0, 14.0), ("0", 14.0, 18.0), ("0", 18.0, 22.0)],
+    )
+
+    assert [run["text"] for run in runs] == ["100 200"]
+    assert "source_fragment_indices" not in runs[0]["evidence"]
+    assert "source_fragment_counts" not in runs[0]["evidence"]
+
+
 def test_rust_native_span_keeps_ordinary_numeric_join_rule_but_not_fragments():
     ordinary = rust_adapter.build_text_runs(
         [

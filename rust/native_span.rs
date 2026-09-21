@@ -165,7 +165,7 @@ fn prepared_unsplit(span: NativeSpanDto) -> PreparedSpan {
 }
 
 fn normalize_span_text(mut span: NativeSpanDto) -> NativeSpanDto {
-    span.text = span.text.replace('\n', " ");
+    span.text = span.text.replace('\n', " ").trim().to_string();
     span
 }
 
