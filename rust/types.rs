@@ -287,6 +287,37 @@ fn optional_i64_list(dict: &Bound<'_, PyDict>, key: &str) -> PyResult<Vec<Option
         .collect()
 }
 
+fn optional_i64_list_present(
+    dict: &Bound<'_, PyDict>,
+    key: &str,
+) -> PyResult<Option<Vec<i64>>> {
+    let value = match dict.get_item(key)? {
+        Some(value) if !value.is_none() => value,
+        _ => return Ok(None),
+    };
+    let list = value.downcast::<PyList>().map_err(|_| {
+        PyValueError::new_err(format!("Field '{}' must be a list", key))
+    })?;
+    list.iter()
+        .enumerate()
+        .map(|(index, value)| {
+            if value.is_instance_of::<PyBool>() {
+                return Err(PyValueError::new_err(format!(
+                    "Field '{}[{}]' must be an integer",
+                    key, index
+                )));
+            }
+            value.extract::<i64>().map_err(|_| {
+                PyValueError::new_err(format!(
+                    "Field '{}[{}]' must be an integer",
+                    key, index
+                ))
+            })
+        })
+        .collect::<PyResult<Vec<_>>>()
+        .map(Some)
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct PageDto {
     pub schema_version: i64,
@@ -1185,6 +1216,8 @@ pub struct TextRunEvidenceDto {
     pub fonts: Vec<Option<String>>,
     pub sizes: Vec<Option<f64>>,
     pub flags: Vec<Option<i64>>,
+    pub source_fragment_indices: Option<Vec<i64>>,
+    pub source_fragment_counts: Option<Vec<i64>>,
 }
 
 impl TextRunEvidenceDto {
@@ -1205,6 +1238,13 @@ impl TextRunEvidenceDto {
         let fonts = optional_string_list(dict, "fonts")?;
         let sizes = optional_f64_list(dict, "sizes")?;
         let flags = optional_i64_list(dict, "flags")?;
+        let source_fragment_indices = optional_i64_list_present(dict, "source_fragment_indices")?;
+        let source_fragment_counts = optional_i64_list_present(dict, "source_fragment_counts")?;
+        if source_fragment_indices.is_some() != source_fragment_counts.is_some() {
+            return Err(PyValueError::new_err(
+                "Fragment evidence fields must be provided together",
+            ));
+        }
         let expected_len = source_positions.len();
         for (field_name, actual_len) in [
             ("fonts", fonts.len()),
@@ -1218,12 +1258,39 @@ impl TextRunEvidenceDto {
                 )));
             }
         }
+        if let Some(indices) = &source_fragment_indices {
+            if indices.len() != expected_len {
+                return Err(PyValueError::new_err(format!(
+                    "Field 'source_fragment_indices' evidence length {} does not match source_positions length {}",
+                    indices.len(), expected_len
+                )));
+            }
+        }
+        if let Some(counts) = &source_fragment_counts {
+            if counts.len() != expected_len {
+                return Err(PyValueError::new_err(format!(
+                    "Field 'source_fragment_counts' evidence length {} does not match source_positions length {}",
+                    counts.len(), expected_len
+                )));
+            }
+        }
+        if let (Some(indices), Some(counts)) = (&source_fragment_indices, &source_fragment_counts) {
+            for (index, count) in indices.iter().zip(counts) {
+                if *index < 0 || *count <= 0 || *index >= *count {
+                    return Err(PyValueError::new_err(
+                        "Fragment evidence index/count must satisfy 0 <= index < count",
+                    ));
+                }
+            }
+        }
         Ok(Self {
             schema_version,
             source_positions,
             fonts,
             sizes,
             flags,
+            source_fragment_indices,
+            source_fragment_counts,
         })
     }
 
@@ -1259,6 +1326,12 @@ impl TextRunEvidenceDto {
             }
         }
         d.set_item("flags", flags)?;
+        if let Some(indices) = &self.source_fragment_indices {
+            d.set_item("source_fragment_indices", indices)?;
+        }
+        if let Some(counts) = &self.source_fragment_counts {
+            d.set_item("source_fragment_counts", counts)?;
+        }
         Ok(d)
     }
 }

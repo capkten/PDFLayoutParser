@@ -48,36 +48,36 @@ REQUIRED_FIXTURES = {
     "independent_fields_counterexample",
     "single_field_control",
 }
-EXPECTED_LEDGER_SHA256 = "5093640efdb9d73e66d6f8adacafc7f635c0e0eded129989677407083044ab59"
+EXPECTED_LEDGER_SHA256 = "a613fbd4ed7fee9a23627ccff34295afe6b5900f0a91c6336fa8f3198e5e8d16"
 EXPECTED_FIXTURE_COUNTS = {
     "alignment_corridor_veto": 266,
     "cjk_non_whitelist_spacing": 14,
     "cjk_whitelist_spacing": 7,
     "empty_whitespace_and_separator": 7,
     "independent_fields_counterexample": 14,
-    "packed_numeric_split": 68,
+    "packed_numeric_split": 14,
     "single_field_control": 7,
     "source_block_line_noncontinuous": 14,
     "superscript_inline_gap": 68,
     "vertical_wrapped_witness": 99,
 }
 EXPECTED_FIELD_COUNTS = {
-    "bbox": 44,
-    "errors": 44,
-    "flow/order": 64,
-    "font/script": 54,
-    "grouping": 44,
-    "ordering": 46,
-    "presence": 52,
-    "source continuity": 64,
-    "span/run refs": 64,
-    "text": 44,
-    "value": 44,
+    "bbox": 38,
+    "errors": 38,
+    "flow/order": 62,
+    "font/script": 50,
+    "grouping": 38,
+    "ordering": 40,
+    "presence": 44,
+    "source continuity": 62,
+    "span/run refs": 62,
+    "text": 38,
+    "value": 38,
 }
 EXPECTED_CLASS_COUNTS = {
     "defect": 218,
-    "requires_adaptation": 208,
-    "unsupported": 138,
+    "requires_adaptation": 156,
+    "unsupported": 136,
 }
 
 
@@ -164,6 +164,24 @@ def _source_orders(span_refs):
     return [int(ref.split(".", 1)[0][1:]) for ref in span_refs]
 
 
+def _rust_span_refs(run):
+    raw_refs = list(run["span_refs"])
+    evidence = run.get("evidence") or {}
+    indices = evidence.get("source_fragment_indices")
+    counts = evidence.get("source_fragment_counts")
+    if (indices is None) != (counts is None):
+        raise AssertionError("Rust fragment evidence fields must be provided together")
+    if indices is None:
+        return [_canonical_ref(order) for order in raw_refs]
+    if len(indices) != len(raw_refs) or len(counts) != len(raw_refs):
+        raise AssertionError("Rust fragment evidence must align with span_refs")
+    refs = []
+    for order, index, count in zip(raw_refs, indices, counts):
+        base = _canonical_ref(order)
+        refs.append(f"{base}.{index + 1}" if count > 1 else base)
+    return refs
+
+
 def _python_normalized_runs(runs, vector):
     source_by_ref = {
         _canonical_ref(item["order"]): item["source_position"]
@@ -204,7 +222,7 @@ def _python_normalized_runs(runs, vector):
 def _rust_normalized_runs(runs, vector):
     normalized = []
     for index, run in enumerate(runs):
-        refs = [_canonical_ref(order) for order in run["span_refs"]]
+        refs = _rust_span_refs(run)
         normalized.append(
             {
                 "presence": True,
@@ -279,7 +297,7 @@ def _normalized_atoms(atoms, runs, vector, side):
             flow_end = atom["flow_end"]
             source_continuity = _source_continuity(span_refs, source_by_ref)
         else:
-            span_refs = [_canonical_ref(order) for order in run["span_refs"]]
+            span_refs = _rust_span_refs(run)
             raw_span_refs = list(run["span_refs"])
             flow_start = None
             flow_end = None
@@ -543,7 +561,12 @@ def test_differential_ledger_is_field_level_repeatable_and_explicit():
     }
 
     by_fixture = {name: {item["field"] for item in first if item["fixture"] == name} for name in {item["fixture"] for item in first}}
-    assert {"presence", "grouping", "text"} <= by_fixture["packed_numeric_split"]
+    assert not {
+        item["field"]
+        for item in first
+        if item["fixture"] == "packed_numeric_split"
+        and item["field"] in SEMANTIC_FIELDS
+    }
     assert {"grouping", "text"} <= by_fixture["superscript_inline_gap"]
     assert {"grouping", "text"} <= by_fixture["vertical_wrapped_witness"]
     assert any(
@@ -593,7 +616,7 @@ def test_complete_ledger_is_locked_by_count_summary_and_digest():
     serialized = json.dumps(
         ledger, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     ).encode("utf-8")
-    assert len(ledger) == 564
+    assert len(ledger) == 510
     assert dict(Counter(item["fixture"] for item in ledger)) == EXPECTED_FIXTURE_COUNTS
     assert dict(Counter(item["field"] for item in ledger)) == EXPECTED_FIELD_COUNTS
     assert dict(Counter(item["classification"] for item in ledger)) == EXPECTED_CLASS_COUNTS
@@ -665,25 +688,19 @@ print(json.dumps(module.build_differential_ledger(module._load_fixture()), ensur
     assert outputs[0] == outputs[1]
 
 
-def test_missing_runs_have_field_level_records_with_stable_identity():
-    ledger = build_differential_ledger(_load_fixture())
-    missing = [
-        item
-        for item in ledger
-        if item["fixture"] == "packed_numeric_split"
-        and item.get("run_identity") == "python:S0.2"
-    ]
-    assert {
-        "value",
-        "grouping",
-        "text",
-        "bbox",
-        "flow/order",
-        "font/script",
-        "span/run refs",
-        "source continuity",
-        "errors",
-    } <= {item["field"] for item in missing}
+def test_packed_numeric_fragment_evidence_aligns_python_identities():
+    fixture = _load_fixture()
+    vector = next(
+        vector
+        for vector in fixture["vectors"]
+        if vector["fixture"] == "packed_numeric_split"
+    )
+
+    normalized = _rust_normalized_runs(
+        _rust_runs(vector, fixture["region"]), vector
+    )
+
+    assert [item["grouping"] for item in normalized] == [["S0.1"], ["S0.2"]]
 
 
 def test_raw_refs_and_source_bounds_are_not_discarded():
