@@ -2,6 +2,7 @@ import json
 import hashlib
 import inspect
 import os
+from copy import deepcopy
 from pathlib import Path
 import subprocess
 import sys
@@ -48,7 +49,7 @@ REQUIRED_FIXTURES = {
     "independent_fields_counterexample",
     "single_field_control",
 }
-EXPECTED_LEDGER_SHA256 = "a613fbd4ed7fee9a23627ccff34295afe6b5900f0a91c6336fa8f3198e5e8d16"
+EXPECTED_LEDGER_SHA256 = "d1b0b788c4f2facf50ca56426e4c3594c199bbe9c66e786c806bd39d4cdb2574"
 EXPECTED_FIXTURE_COUNTS = {
     "alignment_corridor_veto": 266,
     "cjk_non_whitelist_spacing": 14,
@@ -58,26 +59,26 @@ EXPECTED_FIXTURE_COUNTS = {
     "packed_numeric_split": 14,
     "single_field_control": 7,
     "source_block_line_noncontinuous": 14,
-    "superscript_inline_gap": 68,
+    "superscript_inline_gap": 7,
     "vertical_wrapped_witness": 99,
 }
 EXPECTED_FIELD_COUNTS = {
-    "bbox": 38,
-    "errors": 38,
-    "flow/order": 62,
-    "font/script": 50,
-    "grouping": 38,
-    "ordering": 40,
-    "presence": 44,
-    "source continuity": 62,
-    "span/run refs": 62,
-    "text": 38,
-    "value": 38,
+    "bbox": 32,
+    "errors": 32,
+    "flow/order": 58,
+    "font/script": 45,
+    "grouping": 32,
+    "ordering": 34,
+    "presence": 36,
+    "source continuity": 58,
+    "span/run refs": 58,
+    "text": 32,
+    "value": 32,
 }
 EXPECTED_CLASS_COUNTS = {
     "defect": 218,
-    "requires_adaptation": 156,
-    "unsupported": 136,
+    "requires_adaptation": 102,
+    "unsupported": 129,
 }
 
 
@@ -567,7 +568,12 @@ def test_differential_ledger_is_field_level_repeatable_and_explicit():
         if item["fixture"] == "packed_numeric_split"
         and item["field"] in SEMANTIC_FIELDS
     }
-    assert {"grouping", "text"} <= by_fixture["superscript_inline_gap"]
+    assert not {
+        item["field"]
+        for item in first
+        if item["fixture"] == "superscript_inline_gap"
+        and item["field"] in SEMANTIC_FIELDS
+    }
     assert {"grouping", "text"} <= by_fixture["vertical_wrapped_witness"]
     assert any(
         item["fixture"] == "alignment_corridor_veto"
@@ -611,12 +617,60 @@ def test_differential_ledger_is_field_level_repeatable_and_explicit():
     assert any("\n" in run["text"] for run in _python_runs(wrapped, fixture["region"]))
 
 
+def test_superscript_inline_gap_matches_python_and_rust_helpers():
+    fixture = _load_fixture()
+    vector = next(
+        vector
+        for vector in fixture["vectors"]
+        if vector["fixture"] == "superscript_inline_gap"
+    )
+
+    python_runs = _python_runs(vector, fixture["region"])
+    rust_runs = _rust_runs(vector, fixture["region"])
+
+    assert [run["text"] for run in python_runs] == ["基2"]
+    assert [run["text"] for run in rust_runs] == ["基2"]
+    assert rust_runs[0]["span_refs"] == [0, 1]
+    assert rust_runs[0]["source_start"] == 0
+    assert rust_runs[0]["source_end"] == 1
+    assert rust_runs[0]["rect"] == {
+        "schema_version": 1,
+        "x0": 10.0,
+        "y0": 70.0,
+        "x1": 40.0,
+        "y1": 80.0,
+    }
+    assert rust_runs[0]["evidence"]["sizes"] == [10.0, 7.0]
+
+
+def test_superscript_inline_gap_rejects_threshold_and_corridor_variants():
+    fixture = _load_fixture()
+    base = next(
+        vector
+        for vector in fixture["vectors"]
+        if vector["fixture"] == "superscript_inline_gap"
+    )
+
+    for size, x0 in ((8.2, 34.0), (7.0, 35.0)):
+        vector = deepcopy(base)
+        candidate = vector["spans"][1]
+        candidate["size"] = size
+        candidate["bbox"] = [x0, 71.0, x0 + 6.0, 79.0]
+        candidate["char_boxes"][0]["bbox"] = list(candidate["bbox"])
+
+        python_runs = _python_runs(vector, fixture["region"])
+        rust_runs = _rust_runs(vector, fixture["region"])
+
+        assert [run["text"] for run in python_runs] == ["基", "2"]
+        assert [run["text"] for run in rust_runs] == ["基", "2"]
+
+
 def test_complete_ledger_is_locked_by_count_summary_and_digest():
     ledger = build_differential_ledger(_load_fixture())
     serialized = json.dumps(
         ledger, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     ).encode("utf-8")
-    assert len(ledger) == 510
+    assert len(ledger) == 449
     assert dict(Counter(item["fixture"] for item in ledger)) == EXPECTED_FIXTURE_COUNTS
     assert dict(Counter(item["field"] for item in ledger)) == EXPECTED_FIELD_COUNTS
     assert dict(Counter(item["classification"] for item in ledger)) == EXPECTED_CLASS_COUNTS

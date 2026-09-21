@@ -2,6 +2,12 @@
 
 ## 2026-09-21
 
+- Task 3B bounded slice：迁移 Rust native span 的 superscript inline gap 合并规则。
+  - **根因与调用位置**：`rust/native_span.rs` 的 `build_text_runs()` 仅按同一 native line 的普通字距、CJK 白名单字距和连续 source fragment 规则合并；小字号 superscript 即使位于前一 span 的右侧走廊内，也因 source line 不同而被拆成两个 run。
+  - **判定条件**：在现有 source-fragment、`$` 和垂直中心 veto 之后，严格使用 `candidate.size < previous.size * 0.82`，以及 `previous.x1 - previous.size * 0.9 <= candidate.x0 <= previous.x1 + previous.size * 0.45`；不放宽普通 gap、不增大 CJK gap、不添加业务文字特判。packed numeric fragment veto、span refs、source bounds、bbox 和 evidence 保持不变。
+  - **测试与验证**：新增真实 Python/Rust helper 的 `基2` 正例、字号阈值反例和 x 走廊反例；RED 为 `1 failed, 1 passed, 11 deselected`，GREEN focused 为 `2 passed, 11 deselected`。differential/text-runs 回归为 `58 passed`，packed numeric 专项、`cargo test --lib native_span` 和 `git diff --check` 均通过。
+  - **限制**：本 bounded slice 只覆盖 synthetic native-span/text-run 语义，未修改 Python 生产路由、column/grid/header、wrapped merge、alignment corridor、`build_atoms` 或 Rust wireless structure，也未进行页面级 PDF/PNG 重跑；默认 Python 路由保持不变。
+
 - Repair Sprint 003：收紧 Rust 无线结构输出的 Cell 网格边界。
   - **根因与调用位置**：`src/hexai_pdf_parser/tables/wireless_table_recovery.py` 的 `_rust_cells_to_project()` 在读取 `row`、`col`、`rowspan`、`colspan` 时先调用 `int()`，导致 `-0.5`、整数值浮点数或 `bool` 可能被截断或当作整数进入公开 `Cell`。这是 Rust 输出验证边界的问题，不是 Python 无线结构算法的行为调整。
   - **判定条件**：四个 Cell 网格字段现在必须是严格的 Python `int`；`bool`、`float`、字符串及其他可截断类型直接拒绝。既有正跨度、越界、缺失 bbox、occupancy conflict 和未覆盖槽位校验继续执行，默认 Python 路由、shadow 返回 Python 及 Rust 异常 fallback 不变。

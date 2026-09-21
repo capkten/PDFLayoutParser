@@ -410,6 +410,11 @@ pub fn build_text_runs(spans: Vec<NativeSpanDto>, region: Rect4) -> Vec<TextRunD
                     > 2.4_f64.max(min_size * 0.38)
                 {
                     false
+                } else if cand_size < prev_size * 0.82
+                    && prev.rect.x1 - prev_size * 0.9 <= candidate.rect.x0
+                    && candidate.rect.x0 <= prev.rect.x1 + prev_size * 0.45
+                {
+                    true
                 } else if is_whitelisted_cjk_pair(&prev.text, &candidate.text) {
                     same_line && (-0.8..=min_size * 2.5).contains(&gap)
                 } else if is_single_cjk(&prev.text) && is_single_cjk(&candidate.text) {
