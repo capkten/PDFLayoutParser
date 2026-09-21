@@ -1,16 +1,22 @@
 import json
+import hashlib
 import inspect
+import os
 from pathlib import Path
+import subprocess
+import sys
+from collections import Counter
 
 from hexai_pdf_parser import rust_adapter
 from hexai_pdf_parser.core.models import BBox
+from hexai_pdf_parser.tables.wireless_structure.recoverer import _native_atom_core
 from hexai_pdf_parser.tables.wireless_structure.span_chain import region_spans
 from hexai_pdf_parser.tables.wireless_structure.text_runs import build_text_runs
 from hexai_pdf_parser.tables.wireless_table_recovery import NativeSpan
 
 
 FIXTURE = Path(__file__).parent / "fixtures/rust_migration/wireless/native_span_differential.json"
-FIELDS = {
+FIELDS = (
     "presence",
     "value",
     "ordering",
@@ -22,7 +28,7 @@ FIELDS = {
     "span/run refs",
     "source continuity",
     "errors",
-}
+)
 SEMANTIC_FIELDS = {"presence", "value", "ordering", "grouping", "text", "bbox"}
 SEMANTIC_GAP_CLASSIFICATION = {
     "packed_numeric_split": "requires_adaptation",
@@ -41,6 +47,37 @@ REQUIRED_FIXTURES = {
     "alignment_corridor_veto",
     "independent_fields_counterexample",
     "single_field_control",
+}
+EXPECTED_LEDGER_SHA256 = "8673d7a0bc15072af58ad8e2913937c08e21f1640a0fc9f5509e4b20eb626ac6"
+EXPECTED_FIXTURE_COUNTS = {
+    "alignment_corridor_veto": 138,
+    "cjk_non_whitelist_spacing": 14,
+    "cjk_whitelist_spacing": 7,
+    "empty_whitespace_and_separator": 7,
+    "independent_fields_counterexample": 14,
+    "packed_numeric_split": 36,
+    "single_field_control": 7,
+    "source_block_line_noncontinuous": 14,
+    "superscript_inline_gap": 33,
+    "vertical_wrapped_witness": 64,
+}
+EXPECTED_FIELD_COUNTS = {
+    "bbox": 32,
+    "errors": 16,
+    "flow/order": 50,
+    "font/script": 22,
+    "grouping": 32,
+    "ordering": 16,
+    "presence": 8,
+    "source continuity": 44,
+    "span/run refs": 50,
+    "text": 32,
+    "value": 32,
+}
+EXPECTED_CLASS_COUNTS = {
+    "defect": 114,
+    "requires_adaptation": 136,
+    "unsupported": 84,
 }
 
 
@@ -123,6 +160,10 @@ def _source_continuity(span_refs, source_by_ref):
     }
 
 
+def _source_orders(span_refs):
+    return [int(ref.split(".", 1)[0][1:]) for ref in span_refs]
+
+
 def _python_normalized_runs(runs, vector):
     source_by_ref = {
         _canonical_ref(item["order"]): item["source_position"]
@@ -143,9 +184,16 @@ def _python_normalized_runs(runs, vector):
                     "flow_start": run["flow_start"],
                     "flow_end": run["flow_end"],
                     "order": index,
+                    "source_start": min(_source_orders(refs)),
+                    "source_end": max(_source_orders(refs)),
                 },
                 "font/script": {"font": run["font"], "script": run["script"]},
-                "span/run refs": {"span_refs": refs, "run_refs": None},
+                "span/run refs": {
+                    "span_refs": refs,
+                    "raw_span_refs": list(run["span_refs"]),
+                    "run_refs": None,
+                    "raw_run_refs": None,
+                },
                 "source continuity": _source_continuity(refs, source_by_ref),
                 "errors": [],
             }
@@ -174,10 +222,95 @@ def _rust_normalized_runs(runs, vector):
                     "flow_start": None,
                     "flow_end": None,
                     "order": run["order"],
+                    "source_start": run["source_start"],
+                    "source_end": run["source_end"],
                 },
                 "font/script": None,
-                "span/run refs": {"span_refs": refs, "run_refs": None},
+                "span/run refs": {
+                    "span_refs": refs,
+                    "raw_span_refs": list(run["span_refs"]),
+                    "run_refs": None,
+                    "raw_run_refs": None,
+                },
                 "source continuity": None,
+                "errors": [],
+            }
+        )
+    return normalized
+
+
+def _python_atoms(vector, region):
+    runs = _python_runs(vector, region)
+    valid_span_orders = {item["order"] for item in vector["spans"]}
+    atoms = []
+    for index, run in enumerate(runs):
+        atom_input = dict(run)
+        atom_input["bbox"] = list(run["bbox"])
+        atoms.append(_native_atom_core(atom_input, index, valid_span_orders))
+    return atoms, runs
+
+
+def _rust_atoms(vector, region):
+    runs = _rust_runs(vector, region)
+    atoms = rust_adapter.build_atoms(runs, {"schema_version": 1, **region})
+    return atoms, runs
+
+
+def _atom_rect(atom):
+    return [
+        atom["rect"]["x0"],
+        atom["rect"]["y0"],
+        atom["rect"]["x1"],
+        atom["rect"]["y1"],
+    ]
+
+
+def _normalized_atoms(atoms, runs, vector, side):
+    source_by_ref = {
+        _canonical_ref(item["order"]): item["source_position"]
+        for item in vector["spans"]
+    }
+    normalized = []
+    for index, (atom, run) in enumerate(zip(atoms, runs)):
+        if side == "python":
+            span_refs = list(run["span_refs"])
+            raw_span_refs = list(run["span_refs"])
+            flow_start = atom["flow_start"]
+            flow_end = atom["flow_end"]
+            source_continuity = _source_continuity(span_refs, source_by_ref)
+        else:
+            span_refs = [_canonical_ref(order) for order in run["span_refs"]]
+            raw_span_refs = list(run["span_refs"])
+            flow_start = None
+            flow_end = None
+            source_continuity = None
+        normalized.append(
+            {
+                "presence": True,
+                "value": atom["text"],
+                "ordering": index,
+                "grouping": span_refs,
+                "text": atom["text"],
+                "bbox": _atom_rect(atom),
+                "flow/order": {
+                    "flow_start": flow_start,
+                    "flow_end": flow_end,
+                    "order": atom["order"],
+                    "source_start": (
+                        min(_source_orders(span_refs)) if side == "python" else None
+                    ),
+                    "source_end": (
+                        max(_source_orders(span_refs)) if side == "python" else None
+                    ),
+                },
+                "font/script": None,
+                "span/run refs": {
+                    "span_refs": span_refs,
+                    "raw_span_refs": raw_span_refs,
+                    "run_refs": list(atom["run_refs"]),
+                    "raw_run_refs": list(atom["run_refs"]),
+                },
+                "source continuity": source_continuity,
                 "errors": [],
             }
         )
@@ -191,9 +324,86 @@ def _classification(fixture, field):
 
 
 def _values_equal(field, python_value, rust_value):
+    if python_value is None or rust_value is None:
+        return python_value is rust_value
     if field == "bbox":
+        if len(python_value) != len(rust_value):
+            return False
         return all(abs(left - right) <= 0.01 for left, right in zip(python_value, rust_value))
     return python_value == rust_value
+
+
+def _record_mismatch(ledger, fixture, layer, run_identity, field, python_value, rust_value):
+    if field == "span/run refs":
+        python_refs = python_value.get("span_refs") if isinstance(python_value, dict) else None
+        rust_refs = rust_value.get("span_refs") if isinstance(rust_value, dict) else None
+        if python_refs == rust_refs:
+            classification = "unsupported"
+        else:
+            classification = _classification(fixture, field)
+    else:
+        classification = _classification(fixture, field)
+    ledger.append(
+        {
+            "fixture": fixture,
+            "layer": layer,
+            "run_identity": run_identity,
+            "field": field,
+            "python_value": python_value,
+            "rust_value": rust_value,
+            "classification": classification,
+        }
+    )
+
+
+def _compare_layer(ledger, fixture, layer, python_items, rust_items):
+    layer_key = "span_chain" if layer == "text_runs" and fixture == "packed_numeric_split" else layer
+    if len(python_items) != len(rust_items):
+        _record_mismatch(
+            ledger,
+            fixture,
+            layer_key,
+            "__count__",
+            "presence",
+            len(python_items),
+            len(rust_items),
+        )
+    for index in range(max(len(python_items), len(rust_items))):
+        python_item = python_items[index] if index < len(python_items) else None
+        rust_item = rust_items[index] if index < len(rust_items) else None
+        if python_item is not None and rust_item is not None:
+            python_group = python_item.get("grouping", [])
+            rust_group = rust_item.get("grouping", [])
+            run_identity = f"python:{','.join(python_group)}|rust:{','.join(rust_group)}"
+        elif python_item is not None:
+            run_identity = f"python:{','.join(python_item.get('grouping', []))}"
+        else:
+            run_identity = f"rust:{','.join(rust_item.get('grouping', []))}"
+        for field in FIELDS:
+            if field == "presence":
+                continue
+            python_value = python_item[field] if python_item is not None else None
+            rust_value = rust_item[field] if rust_item is not None else None
+            if not _values_equal(field, python_value, rust_value):
+                _record_mismatch(
+                    ledger,
+                    fixture,
+                    layer_key,
+                    run_identity,
+                    field,
+                    python_value,
+                    rust_value,
+                )
+
+
+def _stable_ledger_key(item):
+    return (
+        item["fixture"],
+        item["layer"],
+        item["run_identity"],
+        item["field"],
+        item["classification"],
+    )
 
 
 def build_differential_ledger(fixture):
@@ -219,48 +429,50 @@ def build_differential_ledger(fixture):
 
         if python_error or rust_error:
             if python_error != rust_error:
-                ledger.append(
-                    {
-                        "fixture": name,
-                        "layer": "text_runs",
-                        "field": "errors",
-                        "python_value": python_error,
-                        "rust_value": rust_error,
-                        "classification": "unsupported",
-                    }
+                _record_mismatch(
+                    ledger,
+                    name,
+                    "text_runs",
+                    "__error__",
+                    "errors",
+                    python_error,
+                    rust_error,
                 )
             continue
+        _compare_layer(ledger, name, "text_runs", python_runs, rust_runs)
 
-        common_count = min(len(python_runs), len(rust_runs))
-        if len(python_runs) != len(rust_runs):
-            ledger.append(
-                {
-                    "fixture": name,
-                    "layer": "span_chain" if name == "packed_numeric_split" else "text_runs",
-                    "field": "presence",
-                    "python_value": len(python_runs),
-                    "rust_value": len(rust_runs),
-                    "classification": _classification(name, "presence"),
-                }
+        try:
+            python_atoms_raw, python_atom_runs = _python_atoms(vector, fixture["region"])
+            python_atoms = _normalized_atoms(
+                python_atoms_raw, python_atom_runs, vector, "python"
             )
-        for index in range(common_count):
-            python_run = python_runs[index]
-            rust_run = rust_runs[index]
-            for field in FIELDS - {"presence"}:
-                python_value = python_run[field]
-                rust_value = rust_run[field]
-                if not _values_equal(field, python_value, rust_value):
-                    ledger.append(
-                        {
-                            "fixture": name,
-                            "layer": "span_chain" if name == "packed_numeric_split" else "text_runs",
-                            "field": field,
-                            "python_value": python_value,
-                            "rust_value": rust_value,
-                            "classification": _classification(name, field),
-                        }
-                    )
-    return ledger
+            python_atom_error = None
+        except Exception as exc:  # pragma: no cover - recorded as a field mismatch
+            python_atoms = []
+            python_atom_error = {"type": type(exc).__name__, "message": str(exc)}
+        try:
+            rust_atoms_raw, rust_atom_runs = _rust_atoms(vector, fixture["region"])
+            rust_atoms = _normalized_atoms(
+                rust_atoms_raw, rust_atom_runs, vector, "rust"
+            )
+            rust_atom_error = None
+        except Exception as exc:  # pragma: no cover - recorded as a field mismatch
+            rust_atoms = []
+            rust_atom_error = {"type": type(exc).__name__, "message": str(exc)}
+        if python_atom_error or rust_atom_error:
+            if python_atom_error != rust_atom_error:
+                _record_mismatch(
+                    ledger,
+                    name,
+                    "atoms",
+                    "__error__",
+                    "errors",
+                    python_atom_error,
+                    rust_atom_error,
+                )
+        else:
+            _compare_layer(ledger, name, "atoms", python_atoms, rust_atoms)
+    return sorted(ledger, key=_stable_ledger_key)
 
 
 def test_differential_ledger_is_field_level_repeatable_and_explicit():
@@ -271,9 +483,18 @@ def test_differential_ledger_is_field_level_repeatable_and_explicit():
 
     assert first == second
     assert first
-    assert {item["field"] for item in first} <= FIELDS
+    assert {item["field"] for item in first} <= set(FIELDS)
     assert all(
-        set(item) == {"fixture", "layer", "field", "python_value", "rust_value", "classification"}
+        set(item)
+        == {
+            "fixture",
+            "layer",
+            "run_identity",
+            "field",
+            "python_value",
+            "rust_value",
+            "classification",
+        }
         for item in first
     )
     assert {item["classification"] for item in first} <= {
@@ -328,6 +549,18 @@ def test_differential_ledger_is_field_level_repeatable_and_explicit():
     assert any("\n" in run["text"] for run in _python_runs(wrapped, fixture["region"]))
 
 
+def test_complete_ledger_is_locked_by_count_summary_and_digest():
+    ledger = build_differential_ledger(_load_fixture())
+    serialized = json.dumps(
+        ledger, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    assert len(ledger) == 334
+    assert dict(Counter(item["fixture"] for item in ledger)) == EXPECTED_FIXTURE_COUNTS
+    assert dict(Counter(item["field"] for item in ledger)) == EXPECTED_FIELD_COUNTS
+    assert dict(Counter(item["classification"] for item in ledger)) == EXPECTED_CLASS_COUNTS
+    assert hashlib.sha256(serialized).hexdigest() == EXPECTED_LEDGER_SHA256
+
+
 def test_harness_does_not_use_page_or_word_reads_and_keeps_routes(monkeypatch):
     source = Path(__file__).read_text(encoding="utf-8")
     assert "fitz." + "Page" not in source
@@ -348,3 +581,89 @@ def test_harness_does_not_use_page_or_word_reads_and_keeps_routes(monkeypatch):
         path="task-3a",
     )
     assert result is python_value
+
+
+def test_ledger_field_order_and_sort_are_hash_seed_stable():
+    fixture = _load_fixture()
+    assert isinstance(FIELDS, tuple)
+    ledger = build_differential_ledger(fixture)
+    assert ledger == sorted(
+        ledger,
+        key=lambda item: (
+            item["fixture"],
+            item["layer"],
+            item.get("run_identity", ""),
+            item["field"],
+        ),
+    )
+
+
+def test_ledger_json_is_identical_across_hash_seeds():
+    module_path = str(Path(__file__).resolve())
+    script = """
+import importlib.util
+import json
+import sys
+spec = importlib.util.spec_from_file_location('task_3a_diff', sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+print(json.dumps(module.build_differential_ledger(module._load_fixture()), ensure_ascii=False, sort_keys=True, separators=(',', ':')))
+"""
+    outputs = []
+    for seed in ("1", "2"):
+        env = os.environ.copy()
+        env["PYTHONHASHSEED"] = seed
+        env["PYTHONPATH"] = str(Path(__file__).parents[1] / "src")
+        env["PYTHONIOENCODING"] = "utf-8"
+        outputs.append(
+            subprocess.check_output(
+                [sys.executable, "-c", script, module_path],
+                env=env,
+                text=True,
+                encoding="utf-8",
+            )
+        )
+    assert outputs[0] == outputs[1]
+
+
+def test_missing_runs_have_field_level_records_with_stable_identity():
+    ledger = build_differential_ledger(_load_fixture())
+    missing = [
+        item
+        for item in ledger
+        if item["fixture"] == "packed_numeric_split"
+        and item.get("run_identity") == "python:S0.2"
+    ]
+    assert {
+        "value",
+        "grouping",
+        "text",
+        "bbox",
+        "flow/order",
+        "font/script",
+        "span/run refs",
+        "source continuity",
+        "errors",
+    } <= {item["field"] for item in missing}
+
+
+def test_raw_refs_and_source_bounds_are_not_discarded():
+    fixture = _load_fixture()
+    vector = next(v for v in fixture["vectors"] if v["fixture"] == "packed_numeric_split")
+    rust_run = _rust_normalized_runs(_rust_runs(vector, fixture["region"]), vector)[0]
+    assert rust_run["span/run refs"]["raw_span_refs"] == [0]
+    assert rust_run["span/run refs"]["run_refs"] is None
+    assert rust_run["flow/order"]["source_start"] == 0
+    assert rust_run["flow/order"]["source_end"] == 0
+    rust_atoms, rust_runs = _rust_atoms(vector, fixture["region"])
+    rust_atom = _normalized_atoms(rust_atoms, rust_runs, vector, "rust")[0]
+    assert rust_atom["span/run refs"]["run_refs"] == [0]
+
+
+def test_atom_layer_is_present_and_uses_real_helpers():
+    ledger = build_differential_ledger(_load_fixture())
+    assert any(item["layer"] == "atoms" for item in ledger)
+
+
+def test_bbox_comparison_rejects_length_mismatch():
+    assert not _values_equal("bbox", [0.0, 0.0, 1.0, 1.0, 99.0], [0.0, 0.0, 1.0, 1.0])

@@ -17,13 +17,21 @@ fixture 明确覆盖 packed numeric split、空白/分隔符、CJK whitelist/non
 
 normalizer 按字段比较 presence、value、ordering、grouping、text、bbox（0.01 容差）、flow/order、font/script、span/run refs、source continuity、errors。每条差异包含 fixture、layer、field、两侧值和分类；分类只使用 `requires_adaptation`、`defect`、`unsupported`。
 
+## Reviewer 修复记录
+
+reviewer 指出 eee1685 的字段遍历受 hash seed 影响、缺失 run 只有 count mismatch、raw refs/source 被丢弃、没有 atom layer、bbox 长度不严格。先加入五个最小失败断言，RED 为 `5 failed, 2 passed`；修复后 focused 为 `9 passed`。
+
+现在使用固定 `FIELDS` tuple、稳定 ledger key 和独立 `PYTHONHASHSEED=1/2` 子进程比较；缺失 run 按 `run_identity` 逐字段记录；保留 raw span refs、Rust source bounds 和 atom run refs；通过现有 Python `_native_atom_core` 与 Rust `rust_adapter.build_atoms` 比较 atoms；bbox 先比较长度再使用 0.01 容差。
+
+完整 ledger 已锁定为 `334` 条，SHA-256 为 `8673d7a0bc15072af58ad8e2913937c08e21f1640a0fc9f5509e4b20eb626ac6`；分类为 `requires_adaptation=136`、`defect=114`、`unsupported=84`。
+
 ## 验证与限制
 
 - RED 先证明 packed numeric 的实际字段差异：Python 为 `100`, `200`，Rust 为 `100 200`。
-- GREEN focused differential 为 `2 passed`。
+- 初始 GREEN focused differential 为 `2 passed`；reviewer 修复后为 `9 passed`。
 - 既有相关 Python tests 为 `57 passed`。
 - `cargo test --lib native_span` 为 `4 passed`。
-- Rust helper 当前不输出 font/script、Python flow 区间和 source continuity；这些缺口在 ledger 中标为 `unsupported`，没有标成 accepted，也没有 broad ignore。
+- Rust helper 当前不输出 font/script、Python flow 区间和 source continuity；这些缺口在 ledger 中标为 `unsupported`，没有标成 accepted，也没有 broad ignore。atom layer 已实际调用两侧 helper，未伪造能力。
 - alignment corridor 场景记录为 `defect`；packed numeric、superscript、wrapped witness 记录为 `requires_adaptation`。
 
 ## Handoff gate
