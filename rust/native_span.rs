@@ -391,6 +391,247 @@ fn horizontal_overlap(left: &Rect4, right: &Rect4) -> f64 {
 }
 
 #[derive(Debug, Clone)]
+struct AlignmentItem {
+    text: String,
+    rect: Rect4,
+    font_size: f64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AlignmentMode {
+    Left,
+    Right,
+    Center,
+}
+
+fn alignment_item(span: &PreparedSpan) -> AlignmentItem {
+    AlignmentItem {
+        text: span.span.text.clone(),
+        rect: span.span.rect.clone(),
+        font_size: span.span.size.unwrap_or(0.0),
+    }
+}
+
+fn alignment_left_item(group: &[PreparedSpan]) -> AlignmentItem {
+    let first = group.first().expect("alignment group must not be empty");
+    let mut left = alignment_item(first);
+    left.text = group
+        .iter()
+        .map(|item| item.span.text.as_str())
+        .collect::<Vec<_>>()
+        .join("");
+    left.rect.x0 = group
+        .iter()
+        .map(|item| item.span.rect.x0)
+        .fold(f64::INFINITY, f64::min);
+    left.rect.y0 = group
+        .iter()
+        .map(|item| item.span.rect.y0)
+        .fold(f64::INFINITY, f64::min);
+    left.rect.x1 = group
+        .iter()
+        .map(|item| item.span.rect.x1)
+        .fold(f64::NEG_INFINITY, f64::max);
+    left.rect.y1 = group
+        .iter()
+        .map(|item| item.span.rect.y1)
+        .fold(f64::NEG_INFINITY, f64::max);
+    left.font_size = group
+        .iter()
+        .map(|item| item.span.size.unwrap_or(0.0))
+        .fold(f64::INFINITY, f64::min);
+    left
+}
+
+fn alignment_anchor(item: &AlignmentItem, mode: AlignmentMode) -> f64 {
+    match mode {
+        AlignmentMode::Left => item.rect.x0,
+        AlignmentMode::Right => item.rect.x1,
+        AlignmentMode::Center => (item.rect.x0 + item.rect.x1) / 2.0,
+    }
+}
+
+fn alignment_tolerance(items: &[AlignmentItem]) -> f64 {
+    let minimum_size = items
+        .iter()
+        .map(|item| item.font_size)
+        .fold(f64::INFINITY, f64::min);
+    1.0_f64.max(minimum_size * 0.12)
+}
+
+fn alignment_modes(item: &AlignmentItem) -> &'static [AlignmentMode] {
+    if is_python_numeric_text(item.text.trim()) {
+        &[AlignmentMode::Right]
+    } else {
+        &[
+            AlignmentMode::Left,
+            AlignmentMode::Right,
+            AlignmentMode::Center,
+        ]
+    }
+}
+
+fn opposite_edges_vary(items: &[AlignmentItem], mode: AlignmentMode, tolerance: f64) -> bool {
+    let x0_spread = items
+        .iter()
+        .map(|item| item.rect.x0)
+        .fold(f64::NEG_INFINITY, f64::max)
+        - items
+            .iter()
+            .map(|item| item.rect.x0)
+            .fold(f64::INFINITY, f64::min);
+    let x1_spread = items
+        .iter()
+        .map(|item| item.rect.x1)
+        .fold(f64::NEG_INFINITY, f64::max)
+        - items
+            .iter()
+            .map(|item| item.rect.x1)
+            .fold(f64::INFINITY, f64::min);
+    match mode {
+        AlignmentMode::Left => x1_spread > tolerance,
+        AlignmentMode::Right => x0_spread > tolerance,
+        AlignmentMode::Center => x0_spread > tolerance && x1_spread > tolerance,
+    }
+}
+
+fn has_diverse_text_values(items: &[AlignmentItem]) -> bool {
+    let mut values: Vec<String> = Vec::new();
+    for item in items {
+        let value: String = item.text.split_whitespace().collect();
+        if !value.is_empty() && !values.contains(&value) {
+            values.push(value);
+        }
+    }
+    values.len() >= 3
+}
+
+fn has_alignment_corridor_veto(
+    group: &[PreparedSpan],
+    candidate: &PreparedSpan,
+    visual_rows: &[Vec<PreparedSpan>],
+) -> bool {
+    if group.is_empty() {
+        return false;
+    }
+    let left = alignment_left_item(group);
+    let candidate_flow = candidate.flow;
+    let candidate = alignment_item(candidate);
+    let base_tolerance = alignment_tolerance(&[left.clone(), candidate.clone()]);
+    if candidate.rect.x0 - left.rect.x1 <= base_tolerance {
+        return false;
+    }
+
+    for &left_mode in alignment_modes(&left) {
+        for &right_mode in alignment_modes(&candidate) {
+            if left_mode == AlignmentMode::Center && right_mode == AlignmentMode::Center {
+                continue;
+            }
+            let mut support = vec![(left.clone(), candidate.clone())];
+            for row in visual_rows {
+                if row.iter().any(|item| {
+                    group.iter().any(|group_item| group_item.flow == item.flow)
+                        || item.flow == candidate_flow
+                }) {
+                    continue;
+                }
+                let mut ordered: Vec<&PreparedSpan> = row.iter().collect();
+                ordered.sort_by(|left, right| {
+                    left.span
+                        .rect
+                        .x0
+                        .partial_cmp(&right.span.rect.x0)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
+                let mut matches = Vec::new();
+                for pair in ordered.windows(2) {
+                    let witness_left = alignment_item(pair[0]);
+                    let witness_right = alignment_item(pair[1]);
+                    if witness_right.rect.x0 - witness_left.rect.x1 <= base_tolerance {
+                        continue;
+                    }
+                    if (alignment_anchor(&witness_left, left_mode)
+                        - alignment_anchor(&left, left_mode))
+                    .abs()
+                        <= base_tolerance
+                        && (alignment_anchor(&witness_right, right_mode)
+                            - alignment_anchor(&candidate, right_mode))
+                        .abs()
+                            <= base_tolerance
+                    {
+                        matches.push((witness_left, witness_right));
+                    }
+                }
+                if matches.len() == 1 {
+                    support.push(matches.remove(0));
+                }
+            }
+
+            if support.len() < 3 {
+                continue;
+            }
+            let left_items: Vec<AlignmentItem> = support
+                .iter()
+                .map(|(left, _)| left.clone())
+                .collect();
+            let right_items: Vec<AlignmentItem> = support
+                .iter()
+                .map(|(_, right)| right.clone())
+                .collect();
+            let all_items: Vec<AlignmentItem> = left_items
+                .iter()
+                .chain(right_items.iter())
+                .cloned()
+                .collect();
+            let support_tolerance = alignment_tolerance(&all_items);
+            let left_varies = opposite_edges_vary(&left_items, left_mode, support_tolerance);
+            let right_varies = opposite_edges_vary(&right_items, right_mode, support_tolerance);
+            if !left_varies && !right_varies {
+                continue;
+            }
+            if !left_varies && !has_diverse_text_values(&left_items) {
+                continue;
+            }
+            if !right_varies && !has_diverse_text_values(&right_items) {
+                continue;
+            }
+            let left_anchors: Vec<f64> = left_items
+                .iter()
+                .map(|item| alignment_anchor(item, left_mode))
+                .collect();
+            let right_anchors: Vec<f64> = right_items
+                .iter()
+                .map(|item| alignment_anchor(item, right_mode))
+                .collect();
+            if left_anchors.iter().copied().fold(f64::NEG_INFINITY, f64::max)
+                - left_anchors.iter().copied().fold(f64::INFINITY, f64::min)
+                > support_tolerance
+            {
+                continue;
+            }
+            if right_anchors.iter().copied().fold(f64::NEG_INFINITY, f64::max)
+                - right_anchors.iter().copied().fold(f64::INFINITY, f64::min)
+                > support_tolerance
+            {
+                continue;
+            }
+            let corridor_x0 = left_items
+                .iter()
+                .map(|item| item.rect.x1)
+                .fold(f64::NEG_INFINITY, f64::max);
+            let corridor_x1 = right_items
+                .iter()
+                .map(|item| item.rect.x0)
+                .fold(f64::INFINITY, f64::min);
+            if corridor_x1 - corridor_x0 > support_tolerance {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+#[derive(Debug, Clone)]
 struct WrappedRun {
     run: TextRunDto,
     flow_start: i64,
@@ -811,7 +1052,7 @@ pub fn build_text_runs(spans: Vec<NativeSpanDto>, region: Rect4) -> Vec<TextRunD
     let mut runs: Vec<WrappedRun> = Vec::new();
     let mut run_order = 0;
 
-    for mut row in rows {
+    for mut row in rows.iter().cloned() {
         row.sort_by(|a, b| {
             a.span
                 .rect
@@ -892,7 +1133,9 @@ pub fn build_text_runs(spans: Vec<NativeSpanDto>, region: Rect4) -> Vec<TextRunD
                 }
             };
 
-            if can_join {
+            if can_join
+                && !has_alignment_corridor_veto(&groups.last().unwrap(), &span, &rows)
+            {
                 groups.last_mut().unwrap().push(span);
             } else {
                 groups.push(vec![span]);

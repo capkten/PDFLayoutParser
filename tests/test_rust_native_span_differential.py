@@ -49,9 +49,9 @@ REQUIRED_FIXTURES = {
     "independent_fields_counterexample",
     "single_field_control",
 }
-EXPECTED_LEDGER_SHA256 = "8358c75e03dc5e12086127a75cc9b4ed94e7d829ea63ccefc0f06ac09d701fcc"
+EXPECTED_LEDGER_SHA256 = "e1b9c0a1196e7c8ad21b84f40f15ef2e61ee792e4023a447dfa2dbfb9bb19e9f"
 EXPECTED_FIXTURE_COUNTS = {
-    "alignment_corridor_veto": 266,
+    "alignment_corridor_veto": 56,
     "cjk_non_whitelist_spacing": 14,
     "cjk_whitelist_spacing": 7,
     "empty_whitespace_and_separator": 7,
@@ -63,22 +63,15 @@ EXPECTED_FIXTURE_COUNTS = {
     "vertical_wrapped_witness": 14,
 }
 EXPECTED_FIELD_COUNTS = {
-    "bbox": 24,
-    "errors": 24,
-    "flow/order": 52,
-    "font/script": 38,
-    "grouping": 24,
-    "ordering": 24,
-    "presence": 26,
-    "source continuity": 52,
-    "span/run refs": 52,
-    "text": 24,
-    "value": 24,
+    "flow/order": 44,
+    "font/script": 22,
+    "source continuity": 44,
+    "span/run refs": 44,
 }
 EXPECTED_CLASS_COUNTS = {
-    "defect": 218,
+    "defect": 16,
     "requires_adaptation": 28,
-    "unsupported": 118,
+    "unsupported": 110,
 }
 
 
@@ -574,10 +567,10 @@ def test_differential_ledger_is_field_level_repeatable_and_explicit():
         if item["fixture"] == "superscript_inline_gap"
         and item["field"] in SEMANTIC_FIELDS
     }
-    assert any(
+    assert not any(
         item["fixture"] == "alignment_corridor_veto"
         and item["classification"] == "defect"
-        and item["field"] in {"grouping", "text"}
+        and item["field"] in SEMANTIC_FIELDS
         for item in first
     )
 
@@ -615,6 +608,38 @@ def test_differential_ledger_is_field_level_repeatable_and_explicit():
             ] == expected_python_text[vector["fixture"]]
     wrapped = next(v for v in fixture["vectors"] if v["fixture"] == "vertical_wrapped_witness")
     assert any("\n" in run["text"] for run in _python_runs(wrapped, fixture["region"]))
+
+
+def test_alignment_corridor_veto_matches_python_and_keeps_two_row_join():
+    fixture = _load_fixture()
+    vector = next(
+        vector
+        for vector in fixture["vectors"]
+        if vector["fixture"] == "alignment_corridor_veto"
+    )
+
+    python_runs = _python_runs(vector, fixture["region"])
+    rust_runs = _rust_runs(vector, fixture["region"])
+    expected = ["甲", "乙", "丙", "丁", "戊", "己", "庚", "辛"]
+
+    assert [run["text"] for run in python_runs] == expected
+    assert [run["text"] for run in rust_runs] == expected
+    assert rust_runs[0]["span_refs"] == [0]
+    assert rust_runs[1]["span_refs"] == [1]
+    assert rust_runs[0]["rect"] == {
+        "schema_version": 1,
+        "x0": 10.0,
+        "y0": 10.0,
+        "x1": 30.0,
+        "y1": 20.0,
+    }
+
+    two_row_control = deepcopy(vector)
+    two_row_control["spans"] = two_row_control["spans"][:4]
+    python_control = _python_runs(two_row_control, fixture["region"])
+    rust_control = _rust_runs(two_row_control, fixture["region"])
+    assert [run["text"] for run in python_control] == ["甲乙", "丙丁"]
+    assert [run["text"] for run in rust_control] == ["甲乙", "丙丁"]
 
 
 def test_superscript_inline_gap_matches_python_and_rust_helpers():
@@ -907,7 +932,7 @@ def test_complete_ledger_is_locked_by_count_summary_and_digest():
     serialized = json.dumps(
         ledger, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     ).encode("utf-8")
-    assert len(ledger) == 364
+    assert len(ledger) == 154
     assert dict(Counter(item["fixture"] for item in ledger)) == EXPECTED_FIXTURE_COUNTS
     assert dict(Counter(item["field"] for item in ledger)) == EXPECTED_FIELD_COUNTS
     assert dict(Counter(item["classification"] for item in ledger)) == EXPECTED_CLASS_COUNTS
