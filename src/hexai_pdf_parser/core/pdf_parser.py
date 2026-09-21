@@ -283,6 +283,35 @@ class PDFParser:
 
         return self._execute_result(_do, "pages rendered", "no pages rendered")
 
+    def classify_page(
+        self,
+        page_index: int = 0,
+    ) -> ApiResult:
+        """Classify whether a page is 'vector' or 'scanned'.
+
+        If a cached Document exists, returns the cached page_type.
+        Otherwise loads that specific page and classifies it.
+        """
+        def _do() -> str:
+            if self._document is not None:
+                for page in self._document.pages:
+                    if page.index == page_index:
+                        return page.page_type
+                raise IndexError(f"page_index {page_index} out of range")
+
+            import fitz as _fitz
+            from hexai_pdf_parser.extractors.page_classifier import classify_page_type
+
+            if self._pdf_path is None:
+                raise ValueError("classify_page requires a PDF file path")
+
+            with _fitz.open(self._pdf_path) as doc:
+                if page_index < 0 or page_index >= len(doc):
+                    raise IndexError(f"page_index {page_index} out of range (total pages: {len(doc)})")
+                return classify_page_type(doc[page_index])
+
+        return self._execute_result(_do, "page classified", "page classified but empty")
+
     def to_json(
         self,
         document: Optional[Document] = None,
