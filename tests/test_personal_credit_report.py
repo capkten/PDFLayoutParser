@@ -346,3 +346,40 @@ def test_query_continuation_table_before_header_extracted():
     assert tables[1].rows == 5
     assert tables[1].cells[0].text.strip() == "个人查询记录明细"
 
+
+def test_query_continuation_table_absorbs_wrapped_text():
+    """Verify that a lead continuation query table absorbs trailing wrapped line text."""
+    import os
+    from hexai_pdf_parser.extractors.personal_credit_report import (
+        PersonalCreditReportTableExtractor,
+        parse_personal_credit_report,
+    )
+
+    pdf_path = os.path.join(
+        "D:\\codes\\PDFLayoutParser",
+        "个人信用报告",
+        "3_PDFsam_211.pdf",
+    )
+    if not os.path.exists(pdf_path):
+        pytest.skip(f"Test file not found: {pdf_path}")
+
+    doc = fitz.open(pdf_path)
+    page2 = doc[1]
+    extractor = PersonalCreditReportTableExtractor(use_ml_table_detector=False)
+    tables = extractor.extract(page2)
+
+    assert len(tables) >= 1
+    lead_table = tables[0]
+    # Check cell (0, 2) which is the institution cell
+    inst_cell = next(c for c in lead_table.cells if c.row_index == 0 and c.col_index == 2)
+    assert inst_cell.text == "江苏江南农村商业银行股份有限公司"
+    assert inst_cell.bbox.y1 >= 60.0
+    doc.close()
+
+    # Full pipeline test: ensure '司' is not leaked as an isolated text block
+    res = parse_personal_credit_report(pdf_path, use_ml_table_detector=False)
+    p2_blocks = res["pages"][1]["blocks"]
+    isolated_si_blocks = [b for b in p2_blocks if b["type"] == "text" and b["content"].strip() == "司"]
+    assert len(isolated_si_blocks) == 0, f"Found isolated '司' block: {isolated_si_blocks}"
+
+
