@@ -26,13 +26,14 @@ tests/test_rust_native_span_differential.py：25 passed
 
 ### 新 Differential ledger
 
+- ledger 每条 mismatch 现在显式记录 `reason`；`empty_whitespace_and_separator` 的两条 `flow/order` mismatch 均为 `requires_adaptation`，但根因分层记录：`text_runs/S2` 是 Rust 普通 text run 未透传 flow metadata，Python 保留 separator 过滤后的 source flow `2`；`atoms/S2` 是 Rust 暴露过滤后的 local flow/order `1`，而 Python atom 保留 source order `2`。两者的 `source_start/source_end` 均为 `2`，不应合并描述为单条差异。
 - total：`111`
 - fixture counts：`alignment_corridor_veto=40`、`cjk_non_whitelist_spacing=10`、`cjk_whitelist_spacing=5`、`empty_whitespace_and_separator=6`、`independent_fields_counterexample=10`、`packed_numeric_split=10`、`single_field_control=5`、`source_block_line_noncontinuous=10`、`superscript_inline_gap=5`、`vertical_wrapped_witness=10`
 - field counts：`flow/order=23`、`font/script=22`、`source continuity=22`、`span/run refs=44`
 - classification counts：`defect=8`、`requires_adaptation=15`、`unsupported=88`
-- SHA256：`b2042666a63fa728b7199380708738cddffa21642995e36c93d65f5168f0b052`
+- SHA256：`cb51b9e240ec69b88f9b00066c2293f076b31ffb3973bac7996eb663f0a71f81`
 
-真实 metadata 参与比较后，atom source continuity mismatch 清零；剩余 `empty_whitespace_and_separator` 的一条 flow/order 差异仍是既有过滤流 adaptation，不属于本 review fix。没有修改 `tests/test_wireless_extractor_split.py`、`tests/test_wireless_structure_recoverer.py`，没有修改 `rust/wireless_structure.rs` 或 column/grid/header/route。
+真实 metadata 参与比较后，atom source continuity mismatch 清零；separator fixture 的两条 flow/order 差异现在按 text_runs 与 atoms 分别可审计，均属于既有过滤流 adaptation，不属于本 review fix。没有修改 `tests/test_wireless_extractor_split.py`、`tests/test_wireless_structure_recoverer.py`，没有修改 `rust/wireless_structure.rs` 或 column/grid/header/route。
 
 ### 未解决 concerns
 

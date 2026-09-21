@@ -49,7 +49,7 @@ REQUIRED_FIXTURES = {
     "independent_fields_counterexample",
     "single_field_control",
 }
-EXPECTED_LEDGER_SHA256 = "b2042666a63fa728b7199380708738cddffa21642995e36c93d65f5168f0b052"
+EXPECTED_LEDGER_SHA256 = "cb51b9e240ec69b88f9b00066c2293f076b31ffb3973bac7996eb663f0a71f81"
 EXPECTED_FIXTURE_COUNTS = {
     "alignment_corridor_veto": 40,
     "cjk_non_whitelist_spacing": 10,
@@ -72,6 +72,24 @@ EXPECTED_CLASS_COUNTS = {
     "defect": 8,
     "requires_adaptation": 15,
     "unsupported": 88,
+}
+EXPLICIT_AUDIT = {
+    (
+        "empty_whitespace_and_separator",
+        "text_runs",
+        "flow/order",
+    ): {
+        "classification": "requires_adaptation",
+        "reason": "Rust text run omits flow metadata for the separator survivor; Python retains source flow 2.",
+    },
+    (
+        "empty_whitespace_and_separator",
+        "atoms",
+        "flow/order",
+    ): {
+        "classification": "requires_adaptation",
+        "reason": "Rust atom exposes filtered local flow/order 1 while Python retains source order 2 after separator filtering.",
+    },
 }
 
 
@@ -365,15 +383,29 @@ def _values_equal(field, python_value, rust_value):
 
 
 def _record_mismatch(ledger, fixture, layer, run_identity, field, python_value, rust_value):
-    if field == "span/run refs":
+    explicit_audit = EXPLICIT_AUDIT.get((fixture, layer, field))
+    if explicit_audit is not None:
+        classification = explicit_audit["classification"]
+        reason = explicit_audit["reason"]
+    elif field == "span/run refs":
         python_refs = python_value.get("span_refs") if isinstance(python_value, dict) else None
         rust_refs = rust_value.get("span_refs") if isinstance(rust_value, dict) else None
         if python_refs == rust_refs:
             classification = "unsupported"
         else:
             classification = _classification(fixture, field)
+        reason = {
+            "unsupported": "Raw span/run reference representation is not comparable in this bounded slice.",
+            "requires_adaptation": "Rust and Python differ at a known adaptation boundary for this fixture.",
+            "defect": "Rust differs from Python in a semantic field covered by the migrated contract.",
+        }[classification]
     else:
         classification = _classification(fixture, field)
+        reason = {
+            "unsupported": "Field comparison is outside this bounded slice.",
+            "requires_adaptation": "Rust and Python differ at a known adaptation boundary for this fixture.",
+            "defect": "Rust differs from Python in a semantic field covered by the migrated contract.",
+        }[classification]
     ledger.append(
         {
             "fixture": fixture,
@@ -383,6 +415,7 @@ def _record_mismatch(ledger, fixture, layer, run_identity, field, python_value, 
             "python_value": python_value,
             "rust_value": rust_value,
             "classification": classification,
+            "reason": reason,
         }
     )
 
@@ -564,6 +597,7 @@ def test_differential_ledger_is_field_level_repeatable_and_explicit():
             "python_value",
             "rust_value",
             "classification",
+            "reason",
         }
         for item in first
     )
@@ -572,7 +606,6 @@ def test_differential_ledger_is_field_level_repeatable_and_explicit():
         "defect",
         "unsupported",
     }
-
     by_fixture = {name: {item["field"] for item in first if item["fixture"] == name} for name in {item["fixture"] for item in first}}
     assert not {
         item["field"]
@@ -627,6 +660,33 @@ def test_differential_ledger_is_field_level_repeatable_and_explicit():
             ] == expected_python_text[vector["fixture"]]
     wrapped = next(v for v in fixture["vectors"] if v["fixture"] == "vertical_wrapped_witness")
     assert any("\n" in run["text"] for run in _python_runs(wrapped, fixture["region"]))
+
+
+def test_separator_flow_order_mismatches_have_explicit_audit_reasons():
+    ledger = build_differential_ledger(_load_fixture())
+
+    mismatches = [
+        item
+        for item in ledger
+        if item["fixture"] == "empty_whitespace_and_separator"
+        and item["field"] == "flow/order"
+    ]
+
+    assert [
+        (item["layer"], item["classification"], item["reason"])
+        for item in mismatches
+    ] == [
+        (
+            "atoms",
+            "requires_adaptation",
+            "Rust atom exposes filtered local flow/order 1 while Python retains source order 2 after separator filtering.",
+        ),
+        (
+            "text_runs",
+            "requires_adaptation",
+            "Rust text run omits flow metadata for the separator survivor; Python retains source flow 2.",
+        ),
+    ]
 
 
 def test_alignment_corridor_veto_matches_python_and_keeps_two_row_join():
