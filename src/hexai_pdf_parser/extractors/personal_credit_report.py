@@ -645,7 +645,17 @@ class PersonalCreditReportTableExtractor(TableExtractor):
                 if not any(_table_overlaps(table, query) for query in query_tables)
             ]
             tables.extend(query_tables)
-        return [_trim_query_table(table) for table in tables]
+        filtered = [
+            _trim_query_table(table)
+            for table in tables
+            if not self._is_numbered_prose_candidate(table)
+            and not self._is_report_metadata_candidate(table)
+        ]
+        return [
+            split
+            for table in filtered
+            for split in self._split_repeated_record_table(table)
+        ]
 
 
 
