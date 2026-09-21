@@ -192,7 +192,21 @@ def _make_query_table(
         if len(record_indices) < 1:
             return None
         start_index = record_indices[0]
-        end_index = record_indices[-1] + 1
+        last_rec = record_indices[-1]
+        actual_end = last_rec + 1
+        limit = len(target_rows)
+        while actual_end < limit:
+            r = target_rows[actual_end]
+            r_text = "".join(item[4] for item in r).replace(" ", "")
+            if "页" in r_text and "第" in r_text:
+                break
+            if any(t in r_text for t in (_QUERY_SECTION, _INSTITUTION_TITLE, *_PERSONAL_TITLES)):
+                break
+            if any((item[0] + item[2]) / 2.0 >= 220.0 for item in r):
+                actual_end += 1
+            else:
+                break
+        end_index = actual_end
         header_cells: list[Cell] = []
     else:
         start_index = header_index + 1
@@ -329,14 +343,20 @@ def _make_query_table(
         if not by_col[0]:
             if cur_row <= (1 if section_title else 0):
                 continue
-            continuation_items = by_col[2] + by_col[3]
-            continuation = _join_query_items(continuation_items)
-            if continuation:
-                target_col = 3 if by_col[3] else 2
-                previous = next((cell for cell in cells if cell.row_index == cur_row - 1 and cell.col_index == target_col), None)
-                if previous is not None:
-                    previous.text += continuation
-                    previous.bbox = BBox(previous.bbox.x0, previous.bbox.y0, max(previous.bbox.x1, max(item[2] for item in continuation_items)), max(previous.bbox.y1, max(item[3] for item in continuation_items)))
+            for col_idx in (2, 3):
+                if not by_col[col_idx]:
+                    continue
+                continuation = _join_query_items(by_col[col_idx])
+                if continuation:
+                    previous = next((cell for cell in cells if cell.row_index == cur_row - 1 and cell.col_index == col_idx), None)
+                    if previous is not None:
+                        previous.text += continuation
+                        previous.bbox = BBox(
+                            previous.bbox.x0,
+                            previous.bbox.y0,
+                            max(previous.bbox.x1, max(item[2] for item in by_col[col_idx])),
+                            max(previous.bbox.y1, max(item[3] for item in by_col[col_idx])),
+                        )
             continue
 
         row_y0 = min(item[1] for item in row)
