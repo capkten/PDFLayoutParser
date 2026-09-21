@@ -49,7 +49,7 @@ REQUIRED_FIXTURES = {
     "independent_fields_counterexample",
     "single_field_control",
 }
-EXPECTED_LEDGER_SHA256 = "e1b9c0a1196e7c8ad21b84f40f15ef2e61ee792e4023a447dfa2dbfb9bb19e9f"
+EXPECTED_LEDGER_SHA256 = "b3fdf184452653d59047dacbc57150bef6bdb0e17498043dce35016e132e54e0"
 EXPECTED_FIXTURE_COUNTS = {
     "alignment_corridor_veto": 56,
     "cjk_non_whitelist_spacing": 14,
@@ -1030,6 +1030,113 @@ def test_raw_refs_and_source_bounds_are_not_discarded():
     rust_atoms, rust_runs = _rust_atoms(vector, fixture["region"])
     rust_atom = _normalized_atoms(rust_atoms, rust_runs, vector, "rust")[0]
     assert rust_atom["span/run refs"]["run_refs"] == [0]
+
+
+def test_build_atoms_uses_source_span_refs_not_visual_run_order():
+    run = {
+        "schema_version": 1,
+        "text": "source-owned",
+        "rect": {"schema_version": 1, "x0": 10.0, "y0": 10.0, "x1": 80.0, "y1": 20.0},
+        "span_refs": [7, 9],
+        "source_start": 7,
+        "source_end": 9,
+        "order": 41,
+        "flow_start": 20,
+        "flow_end": 22,
+        "evidence": {
+            "schema_version": 1,
+            "source_positions": [
+                {"schema_version": 1, "block": 6, "line": 3},
+                {"schema_version": 1, "block": 6, "line": 4},
+            ],
+            "fonts": ["SimSun", "SimSun"],
+            "sizes": [10.0, 10.0],
+            "flags": [0, 0],
+        },
+    }
+
+    atom = rust_adapter.build_atoms([run])[0]
+
+    assert atom["run_refs"] == [7, 9]
+
+
+def test_build_atoms_preserves_flow_and_owned_source_evidence():
+    fixture = _load_fixture()
+    packed = next(item for item in fixture["vectors"] if item["fixture"] == "packed_numeric_split")
+
+    atoms, _ = _rust_atoms(packed, fixture["region"])
+
+    assert [(atom["flow_start"], atom["flow_end"], atom["run_refs"]) for atom in atoms] == [
+        (1, 1, [0]),
+        (2, 2, [0]),
+    ]
+    assert all(atom["source_blocks"] == [0] for atom in atoms)
+    assert all(atom["source_line_start"] == 0 for atom in atoms)
+    assert all(atom["source_line_end"] == 0 for atom in atoms)
+    assert all(atom["source_position_known"] is True for atom in atoms)
+
+
+def test_build_atoms_flow_covers_filtered_gap_and_wrapped_chain():
+    fixture = _load_fixture()
+    base = next(
+        item for item in fixture["vectors"] if item["fixture"] == "vertical_wrapped_witness"
+    )
+    vector = deepcopy(base)
+    for span in vector["spans"][1:]:
+        span["order"] += 1
+    vector["spans"].insert(
+        1,
+        {
+            "text": "filtered source gap",
+            "bbox": [400.0, 24.0, 460.0, 34.0],
+            "font": "SimSun",
+            "size": 10.0,
+            "order": 1,
+            "source_position": [9, 9, 0],
+            "char_boxes": [
+                {
+                    "text": char,
+                    "bbox": [400.0 + index * 10.0, 24.0, 410.0 + index * 10.0, 34.0],
+                }
+                for index, char in enumerate("filtered source gap")
+            ],
+        },
+    )
+
+    atoms, _ = _rust_atoms(vector, fixture["region"])
+
+    assert atoms[0]["text"] == "第一行\n第二行\n第三行"
+    assert atoms[0]["flow_start"] == 1
+    assert atoms[0]["flow_end"] == 3
+    assert atoms[0]["run_refs"] == [0, 2, 3]
+    assert atoms[0]["source_blocks"] == [0]
+    assert atoms[0]["source_line_start"] == 0
+    assert atoms[0]["source_line_end"] == 2
+    assert atoms[0]["source_position_known"] is True
+
+
+def test_build_atoms_keeps_legacy_no_evidence_shape():
+    run = {
+        "schema_version": 1,
+        "text": "legacy",
+        "rect": {"schema_version": 1, "x0": 10.0, "y0": 10.0, "x1": 40.0, "y1": 20.0},
+        "span_refs": [3],
+        "source_start": 3,
+        "source_end": 3,
+        "order": 8,
+    }
+
+    atom = rust_adapter.build_atoms([run])[0]
+
+    assert set(atom) == {
+        "schema_version",
+        "text",
+        "rect",
+        "run_refs",
+        "row_hint",
+        "col_hint",
+        "order",
+    }
 
 
 def test_atom_layer_is_present_and_uses_real_helpers():

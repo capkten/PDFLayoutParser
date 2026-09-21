@@ -480,10 +480,45 @@ fn build_atoms_binding<'py>(
         Some(dict) => Some(Rect4::from_py(dict)?),
         None => None,
     };
-    let atoms = py.allow_threads(move || native_span::build_atoms(rust_runs, rust_region));
+    let runs_for_build = rust_runs.clone();
+    let atoms = py.allow_threads(move || native_span::build_atoms(runs_for_build, rust_region));
     let list = PyList::empty_bound(py);
-    for a in atoms {
-        list.append(a.to_py(py)?)?;
+    for (a, run) in atoms.into_iter().zip(rust_runs.iter()) {
+        let atom = a.to_py(py)?;
+        if let Some(flow_start) = run.flow_start {
+            atom.set_item("flow_start", flow_start)?;
+        }
+        if let Some(flow_end) = run.flow_end {
+            atom.set_item("flow_end", flow_end)?;
+        }
+        if let Some(evidence) = &run.evidence {
+            if !evidence.source_positions.is_empty() {
+                let mut source_blocks: Vec<i64> = evidence
+                    .source_positions
+                    .iter()
+                    .map(|position| position.block)
+                    .collect();
+                source_blocks.sort_unstable();
+                source_blocks.dedup();
+                let source_line_start = evidence
+                    .source_positions
+                    .iter()
+                    .map(|position| position.line)
+                    .min()
+                    .unwrap();
+                let source_line_end = evidence
+                    .source_positions
+                    .iter()
+                    .map(|position| position.line)
+                    .max()
+                    .unwrap();
+                atom.set_item("source_blocks", source_blocks)?;
+                atom.set_item("source_line_start", source_line_start)?;
+                atom.set_item("source_line_end", source_line_end)?;
+                atom.set_item("source_position_known", true)?;
+            }
+        }
+        list.append(atom)?;
     }
     Ok(list)
 }

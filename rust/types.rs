@@ -1345,6 +1345,8 @@ pub struct TextRunDto {
     pub source_start: i64,
     pub source_end: i64,
     pub order: i64,
+    pub flow_start: Option<i64>,
+    pub flow_end: Option<i64>,
     pub evidence: Option<TextRunEvidenceDto>,
 }
 
@@ -1358,6 +1360,8 @@ impl TextRunDto {
         let source_start: i64 = get_req(dict, "source_start")?.extract()?;
         let source_end: i64 = get_req(dict, "source_end")?.extract()?;
         let order: i64 = get_req(dict, "order")?.extract()?;
+        let flow_start = optional_i64(dict, "flow_start")?;
+        let flow_end = optional_i64(dict, "flow_end")?;
         let evidence = match get_opt(dict, "evidence")? {
             Some(value) => Some(TextRunEvidenceDto::from_py(
                 &value.downcast::<PyDict>()?.clone(),
@@ -1381,6 +1385,8 @@ impl TextRunDto {
             source_start,
             source_end,
             order,
+            flow_start,
+            flow_end,
             evidence,
         })
     }
@@ -1394,6 +1400,12 @@ impl TextRunDto {
         d.set_item("source_start", self.source_start)?;
         d.set_item("source_end", self.source_end)?;
         d.set_item("order", self.order)?;
+        if let Some(flow_start) = self.flow_start {
+            d.set_item("flow_start", flow_start)?;
+        }
+        if let Some(flow_end) = self.flow_end {
+            d.set_item("flow_end", flow_end)?;
+        }
         if let Some(evidence) = &self.evidence {
             d.set_item("evidence", evidence.to_py(py)?)?;
         }
