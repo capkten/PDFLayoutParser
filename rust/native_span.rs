@@ -84,6 +84,7 @@ struct PreparedSpan {
     fragment_index: i64,
     fragment_count: i64,
     split: bool,
+    flow: i64,
 }
 
 const PYTHON_DECIMAL_DIGIT_RANGES: &[(u32, u32)] = &[
@@ -221,6 +222,7 @@ fn prepared_unsplit(span: NativeSpanDto) -> PreparedSpan {
         fragment_index: 0,
         fragment_count: 1,
         split: false,
+        flow: 0,
     }
 }
 
@@ -343,6 +345,7 @@ fn split_packed_numeric_span(span: NativeSpanDto) -> Vec<PreparedSpan> {
             fragment_index: fragment_index as i64,
             fragment_count,
             split: true,
+            flow: 0,
         });
     }
     fragments
@@ -387,52 +390,63 @@ fn horizontal_overlap(left: &Rect4, right: &Rect4) -> f64 {
     (left.x1.min(right.x1) - left.x0.max(right.x0)).max(0.0)
 }
 
+#[derive(Debug, Clone)]
+struct WrappedRun {
+    run: TextRunDto,
+    flow_start: i64,
+    flow_end: i64,
+}
+
 fn right_witnesses<'a>(
-    chain: &[TextRunDto],
-    candidate: &TextRunDto,
-    runs: &'a [TextRunDto],
+    chain: &[WrappedRun],
+    candidate: &WrappedRun,
+    runs: &'a [WrappedRun],
     require_flow_after: bool,
     minimum_horizontal_gap: f64,
     vertical_margin: f64,
-) -> Vec<&'a TextRunDto> {
+) -> Vec<&'a WrappedRun> {
     let y0 = chain
         .first()
-        .map(|run| run.rect.y0.min(candidate.rect.y0))
-        .unwrap_or(candidate.rect.y0)
+        .map(|run| run.run.rect.y0.min(candidate.run.rect.y0))
+        .unwrap_or(candidate.run.rect.y0)
         - vertical_margin;
     let y1 = chain
         .last()
-        .map(|run| run.rect.y1.max(candidate.rect.y1))
-        .unwrap_or(candidate.rect.y1)
-        + run_font_size(candidate).max(10.0) * 4.0;
+        .map(|run| run.run.rect.y1.max(candidate.run.rect.y1))
+        .unwrap_or(candidate.run.rect.y1)
+        + run_font_size(&candidate.run).max(10.0) * 4.0;
     let x1 = chain
         .iter()
-        .map(|run| run.rect.x1)
-        .chain(std::iter::once(candidate.rect.x1))
+        .map(|run| run.run.rect.x1)
+        .chain(std::iter::once(candidate.run.rect.x1))
         .fold(f64::NEG_INFINITY, f64::max);
     runs.iter()
         .filter(|run| {
-            let in_chain = chain.iter().any(|item| item.order == run.order);
-            let after_candidate = run.order > candidate.order;
+            let in_chain = chain.iter().any(|item| {
+                item.flow_start == run.flow_start && item.flow_end == run.flow_end
+            });
+            let is_candidate = run.flow_start == candidate.flow_start
+                && run.flow_end == candidate.flow_end;
+            let after_candidate = run.flow_start > candidate.flow_end;
             !in_chain
-                && run.order != candidate.order
+                && !is_candidate
                 && (!require_flow_after || after_candidate)
-                && run.rect.x0 >= x1 + minimum_horizontal_gap
-                && y1.min(run.rect.y1) > y0.max(run.rect.y0)
+                && run.run.rect.x0 >= x1 + minimum_horizontal_gap
+                && y1.min(run.run.rect.y1) > y0.max(run.run.rect.y0)
         })
         .collect()
 }
 
-fn is_strong_native_vertical_pair(previous: &TextRunDto, candidate: &TextRunDto) -> bool {
-    let previous_text = previous.text.trim();
-    let candidate_text = candidate.text.trim();
+fn is_strong_native_vertical_pair(previous: &WrappedRun, candidate: &WrappedRun) -> bool {
+    let previous_text = previous.run.text.trim();
+    let candidate_text = candidate.run.text.trim();
     if !is_single_cjk(previous_text) || !is_single_cjk(candidate_text) {
         return false;
     }
-    let Some((previous_blocks, previous_start, previous_end)) = run_source_bounds(previous) else {
+    let Some((previous_blocks, previous_start, previous_end)) = run_source_bounds(&previous.run) else {
         return false;
     };
-    let Some((candidate_blocks, candidate_start, candidate_end)) = run_source_bounds(candidate) else {
+    let Some((candidate_blocks, candidate_start, candidate_end)) = run_source_bounds(&candidate.run) else {
         return false;
     };
     if previous_blocks.len() != 1
@@ -444,35 +458,36 @@ fn is_strong_native_vertical_pair(previous: &TextRunDto, candidate: &TextRunDto)
         return false;
     }
 
-    let minimum_font_size = run_font_size(previous).min(run_font_size(candidate));
+    let minimum_font_size = run_font_size(&previous.run).min(run_font_size(&candidate.run));
     if minimum_font_size <= 0.0
-        || run_is_bold(previous) != run_is_bold(candidate)
-        || (run_font_size(previous) - run_font_size(candidate)).abs()
+        || run_is_bold(&previous.run) != run_is_bold(&candidate.run)
+        || (run_font_size(&previous.run) - run_font_size(&candidate.run)).abs()
             > 0.5_f64.max(minimum_font_size * 0.1)
     {
         return false;
     }
 
     let tolerance = 1.0_f64.max(minimum_font_size * 0.12);
-    (previous.rect.x0 - candidate.rect.x0).abs() <= tolerance
-        && (previous.rect.x1 - candidate.rect.x1).abs() <= tolerance
-        && candidate.rect.y0 >= previous.rect.y1
-        && candidate.rect.y0 - previous.rect.y1 <= 6.0_f64.max(minimum_font_size)
-        && candidate.rect.y0 > previous.rect.y0
+    (previous.run.rect.x0 - candidate.run.rect.x0).abs() <= tolerance
+        && (previous.run.rect.x1 - candidate.run.rect.x1).abs() <= tolerance
+        && candidate.run.rect.y0 >= previous.run.rect.y1
+        && candidate.run.rect.y0 - previous.run.rect.y1 <= 6.0_f64.max(minimum_font_size)
+        && candidate.run.rect.y0 > previous.run.rect.y0
 }
 
-fn is_multiline_witness(run: &TextRunDto) -> bool {
-    let font_size = run_font_size(run);
+fn is_multiline_witness(run: &WrappedRun) -> bool {
+    let font_size = run_font_size(&run.run);
     font_size > 0.0
-        && run.rect.y1 - run.rect.y0 >= (font_size * 1.5).max(font_size + 3.0)
+        && run.run.rect.y1 - run.run.rect.y0 >= (font_size * 1.5).max(font_size + 3.0)
 }
 
 fn has_multiline_right_witness(
-    chain: &[TextRunDto],
-    candidate: &TextRunDto,
-    runs: &[TextRunDto],
+    chain: &[WrappedRun],
+    candidate: &WrappedRun,
+    runs: &[WrappedRun],
 ) -> bool {
-    let font_size = run_font_size(chain.last().unwrap_or(candidate)).min(run_font_size(candidate));
+    let font_size = run_font_size(&chain.last().unwrap_or(candidate).run)
+        .min(run_font_size(&candidate.run));
     if font_size <= 0.0 {
         return false;
     }
@@ -485,33 +500,39 @@ fn has_multiline_right_witness(
         2.0_f64.max(font_size * 0.8),
     );
     for seed in &witnesses {
-        let seed_width = seed.rect.x1 - seed.rect.x0;
-        let mut group: Vec<&TextRunDto> = witnesses
+        let seed_width = seed.run.rect.x1 - seed.run.rect.x0;
+        let mut group: Vec<&WrappedRun> = witnesses
             .iter()
             .copied()
             .filter(|item| {
-                horizontal_overlap(&seed.rect, &item.rect)
-                    >= 2.0_f64.max(seed_width.min(item.rect.x1 - item.rect.x0) * 0.45)
+                horizontal_overlap(&seed.run.rect, &item.run.rect)
+                    >= 2.0_f64.max(seed_width.min(item.run.rect.x1 - item.run.rect.x0) * 0.45)
             })
             .collect();
         group.sort_by(|left, right| {
-            left.rect
+            left.run.rect
                 .y0
-                .partial_cmp(&right.rect.y0)
+                .partial_cmp(&right.run.rect.y0)
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
         if group.len() == 1 && !is_multiline_witness(group[0]) {
             continue;
         }
         if group.windows(2).any(|pair| {
-            pair[1].rect.y0 - pair[0].rect.y1 > 4.0_f64.max(font_size * 0.5)
+            pair[1].run.rect.y0 - pair[0].run.rect.y1 > 4.0_f64.max(font_size * 0.5)
         }) {
             continue;
         }
-        let group_y0 = group.iter().map(|item| item.rect.y0).fold(f64::INFINITY, f64::min);
-        let group_y1 = group.iter().map(|item| item.rect.y1).fold(f64::NEG_INFINITY, f64::max);
-        if group_y0 <= chain.last().unwrap().rect.y0 - 2.0_f64.max(font_size * 0.5)
-            && candidate.rect.y1 >= group_y1 - font_size
+        let group_y0 = group
+            .iter()
+            .map(|item| item.run.rect.y0)
+            .fold(f64::INFINITY, f64::min);
+        let group_y1 = group
+            .iter()
+            .map(|item| item.run.rect.y1)
+            .fold(f64::NEG_INFINITY, f64::max);
+        if group_y0 <= chain.last().unwrap().run.rect.y0 - 2.0_f64.max(font_size * 0.5)
+            && candidate.run.rect.y1 >= group_y1 - font_size
         {
             return true;
         }
@@ -520,38 +541,41 @@ fn has_multiline_right_witness(
 }
 
 fn is_wrapped_chain_pair(
-    chain: &[TextRunDto],
-    candidate: &TextRunDto,
-    runs: &[TextRunDto],
+    chain: &[WrappedRun],
+    candidate: &WrappedRun,
+    runs: &[WrappedRun],
 ) -> bool {
     let left = chain.last().unwrap();
-    if left.text.trim_end().ends_with([':', '：'])
-        || candidate.order != left.order + 1
+    if left.run.text.trim_end().ends_with([':', '：'])
+        || candidate.flow_start != left.flow_end + 1
     {
         return false;
     }
-    let base_bold = run_is_bold(chain.first().unwrap());
-    if run_is_bold(left) != run_is_bold(candidate) && base_bold != run_is_bold(candidate) {
+    let base_bold = run_is_bold(&chain.first().unwrap().run);
+    if run_is_bold(&left.run) != run_is_bold(&candidate.run)
+        && base_bold != run_is_bold(&candidate.run)
+    {
         return false;
     }
-    if (run_font_size(left) - run_font_size(candidate)).abs() > 1.0
-        || is_python_numeric_text(left.text.trim())
-        || is_python_numeric_text(candidate.text.trim())
-        || is_placeholder_text(left.text.trim())
-        || is_placeholder_text(candidate.text.trim())
+    if (run_font_size(&left.run) - run_font_size(&candidate.run)).abs() > 1.0
+        || is_python_numeric_text(left.run.text.trim())
+        || is_python_numeric_text(candidate.run.text.trim())
+        || is_placeholder_text(left.run.text.trim())
+        || is_placeholder_text(candidate.run.text.trim())
     {
         return false;
     }
 
-    let left_center = center_y(&left.rect);
-    let candidate_center = center_y(&candidate.rect);
-    if candidate_center <= left_center || candidate.rect.y0 < left.rect.y1 {
+    let left_center = center_y(&left.run.rect);
+    let candidate_center = center_y(&candidate.run.rect);
+    if candidate_center <= left_center || candidate.run.rect.y0 < left.run.rect.y1 {
         return false;
     }
-    let minimum_width = (left.rect.x1 - left.rect.x0).min(candidate.rect.x1 - candidate.rect.x0);
-    if horizontal_overlap(&left.rect, &candidate.rect) < minimum_width * 0.45
-        || candidate.rect.y0 - left.rect.y1
-            > 6.0_f64.max(run_font_size(left).min(run_font_size(candidate)))
+    let minimum_width = (left.run.rect.x1 - left.run.rect.x0)
+        .min(candidate.run.rect.x1 - candidate.run.rect.x0);
+    if horizontal_overlap(&left.run.rect, &candidate.run.rect) < minimum_width * 0.45
+        || candidate.run.rect.y0 - left.run.rect.y1
+            > 6.0_f64.max(run_font_size(&left.run).min(run_font_size(&candidate.run)))
     {
         return false;
     }
@@ -563,7 +587,7 @@ fn is_wrapped_chain_pair(
         && has_multiline_right_witness(chain, candidate, runs)
 }
 
-fn merge_run_chain(chain: &[TextRunDto]) -> TextRunDto {
+fn merge_run_chain(chain: &[WrappedRun]) -> WrappedRun {
     let first = chain.first().expect("wrapped chain must not be empty");
     let mut source_positions = Vec::new();
     let mut fonts = Vec::new();
@@ -573,7 +597,7 @@ fn merge_run_chain(chain: &[TextRunDto]) -> TextRunDto {
     let mut fragment_counts = Vec::new();
     let mut has_fragment_evidence = true;
     for run in chain {
-        if let Some(evidence) = &run.evidence {
+        if let Some(evidence) = &run.run.evidence {
             source_positions.extend(evidence.source_positions.clone());
             fonts.extend(evidence.fonts.clone());
             sizes.extend(evidence.sizes.clone());
@@ -596,7 +620,7 @@ fn merge_run_chain(chain: &[TextRunDto]) -> TextRunDto {
         None
     } else {
         Some(TextRunEvidenceDto {
-            schema_version: first
+            schema_version: first.run
                 .evidence
                 .as_ref()
                 .map(|evidence| evidence.schema_version)
@@ -609,36 +633,65 @@ fn merge_run_chain(chain: &[TextRunDto]) -> TextRunDto {
             source_fragment_counts: has_fragment_evidence.then_some(fragment_counts),
         })
     };
-    TextRunDto {
-        schema_version: first.schema_version,
-        text: chain
+    WrappedRun {
+        run: TextRunDto {
+            schema_version: first.run.schema_version,
+            text: chain
             .iter()
-            .map(|run| run.text.as_str())
+            .map(|run| run.run.text.as_str())
             .collect::<Vec<_>>()
             .join("\n"),
-        rect: Rect4 {
-            schema_version: first.rect.schema_version,
-            x0: chain.iter().map(|run| run.rect.x0).fold(f64::INFINITY, f64::min),
-            y0: chain.iter().map(|run| run.rect.y0).fold(f64::INFINITY, f64::min),
-            x1: chain.iter().map(|run| run.rect.x1).fold(f64::NEG_INFINITY, f64::max),
-            y1: chain.iter().map(|run| run.rect.y1).fold(f64::NEG_INFINITY, f64::max),
-        },
+            rect: Rect4 {
+                schema_version: first.run.rect.schema_version,
+                x0: chain
+                    .iter()
+                    .map(|run| run.run.rect.x0)
+                    .fold(f64::INFINITY, f64::min),
+                y0: chain
+                    .iter()
+                    .map(|run| run.run.rect.y0)
+                    .fold(f64::INFINITY, f64::min),
+                x1: chain
+                    .iter()
+                    .map(|run| run.run.rect.x1)
+                    .fold(f64::NEG_INFINITY, f64::max),
+                y1: chain
+                    .iter()
+                    .map(|run| run.run.rect.y1)
+                    .fold(f64::NEG_INFINITY, f64::max),
+            },
         span_refs: chain
             .iter()
-            .flat_map(|run| run.span_refs.iter().copied())
+            .flat_map(|run| run.run.span_refs.iter().copied())
             .collect(),
-        source_start: chain.iter().map(|run| run.source_start).min().unwrap_or(0),
-        source_end: chain.iter().map(|run| run.source_end).max().unwrap_or(0),
-        order: first.order,
-        evidence,
+            source_start: chain
+                .iter()
+                .map(|run| run.run.source_start)
+                .min()
+                .unwrap_or(0),
+            source_end: chain
+                .iter()
+                .map(|run| run.run.source_end)
+                .max()
+                .unwrap_or(0),
+            order: first.run.order,
+            evidence,
+        },
+        flow_start: first.flow_start,
+        flow_end: chain.last().unwrap().flow_end,
     }
 }
 
-fn merge_wrapped_field_runs(mut runs: Vec<TextRunDto>) -> Vec<TextRunDto> {
+fn merge_wrapped_field_runs(mut runs: Vec<WrappedRun>) -> Vec<TextRunDto> {
     if runs.len() < 2 {
-        return runs;
+        return runs.into_iter().map(|run| run.run).collect();
     }
-    runs.sort_by_key(|run| run.order);
+    runs.sort_by(|left, right| {
+        left.flow_start
+            .cmp(&right.flow_start)
+            .then(left.flow_end.cmp(&right.flow_end))
+            .then(left.run.order.cmp(&right.run.order))
+    });
     let mut result = Vec::new();
     let mut index = 0;
     while index < runs.len() {
@@ -656,8 +709,13 @@ fn merge_wrapped_field_runs(mut runs: Vec<TextRunDto>) -> Vec<TextRunDto> {
             index = cursor;
         }
     }
-    result.sort_by_key(|run| run.order);
-    result
+    result.sort_by(|left, right| {
+        left.flow_start
+            .cmp(&right.flow_start)
+            .then(left.flow_end.cmp(&right.flow_end))
+            .then(left.run.order.cmp(&right.run.order))
+    });
+    result.into_iter().map(|run| run.run).collect()
 }
 
 pub fn build_text_runs(spans: Vec<NativeSpanDto>, region: Rect4) -> Vec<TextRunDto> {
@@ -694,6 +752,18 @@ pub fn build_text_runs(spans: Vec<NativeSpanDto>, region: Rect4) -> Vec<TextRunD
 
     if valid_spans.is_empty() {
         return Vec::new();
+    }
+
+    // Python's region_spans assigns flow after filtering and packed splitting,
+    // before the native runs are reordered into visual rows.
+    valid_spans.sort_by(|left, right| {
+        left.span
+            .order
+            .cmp(&right.span.order)
+            .then(left.fragment_index.cmp(&right.fragment_index))
+    });
+    for (index, span) in valid_spans.iter_mut().enumerate() {
+        span.flow = index as i64 + 1;
     }
 
     // 2. 按视觉行分组（y-center 容差聚类）
@@ -738,7 +808,7 @@ pub fn build_text_runs(spans: Vec<NativeSpanDto>, region: Rect4) -> Vec<TextRunD
     }
 
     // 3. 行内成词（基于 can_join 与白名单逻辑）
-    let mut runs: Vec<TextRunDto> = Vec::new();
+    let mut runs: Vec<WrappedRun> = Vec::new();
     let mut run_order = 0;
 
     for mut row in rows {
@@ -870,21 +940,25 @@ pub fn build_text_runs(spans: Vec<NativeSpanDto>, region: Rect4) -> Vec<TextRunD
                     .then(|| group.iter().map(|s| s.fragment_count).collect()),
             };
 
-            runs.push(TextRunDto {
-                schema_version: 1,
-                text: joined_text,
-                rect: Rect4 {
+            runs.push(WrappedRun {
+                run: TextRunDto {
                     schema_version: 1,
-                    x0,
-                    y0,
-                    x1,
-                    y1,
+                    text: joined_text,
+                    rect: Rect4 {
+                        schema_version: 1,
+                        x0,
+                        y0,
+                        x1,
+                        y1,
+                    },
+                    span_refs,
+                    source_start,
+                    source_end,
+                    order: run_order,
+                    evidence: Some(evidence),
                 },
-                span_refs,
-                source_start,
-                source_end,
-                order: run_order,
-                evidence: Some(evidence),
+                flow_start: group.iter().map(|span| span.flow).min().unwrap_or(0),
+                flow_end: group.iter().map(|span| span.flow).max().unwrap_or(0),
             });
             run_order += 1;
         }

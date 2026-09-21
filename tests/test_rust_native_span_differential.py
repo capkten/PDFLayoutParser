@@ -49,7 +49,7 @@ REQUIRED_FIXTURES = {
     "independent_fields_counterexample",
     "single_field_control",
 }
-EXPECTED_LEDGER_SHA256 = "2d139ae83aba7551db0d29a34d19225cee689dfd950fa3456122d8a0056ace76"
+EXPECTED_LEDGER_SHA256 = "8358c75e03dc5e12086127a75cc9b4ed94e7d829ea63ccefc0f06ac09d701fcc"
 EXPECTED_FIXTURE_COUNTS = {
     "alignment_corridor_veto": 266,
     "cjk_non_whitelist_spacing": 14,
@@ -710,6 +710,7 @@ def test_wrapped_field_merge_matches_python_and_preserves_owned_evidence():
     expected_text = ["第一行\n第二行\n第三行", "右侧字段"]
     assert [run["text"] for run in python_runs] == expected_text
     assert [run["text"] for run in rust_runs] == expected_text
+    assert [run["order"] for run in rust_runs] == [0, 2]
 
     merged = rust_runs[0]
     assert merged["rect"] == {
@@ -772,6 +773,7 @@ def test_wrapped_field_merge_ignores_filtered_source_gap():
         "右侧字段",
     ]
     assert [run["text"] for run in rust_runs] == [run["text"] for run in python_runs]
+    assert [run["order"] for run in rust_runs] == [0, 2]
 
     merged = rust_runs[0]
     assert merged["rect"] == {
