@@ -101,3 +101,28 @@ Digest 相比基线变化是预期的：atom layer 的 run refs 现在保留 sou
 
 - 本 slice 只在 native span/text-run/atom binding 边界暴露可选 metadata；core `AtomDto` 及未要求的 recovery/structure 输出合同保持不变。
 - 本次验证覆盖 synthetic differential fixtures 和 Rust/Python 相关单元测试，未执行页面级 PDF JSON/PNG 重跑；没有可用于该 bounded slice 的额外页面验收输入。
+
+## Final Fresh Verification（2026-09-21）
+
+最终独立 reviewer `Tesla`（`gpt-5.6-luna`）审查 `review-03d7da0..45fec29.diff`，结论如下：
+
+- Critical：无；Important：无；Minor：无。
+- Assessment：`Ready to merge: Yes`。
+- Reviewer 确认 review package 仅包含预期的 3 个修复文件，没有修改生产 Rust、Task 4 文件或用户已有 dirty 文件。
+- Reviewer 确认 `empty_whitespace_and_separator` 的两条 flow/order mismatch 均有显式 reason，并区分 `text_runs/S2` 与 `atoms/S2`；ledger count、field/classification counts 和 SHA256 均与测试锁定值一致。
+
+本轮 fresh verification（在 reviewer 之后重新执行）：
+
+| 命令 | 结果 |
+|---|---|
+| `maturin develop --release` | 成功；仅有既有 invalid distribution `~ydantic` 环境警告 |
+| `pytest -q tests/test_rust_native_span_differential.py` | `26 passed in 1.79s` |
+| `pytest -q tests/test_rust_native_span_evidence.py tests/test_wireless_structure_text_runs.py tests/test_rust_native_span_packed_numeric.py` | `74 passed in 0.54s` |
+| `cargo test --lib native_span` | `4 passed; 0 failed`，另有 `46 filtered out` |
+| differential ledger/separator/hash-seed tests | `5 passed, 21 deselected` |
+| `git diff --check` | 通过 |
+
+最终 ledger 仍为 `111` 条，分类为 `defect=8`、`requires_adaptation=15`、`unsupported=88`，SHA256 为
+`cb51b9e240ec69b88f9b00066c2293f076b31ffb3973bac7996eb663f0a71f81`。
+
+Task 3B 至此完成。页面级 PDF JSON/PNG 重跑仍未执行，属于后续 Task 5 页面验收；默认 Python route、shadow route、Rust fallback policy 均保持不变。Task 4 尚未开始。
