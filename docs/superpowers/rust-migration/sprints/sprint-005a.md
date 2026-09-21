@@ -23,12 +23,14 @@ reviewer 指出 eee1685 的字段遍历受 hash seed 影响、缺失 run 只有 
 
 现在使用固定 `FIELDS` tuple、稳定 ledger key 和独立 `PYTHONHASHSEED=1/2` 子进程比较；缺失 run 按 `run_identity` 逐字段记录；保留 raw span refs、Rust source bounds 和 atom run refs；通过现有 Python `_native_atom_core` 与 Rust `rust_adapter.build_atoms` 比较 atoms；bbox 先比较长度再使用 0.01 容差。
 
-完整 ledger 已锁定为 `334` 条，SHA-256 为 `8673d7a0bc15072af58ad8e2913937c08e21f1640a0fc9f5509e4b20eb626ac6`；分类为 `requires_adaptation=136`、`defect=114`、`unsupported=84`。
+re-review 又发现中间缺失 run 不能按 index 配对。先加 RED（`1 failed, 9 passed`），再改为按 canonical grouping/span refs identity buckets 对齐；修复后 focused 为 `11 passed`。相同 identity 配对，单侧 identity 生成具体 presence 和全部字段，重复 identity 生成 errors，不使用位置 fallback。
+
+完整 ledger 已锁定为 `564` 条，SHA-256 为 `5093640efdb9d73e66d6f8adacafc7f635c0e0eded129989677407083044ab59`；分类为 `requires_adaptation=208`、`defect=218`、`unsupported=138`。
 
 ## 验证与限制
 
 - RED 先证明 packed numeric 的实际字段差异：Python 为 `100`, `200`，Rust 为 `100 200`。
-- 初始 GREEN focused differential 为 `2 passed`；reviewer 修复后为 `9 passed`。
+- 初始 GREEN focused differential 为 `2 passed`；第一轮 reviewer 修复后为 `9 passed`；re-review identity 修复后为 `11 passed`。
 - 既有相关 Python tests 为 `57 passed`。
 - `cargo test --lib native_span` 为 `4 passed`。
 - Rust helper 当前不输出 font/script、Python flow 区间和 source continuity；这些缺口在 ledger 中标为 `unsupported`，没有标成 accepted，也没有 broad ignore。atom layer 已实际调用两侧 helper，未伪造能力。

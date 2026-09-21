@@ -65,7 +65,25 @@ $env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; $env:PYTHONPATH=(Resolve-Path 'src').Pa
 9 passed in 2.75s
 ```
 
-其中 `test_ledger_json_is_identical_across_hash_seeds` 在独立子进程使用 `PYTHONHASHSEED=1` 和 `PYTHONHASHSEED=2`，对 canonical JSON 做 byte-for-byte 比较；`test_complete_ledger_is_locked_by_count_summary_and_digest` 精确锁定 `334` 条 ledger、fixture/field/class 分布和 SHA-256。
+其中 `test_ledger_json_is_identical_across_hash_seeds` 在独立子进程使用 `PYTHONHASHSEED=1` 和 `PYTHONHASHSEED=2`，对 canonical JSON 做 byte-for-byte 比较；`test_complete_ledger_is_locked_by_count_summary_and_digest` 精确锁定 `564` 条 ledger、fixture/field/class 分布和 SHA-256。
+
+## Re-review 中间缺失 run 修复
+
+针对 `S0,S1,S2` 对 `S0,S2` 仍按 index 配对的问题，先加入最小 RED：要求 `python:S1` 产生独立 presence 与全部字段 mismatch，并禁止 `python:S1|rust:S2` 错配。
+
+同一 focused 命令的修复前输出：
+
+```text
+.........F                                                               [100%]
+1 failed, 9 passed in 3.00s
+```
+
+最小修复改为按 canonical grouping/span refs 建立两侧 identity buckets；相同 identity 配对，单侧 identity 记录具体 presence 和全部字段；重复 identity 生成显式 `errors`，不使用位置 fallback。修复后输出（含重复 identity 显式 errors 回归）：
+
+```text
+...........                                                              [100%]
+11 passed in 2.27s
+```
 
 ## 相关既有测试
 
@@ -101,36 +119,36 @@ test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 46 filtered out
 
 ## 完整 mismatch ledger 摘要
 
-修订后的重复运行生成 `334` 条 mismatch；测试精确锁定总数、fixture 分布、字段分布、分类分布和 UTF-8 canonical JSON SHA-256 `8673d7a0bc15072af58ad8e2913937c08e21f1640a0fc9f5509e4b20eb626ac6`。没有 `accepted` 分类，也没有 broad ignore。字段总计如下：
+修订后的重复运行生成 `564` 条 mismatch；测试精确锁定总数、fixture 分布、字段分布、分类分布和 UTF-8 canonical JSON SHA-256 `5093640efdb9d73e66d6f8adacafc7f635c0e0eded129989677407083044ab59`。没有 `accepted` 分类，也没有 broad ignore。字段总计如下：
 
 | field | count |
 |---|---:|
-| presence | 8 |
-| value | 32 |
-| grouping | 32 |
-| text | 32 |
-| bbox | 32 |
-| ordering | 16 |
-| flow/order | 50 |
-| font/script | 22 |
-| span/run refs | 50 |
-| source continuity | 44 |
-| errors | 16 |
+| presence | 52 |
+| value | 44 |
+| grouping | 44 |
+| text | 44 |
+| bbox | 44 |
+| ordering | 46 |
+| flow/order | 64 |
+| font/script | 54 |
+| span/run refs | 64 |
+| source continuity | 64 |
+| errors | 44 |
 
-分类总计：`requires_adaptation=136`、`defect=114`、`unsupported=84`。
+分类总计：`requires_adaptation=208`、`defect=218`、`unsupported=138`。
 
 每条 ledger 记录均包含 `fixture`、`layer`、`run_identity`、`field`、`python_value`、`rust_value`、`classification`。`run_identity` 用 canonical span refs 标识配对或单侧缺失 run；缺失 run 逐字段记录，不仅记录数量。按 fixture 的完整字段集合如下；同一 fixture 下未列出的字段没有 mismatch：
 
 | fixture | layer | mismatch fields and classification |
 |---|---|---|
-| `packed_numeric_split` | `span_chain`/`text_runs` + `atoms` | 36 条：`presence,value,grouping,text,bbox,ordering,flow/order,span/run refs,errors=requires_adaptation`; `font/script,source continuity=unsupported`；缺失 Python `S0.2` 逐字段记录 |
+| `packed_numeric_split` | `span_chain`/`text_runs` + `atoms` | 68 条：`presence,value,grouping,text,bbox,ordering,flow/order,span/run refs,errors=requires_adaptation`; `font/script,source continuity=unsupported`；缺失 Python `S0.2` 逐字段记录 |
 | `empty_whitespace_and_separator` | `text_runs` + `atoms` | 7 条：`flow/order,span/run refs=requires_adaptation`; `font/script,source continuity=unsupported` |
 | `cjk_whitelist_spacing` | `text_runs` + `atoms` | 7 条：`flow/order,span/run refs=requires_adaptation`; `font/script,source continuity=unsupported` |
 | `cjk_non_whitelist_spacing` | `text_runs` + `atoms` | 14 条：`flow/order,span/run refs=requires_adaptation`; `font/script,source continuity=unsupported` |
-| `superscript_inline_gap` | `text_runs` + `atoms` | 33 条：`presence,value,grouping,text,bbox,ordering,flow/order,span/run refs,errors=requires_adaptation`; `font/script,source continuity=unsupported` |
-| `vertical_wrapped_witness` | `text_runs` + `atoms` | 64 条：`presence,value,grouping,text,bbox,ordering,flow/order,span/run refs,errors=requires_adaptation`; `font/script,source continuity=unsupported` |
+| `superscript_inline_gap` | `text_runs` + `atoms` | 68 条：`presence,value,grouping,text,bbox,ordering,flow/order,span/run refs,errors=requires_adaptation`; `font/script,source continuity=unsupported` |
+| `vertical_wrapped_witness` | `text_runs` + `atoms` | 99 条：`presence,value,grouping,text,bbox,ordering,flow/order,span/run refs,errors=requires_adaptation`; `font/script,source continuity=unsupported` |
 | `source_block_line_noncontinuous` | `text_runs` + `atoms` | 14 条：`flow/order,span/run refs=requires_adaptation`; `font/script,source continuity=unsupported` |
-| `alignment_corridor_veto` | `text_runs` + `atoms` | 138 条：语义字段与缺失 run 记录为 `defect`；Rust 缺失 metadata 为 `unsupported` |
+| `alignment_corridor_veto` | `text_runs` + `atoms` | 266 条：语义字段与缺失 run 记录为 `defect`；Rust 缺失 metadata 为 `unsupported` |
 | `independent_fields_counterexample` | `text_runs` + `atoms` | 14 条：`flow/order,span/run refs=requires_adaptation`; `font/script,source continuity=unsupported`；semantic text/grouping/bbox/presence 保持一致 |
 | `single_field_control` | `text_runs` + `atoms` | 7 条：`flow/order,span/run refs=requires_adaptation`; `font/script,source continuity=unsupported` |
 

@@ -48,36 +48,36 @@ REQUIRED_FIXTURES = {
     "independent_fields_counterexample",
     "single_field_control",
 }
-EXPECTED_LEDGER_SHA256 = "8673d7a0bc15072af58ad8e2913937c08e21f1640a0fc9f5509e4b20eb626ac6"
+EXPECTED_LEDGER_SHA256 = "5093640efdb9d73e66d6f8adacafc7f635c0e0eded129989677407083044ab59"
 EXPECTED_FIXTURE_COUNTS = {
-    "alignment_corridor_veto": 138,
+    "alignment_corridor_veto": 266,
     "cjk_non_whitelist_spacing": 14,
     "cjk_whitelist_spacing": 7,
     "empty_whitespace_and_separator": 7,
     "independent_fields_counterexample": 14,
-    "packed_numeric_split": 36,
+    "packed_numeric_split": 68,
     "single_field_control": 7,
     "source_block_line_noncontinuous": 14,
-    "superscript_inline_gap": 33,
-    "vertical_wrapped_witness": 64,
+    "superscript_inline_gap": 68,
+    "vertical_wrapped_witness": 99,
 }
 EXPECTED_FIELD_COUNTS = {
-    "bbox": 32,
-    "errors": 16,
-    "flow/order": 50,
-    "font/script": 22,
-    "grouping": 32,
-    "ordering": 16,
-    "presence": 8,
-    "source continuity": 44,
-    "span/run refs": 50,
-    "text": 32,
-    "value": 32,
+    "bbox": 44,
+    "errors": 44,
+    "flow/order": 64,
+    "font/script": 54,
+    "grouping": 44,
+    "ordering": 46,
+    "presence": 52,
+    "source continuity": 64,
+    "span/run refs": 64,
+    "text": 44,
+    "value": 44,
 }
 EXPECTED_CLASS_COUNTS = {
-    "defect": 114,
-    "requires_adaptation": 136,
-    "unsupported": 84,
+    "defect": 218,
+    "requires_adaptation": 208,
+    "unsupported": 138,
 }
 
 
@@ -356,6 +356,13 @@ def _record_mismatch(ledger, fixture, layer, run_identity, field, python_value, 
     )
 
 
+def _item_identity(item):
+    grouping = tuple(item.get("grouping", ()))
+    if not grouping:
+        return "__empty_grouping__"
+    return "|".join(grouping)
+
+
 def _compare_layer(ledger, fixture, layer, python_items, rust_items):
     layer_key = "span_chain" if layer == "text_runs" and fixture == "packed_numeric_split" else layer
     if len(python_items) != len(rust_items):
@@ -368,32 +375,64 @@ def _compare_layer(ledger, fixture, layer, python_items, rust_items):
             len(python_items),
             len(rust_items),
         )
-    for index in range(max(len(python_items), len(rust_items))):
-        python_item = python_items[index] if index < len(python_items) else None
-        rust_item = rust_items[index] if index < len(rust_items) else None
-        if python_item is not None and rust_item is not None:
-            python_group = python_item.get("grouping", [])
-            rust_group = rust_item.get("grouping", [])
-            run_identity = f"python:{','.join(python_group)}|rust:{','.join(rust_group)}"
-        elif python_item is not None:
-            run_identity = f"python:{','.join(python_item.get('grouping', []))}"
-        else:
-            run_identity = f"rust:{','.join(rust_item.get('grouping', []))}"
-        for field in FIELDS:
-            if field == "presence":
-                continue
-            python_value = python_item[field] if python_item is not None else None
-            rust_value = rust_item[field] if rust_item is not None else None
-            if not _values_equal(field, python_value, rust_value):
+    python_by_identity = {}
+    rust_by_identity = {}
+    for item in python_items:
+        python_by_identity.setdefault(_item_identity(item), []).append(item)
+    for item in rust_items:
+        rust_by_identity.setdefault(_item_identity(item), []).append(item)
+
+    for identity in sorted(set(python_by_identity) | set(rust_by_identity)):
+        python_group = python_by_identity.get(identity, [])
+        rust_group = rust_by_identity.get(identity, [])
+        if len(python_group) > 1 or len(rust_group) > 1:
+            _record_mismatch(
+                ledger,
+                fixture,
+                layer_key,
+                f"duplicate:{identity}",
+                "errors",
+                {"duplicate_identity": identity, "count": len(python_group)},
+                {"duplicate_identity": identity, "count": len(rust_group)},
+            )
+        for index in range(max(len(python_group), len(rust_group))):
+            python_item = python_group[index] if index < len(python_group) else None
+            rust_item = rust_group[index] if index < len(rust_group) else None
+            if python_item is not None and rust_item is not None:
+                run_identity = identity
+            elif python_item is not None:
+                run_identity = f"python:{identity}"
+            else:
+                run_identity = f"rust:{identity}"
+            if python_item is None or rust_item is None:
                 _record_mismatch(
                     ledger,
                     fixture,
                     layer_key,
                     run_identity,
-                    field,
-                    python_value,
-                    rust_value,
+                    "presence",
+                    python_item is not None,
+                    rust_item is not None,
                 )
+            for field in FIELDS:
+                if field == "presence":
+                    continue
+                python_value = python_item[field] if python_item is not None else None
+                rust_value = rust_item[field] if rust_item is not None else None
+                if (
+                    python_item is None
+                    or rust_item is None
+                    or not _values_equal(field, python_value, rust_value)
+                ):
+                    _record_mismatch(
+                        ledger,
+                        fixture,
+                        layer_key,
+                        run_identity,
+                        field,
+                        python_value,
+                        rust_value,
+                    )
 
 
 def _stable_ledger_key(item):
@@ -554,7 +593,7 @@ def test_complete_ledger_is_locked_by_count_summary_and_digest():
     serialized = json.dumps(
         ledger, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     ).encode("utf-8")
-    assert len(ledger) == 334
+    assert len(ledger) == 564
     assert dict(Counter(item["fixture"] for item in ledger)) == EXPECTED_FIXTURE_COUNTS
     assert dict(Counter(item["field"] for item in ledger)) == EXPECTED_FIELD_COUNTS
     assert dict(Counter(item["classification"] for item in ledger)) == EXPECTED_CLASS_COUNTS
@@ -667,3 +706,56 @@ def test_atom_layer_is_present_and_uses_real_helpers():
 
 def test_bbox_comparison_rejects_length_mismatch():
     assert not _values_equal("bbox", [0.0, 0.0, 1.0, 1.0, 99.0], [0.0, 0.0, 1.0, 1.0])
+
+
+def test_middle_missing_run_aligns_by_identity_not_position():
+    def item(ref, text):
+        return {
+            "presence": True,
+            "value": text,
+            "ordering": 0,
+            "grouping": [ref],
+            "text": text,
+            "bbox": [0.0, 0.0, 1.0, 1.0],
+            "flow/order": {"flow_start": 0, "flow_end": 0, "order": 0},
+            "font/script": None,
+            "span/run refs": {"span_refs": [ref], "run_refs": None},
+            "source continuity": None,
+            "errors": [],
+        }
+
+    ledger = []
+    _compare_layer(
+        ledger,
+        "middle_missing",
+        "text_runs",
+        [item("S0", "zero"), item("S1", "one"), item("S2", "two")],
+        [item("S0", "zero"), item("S2", "two")],
+    )
+
+    missing = [entry for entry in ledger if entry["run_identity"] == "python:S1"]
+    assert {"presence", *FIELDS[1:]} <= {entry["field"] for entry in missing}
+    assert not any("python:S1|rust:S2" == entry["run_identity"] for entry in ledger)
+
+
+def test_duplicate_identity_is_recorded_as_error():
+    item = {
+        "presence": True,
+        "value": "zero",
+        "ordering": 0,
+        "grouping": ["S0"],
+        "text": "zero",
+        "bbox": [0.0, 0.0, 1.0, 1.0],
+        "flow/order": {"flow_start": 0, "flow_end": 0, "order": 0},
+        "font/script": None,
+        "span/run refs": {"span_refs": ["S0"], "run_refs": None},
+        "source continuity": None,
+        "errors": [],
+    }
+    ledger = []
+    _compare_layer(ledger, "duplicate_identity", "text_runs", [item, dict(item)], [item])
+    assert any(
+        entry["field"] == "errors"
+        and entry["run_identity"] == "duplicate:S0"
+        for entry in ledger
+    )
