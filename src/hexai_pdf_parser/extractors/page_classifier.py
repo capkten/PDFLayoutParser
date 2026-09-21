@@ -7,9 +7,49 @@ ToUnicode mapping that require OCR processing).
 
 from __future__ import annotations
 
+from pathlib import Path
+from typing import Any
 from typing_extensions import Literal
 
 import fitz
+
+from hexai_pdf_parser.core.models import ApiResult
+
+
+def classify_pdf_page(
+    source: str | Path | fitz.Page | fitz.Document,
+    page_index: int = 0,
+) -> ApiResult:
+    """Classify whether a PDF page is a 'vector' or 'scanned' page.
+
+    Args:
+        source: PDF file path (str or Path), fitz.Page, or fitz.Document.
+        page_index: 0-based page index (used when source is file path or Document).
+
+    Returns:
+        ApiResult:
+        - code=1, message="page classified", data="vector" | "scanned"
+        - code=-1, message=str(exc), data=None if an error occurs.
+    """
+    def _do() -> str:
+        if isinstance(source, fitz.Page):
+            return classify_page_type(source)
+
+        if isinstance(source, fitz.Document):
+            if page_index < 0 or page_index >= len(source):
+                raise IndexError(f"page_index {page_index} out of range (total pages: {len(source)})")
+            return classify_page_type(source[page_index])
+
+        with fitz.open(str(source)) as doc:
+            if page_index < 0 or page_index >= len(doc):
+                raise IndexError(f"page_index {page_index} out of range (total pages: {len(doc)})")
+            return classify_page_type(doc[page_index])
+
+    try:
+        page_type = _do()
+        return ApiResult(code=1, message="page classified", data=page_type)
+    except Exception as exc:
+        return ApiResult(code=-1, message=str(exc), data=None)
 
 
 def classify_page_type(page: fitz.Page) -> Literal["vector", "scanned"]:
@@ -24,6 +64,7 @@ def classify_page_type(page: fitz.Page) -> Literal["vector", "scanned"]:
     if is_scanned_page(page):
         return "scanned"
     return "vector"
+
 
 
 def is_scanned_page(page: fitz.Page) -> bool:
