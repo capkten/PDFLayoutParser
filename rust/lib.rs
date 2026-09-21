@@ -485,13 +485,11 @@ fn build_atoms_binding<'py>(
     let list = PyList::empty_bound(py);
     for (a, run) in atoms.into_iter().zip(rust_runs.iter()) {
         let atom = a.to_py(py)?;
-        if let Some(flow_start) = run.flow_start {
-            atom.set_item("flow_start", flow_start)?;
-        }
-        if let Some(flow_end) = run.flow_end {
-            atom.set_item("flow_end", flow_end)?;
-        }
-        if let Some(evidence) = &run.evidence {
+        if let (Some(flow_start), Some(flow_end), Some(evidence)) = (
+            run.flow_start,
+            run.flow_end,
+            run.evidence.as_ref(),
+        ) {
             if !evidence.source_positions.is_empty() {
                 let mut source_blocks: Vec<i64> = evidence
                     .source_positions
@@ -512,6 +510,8 @@ fn build_atoms_binding<'py>(
                     .map(|position| position.line)
                     .max()
                     .unwrap();
+                atom.set_item("flow_start", flow_start)?;
+                atom.set_item("flow_end", flow_end)?;
                 atom.set_item("source_blocks", source_blocks)?;
                 atom.set_item("source_line_start", source_line_start)?;
                 atom.set_item("source_line_end", source_line_end)?;

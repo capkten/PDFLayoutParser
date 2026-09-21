@@ -1216,14 +1216,17 @@ pub fn build_text_runs(spans: Vec<NativeSpanDto>, region: Rect4) -> Vec<TextRunD
 
 pub fn build_atoms(runs: Vec<TextRunDto>, _region: Option<Rect4>) -> Vec<AtomDto> {
     runs.into_iter()
-        .map(|run| AtomDto {
-            schema_version: 1,
-            text: run.text,
-            rect: run.rect,
-            run_refs: run.span_refs,
-            row_hint: None,
-            col_hint: None,
-            order: run.order,
+        .map(|run| {
+            let order = run.flow_start.unwrap_or(run.order);
+            AtomDto {
+                schema_version: 1,
+                text: run.text,
+                rect: run.rect,
+                run_refs: run.span_refs,
+                row_hint: None,
+                col_hint: None,
+                order,
+            }
         })
         .collect()
 }

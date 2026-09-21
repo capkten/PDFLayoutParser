@@ -49,29 +49,29 @@ REQUIRED_FIXTURES = {
     "independent_fields_counterexample",
     "single_field_control",
 }
-EXPECTED_LEDGER_SHA256 = "b3fdf184452653d59047dacbc57150bef6bdb0e17498043dce35016e132e54e0"
+EXPECTED_LEDGER_SHA256 = "b2042666a63fa728b7199380708738cddffa21642995e36c93d65f5168f0b052"
 EXPECTED_FIXTURE_COUNTS = {
-    "alignment_corridor_veto": 56,
-    "cjk_non_whitelist_spacing": 14,
-    "cjk_whitelist_spacing": 7,
-    "empty_whitespace_and_separator": 7,
-    "independent_fields_counterexample": 14,
-    "packed_numeric_split": 14,
-    "single_field_control": 7,
-    "source_block_line_noncontinuous": 14,
-    "superscript_inline_gap": 7,
-    "vertical_wrapped_witness": 14,
+    "alignment_corridor_veto": 40,
+    "cjk_non_whitelist_spacing": 10,
+    "cjk_whitelist_spacing": 5,
+    "empty_whitespace_and_separator": 6,
+    "independent_fields_counterexample": 10,
+    "packed_numeric_split": 10,
+    "single_field_control": 5,
+    "source_block_line_noncontinuous": 10,
+    "superscript_inline_gap": 5,
+    "vertical_wrapped_witness": 10,
 }
 EXPECTED_FIELD_COUNTS = {
-    "flow/order": 44,
+    "flow/order": 23,
     "font/script": 22,
-    "source continuity": 44,
+    "source continuity": 22,
     "span/run refs": 44,
 }
 EXPECTED_CLASS_COUNTS = {
-    "defect": 16,
-    "requires_adaptation": 28,
-    "unsupported": 110,
+    "defect": 8,
+    "requires_adaptation": 15,
+    "unsupported": 88,
 }
 
 
@@ -293,9 +293,24 @@ def _normalized_atoms(atoms, runs, vector, side):
         else:
             span_refs = _rust_span_refs(run)
             raw_span_refs = list(run["span_refs"])
-            flow_start = None
-            flow_end = None
-            source_continuity = None
+            flow_start = atom.get("flow_start")
+            flow_end = atom.get("flow_end")
+            source_start = run["source_start"]
+            source_end = run["source_end"]
+            if {
+                "source_blocks",
+                "source_line_start",
+                "source_line_end",
+                "source_position_known",
+            } <= atom.keys():
+                source_continuity = {
+                    "known": atom["source_position_known"],
+                    "blocks": list(atom["source_blocks"]),
+                    "line_start": atom["source_line_start"],
+                    "line_end": atom["source_line_end"],
+                }
+            else:
+                source_continuity = None
         normalized.append(
             {
                 "presence": True,
@@ -309,10 +324,14 @@ def _normalized_atoms(atoms, runs, vector, side):
                     "flow_end": flow_end,
                     "order": atom["order"],
                     "source_start": (
-                        min(_source_orders(span_refs)) if side == "python" else None
+                        min(_source_orders(span_refs))
+                        if side == "python"
+                        else source_start
                     ),
                     "source_end": (
-                        max(_source_orders(span_refs)) if side == "python" else None
+                        max(_source_orders(span_refs))
+                        if side == "python"
+                        else source_end
                     ),
                 },
                 "font/script": None,
@@ -932,7 +951,7 @@ def test_complete_ledger_is_locked_by_count_summary_and_digest():
     serialized = json.dumps(
         ledger, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     ).encode("utf-8")
-    assert len(ledger) == 154
+    assert len(ledger) == 111
     assert dict(Counter(item["fixture"] for item in ledger)) == EXPECTED_FIXTURE_COUNTS
     assert dict(Counter(item["field"] for item in ledger)) == EXPECTED_FIELD_COUNTS
     assert dict(Counter(item["classification"] for item in ledger)) == EXPECTED_CLASS_COUNTS
@@ -1030,6 +1049,19 @@ def test_raw_refs_and_source_bounds_are_not_discarded():
     rust_atoms, rust_runs = _rust_atoms(vector, fixture["region"])
     rust_atom = _normalized_atoms(rust_atoms, rust_runs, vector, "rust")[0]
     assert rust_atom["span/run refs"]["run_refs"] == [0]
+    assert rust_atom["flow/order"] == {
+        "flow_start": 1,
+        "flow_end": 1,
+        "order": 1,
+        "source_start": 0,
+        "source_end": 0,
+    }
+    assert rust_atom["source continuity"] == {
+        "known": True,
+        "blocks": [0],
+        "line_start": 0,
+        "line_end": 0,
+    }
 
 
 def test_build_atoms_uses_source_span_refs_not_visual_run_order():
@@ -1066,9 +1098,9 @@ def test_build_atoms_preserves_flow_and_owned_source_evidence():
 
     atoms, _ = _rust_atoms(packed, fixture["region"])
 
-    assert [(atom["flow_start"], atom["flow_end"], atom["run_refs"]) for atom in atoms] == [
-        (1, 1, [0]),
-        (2, 2, [0]),
+    assert [(atom["flow_start"], atom["flow_end"], atom["order"], atom["run_refs"]) for atom in atoms] == [
+        (1, 1, 1, [0]),
+        (2, 2, 2, [0]),
     ]
     assert all(atom["source_blocks"] == [0] for atom in atoms)
     assert all(atom["source_line_start"] == 0 for atom in atoms)
@@ -1108,6 +1140,7 @@ def test_build_atoms_flow_covers_filtered_gap_and_wrapped_chain():
     assert atoms[0]["text"] == "第一行\n第二行\n第三行"
     assert atoms[0]["flow_start"] == 1
     assert atoms[0]["flow_end"] == 3
+    assert atoms[0]["order"] == 1
     assert atoms[0]["run_refs"] == [0, 2, 3]
     assert atoms[0]["source_blocks"] == [0]
     assert atoms[0]["source_line_start"] == 0
@@ -1124,6 +1157,37 @@ def test_build_atoms_keeps_legacy_no_evidence_shape():
         "source_start": 3,
         "source_end": 3,
         "order": 8,
+    }
+
+    atom = rust_adapter.build_atoms([run])[0]
+
+    assert set(atom) == {
+        "schema_version",
+        "text",
+        "rect",
+        "run_refs",
+        "row_hint",
+        "col_hint",
+        "order",
+    }
+
+
+def test_build_atoms_keeps_legacy_evidence_only_shape_without_flow_bundle():
+    run = {
+        "schema_version": 1,
+        "text": "legacy evidence",
+        "rect": {"schema_version": 1, "x0": 10.0, "y0": 10.0, "x1": 80.0, "y1": 20.0},
+        "span_refs": [3],
+        "source_start": 3,
+        "source_end": 3,
+        "order": 8,
+        "evidence": {
+            "schema_version": 1,
+            "source_positions": [{"schema_version": 1, "block": 4, "line": 6}],
+            "fonts": ["SimSun"],
+            "sizes": [10.0],
+            "flags": [0],
+        },
     }
 
     atom = rust_adapter.build_atoms([run])[0]
