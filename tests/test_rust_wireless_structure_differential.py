@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import ast
+from copy import deepcopy
 import json
 from pathlib import Path
 from typing import Any
+
+import pytest
 
 from hexai_pdf_parser import rust_adapter
 from hexai_pdf_parser.core.models import BBox
@@ -31,6 +34,9 @@ from hexai_pdf_parser.tables.wireless_structure.recoverer import _commit_header_
 FIXTURE = Path(__file__).parent / "fixtures/rust_migration/wireless/wireless_structure_differential.json"
 FIELDS = ("presence", "value", "ordering", "grouping", "bbox", "rowspan/colspan", "source-continuity", "diagnostics")
 CLASSIFICATIONS = {"requires_adaptation", "defect", "unsupported"}
+PYTHON_STAGE = "python_prepared_bands_and_native_span_structure"
+RUST_STAGE = "rust_adapter_raw_owned_atoms_and_bands"
+RUST_UNBOUND_STAGE = "rust_no_binding_for_python_band_prune_refine_rescue"
 REQUIRED_FIXTURES = {
     "paired_cjk_artifact_band", "sparse_alignment_artifact_band", "header_only_note_rescue",
     "header_only_leaf_rescue", "near_center_different_physical_rows", "left_shifted_cjk_continuation",
@@ -66,7 +72,7 @@ def _region(case: dict[str, Any]) -> BBox:
     return BBox(*case["region"])
 
 
-def _bands(case: dict[str, Any], atoms: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], float | None]:
+def _owned_bands(case: dict[str, Any], atoms: list[dict[str, Any]]) -> list[dict[str, Any]]:
     bands = [dict(item) for item in case.get("bands", [])]
     if not bands:
         bands = infer_column_bands(atoms, _region(case))
@@ -78,6 +84,15 @@ def _bands(case: dict[str, Any], atoms: list[dict[str, Any]]) -> tuple[list[dict
             atom_index for atom_index, atom in enumerate(atoms)
             if min(atom["bbox"][2], band["x1"]) > max(atom["bbox"][0], band["x0"])
         ])
+    return deepcopy(bands)
+
+
+def _bands(
+    case: dict[str, Any],
+    atoms: list[dict[str, Any]],
+    owned_bands: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], float | None]:
+    bands = deepcopy(owned_bands)
     action = case.get("band_action")
     if action == "paired_cjk":
         bands = prune_paired_cjk_artifact_bands(atoms, bands)
@@ -97,8 +112,10 @@ def _bands(case: dict[str, Any], atoms: list[dict[str, Any]]) -> tuple[list[dict
 
 
 def _python_output(case: dict[str, Any]) -> dict[str, Any]:
-    atoms = _atoms(case)
-    bands, cutoff = _bands(case, atoms)
+    owned_atoms = _atoms(case)
+    owned_bands = _owned_bands(case, owned_atoms)
+    atoms = deepcopy(owned_atoms)
+    bands, cutoff = _bands(case, atoms, owned_bands)
     annotate_columns(atoms, bands, cutoff, _region(case))
     candidates = merge_column_continuations(atoms, bands)
     rows, columns, physical, issues = build_grid(candidates, bands)
@@ -106,13 +123,28 @@ def _python_output(case: dict[str, Any]) -> dict[str, Any]:
     cells = merge_multiline_cells(cells, cutoff)
     logical_rows, logical_columns, logical = build_logical_grid(rows, columns, cells, cutoff)
     logical = _commit_header_spans_or_keep_base(logical, cutoff)
-    empty_slots = _empty_slots(_occupancy(logical, len(logical_rows), len(logical_columns)))
+    empty_slots = _empty_slots(_occupancy(logical, len(logical_rows), len(logical_columns), side="python"))
     logical = materialize_empty_cells(logical_rows, rows, logical_columns, logical, _region(case))
-    occupancy = _occupancy(logical, len(logical_rows), len(logical_columns))
+    occupancy = _occupancy(
+        logical,
+        len(logical_rows),
+        len(logical_columns),
+        side="python",
+        require_full=True,
+    )
+    _validate_normalized_occupancy(
+        logical,
+        occupancy,
+        len(logical_rows),
+        len(logical_columns),
+        side="python",
+    )
     diagnostics = [{"status": "occupancy_conflict", "message": issue} for issue in issues]
     diagnostics.extend(_bounds_diagnostics(logical, _region(case)))
     return {"rows": rows, "bands": bands, "physical_cells": physical, "logical_cells": logical,
-            "empty_slots": empty_slots, "occupancy": occupancy, "diagnostics": diagnostics, "atoms": atoms}
+            "empty_slots": empty_slots, "occupancy": occupancy, "diagnostics": diagnostics,
+            "atoms": atoms, "owned_atoms": owned_atoms, "owned_bands": owned_bands,
+            "stage": PYTHON_STAGE}
 
 
 def _rust_atoms(atoms: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -139,9 +171,13 @@ def _rust_bands(bands: list[dict[str, Any]]) -> list[dict[str, Any]]:
              "parent_leaf_count": band.get("parent_leaf_count")} for index, band in enumerate(bands)]
 
 
-def _rust_output(case: dict[str, Any], python: dict[str, Any]) -> dict[str, Any]:
-    atoms = _rust_atoms(python["atoms"])
-    bands = _rust_bands(python["bands"])
+def _rust_output(
+    case: dict[str, Any],
+    owned_atoms: list[dict[str, Any]],
+    owned_bands: list[dict[str, Any]],
+) -> dict[str, Any]:
+    atoms = _rust_atoms(owned_atoms)
+    bands = _rust_bands(owned_bands)
     rust_rows, rust_columns, physical, grid_diagnostics = rust_adapter.build_grid(atoms, bands)
     x0, y0, x1, y1 = case["region"]
     input_dto = {"schema_version": 1,
@@ -150,20 +186,89 @@ def _rust_output(case: dict[str, Any], python: dict[str, Any]) -> dict[str, Any]
                  "config": {"schema_version": 1, "line_tolerance": 2.0, "row_tolerance": 2.0,
                             "column_tolerance": 2.0, "span_tolerance": 2.0, "numeric_tolerance": 2.0}}
     logical = rust_adapter.recover_native_region(input_dto)
+    occupancy = logical["grid"]["grid"]["occupancy"]
+    rows = len(occupancy)
+    columns = max((len(row) for row in occupancy), default=0)
+    occupancy_validation = _validate_normalized_occupancy(
+        logical["cells"], occupancy, rows, columns, side="rust"
+    )
     return {"rows": rust_rows, "bands": rust_columns, "physical_cells": physical,
             "logical_cells": logical["cells"], "empty_slots": logical["grid"]["empty_slots"],
-            "occupancy": logical["grid"]["grid"]["occupancy"],
-            "diagnostics": [*grid_diagnostics, *logical.get("diagnostics", [])], "atoms": atoms}
+            "occupancy": occupancy,
+            "diagnostics": [
+                *grid_diagnostics,
+                *logical.get("diagnostics", []),
+                *[
+                    {"status": "occupancy_validation", "message": message}
+                    for message in occupancy_validation
+                ],
+            ], "atoms": atoms,
+             "stage": RUST_STAGE, "unbound_stage": RUST_UNBOUND_STAGE}
 
 
-def _occupancy(cells: list[dict[str, Any]], rows: int, columns: int) -> list[list[int | None]]:
+def _cell_bounds(item: dict[str, Any], side: str) -> tuple[int, int, int, int]:
+    if side == "python":
+        row_start = int(item["row_start"])
+        row_end = int(item["row_end"])
+        col_start = int(item["col_start"])
+        col_end = int(item["col_end"])
+    else:
+        row_start = int(item.get("row_start", int(item["row"]) + 1))
+        col_start = int(item.get("col_start", int(item["col"]) + 1))
+        row_end = row_start + int(item.get("rowspan", 1)) - 1
+        col_end = col_start + int(item.get("colspan", 1)) - 1
+    return row_start, row_end, col_start, col_end
+
+
+def _occupancy(
+    cells: list[dict[str, Any]],
+    rows: int,
+    columns: int,
+    *,
+    side: str = "python",
+    require_full: bool = False,
+) -> list[list[int | None]]:
     result: list[list[int | None]] = [[None] * columns for _ in range(rows)]
     for index, cell in enumerate(cells):
-        for row in range(int(cell["row_start"]), int(cell["row_end"]) + 1):
-            for column in range(int(cell["col_start"]), int(cell["col_end"]) + 1):
-                if 1 <= row <= rows and 1 <= column <= columns:
-                    result[row - 1][column - 1] = index
+        row_start, row_end, col_start, col_end = _cell_bounds(cell, side)
+        for row in range(row_start, row_end + 1):
+            for column in range(col_start, col_end + 1):
+                if not (1 <= row <= rows and 1 <= column <= columns):
+                    raise AssertionError(
+                        f"{side} occupancy out of range: cell {index} claims R{row}C{column}"
+                    )
+                if result[row - 1][column - 1] is not None:
+                    previous = result[row - 1][column - 1]
+                    raise AssertionError(
+                        f"{side} occupancy duplicate: R{row}C{column} claimed by {previous} and {index}"
+                    )
+                result[row - 1][column - 1] = index
+    if require_full and any(value is None for row in result for value in row):
+        raise AssertionError(f"{side} occupancy has uncovered logical slots")
     return result
+
+
+def _validate_normalized_occupancy(
+    cells: list[dict[str, Any]],
+    expected: list[list[int | None]],
+    rows: int,
+    columns: int,
+    *,
+    side: str,
+) -> list[str]:
+    try:
+        actual = _occupancy(cells, rows, columns, side=side, require_full=True)
+    except AssertionError as error:
+        if side == "python":
+            raise
+        return [str(error)]
+    assert actual == expected, f"{side} normalized occupancy differs from cell ownership"
+    assert all(
+        owner is not None and 0 <= owner < len(cells)
+        for row in expected
+        for owner in row
+    ), f"{side} normalized occupancy has invalid owner"
+    return []
 
 
 def _empty_slots(occupancy: list[list[int | None]]) -> list[list[int]]:
@@ -229,7 +334,10 @@ def _records(items: list[Any], layer: str, side: str) -> dict[str, dict[str, Any
             identity, value, grouping = ":".join(str(item.get(key, "")) for key in ("status", "path", "field", "message")), item.get("status"), None
         else:
             row, column = _position(item, side)
-            identity, value, grouping = f"C:{row}:{column}:{item.get('text', '')}", str(item.get("text", "")), item.get("source_refs") or item.get("run_refs") or item.get("merged_from", [])
+            source_start = item.get("source_line_start", "?")
+            source_end = item.get("source_line_end", "?")
+            identity = f"C:{row}:{column}:S:{source_start}-{source_end}"
+            value, grouping = str(item.get("text", "")), item.get("source_refs") or item.get("run_refs") or item.get("merged_from", [])
         span = (int(item.get("rowspan", 1)), int(item.get("colspan", 1))) if isinstance(item, dict) and layer in {"physical_cells", "logical_cells"} else None
         record = {"presence": True, "value": value, "ordering": index, "grouping": grouping,
                   "bbox": _rect(item) if isinstance(item, dict) else None, "rowspan/colspan": span,
@@ -247,11 +355,30 @@ def _equal(field: str, left: Any, right: Any) -> bool:
     return left == right
 
 
+def _classification(case: dict[str, Any], key: str) -> str:
+    configured = case.get("classification")
+    if not isinstance(configured, dict) or not configured:
+        raise AssertionError(f"{case['fixture']} has no explicit mismatch classification")
+    classification = configured.get(key, configured.get("*"))
+    if classification not in CLASSIFICATIONS:
+        raise AssertionError(f"{case['fixture']} has no classification for {key}")
+    return classification
+
+
 def _ledger(data: dict[str, Any]) -> list[dict[str, Any]]:
     ledger = []
     for case in sorted(data["cases"], key=lambda item: item["fixture"]):
         python = _python_output(case)
-        rust = _rust_output(case, python)
+        rust = _rust_output(case, python["owned_atoms"], python["owned_bands"])
+        assert rust["unbound_stage"] == RUST_UNBOUND_STAGE
+        for side, output in (("python", python), ("rust", rust)):
+            if side == "python":
+                _occupancy(output["logical_cells"], len(output["occupancy"]), len(output["occupancy"][0]) if output["occupancy"] else 0, side=side, require_full=True)
+            else:
+                _validate_normalized_occupancy(
+                    output["logical_cells"], output["occupancy"],
+                    len(output["occupancy"]), max((len(row) for row in output["occupancy"]), default=0), side=side,
+                )
         for layer in ("rows", "bands", "physical_cells", "logical_cells", "empty_slots", "occupancy", "diagnostics"):
             left_items, right_items = python[layer], rust[layer]
             if layer == "occupancy":
@@ -266,7 +393,8 @@ def _ledger(data: dict[str, Any]) -> list[dict[str, Any]]:
                         continue
                     ledger.append({"fixture": case["fixture"], "layer": layer, "field": field, "identity": identity,
                                    "python_value": python_value, "rust_value": rust_value,
-                                   "classification": case.get("classification", {}).get(f"{layer}.{field}", case.get("default_classification", "requires_adaptation"))})
+                                    "classification": _classification(case, f"{layer}.{field}"),
+                                    "python_stage": python["stage"], "rust_stage": rust["stage"]})
     return sorted(ledger, key=lambda item: (item["fixture"], item["layer"], item["identity"], item["field"]))
 
 
@@ -274,10 +402,29 @@ def test_task_4a_fixture_contract_and_python_expectations():
     data = _load_fixture()
     assert {case["fixture"] for case in data["cases"]} == REQUIRED_FIXTURES
     for case in data["cases"]:
+        assert "classification" in case and "default_classification" not in case
         output = _python_output(case)
         expected = case.get("python_expectations", {})
         if "band_count" in expected:
             assert len(output["bands"]) == expected["band_count"], case["fixture"]
+        if "prepared_bands" in expected:
+            assert [
+                {"x0": band["x0"], "x1": band["x1"], "source_atoms": band.get("source_atoms")}
+                for band in output["bands"]
+            ] == expected["prepared_bands"]
+        if "removed_bands" in expected:
+            raw = {
+                (band["x0"], band["x1"], tuple(band.get("source_atoms", [])))
+                for band in output["owned_bands"]
+            }
+            retained = {
+                (band["x0"], band["x1"], tuple(band.get("source_atoms", [])))
+                for band in output["bands"]
+            }
+            assert sorted(raw - retained) == [
+                (band["x0"], band["x1"], tuple(band["source_atoms"]))
+                for band in expected["removed_bands"]
+            ]
         if "cell_texts" in expected:
             assert set(expected["cell_texts"]) <= {cell["text"] for cell in output["logical_cells"]}
         if "parent_colspan" in expected:
@@ -300,19 +447,89 @@ def test_task_4a_fixture_contract_and_python_expectations():
         if "source_line_span" in expected:
             cell = next(cell for cell in output["logical_cells"] if cell["text"] == expected["cell_text"])
             assert [cell["source_line_start"], cell["source_line_end"]] == expected["source_line_span"]
+        if "cell_position" in expected:
+            cell = next(cell for cell in output["logical_cells"] if cell["text"] == expected["cell_text"])
+            assert [cell["row_start"], cell["col_start"]] == expected["cell_position"]
+        if "source_refs" in expected:
+            cell = next(cell for cell in output["logical_cells"] if cell["text"] == expected["cell_text"])
+            assert cell["span_refs"] == expected["source_refs"]
+
+        assert output["stage"] == PYTHON_STAGE
+        assert output["owned_atoms"] is not output["atoms"]
+        assert output["owned_bands"] is not output["bands"]
 
 
 def test_task_4a_ledger_is_field_level_repeatable_and_classified():
     first = _ledger(_load_fixture())
     second = _ledger(_load_fixture())
     assert first == second and first
-    assert all(set(item) == {"fixture", "layer", "field", "identity", "python_value", "rust_value", "classification"} for item in first)
+    assert all(set(item) == {"fixture", "layer", "field", "identity", "python_value", "rust_value", "classification", "python_stage", "rust_stage"} for item in first)
     assert all(item["field"] in FIELDS and item["classification"] in CLASSIFICATIONS for item in first)
     assert {item["classification"] for item in first} == CLASSIFICATIONS
     assert {item["layer"] for item in first} <= {"rows", "bands", "physical_cells", "logical_cells", "empty_slots", "occupancy", "diagnostics"}
     assert {item["field"] for item in first} == set(FIELDS)
+    assert {item["python_stage"] for item in first} == {PYTHON_STAGE}
+    assert {item["rust_stage"] for item in first} == {RUST_STAGE}
     digest = hashlib.sha256(json.dumps(first, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     assert digest == hashlib.sha256(json.dumps(second, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def test_task_4a_each_fixture_emits_expected_mismatch_category():
+    data = _load_fixture()
+    ledger = _ledger(data)
+    for case in data["cases"]:
+        expected = case.get("expected_mismatches")
+        assert expected, f"{case['fixture']} must declare expected mismatches"
+        actual = {
+            (item["layer"], item["field"], item["classification"])
+            for item in ledger
+            if item["fixture"] == case["fixture"]
+        }
+        for item in expected:
+            assert (
+                item["layer"], item["field"], item["classification"]
+            ) in actual, case["fixture"]
+
+
+def test_task_4a_cell_identity_is_structural_and_text_is_a_value():
+    before = _records(
+        [{"row_start": 1, "row_end": 1, "col_start": 1, "col_end": 1, "text": "before"}],
+        "logical_cells",
+        "python",
+    )
+    after = _records(
+        [{"row_start": 1, "row_end": 1, "col_start": 1, "col_end": 1, "text": "after"}],
+        "logical_cells",
+        "python",
+    )
+    assert set(before) == set(after)
+    identity = next(iter(before))
+    assert before[identity]["value"] != after[identity]["value"]
+
+
+def test_task_4a_occupancy_validator_rejects_duplicate_and_out_of_range_claims():
+    with pytest.raises(AssertionError, match="duplicate"):
+        _occupancy(
+            [
+                {"row_start": 1, "row_end": 1, "col_start": 1, "col_end": 1},
+                {"row_start": 1, "row_end": 1, "col_start": 1, "col_end": 1},
+            ],
+            1,
+            1,
+        )
+    with pytest.raises(AssertionError, match="out of range"):
+        _occupancy(
+            [{"row_start": 1, "row_end": 1, "col_start": 2, "col_end": 2}],
+            1,
+            1,
+        )
+    with pytest.raises(AssertionError, match="uncovered"):
+        _occupancy(
+            [{"row_start": 1, "row_end": 1, "col_start": 1, "col_end": 1}],
+            1,
+            2,
+            require_full=True,
+        )
 
 
 def test_task_4a_harness_never_reads_page_or_words():

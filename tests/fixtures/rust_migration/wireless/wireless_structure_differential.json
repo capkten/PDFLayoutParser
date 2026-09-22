@@ -24,8 +24,19 @@
         {"text": "100", "bbox": [306, 50, 370, 60], "flow_start": 26, "source_line_start": 3},
         {"text": "90", "bbox": [401, 50, 463, 60], "flow_start": 27, "source_line_start": 3}
       ],
-      "python_expectations": {"band_count": 3},
-      "default_classification": "requires_adaptation"
+      "python_expectations": {
+        "band_count": 3,
+        "prepared_bands": [
+          {"x0": 100, "x1": 180.5, "source_atoms": [0, 2, 3, 4]},
+          {"x0": 306, "x1": 370, "source_atoms": [6, 8]},
+          {"x0": 401, "x1": 463, "source_atoms": [7, 9]}
+        ],
+        "removed_bands": [
+          {"x0": 191, "x1": 201.5, "source_atoms": [1, 5]}
+        ]
+      },
+      "classification": {"*": "requires_adaptation"},
+      "expected_mismatches": [{"layer": "bands", "field": "presence", "classification": "requires_adaptation"}]
     },
     {
       "fixture": "sparse_alignment_artifact_band",
@@ -47,8 +58,19 @@
         {"text": "100", "bbox": [300, 70, 340, 80], "flow_start": 20, "source_line_start": 4},
         {"text": "90", "bbox": [400, 70, 440, 80], "flow_start": 21, "source_line_start": 4}
       ],
-      "python_expectations": {"band_count": 3},
-      "default_classification": "requires_adaptation"
+      "python_expectations": {
+        "band_count": 3,
+        "prepared_bands": [
+          {"x0": 100, "x1": 163, "source_atoms": [1, 2]},
+          {"x0": 300, "x1": 340, "source_atoms": [4, 6]},
+          {"x0": 400, "x1": 440, "source_atoms": [5, 7]}
+        ],
+        "removed_bands": [
+          {"x0": 168, "x1": 189, "source_atoms": [0, 3]}
+        ]
+      },
+      "classification": {"*": "requires_adaptation"},
+      "expected_mismatches": [{"layer": "bands", "field": "presence", "classification": "requires_adaptation"}]
     },
     {
       "fixture": "header_only_note_rescue",
@@ -65,8 +87,17 @@
         {"text": "附注五", "bbox": [45, 10, 60, 18], "flow_start": 2},
         {"text": "金额", "bbox": [76, 30, 94, 38], "flow_start": 3}
       ],
-      "python_expectations": {"band_count": 4},
-      "default_classification": "requires_adaptation"
+      "python_expectations": {
+        "band_count": 4,
+        "prepared_bands": [
+          {"x0": 10, "x1": 40, "source_atoms": [0]},
+          {"x0": 45, "x1": 60, "source_atoms": null},
+          {"x0": 70, "x1": 100, "source_atoms": [2]},
+          {"x0": 130, "x1": 160, "source_atoms": []}
+        ]
+      },
+      "classification": {"*": "requires_adaptation"},
+      "expected_mismatches": [{"layer": "bands", "field": "presence", "classification": "requires_adaptation"}]
     },
     {
       "fixture": "header_only_leaf_rescue",
@@ -86,8 +117,18 @@
         {"text": "方法", "bbox": [190, 10, 210, 20], "flow_start": 4},
         {"text": "空列表头", "bbox": [250, 10, 290, 20], "flow_start": 5}
       ],
-      "python_expectations": {"band_count": 5},
-      "default_classification": "requires_adaptation"
+      "python_expectations": {
+        "band_count": 5,
+        "prepared_bands": [
+          {"x0": 10, "x1": 30, "source_atoms": [0]},
+          {"x0": 70, "x1": 90, "source_atoms": [1]},
+          {"x0": 130, "x1": 150, "source_atoms": [2]},
+          {"x0": 190, "x1": 210, "source_atoms": [3]},
+          {"x0": 250, "x1": 290, "source_atoms": null}
+        ]
+      },
+      "classification": {"*": "requires_adaptation"},
+      "expected_mismatches": [{"layer": "bands", "field": "presence", "classification": "requires_adaptation"}]
     },
     {
       "fixture": "near_center_different_physical_rows",
@@ -100,7 +141,8 @@
         {"text": "另值", "bbox": [100, 24, 130, 34], "flow_start": 22}
       ],
       "python_expectations": {"cell_texts": ["上", "下", "值", "另值"]},
-      "default_classification": "defect"
+      "classification": {"*": "defect"},
+      "expected_mismatches": [{"layer": "logical_cells", "field": "presence", "classification": "defect"}]
     },
     {
       "fixture": "left_shifted_cjk_continuation",
@@ -112,8 +154,15 @@
         {"text": "100", "bbox": [120, 10, 150, 20], "flow_start": 3, "source_line_start": 1},
         {"text": "200", "bbox": [120, 30, 150, 40], "flow_start": 4, "source_line_start": 3}
       ],
-      "python_expectations": {"cell_texts": ["一年内到期的非流动资\n产"]},
-      "default_classification": "requires_adaptation"
+      "python_expectations": {
+        "cell_texts": ["一年内到期的非流动资\n产"],
+        "cell_text": "一年内到期的非流动资\n产",
+        "cell_position": [1, 1],
+        "source_line_span": [1, 2],
+        "source_refs": ["S1", "S2"]
+      },
+      "classification": {"*": "requires_adaptation"},
+      "expected_mismatches": [{"layer": "logical_cells", "field": "presence", "classification": "requires_adaptation"}]
     },
     {
       "fixture": "independent_leaf_same_candidate_slot",
@@ -126,8 +175,8 @@
         {"text": "200", "bbox": [70, 30, 110, 40], "flow_start": 4}
       ],
       "python_expectations": {"cell_texts": ["年初数", "年末数"]},
-      "classification": {"logical_cells.grouping": "unsupported"},
-      "default_classification": "defect"
+      "classification": {"*": "defect", "logical_cells.grouping": "unsupported"},
+      "expected_mismatches": [{"layer": "logical_cells", "field": "grouping", "classification": "unsupported"}]
     },
     {
       "fixture": "complete_two_leaf_parent",
@@ -144,7 +193,8 @@
         {"text": "2", "bbox": [130, 55, 170, 65], "flow_start": 7}
       ],
       "python_expectations": {"parent_text": "本期变动", "parent_colspan": 2},
-      "default_classification": "requires_adaptation"
+      "classification": {"*": "requires_adaptation"},
+      "expected_mismatches": [{"layer": "logical_cells", "field": "grouping", "classification": "requires_adaptation"}]
     },
     {
       "fixture": "incomplete_two_leaf_parent",
@@ -159,8 +209,8 @@
         {"text": "1", "bbox": [70, 55, 110, 65], "flow_start": 5}
       ],
       "python_expectations": {"parent_text": "不完整父\n数量", "parent_colspan": 1},
-      "classification": {"diagnostics.diagnostics": "unsupported"},
-      "default_classification": "defect"
+      "classification": {"*": "defect", "diagnostics.diagnostics": "unsupported"},
+      "expected_mismatches": [{"layer": "logical_cells", "field": "presence", "classification": "defect"}]
     },
     {
       "fixture": "rowspan_empty_coverage",
@@ -175,7 +225,8 @@
         {"text": "100", "bbox": [100, 50, 140, 60], "flow_start": 5}
       ],
       "python_expectations": {"parent_text": "收入\n支出", "parent_rowspan": 2, "empty_slot": [1, 1], "empty_cell": [1, 1]},
-      "default_classification": "requires_adaptation"
+      "classification": {"*": "requires_adaptation"},
+      "expected_mismatches": [{"layer": "logical_cells", "field": "rowspan/colspan", "classification": "requires_adaptation"}]
     },
     {
       "fixture": "rowspan_nonempty_title_rejected",
@@ -189,7 +240,8 @@
         {"text": "100", "bbox": [100, 50, 140, 60], "flow_start": 5}
       ],
       "python_expectations": {"parent_text": "项目", "parent_rowspan": 1},
-      "default_classification": "defect"
+      "classification": {"*": "defect"},
+      "expected_mismatches": [{"layer": "logical_cells", "field": "rowspan/colspan", "classification": "defect"}]
     },
     {
       "fixture": "occupancy_conflict",
@@ -200,7 +252,8 @@
         {"text": "乙", "bbox": [10, 10, 60, 20], "flow_start": 2, "source_line_start": 3}
       ],
       "python_expectations": {"has_occupancy_conflict": true},
-      "default_classification": "defect"
+      "classification": {"*": "defect"},
+      "expected_mismatches": [{"layer": "diagnostics", "field": "presence", "classification": "defect"}]
     },
     {
       "fixture": "out_of_bounds",
@@ -211,7 +264,8 @@
         {"text": "仍在", "bbox": [90, 30, 110, 40], "flow_start": 2}
       ],
       "python_expectations": {"has_out_of_bounds": true},
-      "default_classification": "defect"
+      "classification": {"*": "defect"},
+      "expected_mismatches": [{"layer": "diagnostics", "field": "presence", "classification": "defect"}]
     },
     {
       "fixture": "empty_slot",
@@ -224,7 +278,8 @@
         {"text": "100", "bbox": [100, 50, 140, 60], "flow_start": 4}
       ],
       "python_expectations": {"empty_slot": [1, 1], "empty_cell": [1, 1]},
-      "default_classification": "requires_adaptation"
+      "classification": {"*": "requires_adaptation"},
+      "expected_mismatches": [{"layer": "logical_cells", "field": "grouping", "classification": "requires_adaptation"}]
     }
   ]
 }
