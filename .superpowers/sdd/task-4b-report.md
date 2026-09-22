@@ -49,4 +49,4 @@ paired-CJK 与 sparse-alignment 的 bands presence mismatch 已消除，fixture 
 
 Task 4B 不宣称页面级 JSON/PNG parity。Rust DTO 当前缺少 Python 的 font-size/source-line/block 证据，本 slice 使用现有 order/run_refs 与几何连续性；完整 logical header span、rowspan/colspan、empty-slot materialization 和页面级检查仍是后续边界。
 
-提交 hash：待提交后回填。
+实现提交 hash：`1737a79`（`feat(rust): migrate wireless column refinement`）。报告与实现文件已随该提交纳入；后续仅有本报告回填提交。
