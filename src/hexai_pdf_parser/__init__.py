@@ -124,6 +124,8 @@ from hexai_pdf_parser.extractors.page_classifier import (
 from hexai_pdf_parser.tables.table_extractor import (
     TableExtractor,
     extract_table_from_region,
+    extract_table_html_from_region,
+    table_to_html,
 )
 from hexai_pdf_parser.tables.extractors import (
     ChineseTableExtractor,
@@ -188,6 +190,8 @@ __all__ = [
     "TextExtractor",
     "TableExtractor",
     "extract_table_from_region",
+    "extract_table_html_from_region",
+    "table_to_html",
     "EnglishTableExtractor",
     "ChineseTableExtractor",
     "ImageExtractor",
