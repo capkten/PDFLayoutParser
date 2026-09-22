@@ -1,0 +1,230 @@
+{
+  "schema_version": 1,
+  "description": "Task 4A owned atom/band/region differential vectors",
+  "cases": [
+    {
+      "fixture": "paired_cjk_artifact_band",
+      "region": [90, 0, 470, 110],
+      "band_action": "paired_cjk",
+      "bands": [
+        {"x0": 100, "x1": 180.5, "id": 1, "support": 8, "y_support": 5},
+        {"x0": 191, "x1": 201.5, "id": 2, "support": 2, "y_support": 2},
+        {"x0": 306, "x1": 370, "id": 3, "support": 5, "y_support": 5},
+        {"x0": 401, "x1": 463, "id": 4, "support": 5, "y_support": 5}
+      ],
+      "atoms": [
+        {"text": "项", "bbox": [170, 10, 180.5, 20], "flow_start": 1, "source_line_start": 1},
+        {"text": "目", "bbox": [191, 10, 201.5, 20], "flow_start": 2, "source_line_start": 1},
+        {"text": "职工薪酬", "bbox": [100, 30, 142, 40], "flow_start": 3, "source_line_start": 2},
+        {"text": "办公费", "bbox": [100, 50, 132, 60], "flow_start": 6, "source_line_start": 3},
+        {"text": "合", "bbox": [170, 90, 180.5, 100], "flow_start": 12, "source_line_start": 5},
+        {"text": "计", "bbox": [191, 90, 201.5, 100], "flow_start": 13, "source_line_start": 5},
+        {"text": "100", "bbox": [306, 10, 370, 20], "flow_start": 20, "source_line_start": 1},
+        {"text": "90", "bbox": [401, 10, 463, 20], "flow_start": 21, "source_line_start": 1},
+        {"text": "100", "bbox": [306, 50, 370, 60], "flow_start": 26, "source_line_start": 3},
+        {"text": "90", "bbox": [401, 50, 463, 60], "flow_start": 27, "source_line_start": 3}
+      ],
+      "python_expectations": {"band_count": 3},
+      "default_classification": "requires_adaptation"
+    },
+    {
+      "fixture": "sparse_alignment_artifact_band",
+      "region": [90, 0, 470, 90],
+      "band_action": "sparse_alignment",
+      "bands": [
+        {"x0": 100, "x1": 163, "id": 1, "support": 4, "y_support": 4},
+        {"x0": 168, "x1": 189, "id": 2, "support": 2, "y_support": 2},
+        {"x0": 300, "x1": 340, "id": 3, "support": 4, "y_support": 4},
+        {"x0": 400, "x1": 440, "id": 4, "support": 4, "y_support": 4}
+      ],
+      "atoms": [
+        {"text": "项目", "bbox": [168, 10, 189, 20], "flow_start": 1, "source_line_start": 1},
+        {"text": "正文一", "bbox": [100, 30, 142, 40], "flow_start": 2, "source_line_start": 2},
+        {"text": "正文二", "bbox": [100, 50, 163, 60], "flow_start": 3, "source_line_start": 3},
+        {"text": "合计", "bbox": [168, 70, 189, 80], "flow_start": 4, "source_line_start": 4},
+        {"text": "100", "bbox": [300, 10, 340, 20], "flow_start": 10, "source_line_start": 1},
+        {"text": "90", "bbox": [400, 10, 440, 20], "flow_start": 11, "source_line_start": 1},
+        {"text": "100", "bbox": [300, 70, 340, 80], "flow_start": 20, "source_line_start": 4},
+        {"text": "90", "bbox": [400, 70, 440, 80], "flow_start": 21, "source_line_start": 4}
+      ],
+      "python_expectations": {"band_count": 3},
+      "default_classification": "requires_adaptation"
+    },
+    {
+      "fixture": "header_only_note_rescue",
+      "region": [0, 0, 180, 80],
+      "band_action": "header_note",
+      "header_cutoff": 25,
+      "bands": [
+        {"x0": 10, "x1": 40, "id": 1, "support": 5, "y_support": 5},
+        {"x0": 70, "x1": 100, "id": 2, "support": 5, "y_support": 5},
+        {"x0": 130, "x1": 160, "id": 3, "support": 5, "y_support": 5}
+      ],
+      "atoms": [
+        {"text": "项目", "bbox": [16, 10, 34, 18], "flow_start": 1},
+        {"text": "附注五", "bbox": [45, 10, 60, 18], "flow_start": 2},
+        {"text": "金额", "bbox": [76, 30, 94, 38], "flow_start": 3}
+      ],
+      "python_expectations": {"band_count": 4},
+      "default_classification": "requires_adaptation"
+    },
+    {
+      "fixture": "header_only_leaf_rescue",
+      "region": [0, 0, 330, 80],
+      "band_action": "header_leaf",
+      "header_cutoff": 25,
+      "bands": [
+        {"x0": 10, "x1": 30, "id": 1, "support": 6, "y_support": 6},
+        {"x0": 70, "x1": 90, "id": 2, "support": 6, "y_support": 6},
+        {"x0": 130, "x1": 150, "id": 3, "support": 6, "y_support": 6},
+        {"x0": 190, "x1": 210, "id": 4, "support": 6, "y_support": 6}
+      ],
+      "atoms": [
+        {"text": "类别", "bbox": [10, 10, 30, 20], "flow_start": 1},
+        {"text": "寿命", "bbox": [70, 10, 90, 20], "flow_start": 2},
+        {"text": "依据", "bbox": [130, 10, 150, 20], "flow_start": 3},
+        {"text": "方法", "bbox": [190, 10, 210, 20], "flow_start": 4},
+        {"text": "空列表头", "bbox": [250, 10, 290, 20], "flow_start": 5}
+      ],
+      "python_expectations": {"band_count": 5},
+      "default_classification": "requires_adaptation"
+    },
+    {
+      "fixture": "near_center_different_physical_rows",
+      "region": [0, 0, 160, 80],
+      "bands": [{"x0": 10, "x1": 40, "id": 1, "support": 3, "y_support": 3}, {"x0": 100, "x1": 130, "id": 2, "support": 3, "y_support": 3}],
+      "atoms": [
+        {"text": "上", "bbox": [10, 10, 40, 20], "flow_start": 1},
+        {"text": "下", "bbox": [10, 24, 40, 34], "flow_start": 20},
+        {"text": "值", "bbox": [100, 10, 130, 20], "flow_start": 3},
+        {"text": "另值", "bbox": [100, 24, 130, 34], "flow_start": 22}
+      ],
+      "python_expectations": {"cell_texts": ["上", "下", "值", "另值"]},
+      "default_classification": "defect"
+    },
+    {
+      "fixture": "left_shifted_cjk_continuation",
+      "region": [0, 0, 180, 80],
+      "bands": [{"x0": 20, "x1": 100, "id": 1, "support": 2, "y_support": 2}, {"x0": 120, "x1": 150, "id": 2, "support": 2, "y_support": 2}],
+      "atoms": [
+        {"text": "一年内到期的非流动资", "bbox": [20, 10, 100, 20], "flow_start": 1, "source_line_start": 1},
+        {"text": "产", "bbox": [10, 22, 20, 32], "flow_start": 2, "source_line_start": 2},
+        {"text": "100", "bbox": [120, 10, 150, 20], "flow_start": 3, "source_line_start": 1},
+        {"text": "200", "bbox": [120, 30, 150, 40], "flow_start": 4, "source_line_start": 3}
+      ],
+      "python_expectations": {"cell_texts": ["一年内到期的非流动资\n产"]},
+      "default_classification": "requires_adaptation"
+    },
+    {
+      "fixture": "independent_leaf_same_candidate_slot",
+      "region": [0, 0, 180, 80],
+      "bands": [{"x0": 10, "x1": 60, "id": 1, "support": 2, "y_support": 2}, {"x0": 70, "x1": 120, "id": 2, "support": 2, "y_support": 2}],
+      "atoms": [
+        {"text": "年初数", "bbox": [10, 10, 60, 20], "flow_start": 1},
+        {"text": "年末数", "bbox": [70, 10, 120, 20], "flow_start": 2},
+        {"text": "100", "bbox": [10, 30, 50, 40], "flow_start": 3},
+        {"text": "200", "bbox": [70, 30, 110, 40], "flow_start": 4}
+      ],
+      "python_expectations": {"cell_texts": ["年初数", "年末数"]},
+      "classification": {"logical_cells.grouping": "unsupported"},
+      "default_classification": "defect"
+    },
+    {
+      "fixture": "complete_two_leaf_parent",
+      "region": [0, 0, 240, 80],
+      "header_cutoff": 45,
+      "bands": [{"x0": 10, "x1": 60, "id": 1}, {"x0": 70, "x1": 120, "id": 2}, {"x0": 130, "x1": 180, "id": 3}],
+      "atoms": [
+        {"text": "项目", "bbox": [10, 10, 50, 20], "flow_start": 1},
+        {"text": "本期变动", "bbox": [70, 10, 180, 20], "flow_start": 2},
+        {"text": "数量", "bbox": [70, 30, 110, 40], "flow_start": 3},
+        {"text": "金额", "bbox": [130, 30, 170, 40], "flow_start": 4},
+        {"text": "收入", "bbox": [10, 55, 50, 65], "flow_start": 5},
+        {"text": "1", "bbox": [70, 55, 110, 65], "flow_start": 6},
+        {"text": "2", "bbox": [130, 55, 170, 65], "flow_start": 7}
+      ],
+      "python_expectations": {"parent_text": "本期变动", "parent_colspan": 2},
+      "default_classification": "requires_adaptation"
+    },
+    {
+      "fixture": "incomplete_two_leaf_parent",
+      "region": [0, 0, 240, 80],
+      "header_cutoff": 45,
+      "bands": [{"x0": 10, "x1": 60, "id": 1}, {"x0": 70, "x1": 120, "id": 2}, {"x0": 130, "x1": 180, "id": 3}],
+      "atoms": [
+        {"text": "项目", "bbox": [10, 10, 50, 20], "flow_start": 1},
+        {"text": "不完整父", "bbox": [70, 10, 120, 20], "flow_start": 2},
+        {"text": "数量", "bbox": [70, 30, 110, 40], "flow_start": 3},
+        {"text": "收入", "bbox": [10, 55, 50, 65], "flow_start": 4},
+        {"text": "1", "bbox": [70, 55, 110, 65], "flow_start": 5}
+      ],
+      "python_expectations": {"parent_text": "不完整父\n数量", "parent_colspan": 1},
+      "classification": {"diagnostics.diagnostics": "unsupported"},
+      "default_classification": "defect"
+    },
+    {
+      "fixture": "rowspan_empty_coverage",
+      "region": [0, 0, 180, 90],
+      "header_cutoff": 45,
+      "bands": [{"x0": 10, "x1": 60, "id": 1, "support": 3, "y_support": 3}, {"x0": 100, "x1": 140, "id": 2, "support": 3, "y_support": 3}],
+      "atoms": [
+        {"text": "项目", "bbox": [10, 10, 60, 20], "flow_start": 1},
+        {"text": "金额", "bbox": [100, 10, 140, 20], "flow_start": 2},
+        {"text": "收入", "bbox": [10, 30, 60, 40], "flow_start": 3},
+        {"text": "支出", "bbox": [10, 50, 60, 60], "flow_start": 4},
+        {"text": "100", "bbox": [100, 50, 140, 60], "flow_start": 5}
+      ],
+      "python_expectations": {"parent_text": "收入\n支出", "parent_rowspan": 2, "empty_slot": [1, 1], "empty_cell": [1, 1]},
+      "default_classification": "requires_adaptation"
+    },
+    {
+      "fixture": "rowspan_nonempty_title_rejected",
+      "region": [0, 0, 180, 90],
+      "bands": [{"x0": 10, "x1": 60, "id": 1, "support": 3, "y_support": 3}, {"x0": 100, "x1": 140, "id": 2, "support": 3, "y_support": 3}],
+      "atoms": [
+        {"text": "项目", "bbox": [10, 10, 60, 20], "flow_start": 1},
+        {"text": "金额", "bbox": [100, 10, 140, 20], "flow_start": 2},
+        {"text": "非空标题", "bbox": [10, 30, 60, 40], "flow_start": 3},
+        {"text": "收入", "bbox": [10, 50, 60, 60], "flow_start": 4},
+        {"text": "100", "bbox": [100, 50, 140, 60], "flow_start": 5}
+      ],
+      "python_expectations": {"parent_text": "项目", "parent_rowspan": 1},
+      "default_classification": "defect"
+    },
+    {
+      "fixture": "occupancy_conflict",
+      "region": [0, 0, 140, 60],
+      "bands": [{"x0": 10, "x1": 60, "id": 1, "support": 2, "y_support": 2}],
+      "atoms": [
+        {"text": "甲", "bbox": [10, 10, 60, 20], "flow_start": 1, "source_line_start": 1},
+        {"text": "乙", "bbox": [10, 10, 60, 20], "flow_start": 2, "source_line_start": 3}
+      ],
+      "python_expectations": {"has_occupancy_conflict": true},
+      "default_classification": "defect"
+    },
+    {
+      "fixture": "out_of_bounds",
+      "region": [0, 0, 100, 60],
+      "bands": [{"x0": 90, "x1": 110, "id": 1, "support": 2, "y_support": 2}],
+      "atoms": [
+        {"text": "越界", "bbox": [90, 10, 110, 20], "flow_start": 1},
+        {"text": "仍在", "bbox": [90, 30, 110, 40], "flow_start": 2}
+      ],
+      "python_expectations": {"has_out_of_bounds": true},
+      "default_classification": "defect"
+    },
+    {
+      "fixture": "empty_slot",
+      "region": [0, 0, 180, 80],
+      "bands": [{"x0": 10, "x1": 50, "id": 1, "support": 2, "y_support": 2}, {"x0": 100, "x1": 140, "id": 2, "support": 2, "y_support": 2}],
+      "atoms": [
+        {"text": "项目", "bbox": [10, 10, 50, 20], "flow_start": 1},
+        {"text": "金额", "bbox": [100, 10, 140, 20], "flow_start": 2},
+        {"text": "收入", "bbox": [10, 30, 50, 40], "flow_start": 3},
+        {"text": "100", "bbox": [100, 50, 140, 60], "flow_start": 4}
+      ],
+      "python_expectations": {"empty_slot": [1, 1], "empty_cell": [1, 1]},
+      "default_classification": "requires_adaptation"
+    }
+  ]
+}
