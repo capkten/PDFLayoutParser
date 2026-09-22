@@ -35,7 +35,8 @@ FIXTURE = Path(__file__).parent / "fixtures/rust_migration/wireless/wireless_str
 FIELDS = ("presence", "value", "ordering", "grouping", "bbox", "rowspan/colspan", "source-continuity", "source-reference", "diagnostics")
 CLASSIFICATIONS = {"requires_adaptation", "defect", "unsupported"}
 PYTHON_STAGE = "python_prepared_bands_and_native_span_structure"
-RUST_STAGE = "rust_adapter_raw_owned_atoms_and_bands"
+RUST_RAW_STAGE = "rust_adapter_raw_owned_atoms_and_bands"
+RUST_STAGE = "rust_prepared_bands_and_native_span_structure"
 RUST_UNBOUND_STAGE = "rust_no_binding_for_python_band_prune_refine_rescue"
 REQUIRED_FIXTURES = {
     "paired_cjk_artifact_band", "sparse_alignment_artifact_band", "header_only_note_rescue",
@@ -177,7 +178,8 @@ def _rust_output(
     owned_bands: list[dict[str, Any]],
 ) -> dict[str, Any]:
     atoms = _rust_atoms(owned_atoms)
-    bands = _rust_bands(owned_bands)
+    raw_bands = _rust_bands(owned_bands)
+    bands, _ = rust_adapter.refine_leaf_bands(atoms, raw_bands)
     rust_rows, rust_columns, physical, grid_diagnostics = rust_adapter.build_grid(atoms, bands)
     x0, y0, x1, y1 = case["region"]
     input_dto = {"schema_version": 1,
@@ -196,8 +198,10 @@ def _rust_output(
             "logical_cells": logical["cells"], "empty_slots": logical["grid"]["empty_slots"],
             "occupancy": occupancy,
             "diagnostics": [*grid_diagnostics, *logical.get("diagnostics", [])],
-            "atoms": atoms, "normalization_contract": normalization_contract,
-             "stage": RUST_STAGE, "unbound_stage": RUST_UNBOUND_STAGE}
+            "atoms": atoms, "raw_bands": raw_bands,
+            "normalization_contract": normalization_contract,
+             "stage": RUST_STAGE, "raw_stage": RUST_RAW_STAGE,
+             "unbound_stage": RUST_UNBOUND_STAGE}
 
 
 def _cell_bounds(item: dict[str, Any], side: str) -> tuple[int, int, int, int]:

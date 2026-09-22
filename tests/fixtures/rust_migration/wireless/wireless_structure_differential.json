@@ -36,13 +36,10 @@
         ]
       },
       "classification": {"bands.presence": "requires_adaptation"},
-      "expected_mismatches": [{"layer": "bands", "field": "presence", "classification": "requires_adaptation"}],
+      "expected_mismatches": [{"layer": "diagnostics", "field": "presence", "classification": "requires_adaptation"}],
       "allowed_additional_mismatches": [
-        {"layer": "bands", "fields": ["bbox", "diagnostics", "grouping", "ordering", "rowspan/colspan", "source-continuity", "source-reference", "value"], "classification": "requires_adaptation"},
         {"layer": "diagnostics", "fields": ["bbox", "diagnostics", "grouping", "ordering", "presence", "rowspan/colspan", "source-continuity", "source-reference", "value"], "classification": "requires_adaptation"},
-        {"layer": "empty_slots", "fields": ["bbox", "diagnostics", "grouping", "ordering", "presence", "rowspan/colspan", "source-continuity", "source-reference", "value"], "classification": "requires_adaptation"},
         {"layer": "logical_cells", "fields": ["bbox", "diagnostics", "grouping", "ordering", "presence", "rowspan/colspan", "source-continuity", "source-reference", "value"], "classification": "requires_adaptation"},
-        {"layer": "occupancy", "fields": ["bbox", "diagnostics", "grouping", "ordering", "presence", "rowspan/colspan", "source-continuity", "source-reference", "value"], "classification": "requires_adaptation"},
         {"layer": "physical_cells", "fields": ["bbox", "diagnostics", "grouping", "ordering", "presence", "rowspan/colspan", "source-continuity", "source-reference", "value"], "classification": "requires_adaptation"},
         {"layer": "rows", "fields": ["grouping", "source-reference", "value"], "classification": "requires_adaptation"}
       ]
@@ -79,9 +76,8 @@
         ]
       },
       "classification": {"bands.presence": "requires_adaptation"},
-      "expected_mismatches": [{"layer": "bands", "field": "presence", "classification": "requires_adaptation"}],
+      "expected_mismatches": [{"layer": "empty_slots", "field": "bbox", "classification": "requires_adaptation"}],
       "allowed_additional_mismatches": [
-        {"layer": "bands", "fields": ["bbox", "diagnostics", "grouping", "ordering", "rowspan/colspan", "source-continuity", "source-reference", "value"], "classification": "requires_adaptation"},
         {"layer": "empty_slots", "fields": ["bbox", "diagnostics", "grouping", "ordering", "presence", "rowspan/colspan", "source-continuity", "source-reference", "value"], "classification": "requires_adaptation"},
         {"layer": "logical_cells", "fields": ["bbox", "diagnostics", "grouping", "ordering", "presence", "rowspan/colspan", "source-continuity", "source-reference", "value"], "classification": "requires_adaptation"},
         {"layer": "occupancy", "fields": ["bbox", "diagnostics", "grouping", "ordering", "presence", "rowspan/colspan", "source-continuity", "source-reference", "value"], "classification": "requires_adaptation"},

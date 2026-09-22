@@ -42,3 +42,9 @@ $env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'
 3. Task 4D：迁移 logical row/header-span transaction 与 empty-slot materialization。
 
 每个 bounded slice 都必须先 RED、再 GREEN，并由独立 `gpt-5.6-luna` reviewer 给出 Spec Compliance 与 Task quality 结论。默认 Python route、shadow route 和 fallback policy 保持不变。
+
+## Task 4B 完成记录（2026-09-22）
+
+Task 4B 已接入 Rust owned atom/band 的列带准备：paired-CJK 与 sparse-alignment 伪列裁剪、正文数值轨道和最低表头子列 refine、header cutoff、稀疏正文 rescue，以及保守的 header-only rescue。`recover_native_region` 先执行 prepared-band 阶段，再进入既有 grid/occupancy 流程；默认 Python route、shadow route、Snapshot capture 和 fallback policy 未改动。
+
+TDD RED：新增 `test_refine_leaf_bands_splits_independent_body_tracks` 在旧 stub 上失败，输出 `left: 1, right: 2`。GREEN：focused Rust module suite `22 passed`；focused differential/columns/header suite `72 passed`。paired-CJK 与 sparse-alignment 的 bands presence mismatch 已消除，其余未迁移逻辑差异继续按 `requires_adaptation`、`defect`、`unsupported` ledger 分类保留。Task 4B 不宣称页面级 JSON/PNG parity。

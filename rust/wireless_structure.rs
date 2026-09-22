@@ -432,13 +432,6 @@ pub fn infer_column_bands(atoms: Vec<AtomDto>, region: Rect4) -> Vec<ColumnBandD
         .collect()
 }
 
-pub fn refine_leaf_bands(
-    _atoms: Vec<AtomDto>,
-    bands: Vec<ColumnBandDto>,
-) -> (Vec<ColumnBandDto>, Option<f64>) {
-    (bands, None)
-}
-
 pub fn build_grid(
     atoms: Vec<AtomDto>,
     bands: Vec<ColumnBandDto>,
@@ -1150,6 +1143,364 @@ fn infer_header_cutoff(atoms: &[AtomDto]) -> Option<f64> {
     Some((levels[index] + levels[index + 1]) / 2.0)
 }
 
+fn sorted_bands(mut bands: Vec<ColumnBandDto>) -> Vec<ColumnBandDto> {
+    bands.sort_by(|left, right| {
+        left.x0
+            .partial_cmp(&right.x0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| left.x1.partial_cmp(&right.x1).unwrap_or(std::cmp::Ordering::Equal))
+    });
+    for (order, band) in bands.iter_mut().enumerate() {
+        band.order = order as i64;
+    }
+    bands
+}
+
+fn is_cjk_only(text: &str) -> bool {
+    let mut seen = false;
+    for character in text.trim().chars() {
+        seen = true;
+        if !(('\u{3400}'..='\u{4dbf}').contains(&character)
+            || ('\u{4e00}'..='\u{9fff}').contains(&character)
+            || ('\u{f900}'..='\u{faff}').contains(&character))
+        {
+            return false;
+        }
+    }
+    seen
+}
+
+fn atom_band_overlap(atom: &AtomDto, band: &ColumnBandDto) -> f64 {
+    (atom.rect.x1.min(band.x1) - atom.rect.x0.max(band.x0)).max(0.0)
+}
+
+fn atom_in_band(atom: &AtomDto, band: &ColumnBandDto) -> bool {
+    let center = center_x(&atom.rect);
+    center >= band.x0 && center <= band.x1
+}
+
+fn levels_for_refs(atoms: &[&AtomDto]) -> Vec<f64> {
+    let mut centers: Vec<f64> = atoms.iter().map(|atom| center_y(&atom.rect)).collect();
+    centers.sort_by(|left, right| left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal));
+    let mut levels: Vec<f64> = Vec::new();
+    for center in centers {
+        if let Some(last) = levels.last_mut() {
+            if (center - *last).abs() <= 2.4 {
+                *last = (*last + center) / 2.0;
+                continue;
+            }
+        }
+        levels.push(center);
+    }
+    levels
+}
+
+fn connected_components(atoms: &[&AtomDto]) -> Vec<Vec<usize>> {
+    let mut components = Vec::new();
+    let mut used = vec![false; atoms.len()];
+    for start in 0..atoms.len() {
+        if used[start] {
+            continue;
+        }
+        used[start] = true;
+        let mut component = vec![start];
+        let mut cursor = 0;
+        while cursor < component.len() {
+            let current = component[cursor];
+            for candidate in 0..atoms.len() {
+                if used[candidate] {
+                    continue;
+                }
+                let left = atoms[current];
+                let right = atoms[candidate];
+                let narrow = (left.rect.x1 - left.rect.x0)
+                    .min(right.rect.x1 - right.rect.x0)
+                    .max(1.0);
+                if horizontal_overlap(&left.rect, &right.rect) >= 2.0_f64.max(narrow * 0.25) {
+                    used[candidate] = true;
+                    component.push(candidate);
+                }
+            }
+            cursor += 1;
+        }
+        components.push(component);
+    }
+    components
+}
+
+fn band_from_refs(atoms: &[&AtomDto], component: &[usize]) -> Option<ColumnBandDto> {
+    let x0 = component
+        .iter()
+        .map(|index| atoms[*index].rect.x0)
+        .fold(f64::INFINITY, f64::min);
+    let x1 = component
+        .iter()
+        .map(|index| atoms[*index].rect.x1)
+        .fold(f64::NEG_INFINITY, f64::max);
+    (x0 < x1).then_some(ColumnBandDto {
+        schema_version: 1,
+        x0,
+        x1,
+        source_atoms: Vec::new(),
+        order: 0,
+    })
+}
+
+fn prune_paired_cjk_artifact_bands(
+    atoms: &[AtomDto],
+    bands: Vec<ColumnBandDto>,
+) -> Vec<ColumnBandDto> {
+    let ordered = sorted_bands(bands);
+    let mut removed = vec![false; ordered.len()];
+    for index in 1..ordered.len() {
+        let members: Vec<&AtomDto> = atoms.iter().filter(|atom| atom_in_band(atom, &ordered[index])).collect();
+        let left: Vec<&AtomDto> = atoms.iter().filter(|atom| atom_in_band(atom, &ordered[index - 1])).collect();
+        if !(2..=3).contains(&members.len())
+            || members.iter().any(|atom| !is_cjk_only(&atom.text))
+            || left.len() < members.len() * 2
+            || levels_for_refs(&members).len() < 2
+            || levels_for_refs(&left).len() < 3
+        {
+            continue;
+        }
+        let valid = members.iter().all(|member| {
+            let predecessors: Vec<&AtomDto> = atoms.iter().filter(|candidate| {
+                candidate.order + 1 == member.order
+                    && is_cjk_only(&candidate.text)
+                    && (center_y(&candidate.rect) - center_y(&member.rect)).abs() <= 2.4
+                    && member.rect.x0 >= candidate.rect.x1
+                    && member.rect.x0 - candidate.rect.x1
+                        <= rect_height(&candidate.rect).min(rect_height(&member.rect)) * 2.1
+            }).collect();
+            predecessors.len() == 1 && atom_in_band(predecessors[0], &ordered[index - 1])
+        });
+        if valid {
+            removed[index] = true;
+        }
+    }
+    sorted_bands(ordered.into_iter().enumerate().filter_map(|(index, band)| {
+        (!removed[index]).then_some(band)
+    }).collect())
+}
+
+fn prune_sparse_alignment_artifact_bands(
+    atoms: &[AtomDto],
+    bands: Vec<ColumnBandDto>,
+) -> Vec<ColumnBandDto> {
+    let ordered = sorted_bands(bands);
+    if ordered.len() < 3 {
+        return ordered;
+    }
+    let members = |band: &ColumnBandDto| -> Vec<&AtomDto> {
+        atoms.iter().filter(|atom| atom_in_band(atom, band)).collect()
+    };
+    let left = members(&ordered[0]);
+    let candidate = members(&ordered[1]);
+    let right = members(&ordered[2]);
+    let candidate_levels = levels_for_refs(&candidate);
+    let left_levels = levels_for_refs(&left);
+    let right_levels = levels_for_refs(&right);
+    if !(2..=3).contains(&candidate_levels.len())
+        || left_levels.len() < candidate_levels.len()
+        || right_levels.len() < candidate_levels.len()
+        || candidate.is_empty()
+        || candidate_levels.iter().any(|level| {
+            left_levels.iter().any(|left_level| (level - left_level).abs() <= 2.4)
+        })
+    {
+        return ordered;
+    }
+    let size = median_positive(candidate.iter().map(|atom| rect_height(&atom.rect)), 10.0);
+    let inner_gap = (ordered[1].x0 - ordered[0].x1).max(0.0);
+    let next_gap = (ordered[2].x0 - ordered[1].x1).max(0.0);
+    if inner_gap > size * 0.6 || next_gap < (inner_gap * 3.0).max(size * 2.5) {
+        return ordered;
+    }
+    sorted_bands(ordered.into_iter().enumerate().filter_map(|(index, band)| {
+        (index != 1).then_some(band)
+    }).collect())
+}
+
+fn split_header_children(atoms: &[AtomDto], band: &ColumnBandDto, cutoff: f64) -> Vec<ColumnBandDto> {
+    let header: Vec<&AtomDto> = atoms.iter().filter(|atom| {
+        center_y(&atom.rect) <= cutoff && atom_band_overlap(atom, band) > 0.0
+    }).collect();
+    for level in levels_for_refs(&header).into_iter().rev() {
+        let row: Vec<&AtomDto> = header.iter().copied().filter(|atom| {
+            (center_y(&atom.rect) - level).abs() <= 2.4
+        }).collect();
+        let components = connected_components(&row);
+        if components.len() < 2 {
+            continue;
+        }
+        let centers: Vec<f64> = components.iter().map(|component| {
+            let x0 = component.iter().map(|index| row[*index].rect.x0).fold(f64::INFINITY, f64::min);
+            let x1 = component.iter().map(|index| row[*index].rect.x1).fold(f64::NEG_INFINITY, f64::max);
+            (x0 + x1) / 2.0
+        }).collect();
+        if centers.windows(2).any(|pair| pair[1] - pair[0] < 6.0) {
+            continue;
+        }
+        let splits: Vec<f64> = centers.windows(2).map(|pair| (pair[0] + pair[1]) / 2.0).collect();
+        if atoms.iter().any(|atom| center_y(&atom.rect) > cutoff && splits.iter().any(|split| {
+            atom.rect.x0 < *split - 3.0 && atom.rect.x1 > *split + 3.0
+        })) {
+            continue;
+        }
+        let mut children = Vec::new();
+        for index in 0..centers.len() {
+            children.push(ColumnBandDto {
+                schema_version: 1,
+                x0: if index == 0 { band.x0 } else { splits[index - 1] },
+                x1: if index + 1 == centers.len() { band.x1 } else { splits[index] },
+                source_atoms: Vec::new(),
+                order: 0,
+            });
+        }
+        return children;
+    }
+    Vec::new()
+}
+
+fn split_numeric_body(atoms: &[AtomDto], band: &ColumnBandDto, cutoff: f64) -> Vec<ColumnBandDto> {
+    let members: Vec<&AtomDto> = atoms.iter().filter(|atom| {
+        center_y(&atom.rect) > cutoff
+            && atom.rect.x0 >= band.x0 - 1.0
+            && atom.rect.x1 <= band.x1 + 1.0
+            && is_numeric_body_atom_text(&atom.text)
+    }).collect();
+    let mut children = Vec::new();
+    for component in connected_components(&members) {
+        let component_atoms: Vec<&AtomDto> = component.iter().map(|index| members[*index]).collect();
+        if levels_for_refs(&component_atoms).len() >= 2 {
+            if let Some(child) = band_from_refs(&members, &component) {
+                children.push(child);
+            }
+        }
+    }
+    if children.len() < 2 {
+        return Vec::new();
+    }
+    children.sort_by(|left, right| {
+        left.x0
+            .partial_cmp(&right.x0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let centers: Vec<f64> = children.iter().map(|child| (child.x0 + child.x1) / 2.0).collect();
+    let splits: Vec<f64> = centers.windows(2).map(|pair| (pair[0] + pair[1]) / 2.0).collect();
+    let child_count = children.len();
+    for (index, child) in children.iter_mut().enumerate() {
+        child.x0 = if index == 0 { band.x0 } else { splits[index - 1] };
+        child.x1 = if index + 1 == child_count { band.x1 } else { splits[index] };
+    }
+    children
+}
+
+fn rescue_sparse_body_bands(
+    atoms: &[AtomDto],
+    bands: Vec<ColumnBandDto>,
+    cutoff: Option<f64>,
+) -> Vec<ColumnBandDto> {
+    let mut rescued = sorted_bands(bands);
+    let mut additions = Vec::new();
+    for atom in atoms.iter().filter(|atom| {
+        cutoff.map_or(true, |value| center_y(&atom.rect) > value)
+    }) {
+        if is_dash_placeholder(&atom.text)
+            || rescued.iter().any(|band| atom_band_overlap(atom, band) > 0.0)
+        {
+            continue;
+        }
+        let center = center_x(&atom.rect);
+        let left = rescued.iter().filter(|band| band.x1 < center).last();
+        let right = rescued.iter().find(|band| band.x0 > center);
+        let (Some(left), Some(right)) = (left, right) else {
+            continue;
+        };
+        let row_mates: Vec<&AtomDto> = atoms
+            .iter()
+            .filter(|candidate| {
+                (center_y(&candidate.rect) - center_y(&atom.rect)).abs() <= 2.4
+            })
+            .collect();
+        let left_mates: Vec<&AtomDto> = row_mates
+            .iter()
+            .copied()
+            .filter(|candidate| atom_band_overlap(candidate, left) > 0.0)
+            .collect();
+        let right_mates: Vec<&AtomDto> = row_mates
+            .iter()
+            .copied()
+            .filter(|candidate| atom_band_overlap(candidate, right) > 0.0)
+            .collect();
+        if left_mates.is_empty() || right_mates.is_empty() {
+            continue;
+        }
+        let left_gap = atom.rect.x0
+            - left_mates
+                .iter()
+                .map(|item| item.rect.x1)
+                .fold(f64::NEG_INFINITY, f64::max);
+        let right_gap = right_mates
+            .iter()
+            .map(|item| item.rect.x0)
+            .fold(f64::INFINITY, f64::min)
+            - atom.rect.x1;
+        let height = rect_height(&atom.rect)
+            .max(left_mates.iter().map(|item| rect_height(&item.rect)).fold(0.0, f64::max))
+            .max(right_mates.iter().map(|item| rect_height(&item.rect)).fold(0.0, f64::max));
+        if left_gap >= 8.0_f64.max(height * 1.25)
+            && right_gap >= 8.0_f64.max(height * 1.25)
+        {
+            additions.push(ColumnBandDto {
+                schema_version: 1,
+                x0: atom.rect.x0,
+                x1: atom.rect.x1,
+                source_atoms: atom.run_refs.clone(),
+                order: 0,
+            });
+        }
+    }
+    rescued.extend(additions);
+    sorted_bands(rescued)
+}
+
+pub fn refine_leaf_bands(
+    atoms: Vec<AtomDto>,
+    bands: Vec<ColumnBandDto>,
+) -> (Vec<ColumnBandDto>, Option<f64>) {
+    let bands = prune_paired_cjk_artifact_bands(&atoms, bands);
+    let bands = prune_sparse_alignment_artifact_bands(&atoms, bands);
+    let cutoff = infer_header_cutoff(&atoms);
+    let Some(cutoff) = cutoff else {
+        return (bands, None);
+    };
+    let mut refined = Vec::new();
+    for (band_index, band) in bands.iter().enumerate() {
+        if bands.iter().enumerate().any(|(other_index, other)| {
+            other_index != band_index
+                && other.x0 < band.x1
+                && band.x0 < other.x1
+        }) {
+            refined.push(band.clone());
+            continue;
+        }
+        let children = split_numeric_body(&atoms, band, cutoff);
+        if children.len() >= 2 {
+            refined.extend(children);
+            continue;
+        }
+        let children = split_header_children(&atoms, band, cutoff);
+        if children.len() >= 2 {
+            refined.extend(children);
+        } else {
+            refined.push(band.clone());
+        }
+    }
+    let refined = rescue_sparse_body_bands(&atoms, refined, Some(cutoff));
+    (sorted_bands(refined), Some(cutoff))
+}
+
 fn rescue_header_only_bands(atoms: &[AtomDto], bands: Vec<ColumnBandDto>) -> Vec<ColumnBandDto> {
     let Some(header_cutoff) = infer_header_cutoff(atoms) else {
         return bands;
@@ -1220,6 +1571,49 @@ fn rescue_header_only_bands(atoms: &[AtomDto], bands: Vec<ColumnBandDto>) -> Vec
             source_atoms: vec![atom.order],
             order: 0,
         });
+    }
+
+    let stable_covered = stable.iter().all(|band| {
+        atoms.iter().any(|atom| {
+            center_y(&atom.rect) <= header_cutoff && atom_band_overlap(atom, band) > 0.0
+        })
+    });
+    if stable_covered {
+        let existing = rescued.clone();
+        for atom in atoms.iter().filter(|atom| center_y(&atom.rect) <= header_cutoff) {
+            if is_note_reference(&atom.text)
+                || is_structural_header_text(&atom.text)
+                || atom.rect.x1 <= atom.rect.x0
+                || existing.iter().any(|band| atom_band_overlap(atom, band) > 0.0)
+            {
+                continue;
+            }
+            let left_gap = existing
+                .iter()
+                .filter(|band| band.x1 <= atom.rect.x0)
+                .map(|band| atom.rect.x0 - band.x1)
+                .fold(f64::INFINITY, f64::min);
+            let right_gap = existing
+                .iter()
+                .filter(|band| band.x0 >= atom.rect.x1)
+                .map(|band| band.x0 - atom.rect.x1)
+                .fold(f64::INFINITY, f64::min);
+            let minimum_gap = 8.0_f64.max(rect_height(&atom.rect) * 1.25);
+            if (left_gap.is_finite() && right_gap.is_finite()
+                && left_gap >= minimum_gap
+                && right_gap >= minimum_gap)
+                || (atom.rect.x0 >= existing.last().map(|band| band.x1).unwrap_or(atom.rect.x0)
+                    && left_gap >= minimum_gap)
+            {
+                rescued.push(ColumnBandDto {
+                    schema_version: 1,
+                    x0: atom.rect.x0,
+                    x1: atom.rect.x1,
+                    source_atoms: atom.run_refs.clone(),
+                    order: 0,
+                });
+            }
+        }
     }
 
     rescued.sort_by(|left, right| {
@@ -2449,6 +2843,7 @@ pub fn recover_native_region(input: NativeRegionInput) -> NativeRegionOutput {
     } else {
         input.bands
     };
+    let (bands, _) = refine_leaf_bands(input.atoms.clone(), bands);
     let bands = rescue_header_only_bands(&input.atoms, bands);
 
     let (rows, bands, mut phys_cells, mut diags) = build_grid(input.atoms.clone(), bands);
@@ -4006,5 +4401,32 @@ mod tests {
         let cutoff = infer_header_cutoff(&atoms).expect("header cutoff");
 
         assert!((cutoff - 139.0).abs() < 0.01, "cutoff={cutoff}");
+    }
+
+    #[test]
+    fn test_refine_leaf_bands_splits_independent_body_tracks() {
+        let atoms = vec![
+            make_atom("股权比例", 25.0, 10.0, 75.0, 20.0, 1),
+            make_atom("直接", 15.0, 30.0, 35.0, 40.0, 2),
+            make_atom("间接", 65.0, 30.0, 85.0, 40.0, 3),
+            make_atom("60", 15.0, 60.0, 35.0, 70.0, 4),
+            make_atom("40", 65.0, 60.0, 85.0, 70.0, 5),
+            make_atom("70", 15.0, 80.0, 35.0, 90.0, 6),
+            make_atom("30", 65.0, 80.0, 85.0, 90.0, 7),
+        ];
+        let bands = vec![ColumnBandDto {
+            schema_version: 1,
+            x0: 10.0,
+            x1: 90.0,
+            source_atoms: Vec::new(),
+            order: 0,
+        }];
+
+        let (refined, cutoff) = refine_leaf_bands(atoms, bands);
+
+        assert_eq!(refined.len(), 2);
+        assert_eq!((refined[0].x0, refined[0].x1), (10.0, 50.0));
+        assert_eq!((refined[1].x0, refined[1].x1), (50.0, 90.0));
+        assert!(cutoff.is_some());
     }
 }
