@@ -34,3 +34,27 @@ def test_setup_py_declares_typing_extensions_for_python_37():
     content = setup_file.read_text(encoding="utf-8")
     assert "typing_extensions" in content
     assert "python_version<'3.8'" in content
+
+
+def test_pyproject_declares_typing_extensions_for_python_37():
+    """The PEP 517 build metadata must install the Python 3.7 typing shim."""
+    from pathlib import Path
+
+    pyproject_file = Path(__file__).resolve().parents[1] / "pyproject.toml"
+    content = pyproject_file.read_text(encoding="utf-8")
+    assert '"typing_extensions>=3.7.4; python_version < \'3.8\'"' in content
+
+
+def test_text_extractor_defers_modern_annotations_for_python_37():
+    """Modules using PEP 585/604 annotations must defer their evaluation."""
+    from pathlib import Path
+
+    source_file = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "hexai_pdf_parser"
+        / "extractors"
+        / "text_extractor.py"
+    )
+    source = source_file.read_text(encoding="utf-8")
+    assert "from __future__ import annotations" in source

@@ -4,6 +4,8 @@ Extracts a hierarchical text structure (blocks -> lines -> words -> chars)
 from a PyMuPDF ``fitz.Page``.
 """
 
+from __future__ import annotations
+
 from statistics import median
 from typing import Dict, List, Tuple
 
