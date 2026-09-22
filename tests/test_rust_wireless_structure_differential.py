@@ -32,7 +32,7 @@ from hexai_pdf_parser.tables.wireless_structure.merged_cells import merge_multil
 from hexai_pdf_parser.tables.wireless_structure.recoverer import _commit_header_spans_or_keep_base
 
 FIXTURE = Path(__file__).parent / "fixtures/rust_migration/wireless/wireless_structure_differential.json"
-FIELDS = ("presence", "value", "ordering", "grouping", "bbox", "rowspan/colspan", "source-continuity", "diagnostics")
+FIELDS = ("presence", "value", "ordering", "grouping", "bbox", "rowspan/colspan", "source-continuity", "source-reference", "diagnostics")
 CLASSIFICATIONS = {"requires_adaptation", "defect", "unsupported"}
 PYTHON_STAGE = "python_prepared_bands_and_native_span_structure"
 RUST_STAGE = "rust_adapter_raw_owned_atoms_and_bands"
@@ -132,7 +132,7 @@ def _python_output(case: dict[str, Any]) -> dict[str, Any]:
         side="python",
         require_full=True,
     )
-    _validate_normalized_occupancy(
+    normalization_contract = _validate_normalized_occupancy(
         logical,
         occupancy,
         len(logical_rows),
@@ -144,7 +144,7 @@ def _python_output(case: dict[str, Any]) -> dict[str, Any]:
     return {"rows": rows, "bands": bands, "physical_cells": physical, "logical_cells": logical,
             "empty_slots": empty_slots, "occupancy": occupancy, "diagnostics": diagnostics,
             "atoms": atoms, "owned_atoms": owned_atoms, "owned_bands": owned_bands,
-            "stage": PYTHON_STAGE}
+            "stage": PYTHON_STAGE, "normalization_contract": normalization_contract}
 
 
 def _rust_atoms(atoms: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -189,20 +189,14 @@ def _rust_output(
     occupancy = logical["grid"]["grid"]["occupancy"]
     rows = len(occupancy)
     columns = max((len(row) for row in occupancy), default=0)
-    occupancy_validation = _validate_normalized_occupancy(
+    normalization_contract = _validate_normalized_occupancy(
         logical["cells"], occupancy, rows, columns, side="rust"
     )
     return {"rows": rust_rows, "bands": rust_columns, "physical_cells": physical,
             "logical_cells": logical["cells"], "empty_slots": logical["grid"]["empty_slots"],
             "occupancy": occupancy,
-            "diagnostics": [
-                *grid_diagnostics,
-                *logical.get("diagnostics", []),
-                *[
-                    {"status": "occupancy_validation", "message": message}
-                    for message in occupancy_validation
-                ],
-            ], "atoms": atoms,
+            "diagnostics": [*grid_diagnostics, *logical.get("diagnostics", [])],
+            "atoms": atoms, "normalization_contract": normalization_contract,
              "stage": RUST_STAGE, "unbound_stage": RUST_UNBOUND_STAGE}
 
 
@@ -255,20 +249,29 @@ def _validate_normalized_occupancy(
     columns: int,
     *,
     side: str,
-) -> list[str]:
+) -> dict[str, Any]:
+    def rejected(message: str) -> dict[str, Any]:
+        return {
+            "status": "rejected",
+            "contract": "normalized_output_occupancy",
+            "issues": [message],
+        }
+
     try:
         actual = _occupancy(cells, rows, columns, side=side, require_full=True)
     except AssertionError as error:
         if side == "python":
             raise
-        return [str(error)]
-    assert actual == expected, f"{side} normalized occupancy differs from cell ownership"
-    assert all(
+        return rejected(str(error))
+    if actual != expected:
+        return rejected(f"{side} normalized occupancy differs from cell ownership")
+    if not all(
         owner is not None and 0 <= owner < len(cells)
         for row in expected
         for owner in row
-    ), f"{side} normalized occupancy has invalid owner"
-    return []
+    ):
+        return rejected(f"{side} normalized occupancy has invalid owner")
+    return {"status": "accepted", "contract": "normalized_output_occupancy", "issues": []}
 
 
 def _empty_slots(occupancy: list[list[int | None]]) -> list[list[int]]:
@@ -313,6 +316,21 @@ def _source_continuity(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _source_reference(item: Any, layer: str) -> dict[str, list[Any]] | None:
+    if not isinstance(item, dict) or layer in {"empty_slots", "occupancy", "diagnostics"}:
+        return None
+    source = item.get("source") if isinstance(item.get("source"), dict) else {}
+    if layer == "bands":
+        refs = list(item.get("source_atoms", []))
+        return {"source_refs": refs, "span_refs": refs}
+    if layer == "rows":
+        refs = list(item.get("source_rows", item.get("item_indices", [])))
+        return {"source_refs": refs, "span_refs": refs}
+    span_refs = item.get("span_refs") or source.get("span_refs") or source.get("source_refs") or []
+    source_refs = item.get("source_refs") or source.get("source_refs") or item.get("run_refs") or span_refs
+    return {"source_refs": list(source_refs), "span_refs": list(span_refs or source_refs)}
+
+
 def _records(items: list[Any], layer: str, side: str) -> dict[str, dict[str, Any]]:
     result = {}
     duplicate_counts: dict[str, int] = {}
@@ -342,6 +360,7 @@ def _records(items: list[Any], layer: str, side: str) -> dict[str, dict[str, Any
         record = {"presence": True, "value": value, "ordering": index, "grouping": grouping,
                   "bbox": _rect(item) if isinstance(item, dict) else None, "rowspan/colspan": span,
                   "source-continuity": _source_continuity(item) if isinstance(item, dict) else None,
+                  "source-reference": _source_reference(item, layer),
                   "diagnostics": item.get("diagnostics", []) if isinstance(item, dict) else []}
         ordinal = duplicate_counts.get(identity, 0)
         duplicate_counts[identity] = ordinal + 1
@@ -359,7 +378,18 @@ def _classification(case: dict[str, Any], key: str) -> str:
     configured = case.get("classification")
     if not isinstance(configured, dict) or not configured:
         raise AssertionError(f"{case['fixture']} has no explicit mismatch classification")
-    classification = configured.get(key, configured.get("*"))
+    if "*" in configured:
+        raise AssertionError(f"{case['fixture']} uses wildcard mismatch classification")
+    classification = configured.get(key)
+    if classification is None:
+        entries = [*case.get("expected_mismatches", []), *case.get("allowed_additional_mismatches", [])]
+        for entry in entries:
+            fields = entry.get("fields", [entry.get("field")])
+            if key == f"{entry.get('layer')}.{entry.get('field')}" or any(
+                key == f"{entry.get('layer')}.{field}" for field in fields
+            ):
+                classification = entry.get("classification")
+                break
     if classification not in CLASSIFICATIONS:
         raise AssertionError(f"{case['fixture']} has no classification for {key}")
     return classification
@@ -375,10 +405,16 @@ def _ledger(data: dict[str, Any]) -> list[dict[str, Any]]:
             if side == "python":
                 _occupancy(output["logical_cells"], len(output["occupancy"]), len(output["occupancy"][0]) if output["occupancy"] else 0, side=side, require_full=True)
             else:
-                _validate_normalized_occupancy(
-                    output["logical_cells"], output["occupancy"],
-                    len(output["occupancy"]), max((len(row) for row in output["occupancy"]), default=0), side=side,
-                )
+                assert output["normalization_contract"]["status"] in {"accepted", "rejected"}
+        if rust["normalization_contract"]["status"] == "rejected":
+            ledger.append({
+                "fixture": case["fixture"], "layer": "normalized_output", "field": "contract",
+                "identity": "normalized_output_occupancy",
+                "python_value": python["normalization_contract"],
+                "rust_value": rust["normalization_contract"],
+                "classification": _classification(case, "normalized_output.contract"),
+                "python_stage": python["stage"], "rust_stage": rust["stage"],
+            })
         for layer in ("rows", "bands", "physical_cells", "logical_cells", "empty_slots", "occupancy", "diagnostics"):
             left_items, right_items = python[layer], rust[layer]
             if layer == "occupancy":
@@ -464,10 +500,15 @@ def test_task_4a_ledger_is_field_level_repeatable_and_classified():
     second = _ledger(_load_fixture())
     assert first == second and first
     assert all(set(item) == {"fixture", "layer", "field", "identity", "python_value", "rust_value", "classification", "python_stage", "rust_stage"} for item in first)
-    assert all(item["field"] in FIELDS and item["classification"] in CLASSIFICATIONS for item in first)
+    assert all(
+        (item["field"] in FIELDS or (item["layer"] == "normalized_output" and item["field"] == "contract"))
+        and item["classification"] in CLASSIFICATIONS
+        for item in first
+    )
     assert {item["classification"] for item in first} == CLASSIFICATIONS
-    assert {item["layer"] for item in first} <= {"rows", "bands", "physical_cells", "logical_cells", "empty_slots", "occupancy", "diagnostics"}
-    assert {item["field"] for item in first} == set(FIELDS)
+    assert {item["layer"] for item in first} <= {"rows", "bands", "physical_cells", "logical_cells", "empty_slots", "occupancy", "diagnostics", "normalized_output"}
+    assert {item["field"] for item in first if item["layer"] != "normalized_output"} == set(FIELDS)
+    assert all(item["field"] == "contract" for item in first if item["layer"] == "normalized_output")
     assert {item["python_stage"] for item in first} == {PYTHON_STAGE}
     assert {item["rust_stage"] for item in first} == {RUST_STAGE}
     digest = hashlib.sha256(json.dumps(first, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
@@ -479,16 +520,68 @@ def test_task_4a_each_fixture_emits_expected_mismatch_category():
     ledger = _ledger(data)
     for case in data["cases"]:
         expected = case.get("expected_mismatches")
+        allowed = case.get("allowed_additional_mismatches", [])
         assert expected, f"{case['fixture']} must declare expected mismatches"
+        assert "*" not in case.get("classification", {}), case["fixture"]
+        expected_keys = {
+            (item["layer"], item["field"], item["classification"])
+            for item in expected
+        }
+        allowed_keys = {
+            (item["layer"], field, item["classification"])
+            for item in allowed
+            for field in item.get("fields", [item.get("field")])
+        }
         actual = {
             (item["layer"], item["field"], item["classification"])
             for item in ledger
             if item["fixture"] == case["fixture"]
         }
-        for item in expected:
-            assert (
-                item["layer"], item["field"], item["classification"]
-            ) in actual, case["fixture"]
+        assert actual == expected_keys | allowed_keys, case["fixture"]
+
+
+def test_task_4a_source_reference_is_explicit_and_normalized():
+    records = _records(
+        [{"text": "甲", "row_start": 1, "row_end": 1, "col_start": 1, "col_end": 1,
+          "span_refs": ["S1", "S2"], "source_line_start": 3, "source_line_end": 4}],
+        "logical_cells",
+        "python",
+    )
+    record = next(iter(records.values()))
+    assert "source-reference" in FIELDS
+    assert record["source-reference"] == {
+        "source_refs": ["S1", "S2"],
+        "span_refs": ["S1", "S2"],
+    }
+
+
+@pytest.mark.parametrize(
+    ("cells", "expected", "rows", "columns"),
+    [
+        (
+            [{"row": 0, "col": 0, "rowspan": 1, "colspan": 1},
+             {"row": 0, "col": 0, "rowspan": 1, "colspan": 1}],
+            [[0]], 1, 1,
+        ),
+        (
+            [{"row": 0, "col": 1, "rowspan": 1, "colspan": 1}],
+            [[0]], 1, 1,
+        ),
+        ([], [[None]], 1, 1),
+    ],
+    ids=["duplicate", "out_of_range", "uncovered"],
+)
+def test_task_4a_rust_normalized_output_rejection_is_structured(cells, expected, rows, columns):
+    result = _validate_normalized_occupancy(
+        cells,
+        expected,
+        rows,
+        columns,
+        side="rust",
+    )
+    assert result["status"] == "rejected"
+    assert result["contract"] == "normalized_output_occupancy"
+    assert result["issues"]
 
 
 def test_task_4a_cell_identity_is_structural_and_text_is_a_value():

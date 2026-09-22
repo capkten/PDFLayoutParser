@@ -35,8 +35,17 @@
           {"x0": 191, "x1": 201.5, "source_atoms": [1, 5]}
         ]
       },
-      "classification": {"*": "requires_adaptation"},
-      "expected_mismatches": [{"layer": "bands", "field": "presence", "classification": "requires_adaptation"}]
+      "classification": {"bands.presence": "requires_adaptation"},
+      "expected_mismatches": [{"layer": "bands", "field": "presence", "classification": "requires_adaptation"}],
+      "allowed_additional_mismatches": [
+        {"layer": "bands", "fields": ["bbox", "diagnostics", "grouping", "ordering", "rowspan/colspan", "source-continuity", "source-reference", "value"], "classification": "requires_adaptation"},
+        {"layer": "diagnostics", "fields": ["bbox", "diagnostics", "grouping", "ordering", "presence", "rowspan/colspan", "source-continuity", "source-reference", "value"], "classification": "requires_adaptation"},
+        {"layer": "empty_slots", "fields": ["bbox", "diagnostics", "grouping", "ordering", "presence", "rowspan/colspan", "source-continuity", "source-reference", "value"], "classification": "requires_adaptation"},
+        {"layer": "logical_cells", "fields": ["bbox", "diagnostics", "grouping", "ordering", "presence", "rowspan/colspan", "source-continuity", "source-reference", "value"], "classification": "requires_adaptation"},
+        {"layer": "occupancy", "fields": ["bbox", "diagnostics", "grouping", "ordering", "presence", "rowspan/colspan", "source-continuity", "source-reference", "value"], "classification": "requires_adaptation"},
+        {"layer": "physical_cells", "fields": ["bbox", "diagnostics", "grouping", "ordering", "presence", "rowspan/colspan", "source-continuity", "source-reference", "value"], "classification": "requires_adaptation"},
+        {"layer": "rows", "fields": ["grouping", "source-reference", "value"], "classification": "requires_adaptation"}
+      ]
     },
     {
       "fixture": "sparse_alignment_artifact_band",
@@ -69,8 +78,16 @@
           {"x0": 168, "x1": 189, "source_atoms": [0, 3]}
         ]
       },
-      "classification": {"*": "requires_adaptation"},
-      "expected_mismatches": [{"layer": "bands", "field": "presence", "classification": "requires_adaptation"}]
+      "classification": {"bands.presence": "requires_adaptation"},
+      "expected_mismatches": [{"layer": "bands", "field": "presence", "classification": "requires_adaptation"}],
+      "allowed_additional_mismatches": [
+        {"layer": "bands", "fields": ["bbox", "diagnostics", "grouping", "ordering", "rowspan/colspan", "source-continuity", "source-reference", "value"], "classification": "requires_adaptation"},
+        {"layer": "empty_slots", "fields": ["bbox", "diagnostics", "grouping", "ordering", "presence", "rowspan/colspan", "source-continuity", "source-reference", "value"], "classification": "requires_adaptation"},
+        {"layer": "logical_cells", "fields": ["bbox", "diagnostics", "grouping", "ordering", "presence", "rowspan/colspan", "source-continuity", "source-reference", "value"], "classification": "requires_adaptation"},
+        {"layer": "occupancy", "fields": ["bbox", "diagnostics", "grouping", "ordering", "presence", "rowspan/colspan", "source-continuity", "source-reference", "value"], "classification": "requires_adaptation"},
+        {"layer": "physical_cells", "fields": ["bbox", "diagnostics", "grouping", "ordering", "presence", "rowspan/colspan", "source-continuity", "source-reference", "value"], "classification": "requires_adaptation"},
+        {"layer": "rows", "fields": ["grouping", "source-reference", "value"], "classification": "requires_adaptation"}
+      ]
     },
     {
       "fixture": "header_only_note_rescue",
@@ -96,8 +113,18 @@
           {"x0": 130, "x1": 160, "source_atoms": []}
         ]
       },
-      "classification": {"*": "requires_adaptation"},
-      "expected_mismatches": [{"layer": "bands", "field": "presence", "classification": "requires_adaptation"}]
+      "classification": {"bands.presence": "requires_adaptation"},
+      "expected_mismatches": [{"layer": "bands", "field": "presence", "classification": "requires_adaptation"}],
+      "allowed_additional_mismatches": [
+        {"layer": "bands", "fields": ["bbox", "diagnostics", "grouping", "ordering", "rowspan/colspan", "source-continuity", "source-reference", "value"], "classification": "requires_adaptation"},
+        {"layer": "diagnostics", "fields": ["bbox", "diagnostics", "grouping", "ordering", "presence", "rowspan/colspan", "source-continuity", "source-reference", "value"], "classification": "requires_adaptation"},
+        {"layer": "empty_slots", "fields": ["bbox", "diagnostics", "grouping", "ordering", "presence", "rowspan/colspan", "source-continuity", "source-reference", "value"], "classification": "requires_adaptation"},
+        {"layer": "logical_cells", "fields": ["bbox", "diagnostics", "grouping", "ordering", "presence", "rowspan/colspan", "source-continuity", "source-reference", "value"], "classification": "requires_adaptation"},
+        {"layer": "normalized_output", "fields": ["contract"], "classification": "requires_adaptation"},
+        {"layer": "occupancy", "fields": ["bbox", "diagnostics", "grouping", "ordering", "presence", "rowspan/colspan", "source-continuity", "source-reference", "value"], "classification": "requires_adaptation"},
+        {"layer": "physical_cells", "fields": ["bbox", "diagnostics", "grouping", "ordering", "presence", "rowspan/colspan", "source-continuity", "source-reference", "value"], "classification": "requires_adaptation"},
+        {"layer": "rows", "fields": ["grouping", "source-reference", "value"], "classification": "requires_adaptation"}
+      ]
     },
     {
       "fixture": "header_only_leaf_rescue",
@@ -127,8 +154,17 @@
           {"x0": 250, "x1": 290, "source_atoms": null}
         ]
       },
-      "classification": {"*": "requires_adaptation"},
-      "expected_mismatches": [{"layer": "bands", "field": "presence", "classification": "requires_adaptation"}]
+      "classification": {"bands.presence": "requires_adaptation"},
+      "expected_mismatches": [{"layer": "bands", "field": "presence", "classification": "requires_adaptation"}],
+      "allowed_additional_mismatches": [
+        {"layer": "bands", "fields": ["bbox", "diagnostics", "grouping", "ordering", "rowspan/colspan", "source-continuity", "source-reference", "value"], "classification": "requires_adaptation"},
+        {"layer": "diagnostics", "fields": ["bbox", "diagnostics", "grouping", "ordering", "presence", "rowspan/colspan", "source-continuity", "source-reference", "value"], "classification": "requires_adaptation"},
+        {"layer": "logical_cells", "fields": ["bbox", "diagnostics", "grouping", "ordering", "presence", "rowspan/colspan", "source-continuity", "source-reference", "value"], "classification": "requires_adaptation"},
+        {"layer": "normalized_output", "fields": ["contract"], "classification": "requires_adaptation"},
+        {"layer": "occupancy", "fields": ["bbox", "diagnostics", "grouping", "ordering", "presence", "rowspan/colspan", "source-continuity", "source-reference", "value"], "classification": "requires_adaptation"},
+        {"layer": "physical_cells", "fields": ["bbox", "diagnostics", "grouping", "ordering", "presence", "rowspan/colspan", "source-continuity", "source-reference", "value"], "classification": "requires_adaptation"},
+        {"layer": "rows", "fields": ["grouping", "source-reference", "value"], "classification": "requires_adaptation"}
+      ]
     },
     {
       "fixture": "near_center_different_physical_rows",
@@ -141,8 +177,14 @@
         {"text": "另值", "bbox": [100, 24, 130, 34], "flow_start": 22}
       ],
       "python_expectations": {"cell_texts": ["上", "下", "值", "另值"]},
-      "classification": {"*": "defect"},
-      "expected_mismatches": [{"layer": "logical_cells", "field": "presence", "classification": "defect"}]
+      "classification": {"logical_cells.presence": "defect"},
+      "expected_mismatches": [{"layer": "logical_cells", "field": "presence", "classification": "defect"}],
+      "allowed_additional_mismatches": [
+        {"layer": "logical_cells", "fields": ["bbox", "diagnostics", "grouping", "ordering", "rowspan/colspan", "source-continuity", "source-reference", "value"], "classification": "defect"},
+        {"layer": "occupancy", "fields": ["grouping", "value"], "classification": "defect"},
+        {"layer": "physical_cells", "fields": ["bbox", "diagnostics", "grouping", "ordering", "presence", "rowspan/colspan", "source-continuity", "source-reference", "value"], "classification": "defect"},
+        {"layer": "rows", "fields": ["grouping", "source-reference", "value"], "classification": "defect"}
+      ]
     },
     {
       "fixture": "left_shifted_cjk_continuation",
@@ -161,8 +203,15 @@
         "source_line_span": [1, 2],
         "source_refs": ["S1", "S2"]
       },
-      "classification": {"*": "requires_adaptation"},
-      "expected_mismatches": [{"layer": "logical_cells", "field": "presence", "classification": "requires_adaptation"}]
+      "classification": {"logical_cells.presence": "requires_adaptation"},
+      "expected_mismatches": [{"layer": "logical_cells", "field": "presence", "classification": "requires_adaptation"}],
+      "allowed_additional_mismatches": [
+        {"layer": "empty_slots", "fields": ["bbox", "diagnostics", "grouping", "ordering", "presence", "rowspan/colspan", "source-continuity", "source-reference", "value"], "classification": "requires_adaptation"},
+        {"layer": "logical_cells", "fields": ["bbox", "diagnostics", "grouping", "ordering", "rowspan/colspan", "source-continuity", "source-reference", "value"], "classification": "requires_adaptation"},
+        {"layer": "occupancy", "fields": ["bbox", "diagnostics", "grouping", "ordering", "presence", "rowspan/colspan", "source-continuity", "source-reference", "value"], "classification": "requires_adaptation"},
+        {"layer": "physical_cells", "fields": ["bbox", "diagnostics", "grouping", "ordering", "presence", "rowspan/colspan", "source-continuity", "source-reference", "value"], "classification": "requires_adaptation"},
+        {"layer": "rows", "fields": ["grouping", "source-reference", "value"], "classification": "requires_adaptation"}
+      ]
     },
     {
       "fixture": "independent_leaf_same_candidate_slot",
@@ -175,8 +224,13 @@
         {"text": "200", "bbox": [70, 30, 110, 40], "flow_start": 4}
       ],
       "python_expectations": {"cell_texts": ["年初数", "年末数"]},
-      "classification": {"*": "defect", "logical_cells.grouping": "unsupported"},
-      "expected_mismatches": [{"layer": "logical_cells", "field": "grouping", "classification": "unsupported"}]
+      "classification": {"logical_cells.grouping": "unsupported"},
+      "expected_mismatches": [{"layer": "logical_cells", "field": "grouping", "classification": "unsupported"}],
+      "allowed_additional_mismatches": [
+        {"layer": "logical_cells", "fields": ["bbox", "diagnostics", "ordering", "presence", "rowspan/colspan", "source-continuity", "source-reference", "value"], "classification": "defect"},
+        {"layer": "physical_cells", "fields": ["bbox", "diagnostics", "grouping", "ordering", "presence", "rowspan/colspan", "source-continuity", "source-reference", "value"], "classification": "defect"},
+        {"layer": "rows", "fields": ["grouping", "source-reference", "value"], "classification": "defect"}
+      ]
     },
     {
       "fixture": "complete_two_leaf_parent",
@@ -193,8 +247,13 @@
         {"text": "2", "bbox": [130, 55, 170, 65], "flow_start": 7}
       ],
       "python_expectations": {"parent_text": "本期变动", "parent_colspan": 2},
-      "classification": {"*": "requires_adaptation"},
-      "expected_mismatches": [{"layer": "logical_cells", "field": "grouping", "classification": "requires_adaptation"}]
+      "classification": {"logical_cells.grouping": "requires_adaptation"},
+      "expected_mismatches": [{"layer": "logical_cells", "field": "grouping", "classification": "requires_adaptation"}],
+      "allowed_additional_mismatches": [
+        {"layer": "logical_cells", "fields": ["bbox", "diagnostics", "ordering", "presence", "rowspan/colspan", "source-continuity", "source-reference", "value"], "classification": "requires_adaptation"},
+        {"layer": "physical_cells", "fields": ["bbox", "diagnostics", "grouping", "ordering", "presence", "rowspan/colspan", "source-continuity", "source-reference", "value"], "classification": "requires_adaptation"},
+        {"layer": "rows", "fields": ["grouping", "source-reference", "value"], "classification": "requires_adaptation"}
+      ]
     },
     {
       "fixture": "incomplete_two_leaf_parent",
@@ -209,8 +268,15 @@
         {"text": "1", "bbox": [70, 55, 110, 65], "flow_start": 5}
       ],
       "python_expectations": {"parent_text": "不完整父\n数量", "parent_colspan": 1},
-      "classification": {"*": "defect", "diagnostics.diagnostics": "unsupported"},
-      "expected_mismatches": [{"layer": "logical_cells", "field": "presence", "classification": "defect"}]
+      "classification": {"logical_cells.presence": "defect"},
+      "expected_mismatches": [{"layer": "logical_cells", "field": "presence", "classification": "defect"}],
+      "allowed_additional_mismatches": [
+        {"layer": "empty_slots", "fields": ["bbox", "diagnostics", "grouping", "ordering", "presence", "rowspan/colspan", "source-continuity", "source-reference", "value"], "classification": "defect"},
+        {"layer": "logical_cells", "fields": ["bbox", "diagnostics", "grouping", "ordering", "rowspan/colspan", "source-continuity", "source-reference", "value"], "classification": "defect"},
+        {"layer": "occupancy", "fields": ["bbox", "diagnostics", "grouping", "ordering", "presence", "rowspan/colspan", "source-continuity", "source-reference", "value"], "classification": "defect"},
+        {"layer": "physical_cells", "fields": ["bbox", "diagnostics", "grouping", "ordering", "presence", "rowspan/colspan", "source-continuity", "source-reference", "value"], "classification": "defect"},
+        {"layer": "rows", "fields": ["grouping", "source-reference", "value"], "classification": "defect"}
+      ]
     },
     {
       "fixture": "rowspan_empty_coverage",
@@ -225,8 +291,14 @@
         {"text": "100", "bbox": [100, 50, 140, 60], "flow_start": 5}
       ],
       "python_expectations": {"parent_text": "收入\n支出", "parent_rowspan": 2, "empty_slot": [1, 1], "empty_cell": [1, 1]},
-      "classification": {"*": "requires_adaptation"},
-      "expected_mismatches": [{"layer": "logical_cells", "field": "rowspan/colspan", "classification": "requires_adaptation"}]
+      "classification": {"logical_cells.rowspan/colspan": "requires_adaptation"},
+      "expected_mismatches": [{"layer": "logical_cells", "field": "rowspan/colspan", "classification": "requires_adaptation"}],
+      "allowed_additional_mismatches": [
+        {"layer": "logical_cells", "fields": ["bbox", "diagnostics", "grouping", "ordering", "presence", "source-continuity", "source-reference", "value"], "classification": "requires_adaptation"},
+        {"layer": "occupancy", "fields": ["grouping", "value"], "classification": "requires_adaptation"},
+        {"layer": "physical_cells", "fields": ["bbox", "diagnostics", "grouping", "ordering", "presence", "rowspan/colspan", "source-continuity", "source-reference", "value"], "classification": "requires_adaptation"},
+        {"layer": "rows", "fields": ["grouping", "source-reference", "value"], "classification": "requires_adaptation"}
+      ]
     },
     {
       "fixture": "rowspan_nonempty_title_rejected",
@@ -240,8 +312,15 @@
         {"text": "100", "bbox": [100, 50, 140, 60], "flow_start": 5}
       ],
       "python_expectations": {"parent_text": "项目", "parent_rowspan": 1},
-      "classification": {"*": "defect"},
-      "expected_mismatches": [{"layer": "logical_cells", "field": "rowspan/colspan", "classification": "defect"}]
+      "classification": {"logical_cells.rowspan/colspan": "defect"},
+      "expected_mismatches": [{"layer": "logical_cells", "field": "rowspan/colspan", "classification": "defect"}],
+      "allowed_additional_mismatches": [
+        {"layer": "empty_slots", "fields": ["bbox", "diagnostics", "grouping", "ordering", "presence", "rowspan/colspan", "source-continuity", "source-reference", "value"], "classification": "defect"},
+        {"layer": "logical_cells", "fields": ["bbox", "diagnostics", "grouping", "ordering", "presence", "source-continuity", "source-reference", "value"], "classification": "defect"},
+        {"layer": "occupancy", "fields": ["bbox", "diagnostics", "grouping", "ordering", "presence", "rowspan/colspan", "source-continuity", "source-reference", "value"], "classification": "defect"},
+        {"layer": "physical_cells", "fields": ["bbox", "diagnostics", "grouping", "ordering", "presence", "rowspan/colspan", "source-continuity", "source-reference", "value"], "classification": "defect"},
+        {"layer": "rows", "fields": ["grouping", "source-reference", "value"], "classification": "defect"}
+      ]
     },
     {
       "fixture": "occupancy_conflict",
@@ -252,8 +331,14 @@
         {"text": "乙", "bbox": [10, 10, 60, 20], "flow_start": 2, "source_line_start": 3}
       ],
       "python_expectations": {"has_occupancy_conflict": true},
-      "classification": {"*": "defect"},
-      "expected_mismatches": [{"layer": "diagnostics", "field": "presence", "classification": "defect"}]
+      "classification": {"diagnostics.presence": "defect"},
+      "expected_mismatches": [{"layer": "diagnostics", "field": "presence", "classification": "defect"}],
+      "allowed_additional_mismatches": [
+        {"layer": "diagnostics", "fields": ["bbox", "diagnostics", "grouping", "ordering", "rowspan/colspan", "source-continuity", "source-reference", "value"], "classification": "defect"},
+        {"layer": "logical_cells", "fields": ["bbox", "diagnostics", "grouping", "ordering", "presence", "rowspan/colspan", "source-continuity", "source-reference", "value"], "classification": "defect"},
+        {"layer": "physical_cells", "fields": ["bbox", "diagnostics", "grouping", "ordering", "presence", "rowspan/colspan", "source-continuity", "source-reference", "value"], "classification": "defect"},
+        {"layer": "rows", "fields": ["grouping", "source-reference", "value"], "classification": "defect"}
+      ]
     },
     {
       "fixture": "out_of_bounds",
@@ -264,8 +349,15 @@
         {"text": "仍在", "bbox": [90, 30, 110, 40], "flow_start": 2}
       ],
       "python_expectations": {"has_out_of_bounds": true},
-      "classification": {"*": "defect"},
-      "expected_mismatches": [{"layer": "diagnostics", "field": "presence", "classification": "defect"}]
+      "classification": {"diagnostics.presence": "defect"},
+      "expected_mismatches": [{"layer": "diagnostics", "field": "presence", "classification": "defect"}],
+      "allowed_additional_mismatches": [
+        {"layer": "diagnostics", "fields": ["bbox", "diagnostics", "grouping", "ordering", "rowspan/colspan", "source-continuity", "source-reference", "value"], "classification": "defect"},
+        {"layer": "logical_cells", "fields": ["bbox", "diagnostics", "grouping", "ordering", "presence", "rowspan/colspan", "source-continuity", "source-reference", "value"], "classification": "defect"},
+        {"layer": "occupancy", "fields": ["bbox", "diagnostics", "grouping", "ordering", "presence", "rowspan/colspan", "source-continuity", "source-reference", "value"], "classification": "defect"},
+        {"layer": "physical_cells", "fields": ["bbox", "diagnostics", "grouping", "ordering", "presence", "rowspan/colspan", "source-continuity", "source-reference", "value"], "classification": "defect"},
+        {"layer": "rows", "fields": ["grouping", "source-reference", "value"], "classification": "defect"}
+      ]
     },
     {
       "fixture": "empty_slot",
@@ -278,8 +370,13 @@
         {"text": "100", "bbox": [100, 50, 140, 60], "flow_start": 4}
       ],
       "python_expectations": {"empty_slot": [1, 1], "empty_cell": [1, 1]},
-      "classification": {"*": "requires_adaptation"},
-      "expected_mismatches": [{"layer": "logical_cells", "field": "grouping", "classification": "requires_adaptation"}]
+      "classification": {"logical_cells.grouping": "requires_adaptation"},
+      "expected_mismatches": [{"layer": "logical_cells", "field": "grouping", "classification": "requires_adaptation"}],
+      "allowed_additional_mismatches": [
+        {"layer": "logical_cells", "fields": ["bbox", "diagnostics", "ordering", "presence", "rowspan/colspan", "source-continuity", "source-reference", "value"], "classification": "requires_adaptation"},
+        {"layer": "physical_cells", "fields": ["bbox", "diagnostics", "grouping", "ordering", "presence", "rowspan/colspan", "source-continuity", "source-reference", "value"], "classification": "requires_adaptation"},
+        {"layer": "rows", "fields": ["grouping", "source-reference", "value"], "classification": "requires_adaptation"}
+      ]
     }
   ]
 }

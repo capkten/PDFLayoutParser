@@ -111,3 +111,87 @@ git diff --check
 ```
 
 结果：无输出，退出码 `0`。
+
+## Re-review fix verification（2026-09-22）
+
+本轮修复严格限制在 Task 4A harness、fixture、报告和 sprint handoff。两个用户已有 dirty 测试文件保持不变；没有修改 Rust/Python 生产代码、route policy 或其他测试。
+
+- ledger 增加显式 `source-reference` 字段，统一记录 `source_refs` 与 `span_refs`，并纳入字段覆盖集合；不再只通过 `grouping` 或 fixture 断言间接观察来源。
+- Rust normalized-output 的 duplicate、out-of-range、uncovered-slot 和 ownership mismatch 校验返回结构化 `normalized_output_occupancy` rejection contract；rejection 作为独立 `normalized_output/contract` ledger 记录，同时保留普通 Rust/Python mismatch 记录。
+- 14 个 fixture 的 mismatch contract 取消 wildcard classification；每个 fixture 都有 exact expected record，并用按 layer/field 明列的 `allowed_additional_mismatches` 闭合集合。实际集合必须与 expected 加 allowed 完全相等。
+
+### Reconstructed baseline RED（非历史证据）
+
+以下是在临时 detached worktree 的 `d0774c2` pre-fix harness 上，以最终 fixture contract 和最终 rejection/source-reference contract 做的可重构 baseline probe。该结果不是历史终端记录；同时复制了当前 worktree 的同一 `_pdf_fast.pyd` 构建产物，仅用于使旧源码可导入。
+
+实际命令：
+
+```powershell
+$target = 'D:\codes\PDFLayoutParser-Fast\.worktrees\rust-migration-replan'
+$baseline = 'D:\codes\PDFLayoutParser-Fast\.worktrees\task-4a-reconstructed-baseline'
+git worktree add --detach $baseline d0774c2
+Copy-Item "$target\tests\fixtures\rust_migration\wireless\wireless_structure_differential.json" "$baseline\tests\fixtures\rust_migration\wireless\wireless_structure_differential.json"
+Copy-Item "$target\src\hexai_pdf_parser\_pdf_fast.pyd" "$baseline\src\hexai_pdf_parser\_pdf_fast.pyd"
+Push-Location $baseline
+$env:PYTHONPATH = (Resolve-Path 'src').Path
+@'
+import importlib.util
+from pathlib import Path
+p = Path('tests/test_rust_wireless_structure_differential.py').resolve()
+spec = importlib.util.spec_from_file_location('task4a_baseline', p)
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+failures = []
+if 'source-reference' not in mod.FIELDS:
+    failures.append('missing source-reference ledger field')
+try:
+    result = mod._validate_normalized_occupancy(
+        [{'row': 0, 'col': 0, 'rowspan': 2, 'colspan': 1}], [[0]], 1, 1, side='rust'
+    )
+    if not isinstance(result, dict) or result.get('status') != 'rejected':
+        failures.append('Rust normalized occupancy rejection is not structured')
+except Exception as error:
+    failures.append(f'Rust occupancy contract raised {type(error).__name__}: {error}')
+if failures:
+    raise AssertionError('RECONSTRUCTED BASELINE RED: ' + '; '.join(failures))
+'@ | & 'C:\Users\23662\AppData\Local\Programs\Python\Python312\python.exe' -
+Pop-Location
+git worktree remove --force $baseline
+```
+
+实际输出：
+
+```text
+AssertionError: RECONSTRUCTED BASELINE RED: missing source-reference ledger field; Rust occupancy contract raised AttributeError: module 'task4a_baseline' has no attribute '_validate_normalized_occupancy'
+BASELINE_PROBE_EXIT=1
+```
+
+### Final verification
+
+```powershell
+$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'
+$env:PYTHONPATH = (Resolve-Path 'src').Path
+& 'C:\Users\23662\AppData\Local\Programs\Python\Python312\Scripts\pytest.exe' -q tests/test_rust_wireless_structure_differential.py
+```
+
+```text
+..........                                                               [100%]
+10 passed in 0.65s
+```
+
+```powershell
+git diff --check
+```
+
+结果：无输出，退出码 `0`。
+
+### 自审
+
+- [x] 只修改允许的 harness、fixture、report 和 sprint 文件；保留两个用户 dirty 测试文件。
+- [x] source-reference/span-reference 已成为 ledger 的直接字段并参与字段覆盖。
+- [x] Rust normalized-output occupancy failure 是显式 rejection contract，不再伪装成普通 diagnostics；预期差分仍进入 ledger。
+- [x] 每个 fixture 的实际 mismatch/category 集合被 exact expected 与显式 allowed additions 完整闭合，wildcard 会失败。
+- [x] 已记录 reconstructed baseline RED，明确不是历史证据，并说明共享构建产物。
+- [x] focused pytest（10 tests）、whitespace 检查和 sprint handoff 已完成。
+
+剩余边界：Rust band prune/refine/rescue 等价 binding 仍不存在，阶段继续标记为 `rust_no_binding_for_python_band_prune_refine_rescue`；本 slice 只提供迁移适配边界和可重复差分证据，不宣称 Rust parity。

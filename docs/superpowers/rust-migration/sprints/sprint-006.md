@@ -24,10 +24,16 @@ Task 4A 已完成差分观测基础设施。当前只证明 Python oracle 与 Ru
 ```text
 $env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'
 & 'C:\Users\23662\AppData\Local\Programs\Python\Python312\Scripts\pytest.exe' -q tests/test_rust_wireless_structure_differential.py
-3 passed in 0.46s
+10 passed in 0.65s
 ```
 
 `git diff --check` 在提交前执行；Rust 生产实现和 route 尚未修改。
+
+## Task 4A re-review handoff
+
+最终 focused differential contract 为 10 个测试，覆盖 14 个 fixture。ledger 现在直接覆盖 normalized `source-reference`，并以 exact expected mismatch/category 集合加显式 allowed additions 防止 wildcard 漂移。Rust normalized-output 的 duplicate、out-of-range、uncovered-slot 和 ownership mismatch 必须返回独立 rejection contract；预期 Rust/Python mismatch 仍保留在 ledger 中供后续迁移观察。
+
+适配边界已明确：Rust adapter 继续消费 fixture-owned raw atoms/bands；Python 侧负责 prune/refine/rescue，Rust 侧仍记录为 `rust_no_binding_for_python_band_prune_refine_rescue`，因此 4A 不宣称 column/grid/header parity。Task 4B 接手 raw-input 到 prepared-band 的适配；Task 4C 接手 physical/logical occupancy contract；Task 4D 接手 header span 与 empty-slot materialization。后续每个 slice 继续复用 source-reference、rejection contract 和 fixture 闭合集合。
 
 ## 下一步
 
