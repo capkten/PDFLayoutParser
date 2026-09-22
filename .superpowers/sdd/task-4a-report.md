@@ -155,6 +155,8 @@ except Exception as error:
 if failures:
     raise AssertionError('RECONSTRUCTED BASELINE RED: ' + '; '.join(failures))
 '@ | & 'C:\Users\23662\AppData\Local\Programs\Python\Python312\python.exe' -
+$baselineProbeExit = $LASTEXITCODE
+Write-Output "BASELINE_PROBE_EXIT=$baselineProbeExit"
 Pop-Location
 git worktree remove --force $baseline
 ```
@@ -162,6 +164,11 @@ git worktree remove --force $baseline
 实际输出：
 
 ```text
+Preparing worktree (detached HEAD d0774c2)
+HEAD is now at d0774c2 test: add wireless structure differential harness
+warning: The `fitz` API is deprecated and will be removed in the future. Use `import pymupdf` instead.
+Traceback (most recent call last):
+  File "<stdin>", line 19, in <module>
 AssertionError: RECONSTRUCTED BASELINE RED: missing source-reference ledger field; Rust occupancy contract raised AttributeError: module 'task4a_baseline' has no attribute '_validate_normalized_occupancy'
 BASELINE_PROBE_EXIT=1
 ```
