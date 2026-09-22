@@ -817,3 +817,9 @@
 
 - 新增 `scripts/run_pdf_diff_review.ps1` 真实审阅运行入口：固定默认的实际输出、测试集和 review 目录，同时允许通过参数覆盖；使用主项目 Python 调用 `build_review()` 生成分类摘要、JSON、HTML 和合成 PNG，不修改原始 PDF、标签或真实 E2E 输出。
 - 修正 `build_review()` 与 Markdown golden comparator 的判定口径：分类、文本 diff 和搜索索引统一先调用 `normalize_markdown()`，移除图片行并归一化空白，避免把资源路径差异误判为正文/格式差异；manifest 标记为 `excluded` 的页面不进入差异审阅列表。真实 `fix/zh_all_table_pages.pdf` 快照复核结果为 1023 页，其中 901 页相同、1 页排除、121 页待审阅；分类为正文 97、混合 10、表格结构 8、表格数量 3、表格文本 1、资源缺失 2。分类 JSON 和离线网页只载入 121 个差异页，合成图与两侧 PNG 资源保留在 `output/fix_zh_all_table_pages_review_20260914/review/`。
+## 2026-09-23
+
+- 完成 Rust 无线结构 Task 5/6 页面级验收闭环：新增纯 Python 字段 normalizer `src/hexai_pdf_parser/debug/rust_task5_acceptance.py`、三模式 runner `scripts/run_task5_shadow_acceptance.py` 和回归测试 `tests/test_rust_wireless_shadow_differential.py`。normalizer 稳定化 table/region 的 source、rows、cols、bbox、Cell 文本与跨度、空槽位、occupancy owner/conflict/out-of-bounds 及 routing diagnostic；比较器只允许 0.01pt bbox 浮点噪声，不忽略结构字段。
+- 使用 `D:\codes\PDFLayoutParser\fix\zh_all_table_pages.pdf` 的 0-based 页面 `184,188,189,191,192`，分别运行 `python`、`shadow`、`rust`，覆盖 `recover_wireless_tables()` 和 `recover_cells_from_region()`。新输出位于 `D:\codes\PDFLayoutParser\output\rust_migration_task5_20260922\`，包含 15 个 page JSON、15 个 overlay PNG、三份 manifest 和 comparison JSON；输入 SHA256 和绝对 artifact 路径均通过审计。
+- 页面结果明确显示 shadow 的结构化结果与 Python 语义结果一致并保留 17 条 Rust 观测诊断；Rust page/region 在 188、189 以及固定区域输入上存在真实结构差异，184、191、192 的 page route 因 occupancy conflict 走 Python fallback。比较报告共 2894 条差异，全部标为 `defect`，`unclassified_count=0`；默认 Python route、fallback policy、用户 dirty 测试文件均保持不变。
+- Task 5/6 最终验证：normalizer/runner `8 passed`，组合迁移矩阵 `140 passed`，`cargo test --lib` `60 passed`，`cargo check` 与 `git diff --check` 通过。结论为验收和审计交付完成，但 Rust primary gate 仍不通过；后续修复必须逐项处理 defect ledger，并在新的独立输出目录重跑 JSON/PNG。
