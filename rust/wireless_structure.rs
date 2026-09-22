@@ -949,6 +949,12 @@ fn merge_source_contiguous_vertical_cells(cells: &mut Vec<CellDto>) {
             {
                 continue;
             }
+            if is_numeric_body_text(&current.text) && is_numeric_body_text(&candidate.text) {
+                continue;
+            }
+            if is_single_cjk(&current.text) && is_single_cjk(&candidate.text) {
+                continue;
+            }
             let candidate_source_refs = candidate
                 .source
                 .as_ref()
@@ -962,7 +968,7 @@ fn merge_source_contiguous_vertical_cells(cells: &mut Vec<CellDto>) {
                 .max(1.0);
             let overlap = horizontal_overlap(&current.rect, &candidate.rect);
             let vertical_gap = candidate.rect.y0 - current.rect.y1;
-            if overlap < minimum_width * 0.45 || vertical_gap > 6.0 {
+            if overlap < minimum_width * 0.45 || vertical_gap > 10.0 {
                 continue;
             }
             candidate_index = Some(other_index);
@@ -1750,6 +1756,12 @@ fn merge_vertical_continuations(cells: &mut Vec<CellDto>, header_rows: usize) {
             {
                 continue;
             }
+            if is_numeric_body_text(&current.text) && is_numeric_body_text(&candidate.text) {
+                continue;
+            }
+            if is_single_cjk(&current.text) && is_single_cjk(&candidate.text) {
+                continue;
+            }
             if !source_refs_contiguous_in_interleaved_row(cells, index, other_index) {
                 continue;
             }
@@ -1793,12 +1805,6 @@ fn merge_vertical_continuations(cells: &mut Vec<CellDto>, header_rows: usize) {
             }
         }
     }
-}
-
-fn cell_overlaps_column(cell: &CellDto, col: usize) -> bool {
-    let start = cell.col.max(0) as usize;
-    let end = start.saturating_add(cell.colspan.max(1) as usize);
-    start <= col && col < end
 }
 
 fn is_numeric_body_text(text: &str) -> bool {
@@ -1851,50 +1857,7 @@ fn header_body_start(cells: &[CellDto], physical_rows: usize, columns: usize) ->
         .unwrap_or(physical_rows)
 }
 
-fn find_wrapped_header_row(cells: &[CellDto], body_start: usize) -> Option<usize> {
-    if body_start < 3 {
-        return None;
-    }
-    for row in 1..body_start.saturating_sub(1) {
-        let current: Vec<&CellDto> = cells
-            .iter()
-            .filter(|cell| cell.row as usize == row && !cell.text.trim().is_empty())
-            .collect();
-        let next: Vec<&CellDto> = cells
-            .iter()
-            .filter(|cell| cell.row as usize == row + 1 && !cell.text.trim().is_empty())
-            .collect();
-        if current.len() < 2 || next.len() < 2 {
-            continue;
-        }
-        let wrapped = next
-            .iter()
-            .filter(|cell| {
-                cell.text.contains('\n')
-                    && cell.rect.y1 - cell.rect.y0
-                        > current
-                            .iter()
-                            .map(|item| item.rect.y1 - item.rect.y0)
-                            .fold(0.0, f64::max)
-                            * 1.35
-            })
-            .count();
-        if wrapped < 2 {
-            continue;
-        }
-        let disjoint = next.iter().all(|candidate| {
-            !current.iter().any(|parent| {
-                parent.col <= candidate.col + candidate.colspan.max(1) - 1
-                    && candidate.col <= parent.col + parent.colspan.max(1) - 1
-            })
-        });
-        if disjoint {
-            return Some(row + 1);
-        }
-    }
-    None
-}
-
+#[cfg(test)]
 fn mapped_header_row(
     row: usize,
     body_start: usize,
@@ -1908,6 +1871,7 @@ fn mapped_header_row(
     logical_row_mapping(row, body_start, leaf_row, collapse)
 }
 
+#[cfg(test)]
 fn logical_row_mapping(row: usize, body_start: usize, leaf_row: usize, collapse: bool) -> usize {
     if !collapse {
         return row;
@@ -1943,6 +1907,7 @@ fn physical_row_tracks(rows: &[RowClusterDto], atoms: &[AtomDto]) -> Vec<f64> {
         .collect()
 }
 
+#[cfg(test)]
 fn logical_row_edges(
     rows: &[RowClusterDto],
     region: &Rect4,
@@ -2011,6 +1976,628 @@ fn logical_row_edges(
     edges
 }
 
+fn cell_row_end(cell: &CellDto) -> usize {
+    cell.row
+        .max(0)
+        .saturating_add(cell.rowspan.max(1))
+        .saturating_sub(1) as usize
+}
+
+fn cell_col_end(cell: &CellDto) -> usize {
+    cell.col
+        .max(0)
+        .saturating_add(cell.colspan.max(1))
+        .saturating_sub(1) as usize
+}
+
+fn cells_overlap_columns(cell: &CellDto, start: usize, end: usize) -> bool {
+    let cell_start = cell.col.max(0) as usize;
+    let cell_end = cell_col_end(cell);
+    cell_start <= end && start <= cell_end
+}
+
+fn cell_is_nonempty(cell: &CellDto) -> bool {
+    !cell.text.trim().is_empty()
+}
+
+fn merge_row_component_ranges(groups: &mut Vec<Vec<usize>>, spans: &[(usize, usize)]) {
+    for &(start, end) in spans {
+        let matching: Vec<usize> = groups
+            .iter()
+            .enumerate()
+            .filter(|(_, group)| group.iter().any(|row| start <= *row && *row <= end))
+            .map(|(index, _)| index)
+            .collect();
+        if matching.len() < 2 {
+            continue;
+        }
+        let first = matching[0];
+        let last = *matching.last().unwrap_or(&first);
+        let merged = groups[first..=last]
+            .iter()
+            .flatten()
+            .copied()
+            .collect();
+        groups.splice(first..=last, std::iter::once(merged));
+    }
+}
+
+fn wrapped_leaf_header_span(
+    cells: &[CellDto],
+    candidate_index: usize,
+    body_start: usize,
+) -> Option<(usize, usize)> {
+    let candidate = cells.get(candidate_index)?;
+    let start = usize::try_from(candidate.row).ok()?;
+    if start >= body_start
+        || !cell_is_nonempty(candidate)
+        || !candidate.text.contains('\n')
+        || candidate.colspan.max(1) != 1
+    {
+        return None;
+    }
+
+    let reference_height = cells
+        .iter()
+        .filter(|cell| {
+            (cell.row.max(0) as usize) < body_start
+                && cell_is_nonempty(cell)
+                && !cell.text.contains('\n')
+        })
+        .map(|cell| (cell.rect.y1 - cell.rect.y0).max(0.0))
+        .filter(|height| *height > 0.0)
+        .fold(f64::INFINITY, f64::min);
+    let reference_height = if reference_height.is_finite() {
+        reference_height
+    } else {
+        (candidate.rect.y1 - candidate.rect.y0).max(1.0) / 2.0
+    };
+    let is_wrapped_geometry = candidate.rowspan > 1
+        || candidate.rect.y1 - candidate.rect.y0 > reference_height * 1.35;
+    if !is_wrapped_geometry {
+        return None;
+    }
+
+    let started: Vec<usize> = cells
+        .iter()
+        .enumerate()
+        .filter(|(_, cell)| {
+            cell.row.max(0) as usize == start && cell_is_nonempty(cell)
+        })
+        .map(|(index, _)| index)
+        .collect();
+    if started.is_empty() || !started.contains(&candidate_index) {
+        return None;
+    }
+    if started.iter().any(|index| {
+        let cell = &cells[*index];
+        cell.colspan.max(1) != 1
+            || !cell.text.contains('\n')
+            || (cell.rowspan <= 1
+                && cell.rect.y1 - cell.rect.y0 <= reference_height * 1.35)
+    }) {
+        return None;
+    }
+
+    let (span_start, end) = if candidate.rowspan > 1 {
+        (
+            start,
+            start
+                .saturating_add(candidate.rowspan.max(2) as usize)
+                .saturating_sub(1)
+                .min(body_start.saturating_sub(1)),
+        )
+    } else {
+        (start.saturating_sub(1), start)
+    };
+    if end <= span_start || (span_start == start && end >= body_start) {
+        return None;
+    }
+
+    let started_columns: std::collections::BTreeSet<usize> = started
+        .iter()
+        .map(|index| cells[*index].col.max(0) as usize)
+        .collect();
+    let candidate_column = candidate.col.max(0) as usize;
+    for (index, cell) in cells.iter().enumerate() {
+        if started.contains(&index) || !cell_is_nonempty(cell) {
+            continue;
+        }
+        let cell_start = cell.row.max(0) as usize;
+        let cell_end = cell_row_end(cell);
+        if cell_start <= end
+            && span_start <= cell_end
+            && cells_overlap_columns(cell, candidate_column, candidate_column)
+        {
+            return None;
+        }
+    }
+
+    let mut sibling_columns_by_row: std::collections::BTreeMap<usize, std::collections::BTreeSet<usize>> =
+        std::collections::BTreeMap::new();
+    for (index, cell) in cells.iter().enumerate() {
+        if started.contains(&index)
+            || (cell.row.max(0) as usize) < span_start
+            || cell_row_end(cell) > end
+            || cell.row.max(0) as usize != cell_row_end(cell)
+            || cell.colspan.max(1) != 1
+            || !cell_is_nonempty(cell)
+        {
+            continue;
+        }
+        let column = cell.col.max(0) as usize;
+        if started_columns.contains(&column) {
+            continue;
+        }
+        sibling_columns_by_row
+            .entry(cell.row.max(0) as usize)
+            .or_default()
+            .insert(column);
+    }
+    let sibling_support = sibling_columns_by_row.values().any(|columns| columns.len() >= 2);
+    (sibling_support || candidate.rowspan == 1).then_some((span_start, end))
+}
+
+fn grouped_mixed_leaf_header_span(
+    cells: &[CellDto],
+    candidate_index: usize,
+    body_start: usize,
+) -> Option<(usize, usize)> {
+    let candidate = cells.get(candidate_index)?;
+    let start = usize::try_from(candidate.row).ok()?;
+    if start >= body_start
+        || !cell_is_nonempty(candidate)
+        || !candidate.text.contains('\n')
+        || candidate.colspan.max(1) != 1
+    {
+        return None;
+    }
+    let reference_height = cells
+        .iter()
+        .filter(|cell| {
+            (cell.row.max(0) as usize) < body_start
+                && cell_is_nonempty(cell)
+                && !cell.text.contains('\n')
+        })
+        .map(|cell| (cell.rect.y1 - cell.rect.y0).max(0.0))
+        .fold(f64::INFINITY, f64::min);
+    let reference_height = if reference_height.is_finite() {
+        reference_height
+    } else {
+        (candidate.rect.y1 - candidate.rect.y0).max(1.0) / 2.0
+    };
+    if candidate.rowspan <= 1
+        && candidate.rect.y1 - candidate.rect.y0 <= reference_height * 1.35
+    {
+        return None;
+    }
+    let span_start = if candidate.rowspan > 1 {
+        start
+    } else {
+        start.saturating_sub(1)
+    };
+    let end = if candidate.rowspan > 1 {
+        start
+            .saturating_add(candidate.rowspan.max(2) as usize)
+            .saturating_sub(1)
+            .min(body_start.saturating_sub(1))
+    } else {
+        start
+    };
+    if end <= span_start || (span_start == start && end >= body_start) {
+        return None;
+    }
+
+    let candidate_column = candidate.col.max(0) as usize;
+    let parent_index = cells.iter().enumerate().find_map(|(index, parent)| {
+        let parent_start = parent.col.max(0) as usize;
+        let parent_end = cell_col_end(parent);
+        (index != candidate_index
+            && cell_is_nonempty(parent)
+            && parent.row.max(0) as usize + parent.rowspan.max(1) as usize <= start
+            && parent.colspan.max(1) == 2
+            && parent_start <= candidate_column
+            && candidate_column <= parent_end)
+        .then_some(index)
+    })?;
+    let parent = &cells[parent_index];
+    let parent_start = parent.col.max(0) as usize;
+    let parent_end = cell_col_end(parent);
+    let children: Vec<usize> = cells
+        .iter()
+        .enumerate()
+        .filter(|(index, cell)| {
+            *index != parent_index
+                && cell_is_nonempty(cell)
+                && cell.colspan.max(1) == 1
+                && cell.row.max(0) as usize >= span_start
+                && cell_row_end(cell) <= end
+                && cells_overlap_columns(cell, parent_start, parent_end)
+        })
+        .map(|(index, _)| index)
+        .collect();
+    let child_columns: std::collections::BTreeSet<usize> = children
+        .iter()
+        .map(|index| cells[*index].col.max(0) as usize)
+        .collect();
+    if children.len() != 2
+        || !children.contains(&candidate_index)
+        || child_columns
+            != (parent_start..=parent_end).collect::<std::collections::BTreeSet<_>>()
+    {
+        return None;
+    }
+    if children.iter().any(|index| {
+        let cell = &cells[*index];
+        cell.col.max(0) as usize != cell_col_end(cell)
+    }) {
+        return None;
+    }
+
+    let mut outside_columns = std::collections::BTreeSet::new();
+    for (index, cell) in cells.iter().enumerate() {
+        if index == parent_index || children.contains(&index) {
+            continue;
+        }
+        let cell_start = cell.row.max(0) as usize;
+        let cell_end = cell_row_end(cell);
+        if cell_start > end || span_start > cell_end || !cell_is_nonempty(cell) {
+            continue;
+        }
+        if cell.col.max(0) as usize != cell_col_end(cell) {
+            return None;
+        }
+        outside_columns.insert(cell.col.max(0) as usize);
+    }
+    Some((span_start, end))
+}
+
+fn logical_row_components(
+    row_count: usize,
+    cells: &[CellDto],
+    body_start: usize,
+) -> Vec<Vec<usize>> {
+    if row_count == 0 {
+        return Vec::new();
+    }
+    let row_starts: std::collections::BTreeSet<usize> = cells
+        .iter()
+        .filter_map(|cell| {
+            let row = usize::try_from(cell.row).ok()?;
+            (row < row_count).then_some(row)
+        })
+        .collect();
+    let mut groups: Vec<Vec<usize>> = Vec::new();
+    for row in 0..row_count {
+        if row > 0 && !row_starts.contains(&row) && !groups.is_empty() {
+            groups.last_mut().unwrap().push(row);
+        } else {
+            groups.push(vec![row]);
+        }
+    }
+
+    let first_column = cells
+        .iter()
+        .filter(|cell| cell_is_nonempty(cell))
+        .map(|cell| cell.col.max(0) as usize)
+        .min();
+    let mut spans = Vec::new();
+    if let Some(first_column) = first_column {
+        for cell in cells.iter().filter(|cell| {
+            cell_is_nonempty(cell)
+                && cell.col.max(0) as usize == first_column
+                && cell.rowspan > 1
+                && cell.row.max(0) as usize >= body_start
+        }) {
+            spans.push((
+                cell.row.max(0) as usize,
+                cell_row_end(cell).min(row_count.saturating_sub(1)),
+            ));
+        }
+    }
+    for index in 0..cells.len() {
+        if let Some(span) = wrapped_leaf_header_span(cells, index, body_start) {
+            spans.push(span);
+        }
+        if let Some(span) = grouped_mixed_leaf_header_span(cells, index, body_start) {
+            spans.push(span);
+        }
+    }
+    merge_row_component_ranges(&mut groups, &spans);
+    groups
+}
+
+fn logical_row_mapping_for_components(
+    row_count: usize,
+    groups: &[Vec<usize>],
+) -> Vec<usize> {
+    let mut mapping = vec![0; row_count];
+    for (logical, group) in groups.iter().enumerate() {
+        for row in group {
+            if *row < mapping.len() {
+                mapping[*row] = logical;
+            }
+        }
+    }
+    mapping
+}
+
+fn remap_cells_to_logical_rows(
+    cells: &[CellDto],
+    row_count: usize,
+    groups: &[Vec<usize>],
+) -> Vec<CellDto> {
+    let mapping = logical_row_mapping_for_components(row_count, groups);
+    cells
+        .iter()
+        .cloned()
+        .map(|mut cell| {
+            let physical_start = cell.row.max(0) as usize;
+            let physical_end = cell_row_end(&cell).min(row_count.saturating_sub(1));
+            let logical_start = mapping.get(physical_start).copied().unwrap_or(0);
+            let logical_end = mapping
+                .get(physical_end)
+                .copied()
+                .unwrap_or(logical_start);
+            cell.row = logical_start as i64;
+            cell.rowspan = logical_end.saturating_sub(logical_start) as i64 + 1;
+            cell
+        })
+        .collect()
+}
+
+fn logical_row_edges_for_components(
+    rows: &[RowClusterDto],
+    region: &Rect4,
+    groups: &[Vec<usize>],
+    row_tracks: Option<&[f64]>,
+) -> Vec<f64> {
+    if rows.is_empty() || groups.is_empty() {
+        return vec![region.y0, region.y1];
+    }
+    let mapping = logical_row_mapping_for_components(rows.len(), groups);
+    let mut tracks: Vec<Vec<f64>> = vec![Vec::new(); groups.len()];
+    for (row_index, row) in rows.iter().enumerate() {
+        let logical = mapping[row_index];
+        tracks[logical].push(
+            row_tracks
+                .and_then(|values| values.get(row_index).copied())
+                .unwrap_or((row.y0 + row.y1) / 2.0),
+        );
+    }
+    let mut edges = vec![region.y0];
+    for pair in tracks.windows(2) {
+        let left = pair[0].iter().sum::<f64>() / pair[0].len().max(1) as f64;
+        let right = pair[1].iter().sum::<f64>() / pair[1].len().max(1) as f64;
+        edges.push((left + right) / 2.0);
+    }
+    edges.push(region.y1);
+    edges
+}
+
+fn occupancy_is_valid(cells: &[CellDto], rows: usize, cols: usize) -> bool {
+    let mut occupancy = vec![vec![false; cols]; rows];
+    for cell in cells {
+        if cell.row < 0 || cell.col < 0 {
+            return false;
+        }
+        let row_start = cell.row as usize;
+        let col_start = cell.col as usize;
+        let row_end = row_start.saturating_add(cell.rowspan.max(1) as usize);
+        let col_end = col_start.saturating_add(cell.colspan.max(1) as usize);
+        if row_end > rows || col_end > cols {
+            return false;
+        }
+        for row in row_start..row_end {
+            for col in col_start..col_end {
+                if occupancy[row][col] {
+                    return false;
+                }
+                occupancy[row][col] = true;
+            }
+        }
+    }
+    true
+}
+
+fn cell_span_is_in_bounds(cell: &CellDto, rows: usize, cols: usize) -> bool {
+    if cell.row < 0 || cell.col < 0 {
+        return false;
+    }
+    let row_end = (cell.row as usize).saturating_add(cell.rowspan.max(1) as usize);
+    let col_end = (cell.col as usize).saturating_add(cell.colspan.max(1) as usize);
+    row_end <= rows && col_end <= cols
+}
+
+fn commit_header_span_proposal(
+    base: &[CellDto],
+    proposed: Vec<CellDto>,
+    rows: usize,
+    cols: usize,
+) -> Vec<CellDto> {
+    if occupancy_is_valid(&proposed, rows, cols) {
+        proposed
+    } else {
+        base.to_vec()
+    }
+}
+
+fn complete_two_leaf_header_row(
+    cells: &[CellDto],
+    parent_index: usize,
+    header_rows: usize,
+) -> Option<usize> {
+    let parent = cells.get(parent_index)?;
+    let parent_start = parent.col.max(0) as usize;
+    let parent_end = cell_col_end(parent);
+    let parent_end_row = cell_row_end(parent);
+    let candidate_rows: std::collections::BTreeSet<usize> = cells
+        .iter()
+        .filter(|cell| {
+            cell.row >= 0
+                && (cell.row as usize) > parent_end_row
+                && (cell.row as usize) < header_rows
+                && cell_is_nonempty(cell)
+        })
+        .map(|cell| cell.row as usize)
+        .collect();
+    candidate_rows.into_iter().find(|row| {
+        let child_columns: Vec<usize> = cells
+            .iter()
+            .filter(|cell| {
+                cell.row as usize == *row
+                    && cell_row_end(cell) == *row
+                    && cell_is_nonempty(cell)
+                    && cell.colspan.max(1) == 1
+                    && (cell.col.max(0) as usize) >= parent_start
+                    && (cell.col.max(0) as usize) <= parent_end
+            })
+            .map(|cell| cell.col.max(0) as usize)
+            .collect();
+        child_columns.len() == parent_end - parent_start + 1
+            && child_columns.iter().copied().collect::<std::collections::BTreeSet<_>>()
+                == (parent_start..=parent_end)
+                    .collect::<std::collections::BTreeSet<_>>()
+    })
+}
+
+fn infer_header_spans(cells: &[CellDto], header_rows: usize) -> Vec<CellDto> {
+    let mut proposed = cells.to_vec();
+    if header_rows == 0 {
+        return proposed;
+    }
+    let parents: Vec<(usize, usize, usize, usize)> = cells
+        .iter()
+        .enumerate()
+        .filter(|(_, cell)| {
+            cell.row >= 0
+                && (cell.row as usize) < header_rows
+                && cell_is_nonempty(cell)
+                && cell.colspan.max(1) > 1
+        })
+        .map(|(index, cell)| {
+            (
+                index,
+                cell.row as usize,
+                cell.col.max(0) as usize,
+                cell_col_end(cell),
+            )
+        })
+        .collect();
+    let mut invalid_two_leaf_tiers = std::collections::BTreeSet::new();
+    for (parent_index, parent_row, _, _) in &parents {
+        if cells[*parent_index].colspan.max(1) == 2
+            && complete_two_leaf_header_row(cells, *parent_index, header_rows).is_none()
+        {
+            invalid_two_leaf_tiers.insert(*parent_row);
+        }
+    }
+    for cell in &mut proposed {
+        if cell.colspan.max(1) == 2
+            && invalid_two_leaf_tiers.contains(&(cell.row.max(0) as usize))
+        {
+            cell.colspan = 1;
+        }
+    }
+    let mut proven_groups = Vec::new();
+    for (parent_index, parent_row, parent_start, parent_end) in parents {
+        if cells[parent_index].colspan.max(1) == 2
+            && invalid_two_leaf_tiers.contains(&parent_row)
+        {
+            continue;
+        }
+        let parent_end_row = cell_row_end(&cells[parent_index]);
+        let candidate_rows: std::collections::BTreeSet<usize> = cells
+            .iter()
+            .filter(|cell| {
+                cell.row >= 0
+                    && cell.row as usize > parent_end_row
+                    && (cell.row as usize) < header_rows
+                    && cell_is_nonempty(cell)
+            })
+            .map(|cell| cell.row as usize)
+            .collect();
+        let leaf_row = candidate_rows.into_iter().find(|row| {
+            let child_columns: Vec<usize> = cells
+                .iter()
+                .filter(|cell| {
+                    cell.row as usize == *row
+                        && cell_row_end(cell) == *row
+                        && cell_is_nonempty(cell)
+                        && cell.colspan.max(1) == 1
+                        && (cell.col.max(0) as usize) >= parent_start
+                        && (cell.col.max(0) as usize) <= parent_end
+                })
+                .map(|cell| cell.col.max(0) as usize)
+                .collect();
+            child_columns.len() == parent_end - parent_start + 1
+                && child_columns.iter().copied().collect::<std::collections::BTreeSet<_>>()
+                    == (parent_start..=parent_end)
+                        .collect::<std::collections::BTreeSet<_>>()
+        });
+        let Some(leaf_row) = leaf_row else {
+            continue;
+        };
+        let blocked = cells.iter().enumerate().any(|(index, cell)| {
+            index != parent_index
+                && cell_is_nonempty(cell)
+                && cell.row as usize > parent_end_row
+                && (cell.row as usize) < leaf_row
+                && cells_overlap_columns(cell, parent_start, parent_end)
+        });
+        proven_groups.push((parent_index, parent_row, parent_start, parent_end, leaf_row, blocked));
+        if !blocked && leaf_row > parent_end_row + 1 {
+            proposed[parent_index].rowspan = (leaf_row - parent_row) as i64;
+        }
+    }
+    if proven_groups.is_empty() {
+        return proposed;
+    }
+
+    let first_header_row = proven_groups
+        .iter()
+        .map(|(_, row, _, _, _, _)| *row)
+        .min()
+        .unwrap_or(0);
+    let last_header_row = proven_groups
+        .iter()
+        .map(|(_, _, _, _, leaf, _)| *leaf)
+        .max()
+        .unwrap_or(first_header_row);
+    let grouped_columns: std::collections::BTreeSet<usize> = proven_groups
+        .iter()
+        .flat_map(|(_, _, start, end, _, _)| *start..=*end)
+        .collect();
+    for (index, stub) in cells.iter().enumerate() {
+        if !cell_is_nonempty(stub)
+            || stub.colspan.max(1) != 1
+            || grouped_columns.contains(&(stub.col.max(0) as usize))
+            || stub.row as usize > last_header_row
+            || cell_row_end(stub) < first_header_row
+        {
+            continue;
+        }
+        let column = stub.col.max(0) as usize;
+        let occupants: Vec<usize> = cells
+            .iter()
+            .enumerate()
+            .filter(|(_, cell)| {
+                cell_is_nonempty(cell)
+                    && cell.col.max(0) as usize <= column
+                    && cell_col_end(cell) >= column
+                    && cell.row as usize <= last_header_row
+                    && cell_row_end(cell) >= first_header_row
+            })
+            .map(|(other_index, _)| other_index)
+            .collect();
+        if occupants == vec![index] {
+            proposed[index].row = first_header_row as i64;
+            proposed[index].rowspan = (last_header_row - first_header_row + 1) as i64;
+        }
+    }
+    proposed
+}
+
 fn normalize_header_layout(
     cells: &mut Vec<CellDto>,
     rows: &[RowClusterDto],
@@ -2023,150 +2610,21 @@ fn normalize_header_layout(
         return vec![region.y0, region.y1];
     }
     let body_start = header_body_start(cells, physical_rows, bands.len());
-    let leaf_row = (0..body_start)
-        .rev()
-        .find(|row| {
-            cells
-                .iter()
-                .filter(|cell| cell.row as usize == *row && !cell.text.trim().is_empty())
-                .count()
-                >= 2
-        })
-        .unwrap_or(body_start.saturating_sub(1));
-
-    let wrapped_row = find_wrapped_header_row(cells, body_start);
-    let collapse = wrapped_row.is_none()
-        && body_start < physical_rows
-        && leaf_row >= 2
-        && cells
-            .iter()
-            .filter(|cell| {
-                cell.row as usize == leaf_row.saturating_sub(1) && !cell.text.trim().is_empty()
-            })
-            .count()
-            >= 2;
-    for cell in cells.iter_mut() {
-        let physical_start = cell.row.max(0) as usize;
-        let physical_end = physical_start
-            .saturating_add(cell.rowspan.max(1) as usize)
-            .saturating_sub(1);
-        let logical_start =
-            mapped_header_row(physical_start, body_start, leaf_row, collapse, wrapped_row);
-        let logical_end = mapped_header_row(
-            physical_end.min(physical_rows.saturating_sub(1)),
-            body_start,
-            leaf_row,
-            collapse,
-            wrapped_row,
-        );
-        cell.row = logical_start as i64;
-        cell.rowspan = logical_end.saturating_sub(logical_start) as i64 + 1;
-    }
-
-    let logical_rows = if wrapped_row.is_some() {
-        physical_rows.saturating_sub(1)
-    } else if collapse {
-        2 + physical_rows.saturating_sub(body_start)
+    let groups = logical_row_components(physical_rows, cells, body_start);
+    let base = remap_cells_to_logical_rows(cells, physical_rows, &groups);
+    let logical_rows = groups.len();
+    let logical_body_start = if body_start >= physical_rows {
+        logical_rows
     } else {
-        physical_rows
+        logical_row_mapping_for_components(physical_rows, &groups)
+            .get(body_start)
+            .copied()
+            .unwrap_or(logical_rows)
     };
-    if collapse && logical_rows >= 2 {
-        for index in 0..cells.len() {
-            if cells[index].row != 0 || cells[index].text.trim().is_empty() {
-                continue;
-            }
-            let end = cells[index].col.saturating_add(cells[index].colspan.max(1));
-            let has_child = cells.iter().enumerate().any(|(other_index, child)| {
-                other_index != index
-                    && child.row == 1
-                    && !child.text.trim().is_empty()
-                    && (cells[index].col..end)
-                        .any(|column| cell_overlaps_column(child, column.max(0) as usize))
-            });
-            if !has_child && cells[index].rowspan == 1 {
-                cells[index].rowspan = 2;
-            }
-        }
-    }
+    let proposed = infer_header_spans(&base, logical_body_start.min(logical_rows));
+    *cells = commit_header_span_proposal(&base, proposed, logical_rows, bands.len());
 
-    if logical_rows >= 2 {
-        let header_rows = if let Some(collapsed_row) = wrapped_row {
-            body_start.saturating_sub(usize::from(collapsed_row < body_start))
-        } else {
-            mapped_header_row(body_start, body_start, leaf_row, collapse, wrapped_row)
-        };
-        let parents: Vec<(usize, usize, usize)> = cells
-            .iter()
-            .filter(|cell| cell.row >= 0 && (cell.row as usize) < header_rows && cell.colspan > 1)
-            .map(|cell| {
-                (
-                    cell.row as usize,
-                    cell.col.max(0) as usize,
-                    cell.col.saturating_add(cell.colspan.max(1)) as usize,
-                )
-            })
-            .collect();
-        for (parent_row, parent_start, parent_end) in parents {
-            let Some(leaf_row) = (parent_row + 1..header_rows).find(|row| {
-                let child_columns: Vec<usize> = cells
-                    .iter()
-                    .filter(|cell| {
-                        cell.row as usize == *row
-                            && !cell.text.trim().is_empty()
-                            && cell.colspan == 1
-                            && (cell.col as usize) >= parent_start
-                            && (cell.col as usize) < parent_end
-                    })
-                    .map(|cell| cell.col as usize)
-                    .collect();
-                child_columns.len() == parent_end - parent_start
-                    && child_columns
-                        .iter()
-                        .copied()
-                        .collect::<std::collections::BTreeSet<_>>()
-                        .len()
-                        == child_columns.len()
-            }) else {
-                continue;
-            };
-            let grouped_columns: std::collections::BTreeSet<usize> =
-                (parent_start..parent_end).collect();
-            let snapshot = cells.clone();
-            for index in 0..cells.len() {
-                let cell = &snapshot[index];
-                if cell.text.trim().is_empty()
-                    || cell.colspan != 1
-                    || cell.row as usize >= header_rows
-                    || grouped_columns.contains(&(cell.col.max(0) as usize))
-                {
-                    continue;
-                }
-                let column = cell.col.max(0) as usize;
-                let only_occupant = snapshot.iter().enumerate().all(|(other_index, other)| {
-                    other_index == index
-                        || other.text.trim().is_empty()
-                        || other.col as usize > column
-                        || other.col.saturating_add(other.colspan.max(1)) as usize <= column
-                        || other.row as usize > leaf_row
-                        || other.row.saturating_add(other.rowspan.max(1)) as usize <= parent_row
-                });
-                if only_occupant {
-                    cells[index].row = parent_row as i64;
-                    cells[index].rowspan = (leaf_row - parent_row + 1) as i64;
-                }
-            }
-        }
-    }
-
-    logical_row_edges(
-        rows,
-        region,
-        body_start,
-        leaf_row,
-        collapse,
-        wrapped_row,
-        row_tracks,
-    )
+    logical_row_edges_for_components(rows, region, &groups, row_tracks)
 }
 
 fn rebuild_occupancy_indices(
@@ -2962,6 +3420,17 @@ pub fn recover_native_region(input: NativeRegionInput) -> NativeRegionOutput {
     let num_cols = bands.len().max(1);
     let col_edges = logical_column_edges(&bands, &input.region.rect);
 
+    for cell in &cells {
+        if !cell_span_is_in_bounds(cell, num_rows, num_cols) {
+            diags.push(occupancy_out_of_bounds_diagnostic(
+                "wireless_structure.recover_native_region",
+                cell.row,
+                cell.col,
+                "logical cell is outside inferred grid",
+            ));
+        }
+    }
+
     let (mut occupancy, conflicts) = rebuild_occupancy_indices(&cells, num_rows, num_cols);
     for (row, col) in conflicts {
         diags.push(occupancy_conflict_diagnostic(
@@ -3340,6 +3809,25 @@ mod tests {
             },
             block: 0,
             line,
+        }
+    }
+
+    fn make_cell(text: &str, row: i64, col: i64, rowspan: i64, colspan: i64) -> CellDto {
+        CellDto {
+            schema_version: 1,
+            text: text.to_string(),
+            row,
+            col,
+            rect: Rect4 {
+                schema_version: 1,
+                x0: col as f64 * 10.0,
+                y0: row as f64 * 10.0,
+                x1: (col + colspan.max(1)) as f64 * 10.0,
+                y1: (row + rowspan.max(1)) as f64 * 10.0,
+            },
+            rowspan,
+            colspan,
+            source: None,
         }
     }
 
@@ -4624,5 +5112,67 @@ mod tests {
         assert_eq!((refined[0].x0, refined[0].x1), (10.0, 50.0));
         assert_eq!((refined[1].x0, refined[1].x1), (50.0, 90.0));
         assert!(cutoff.is_some());
+    }
+
+    #[test]
+    fn test_logical_row_components_collapse_only_owned_continuation_rows() {
+        let cells = vec![
+            make_cell("父", 0, 0, 1, 1),
+            make_cell("包裹叶一\n下", 1, 1, 2, 1),
+            make_cell("包裹叶二\n下", 1, 2, 2, 1),
+            make_cell("兄弟一", 2, 3, 1, 1),
+            make_cell("兄弟二", 2, 4, 1, 1),
+            make_cell("正文", 3, 0, 1, 1),
+        ];
+
+        let groups = logical_row_components(4, &cells, 3);
+
+        assert_eq!(groups, vec![vec![0], vec![1, 2], vec![3]]);
+    }
+
+    #[test]
+    fn test_header_span_transaction_rolls_back_conflicting_proposal() {
+        let base = vec![make_cell("左", 0, 0, 1, 1), make_cell("下", 1, 0, 1, 1)];
+        let mut proposed = base.clone();
+        proposed[0].rowspan = 2;
+
+        let committed = commit_header_span_proposal(&base, proposed, 2, 1);
+
+        assert_eq!(committed, base);
+    }
+
+    #[test]
+    fn test_header_span_inference_promotes_only_an_unblocked_stub() {
+        let base = vec![
+            make_cell("项目", 0, 0, 1, 1),
+            make_cell("父", 0, 1, 1, 2),
+            make_cell("左叶", 1, 1, 1, 1),
+            make_cell("右叶", 1, 2, 1, 1),
+        ];
+        let valid = infer_header_spans(&base, 2);
+        assert_eq!((valid[0].row, valid[0].rowspan), (0, 2));
+
+        let blocked_base = [
+            base[0].clone(),
+            base[1].clone(),
+            base[2].clone(),
+            base[3].clone(),
+            make_cell("非空", 1, 0, 1, 1),
+        ];
+        let blocked = infer_header_spans(&blocked_base, 2);
+        assert_eq!((blocked[0].row, blocked[0].rowspan), (0, 1));
+    }
+
+    #[test]
+    fn test_header_span_inference_rejects_incomplete_two_leaf_group() {
+        let base = vec![
+            make_cell("项目", 0, 0, 1, 1),
+            make_cell("不完整父", 0, 1, 1, 2),
+            make_cell("左叶", 1, 1, 1, 1),
+        ];
+
+        let proposed = infer_header_spans(&base, 2);
+
+        assert_eq!(proposed[1].colspan, 1);
     }
 }

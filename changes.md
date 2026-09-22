@@ -2,6 +2,9 @@
 
 ## 2026-09-22
 
+- Task 4D logical row/header-span transaction：以 native continuation 的拥有关系压缩物理行；只有同层父标题与下一层连续叶子列形成完整、无重叠 `1:2` 配对时恢复 `colspan=2`，不完整层整层回退为 `colspan=1`。`rowspan` 在逻辑网格生成后才推断，覆盖槽位出现非空标题时拒绝扩展；跨度 proposal 在 clone 上重建 occupancy，冲突或越界时回滚。
+- 所有未被既有 rowspan/colspan 覆盖的逻辑槽位现在各自物化为独立 `text=""`、`1x1` Cell，并执行最终 exact occupancy 检查；恢复入口保留 out-of-bounds diagnostic。实现只消费 native span、atom、列带和 Cell，不回读 `page.get_text("words")`，不调用 `extract_zebra()` 或 legacy `_rebuild_text_aligned_table()`。
+- Task 4D 回归：fresh binding 下 differential/grid/header/recoverer focused pytest `102 passed`，`cargo test --lib wireless_structure` `31 passed`；默认 Python route、shadow/fallback policy 和页面级 JSON/PNG 验收保持不变。仓库级 `cargo fmt -- --check` 仍受既有跨文件格式差异影响，未做全仓格式化。
 - Task 4C physical grid/occupancy bounded slice：修复 Rust 行聚类先于 continuation 判定拒绝左移 CJK 换行字段的问题；严格要求 source refs 连续、向下移动、CJK-only、左移、右边界接近前一字段左边界且前字段足够宽。修正 continuation predicate 的 veto 逻辑，避免拒绝条件被误当成允许条件。
 - 物理片段合并后从完整 Cell 集合重新计算 occupancy，避免合法的 source-contiguous same-slot inline fragment 保留过期 `occupancy_conflict`；独立字段冲突仍显式诊断。物理 Cell 负索引或超出推断网格时输出 `occupancy_out_of_bounds`，不再静默丢弃。有效 `col_hint` 优先于宽 bbox 的列推断。
 - 新增 Rust 物理网格正例和拒绝误合并/冲突/空槽覆盖回归；`cargo test --lib wireless_structure` 为 `27 passed`，无线结构 differential/grid/recoverer focused pytest 为 `49 passed`，`git diff --check` 通过。结构恢复仍只消费 owned atom、列带和 region，不回读 `page.get_text("words")`；默认 Python route 和页面级 JSON/PNG 验收保持不变。

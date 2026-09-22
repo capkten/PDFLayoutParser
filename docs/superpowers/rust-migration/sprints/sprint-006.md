@@ -6,7 +6,7 @@
 
 ## 当前阶段
 
-Task 4A 已完成差分观测基础设施。当前只证明 Python oracle 与 Rust helper 可以在同一 owned atom/band/region 输入上按字段比较；尚未宣称 column/grid/header parity。
+Task 4A–4D 已完成本 sprint 的 Rust 无线结构 bounded slice：列带、物理网格、逻辑行/表头跨度、空槽位和 occupancy transaction 均已实现并通过 focused 验证。默认 Python route、shadow route、fallback policy 和页面级 JSON/PNG 验收仍保持不变。
 
 ## 夹具范围
 
@@ -37,11 +37,10 @@ $env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'
 
 ## 下一步
 
-1. Task 4B：迁移 owned-input 的列带 refine/rescue、header cutoff 与 geometry-based annotation。
-2. Task 4C：迁移 physical row/grid、column span 和 occupancy contract。
-3. Task 4D：迁移 logical row/header-span transaction 与 empty-slot materialization。
+1. Task 5：双路 shadow 与真实页面 JSON/PNG 验收。
+2. Task 6：最终 review、回归和迁移完成门禁。
 
-每个 bounded slice 都必须先 RED、再 GREEN，并由独立 `gpt-5.6-luna` reviewer 给出 Spec Compliance 与 Task quality 结论。默认 Python route、shadow route 和 fallback policy 保持不变。
+Task 4D 由当前会话直接实现，未派发独立 subagent；后续页面级工作仍必须保持 native-span/atom/grid/Cell 单向数据流，不回读 `page.get_text("words")`。
 
 ## Task 4B 完成记录（2026-09-22）
 
@@ -54,3 +53,11 @@ TDD RED：新增 `test_refine_leaf_bands_splits_independent_body_tracks` 在旧 
 Task 4C 接入 physical grid 与 occupancy contract：行聚类使用 median positive height 和垂直 overlap；左移 CJK continuation 只有 source refs 连续、向下移动、CJK-only、左移和宽字段几何证据完整时才允许进入同一物理行；有效 `col_hint` 优先于宽 bbox 推断；source-contiguous inline fragment 合并后重新计算 occupancy diagnostic；负索引和超出推断网格的 physical Cell 生成显式 `occupancy_out_of_bounds` diagnostic，不再静默跳过。
 
 TDD 接手时的 RED 为 `25 passed; 2 failed`，失败分别是左移 continuation 正例和合法 same-slot fragment 被 stale occupancy diagnostic 误报。修复后的验证结果为：`cargo test --lib wireless_structure` 为 `27 passed`；differential/grid/recoverer focused pytest 为 `49 passed`；`git diff --check` 通过。Task 4C 仍不宣称页面级 JSON/PNG parity；Task 4D 接手 logical row/header-span transaction 和最终逻辑槽位合同。
+
+## Task 4D 完成记录（2026-09-22）
+
+Task 4D 将逻辑行压缩和跨度恢复改为拓扑驱动、事务式流程。`logical_row_components()` 只把拥有同一 native continuation 证据的物理行折叠；完整二叶子表头要求同层父标题、下一层连续叶子列和完整 `1:2` 覆盖同时成立，缺叶或存在歧义时整层降回 `colspan=1`，不做部分提升。`rowspan` 在逻辑网格形成后推断，父标题覆盖槽位均为空才允许向下扩展；覆盖区存在非空标题时拒绝。表头跨度先在 clone 上推断，再重建 occupancy，发现越界或冲突则回滚到 base cells。
+
+空槽位在既有 rowspan/colspan 覆盖之后逐槽位物化为独立 `text=""`、`1x1` Cell，最终 occupancy 必须恰好一次覆盖每个逻辑槽位；恢复入口额外记录 out-of-bounds diagnostic。实现只消费 native span、atom、列带、物理 Cell 和逻辑 Cell，不回读 `page.get_text("words")`，不调用 `extract_zebra()` 或 legacy `_rebuild_text_aligned_table()`。
+
+TDD 回归覆盖：完整/不完整二叶子父表头、可恢复/被非空标题阻断的 rowspan、跨度事务冲突回滚、逻辑行压缩所有权和独立空槽位。fresh 扩展下差分/grid/header/recoverer focused pytest 为 `102 passed`；`cargo test --lib wireless_structure` 为 `31 passed`。`cargo check` 与 `git diff --check` 作为提交前门禁；仓库级 `cargo fmt -- --check` 仍会报告本 slice 之前跨文件的既有格式差异，因此未做全仓格式化。Task 4D 不宣称真实 PDF 页面 JSON/PNG parity，页面验收留给 Task 5。
