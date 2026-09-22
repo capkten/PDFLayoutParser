@@ -1,5 +1,11 @@
 # Changes
 
+## 2026-09-22
+
+- Task 4C physical grid/occupancy bounded slice：修复 Rust 行聚类先于 continuation 判定拒绝左移 CJK 换行字段的问题；严格要求 source refs 连续、向下移动、CJK-only、左移、右边界接近前一字段左边界且前字段足够宽。修正 continuation predicate 的 veto 逻辑，避免拒绝条件被误当成允许条件。
+- 物理片段合并后从完整 Cell 集合重新计算 occupancy，避免合法的 source-contiguous same-slot inline fragment 保留过期 `occupancy_conflict`；独立字段冲突仍显式诊断。物理 Cell 负索引或超出推断网格时输出 `occupancy_out_of_bounds`，不再静默丢弃。有效 `col_hint` 优先于宽 bbox 的列推断。
+- 新增 Rust 物理网格正例和拒绝误合并/冲突/空槽覆盖回归；`cargo test --lib wireless_structure` 为 `27 passed`，无线结构 differential/grid/recoverer focused pytest 为 `49 passed`，`git diff --check` 通过。结构恢复仍只消费 owned atom、列带和 region，不回读 `page.get_text("words")`；默认 Python route 和页面级 JSON/PNG 验收保持不变。
+
 ## 2026-09-21
 
 - Task 3B differential ledger minor fix：为每条 mismatch 增加显式 `reason`，并为 `empty_whitespace_and_separator` 的两条 `flow/order` 记录固定 `requires_adaptation` 分类和分层根因。`text_runs/S2` 是 Rust 未透传 separator survivor 的 flow metadata，`atoms/S2` 是 Rust 使用过滤后的 local flow/order `1` 而 Python 保留 source order `2`；两者 source bounds 均为 `2`，不再笼统记为一条差异。重新计算 ledger：total `111`，fixture/field/classification counts 不变，SHA256 为 `cb51b9e240ec69b88f9b00066c2293f076b31ffb3973bac7996eb663f0a71f81`。

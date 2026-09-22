@@ -48,3 +48,9 @@ $env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'
 Task 4B 已接入 Rust owned atom/band 的列带准备：paired-CJK 与 sparse-alignment 伪列裁剪、正文数值轨道和最低表头子列 refine、header cutoff、稀疏正文 rescue，以及保守的 header-only rescue。`recover_native_region` 先执行 prepared-band 阶段，再进入既有 grid/occupancy 流程；默认 Python route、shadow route、Snapshot capture 和 fallback policy 未改动。
 
 TDD RED：新增 `test_refine_leaf_bands_splits_independent_body_tracks` 在旧 stub 上失败，输出 `left: 1, right: 2`。GREEN：focused Rust module suite `22 passed`；focused differential/columns/header suite `72 passed`。paired-CJK 与 sparse-alignment 的 bands presence mismatch 已消除，其余未迁移逻辑差异继续按 `requires_adaptation`、`defect`、`unsupported` ledger 分类保留。Task 4B 不宣称页面级 JSON/PNG parity。
+
+## Task 4C 完成记录（2026-09-22）
+
+Task 4C 接入 physical grid 与 occupancy contract：行聚类使用 median positive height 和垂直 overlap；左移 CJK continuation 只有 source refs 连续、向下移动、CJK-only、左移和宽字段几何证据完整时才允许进入同一物理行；有效 `col_hint` 优先于宽 bbox 推断；source-contiguous inline fragment 合并后重新计算 occupancy diagnostic；负索引和超出推断网格的 physical Cell 生成显式 `occupancy_out_of_bounds` diagnostic，不再静默跳过。
+
+TDD 接手时的 RED 为 `25 passed; 2 failed`，失败分别是左移 continuation 正例和合法 same-slot fragment 被 stale occupancy diagnostic 误报。修复后的验证结果为：`cargo test --lib wireless_structure` 为 `27 passed`；differential/grid/recoverer focused pytest 为 `49 passed`；`git diff --check` 通过。Task 4C 仍不宣称页面级 JSON/PNG parity；Task 4D 接手 logical row/header-span transaction 和最终逻辑槽位合同。

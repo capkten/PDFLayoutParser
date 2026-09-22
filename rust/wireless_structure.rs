@@ -29,6 +29,25 @@ fn y_overlap_ratio(left: &Rect4, right: &Rect4) -> f64 {
     vertical_overlap(left, right) / taller_height
 }
 
+fn is_left_shifted_continuation(previous: &AtomDto, candidate: &AtomDto) -> bool {
+    let Some(previous_ref) = previous.run_refs.last() else {
+        return false;
+    };
+    let Some(candidate_ref) = candidate.run_refs.first() else {
+        return false;
+    };
+    if candidate_ref != &(previous_ref + 1)
+        || center_y(&candidate.rect) <= center_y(&previous.rect)
+        || candidate.rect.x0 >= previous.rect.x0
+        || !is_cjk_only(&candidate.text)
+        || candidate.rect.x1 > previous.rect.x0 + 5.0
+        || previous.rect.x1 - previous.rect.x0 < 4.0 * rect_height(&previous.rect).max(1.0)
+    {
+        return false;
+    }
+    true
+}
+
 fn same_visual_row(left: &Rect4, right: &Rect4, tolerance: f64) -> bool {
     if (center_y(left) - center_y(right)).abs() <= tolerance {
         return true;
@@ -95,7 +114,11 @@ fn can_join_visual_row(
     }) else {
         return false;
     };
-    if !same_visual_row(&representative.rect, &candidate.rect, tolerance) {
+    let left_shifted_continuation =
+        is_left_shifted_continuation(representative, candidate);
+    if !same_visual_row(&representative.rect, &candidate.rect, tolerance)
+        && !left_shifted_continuation
+    {
         return false;
     }
 
@@ -114,7 +137,9 @@ fn can_join_visual_row(
         if existing_span != candidate_span {
             return false;
         }
-        if y_overlap_ratio(&existing.rect, &candidate.rect) < 0.45 {
+        if y_overlap_ratio(&existing.rect, &candidate.rect) < 0.45
+            && !is_left_shifted_continuation(existing, candidate)
+        {
             return false;
         }
     }
@@ -502,9 +527,14 @@ pub fn build_grid(
         });
 
         for atom in row_atoms {
+            let hinted_col = atom.col_hint.and_then(|hint| {
+                (hint >= 0 && (hint as usize) < bands.len()).then_some(hint as usize)
+            });
             let best_col = dash_assignments
                 .get(&atom.order)
                 .copied()
+                .filter(|column| *column < bands.len())
+                .or(hinted_col)
                 .unwrap_or_else(|| best_column_for_rect(&atom.rect, &bands));
 
             physical_cells.push(PhysicalCell {
@@ -518,7 +548,45 @@ pub fn build_grid(
         }
     }
 
-    (row_clusters, bands, physical_cells, Vec::new())
+    let diagnostics =
+        physical_occupancy_diagnostics(&physical_cells, "wireless_structure.build_grid");
+    (row_clusters, bands, physical_cells, diagnostics)
+}
+
+fn physical_occupancy_diagnostics(cells: &[PhysicalCell], path: &str) -> Vec<DiagnosticDto> {
+    let mut diagnostics = Vec::new();
+    let mut occupied = std::collections::BTreeMap::new();
+    for cell in cells {
+        let key = (cell.row.max(0) as usize, cell.col.max(0) as usize);
+        if occupied.insert(key, ()).is_some() {
+            diagnostics.push(occupancy_conflict_diagnostic(
+                path,
+                key.0,
+                key.1,
+            ));
+        }
+    }
+    diagnostics
+}
+
+fn occupancy_out_of_bounds_diagnostic(
+    path: &str,
+    row: i64,
+    col: i64,
+    message: &str,
+) -> DiagnosticDto {
+    DiagnosticDto {
+        schema_version: 1,
+        status: "occupancy_out_of_bounds".to_string(),
+        path: path.to_string(),
+        error_type: Some("OccupancyOutOfBounds".to_string()),
+        message: Some(format!("{message}: row={row}, col={col}")),
+        traceback_id: None,
+        field: Some("occupancy".to_string()),
+        python_value: None,
+        rust_value: None,
+        classification: Some("defect".to_string()),
+    }
 }
 
 fn occupancy_conflict_diagnostic(path: &str, row: usize, col: usize) -> DiagnosticDto {
@@ -2846,15 +2914,27 @@ pub fn recover_native_region(input: NativeRegionInput) -> NativeRegionOutput {
     let (bands, _) = refine_leaf_bands(input.atoms.clone(), bands);
     let bands = rescue_header_only_bands(&input.atoms, bands);
 
-    let (rows, bands, mut phys_cells, mut diags) = build_grid(input.atoms.clone(), bands);
+    let (rows, bands, mut phys_cells, _) = build_grid(input.atoms.clone(), bands);
     merge_physical_inline_fragments(&mut phys_cells);
+    let mut diags = physical_occupancy_diagnostics(
+        &phys_cells,
+        "wireless_structure.recover_native_region",
+    );
 
     let mut cells = Vec::new();
 
     for pc in phys_cells {
-        let r = pc.row.max(0) as usize;
-        let c = pc.col.max(0) as usize;
-        if r >= rows.len() || c >= bands.len() {
+        if pc.row < 0
+            || pc.col < 0
+            || pc.row as usize >= rows.len()
+            || pc.col as usize >= bands.len()
+        {
+            diags.push(occupancy_out_of_bounds_diagnostic(
+                "wireless_structure.recover_native_region",
+                pc.row,
+                pc.col,
+                "physical cell is outside inferred grid",
+            ));
             continue;
         }
         cells.push(cell_from_physical(pc, &bands));
@@ -3065,13 +3145,16 @@ pub fn recover_wireless_tables(input: WirelessRecoveryInput) -> WirelessRecovery
             continue;
         }
 
-        let (rows, bands_out, mut phys_cells, mut region_diags) = build_grid(region_atoms, bands);
-        diagnostics.append(&mut region_diags);
+        let (rows, bands_out, mut phys_cells, _) = build_grid(region_atoms, bands);
         if rows.len() < 2 || bands_out.len() < 2 {
             continue;
         }
 
         merge_physical_inline_fragments(&mut phys_cells);
+        diagnostics.extend(physical_occupancy_diagnostics(
+            &phys_cells,
+            "wireless_table_recovery.recover_wireless_tables",
+        ));
 
         let mut cells = Vec::new();
         let num_rows = rows.len();
@@ -3080,9 +3163,26 @@ pub fn recover_wireless_tables(input: WirelessRecoveryInput) -> WirelessRecovery
         let mut has_conflict = false;
 
         for pc in phys_cells {
+            if pc.row < 0 || pc.col < 0 {
+                diagnostics.push(occupancy_out_of_bounds_diagnostic(
+                    "wireless_table_recovery.recover_wireless_tables",
+                    pc.row,
+                    pc.col,
+                    "physical cell has a negative grid index",
+                ));
+                has_conflict = true;
+                continue;
+            }
             let r = pc.row as usize;
             let (col_start, col_end) = physical_cell_span(&pc, &bands_out);
             if r >= num_rows || col_start >= num_cols || col_end >= num_cols {
+                diagnostics.push(occupancy_out_of_bounds_diagnostic(
+                    "wireless_table_recovery.recover_wireless_tables",
+                    pc.row,
+                    pc.col,
+                    "physical cell span is outside inferred grid",
+                ));
+                has_conflict = true;
                 continue;
             }
             let mut cell_conflict = false;
@@ -3401,6 +3501,102 @@ mod tests {
         assert_eq!(rows.len(), 3);
         assert_eq!(cells.len(), 13);
         assert!(diagnostics.is_empty());
+    }
+
+    #[test]
+    fn test_build_grid_keeps_same_column_rows_separate_when_vertical_overlap_is_insufficient() {
+        let bands = vec![ColumnBandDto {
+            schema_version: 1,
+            x0: 0.0,
+            x1: 100.0,
+            source_atoms: Vec::new(),
+            order: 0,
+        }];
+        let atoms = vec![
+            make_atom("上", 10.0, 0.0, 40.0, 10.0, 0),
+            make_atom("下", 10.0, 9.0, 40.0, 19.0, 1),
+        ];
+        let (rows, _, _, _) = build_grid(atoms, bands);
+        assert_eq!(rows.len(), 2);
+    }
+
+    #[test]
+    fn test_build_grid_accepts_left_shifted_cjk_continuation_only_with_source_continuity() {
+        let bands = vec![ColumnBandDto {
+            schema_version: 1,
+            x0: 0.0,
+            x1: 100.0,
+            source_atoms: Vec::new(),
+            order: 0,
+        }];
+        let mut first = make_atom("长字段", 30.0, 0.0, 90.0, 10.0, 0);
+        first.run_refs = vec![10];
+        let mut second = make_atom("续", 10.0, 9.0, 25.0, 19.0, 1);
+        second.run_refs = vec![11];
+        let (rows, _, _, _) = build_grid(vec![first, second], bands);
+        assert_eq!(rows.len(), 1);
+    }
+
+    #[test]
+    fn test_build_grid_reports_duplicate_occupancy() {
+        let bands = vec![ColumnBandDto {
+            schema_version: 1,
+            x0: 0.0,
+            x1: 100.0,
+            source_atoms: Vec::new(),
+            order: 0,
+        }];
+        let (rows, _, _, diagnostics) = build_grid(
+            vec![
+                make_atom("甲", 10.0, 0.0, 40.0, 10.0, 0),
+                make_atom("乙", 10.0, 0.0, 40.0, 10.0, 1),
+            ],
+            bands,
+        );
+        assert_eq!(rows.len(), 1);
+        assert!(diagnostics
+            .iter()
+            .any(|item| item.status == "occupancy_conflict"));
+    }
+
+    #[test]
+    fn test_build_grid_preserves_annotated_column_hint_over_bbox_overlap() {
+        let bands = (0..2)
+            .map(|index| ColumnBandDto {
+                schema_version: 1,
+                x0: index as f64 * 50.0,
+                x1: index as f64 * 50.0 + 45.0,
+                source_atoms: Vec::new(),
+                order: index,
+            })
+            .collect();
+        let mut atom = make_atom("字段", 5.0, 0.0, 80.0, 10.0, 0);
+        atom.col_hint = Some(1);
+        let (_, _, cells, _) = build_grid(vec![atom], bands);
+        assert_eq!(cells[0].col, 1);
+    }
+
+    #[test]
+    fn test_build_logical_grid_materializes_each_uncovered_slot_after_spans() {
+        let atoms = vec![make_atom("跨列", 0.0, 0.0, 90.0, 10.0, 0)];
+        let grid = GridDto {
+            schema_version: 1,
+            rows: 2,
+            cols: 3,
+            row_edges: vec![0.0, 10.0, 20.0],
+            col_edges: vec![0.0, 30.0, 60.0, 90.0],
+            occupancy: vec![vec![Some(0), Some(0), None], vec![None, None, None]],
+        };
+        let output = build_logical_grid(atoms, grid);
+        assert_eq!(output.empty_slots.len(), 4);
+        assert_eq!(
+            output
+                .cells
+                .iter()
+                .filter(|cell| cell.text.is_empty())
+                .count(),
+            4
+        );
     }
 
     #[test]
