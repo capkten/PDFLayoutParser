@@ -1421,6 +1421,7 @@ pub struct AtomDto {
     pub run_refs: Vec<i64>,
     pub row_hint: Option<i64>,
     pub col_hint: Option<i64>,
+    pub col_end_hint: Option<i64>,
     pub order: i64,
 }
 
@@ -1433,6 +1434,7 @@ impl AtomDto {
         let run_refs = required_i64_list(dict, "run_refs")?;
         let row_hint = optional_i64(dict, "row_hint")?;
         let col_hint = optional_i64(dict, "col_hint")?;
+        let col_end_hint = optional_i64(dict, "col_end_hint")?;
         let order = required_i64(dict, "order")?;
         Ok(Self {
             schema_version: sv,
@@ -1441,6 +1443,7 @@ impl AtomDto {
             run_refs,
             row_hint,
             col_hint,
+            col_end_hint,
             order,
         })
     }
@@ -1453,6 +1456,9 @@ impl AtomDto {
         d.set_item("run_refs", &self.run_refs)?;
         d.set_item("row_hint", self.row_hint)?;
         d.set_item("col_hint", self.col_hint)?;
+        if let Some(col_end_hint) = self.col_end_hint {
+            d.set_item("col_end_hint", col_end_hint)?;
+        }
         d.set_item("order", self.order)?;
         Ok(d)
     }
@@ -1617,6 +1623,7 @@ pub struct PhysicalCell {
     pub rect: Rect4,
     pub row: i64,
     pub col: i64,
+    pub colspan: i64,
     pub source_refs: Vec<i64>,
 }
 
@@ -1628,6 +1635,10 @@ impl PhysicalCell {
         let rect = Rect4::from_py(&get_req(dict, "rect")?.downcast::<PyDict>()?.clone())?;
         let row: i64 = get_req(dict, "row")?.extract()?;
         let col: i64 = get_req(dict, "col")?.extract()?;
+        let colspan = optional_i64(dict, "colspan")?.unwrap_or(1);
+        if colspan < 1 {
+            return Err(PyValueError::new_err("Field 'colspan' must be positive"));
+        }
         let source_refs: Vec<i64> = get_req(dict, "source_refs")?.extract()?;
         Ok(Self {
             schema_version: sv,
@@ -1635,6 +1646,7 @@ impl PhysicalCell {
             rect,
             row,
             col,
+            colspan,
             source_refs,
         })
     }
@@ -1646,6 +1658,7 @@ impl PhysicalCell {
         d.set_item("rect", self.rect.to_py(py)?)?;
         d.set_item("row", self.row)?;
         d.set_item("col", self.col)?;
+        d.set_item("colspan", self.colspan)?;
         d.set_item("source_refs", &self.source_refs)?;
         Ok(d)
     }

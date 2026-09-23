@@ -487,22 +487,30 @@ pub fn build_grid(
     ) * 0.70)
         .max(3.0);
     let mut rows: Vec<Vec<AtomDto>> = Vec::new();
-    let mut row_centers: Vec<f64> = Vec::new();
-
-    for atom in sorted_atoms {
-        let last_index = rows.len().checked_sub(1);
-        if let Some(last_index) = last_index {
-            if can_join_visual_row(&rows[last_index], &atom, &bands, row_tolerance) {
-                rows[last_index].push(atom);
-                let count = rows[last_index].len() as f64;
-                let sum: f64 = rows[last_index].iter().map(|a| center_y(&a.rect)).sum();
-                row_centers[last_index] = sum / count;
-                continue;
-            }
+    if sorted_atoms.iter().all(|atom| atom.row_hint.is_some()) {
+        let mut hinted_rows: std::collections::BTreeMap<i64, Vec<AtomDto>> =
+            std::collections::BTreeMap::new();
+        for atom in sorted_atoms {
+            hinted_rows.entry(atom.row_hint.unwrap()).or_default().push(atom);
         }
-        let cy = center_y(&atom.rect);
-        row_centers.push(cy);
-        rows.push(vec![atom]);
+        rows = hinted_rows.into_values().collect();
+    } else {
+        let mut row_centers: Vec<f64> = Vec::new();
+        for atom in sorted_atoms {
+            let last_index = rows.len().checked_sub(1);
+            if let Some(last_index) = last_index {
+                if can_join_visual_row(&rows[last_index], &atom, &bands, row_tolerance) {
+                    rows[last_index].push(atom);
+                    let count = rows[last_index].len() as f64;
+                    let sum: f64 = rows[last_index].iter().map(|a| center_y(&a.rect)).sum();
+                    row_centers[last_index] = sum / count;
+                    continue;
+                }
+            }
+            let cy = center_y(&atom.rect);
+            row_centers.push(cy);
+            rows.push(vec![atom]);
+        }
     }
 
     let mut row_clusters = Vec::new();
@@ -530,12 +538,24 @@ pub fn build_grid(
             let hinted_col = atom.col_hint.and_then(|hint| {
                 (hint >= 0 && (hint as usize) < bands.len()).then_some(hint as usize)
             });
-            let best_col = dash_assignments
+            let dash_col = dash_assignments
                 .get(&atom.order)
                 .copied()
-                .filter(|column| *column < bands.len())
-                .or(hinted_col)
+                .filter(|column| *column < bands.len());
+            let best_col = hinted_col
+                .or(dash_col)
                 .unwrap_or_else(|| best_column_for_rect(&atom.rect, &bands));
+            let hinted_end = if hinted_col == Some(best_col) {
+                atom.col_end_hint.and_then(|hint| {
+                    (hint >= best_col as i64 && (hint as usize) < bands.len())
+                        .then_some(hint as usize)
+                })
+            } else {
+                None
+            };
+            let colspan = hinted_end
+                .map(|end| end.saturating_sub(best_col) + 1)
+                .unwrap_or(1) as i64;
 
             physical_cells.push(PhysicalCell {
                 schema_version: 1,
@@ -543,6 +563,7 @@ pub fn build_grid(
                 rect: atom.rect,
                 row: row_idx as i64,
                 col: best_col as i64,
+                colspan,
                 source_refs: atom.run_refs,
             });
         }
@@ -557,13 +578,14 @@ fn physical_occupancy_diagnostics(cells: &[PhysicalCell], path: &str) -> Vec<Dia
     let mut diagnostics = Vec::new();
     let mut occupied = std::collections::BTreeMap::new();
     for cell in cells {
-        let key = (cell.row.max(0) as usize, cell.col.max(0) as usize);
-        if occupied.insert(key, ()).is_some() {
-            diagnostics.push(occupancy_conflict_diagnostic(
-                path,
-                key.0,
-                key.1,
-            ));
+        let row = cell.row.max(0) as usize;
+        let col_start = cell.col.max(0) as usize;
+        let col_end = col_start.saturating_add(cell.colspan.max(1) as usize);
+        for col in col_start..col_end {
+            let key = (row, col);
+            if occupied.insert(key, ()).is_some() {
+                diagnostics.push(occupancy_conflict_diagnostic(path, key.0, key.1));
+            }
         }
     }
     diagnostics
@@ -604,6 +626,312 @@ fn occupancy_conflict_diagnostic(path: &str, row: usize, col: usize) -> Diagnost
     }
 }
 
+fn rect_for_atoms(atoms: &[AtomDto]) -> Option<Rect4> {
+    if atoms.is_empty() {
+        return None;
+    }
+    Some(Rect4 {
+        schema_version: 1,
+        x0: atoms
+            .iter()
+            .map(|atom| atom.rect.x0)
+            .fold(f64::INFINITY, f64::min),
+        y0: atoms
+            .iter()
+            .map(|atom| atom.rect.y0)
+            .fold(f64::INFINITY, f64::min),
+        x1: atoms
+            .iter()
+            .map(|atom| atom.rect.x1)
+            .fold(f64::NEG_INFINITY, f64::max),
+        y1: atoms
+            .iter()
+            .map(|atom| atom.rect.y1)
+            .fold(f64::NEG_INFINITY, f64::max),
+    })
+}
+
+fn table_row_box(row: &[AtomDto]) -> Option<Rect4> {
+    rect_for_atoms(row)
+}
+
+fn is_table_field_label(text: &str) -> bool {
+    text.contains(':') || text.contains('：')
+}
+
+fn split_wide_candidate_atom<'a>(text: &'a str) -> Vec<&'a str> {
+    let mut parts = Vec::new();
+    let mut split_start = 0;
+    let mut chars = text.char_indices().peekable();
+    while let Some((index, character)) = chars.next() {
+        if !character.is_whitespace() {
+            continue;
+        }
+        let run_start = index;
+        let mut run_end = index + character.len_utf8();
+        let mut count = 1;
+        while let Some((next_index, next_character)) = chars.peek().copied() {
+            if !next_character.is_whitespace() {
+                break;
+            }
+            chars.next();
+            run_end = next_index + next_character.len_utf8();
+            count += 1;
+        }
+        if count >= 3 {
+            let part = text[split_start..run_start].trim();
+            if !part.is_empty() {
+                parts.push(part);
+            }
+            split_start = run_end;
+        }
+    }
+    let final_part = text[split_start..].trim();
+    if !final_part.is_empty() {
+        parts.push(final_part);
+    }
+    parts
+}
+
+fn split_wide_candidate_atom_geometry(atom: &AtomDto, tracks: &[f64]) -> Vec<AtomDto> {
+    let parts = split_wide_candidate_atom(atom.text.trim());
+    if parts.len() < 2
+        || parts.len() != tracks.len()
+        || parts.iter().any(|part| !is_table_field_label(part))
+    {
+        return vec![atom.clone()];
+    }
+
+    parts
+        .into_iter()
+        .enumerate()
+        .map(|(index, part)| {
+            let x0 = tracks[index];
+            let x1 = tracks
+                .get(index + 1)
+                .map(|next| next - 1.0)
+                .unwrap_or(atom.rect.x1);
+            let mut piece = atom.clone();
+            piece.text = part.to_string();
+            piece.rect.x0 = x0;
+            piece.rect.x1 = (x0 + 1.0).max(x1);
+            piece
+        })
+        .collect()
+}
+
+fn is_table_number(text: &str) -> bool {
+    let mut value = text.trim().replace(',', "").replace(' ', "");
+    if let Some(first) = value.chars().next() {
+        if matches!(first, '$' | '¥' | '￥' | '€' | '£' | '₹') {
+            value.remove(0);
+        }
+    }
+    value
+        .replace('(', "-")
+        .replace(')', "")
+        .parse::<f64>()
+        .is_ok()
+        && value.chars().any(|character| character.is_ascii_digit())
+}
+
+fn median_value(mut values: Vec<f64>) -> Option<f64> {
+    if values.is_empty() {
+        return None;
+    }
+    values.sort_by(|left, right| left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal));
+    let middle = values.len() / 2;
+    Some(if values.len() % 2 == 0 {
+        (values[middle - 1] + values[middle]) / 2.0
+    } else {
+        values[middle]
+    })
+}
+
+fn table_anchor(atom: &AtomDto) -> f64 {
+    if is_table_number(&atom.text) {
+        atom.rect.x1
+    } else {
+        atom.rect.x0
+    }
+}
+
+fn is_table_currency_token(text: &str) -> bool {
+    matches!(text.trim(), "$" | "¥" | "￥" | "€" | "£" | "₹")
+}
+
+fn infer_python_candidate_tracks(atoms: &[AtomDto]) -> Option<Vec<f64>> {
+    let mut row_counts = std::collections::BTreeMap::new();
+    for atom in atoms {
+        let row = atom.row_hint?;
+        *row_counts.entry(row).or_insert(0_usize) += 1;
+    }
+
+    let mut entries: Vec<(i64, &AtomDto, f64)> = atoms
+        .iter()
+        .filter_map(|atom| {
+            let row = atom.row_hint?;
+            let width = atom.rect.x1 - atom.rect.x0;
+            (row_counts.get(&row).copied().unwrap_or(0) >= 2 && width < 350.0)
+                .then_some((row, atom, table_anchor(atom)))
+        })
+        .collect();
+    if entries.is_empty() {
+        return Some(Vec::new());
+    }
+
+    let widths = entries
+        .iter()
+        .map(|(_, atom, _)| atom.rect.x1 - atom.rect.x0)
+        .collect();
+    let tolerance = (median_value(widths)? * 0.42).max(10.0);
+    entries.sort_by(|left, right| {
+        left.2
+            .partial_cmp(&right.2)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| {
+                left.1
+                    .rect
+                    .x0
+                    .partial_cmp(&right.1.rect.x0)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+    });
+
+    let mut groups: Vec<Vec<(i64, f64, &str)>> = Vec::new();
+    for (row, atom, anchor) in entries {
+        let should_join = groups.last().map(|group| {
+            let prior_anchor = median_value(group.iter().map(|entry| entry.1).collect())
+                .unwrap_or(anchor);
+            let currency_then_number = is_table_number(&atom.text)
+                && group
+                    .iter()
+                    .any(|entry| is_table_currency_token(entry.2));
+            !currency_then_number && (anchor - prior_anchor).abs() <= tolerance
+        });
+        if should_join.unwrap_or(false) {
+            groups.last_mut().unwrap().push((row, anchor, &atom.text));
+        } else {
+            groups.push(vec![(row, anchor, &atom.text)]);
+        }
+    }
+
+    Some(
+        groups
+            .into_iter()
+            .filter_map(|group| {
+                let rows: std::collections::BTreeSet<i64> =
+                    group.iter().map(|entry| entry.0).collect();
+                (rows.len() >= 2)
+                    .then(|| median_value(group.into_iter().map(|entry| entry.1).collect()))
+                    .flatten()
+            })
+            .collect(),
+    )
+}
+
+fn nearest_candidate_track(text: &str, rect: &Rect4, tracks: &[f64]) -> Option<usize> {
+    let anchor = if is_table_number(text) {
+        rect.x1
+    } else {
+        rect.x0
+    };
+    tracks
+        .iter()
+        .enumerate()
+        .min_by(|(left_index, left), (right_index, right)| {
+            (anchor - **left)
+                .abs()
+                .partial_cmp(&(anchor - **right).abs())
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| left_index.cmp(right_index))
+        })
+        .map(|(index, _)| index)
+}
+
+fn merge_wrapped_candidate_rows(rows: Vec<Vec<AtomDto>>) -> Vec<Vec<AtomDto>> {
+    if rows.len() < 2 {
+        return rows;
+    }
+    let heights = rows
+        .iter()
+        .flat_map(|row| row.iter().map(|atom| rect_height(&atom.rect)))
+        .filter(|height| *height > 0.0);
+    let gap_limit = (median_positive(heights, 10.0) * 1.45).max(12.0);
+    let mut merged: Vec<Vec<AtomDto>> = vec![rows[0].clone()];
+    for row in rows.into_iter().skip(1) {
+        let current = merged.last_mut().unwrap();
+        let previous_box = table_row_box(current).unwrap();
+        let row_box = table_row_box(&row).unwrap();
+        let close = (0.0..=gap_limit).contains(&(row_box.y0 - previous_box.y1));
+        let sparse = current.len() >= 2 && row.len() < current.len();
+        let previous_center = (previous_box.x0 + previous_box.x1) / 2.0;
+        let row_center = (row_box.x0 + row_box.x1) / 2.0;
+        let centered_section_title = row.len() == 1
+            && (row_center - previous_center).abs()
+                <= (18.0_f64).max((previous_box.x1 - previous_box.x0) * 0.12);
+        let aligned = row.iter().all(|atom| {
+            current.iter().any(|existing| {
+                atom.rect.x1 >= existing.rect.x0 - 8.0
+                    && atom.rect.x0 <= existing.rect.x1 + 8.0
+            })
+        });
+        let continuation = close
+            && sparse
+            && aligned
+            && !centered_section_title
+            && !row.iter().any(|atom| is_table_number(&atom.text))
+            && !row.iter().any(|atom| is_table_field_label(&atom.text));
+        if continuation {
+            current.extend(row);
+            current.sort_by(|left, right| {
+                left.rect
+                    .x0
+                    .partial_cmp(&right.rect.x0)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then_with(|| left.order.cmp(&right.order))
+            });
+        } else {
+            merged.push(row);
+        }
+    }
+    merged
+}
+
+fn prepend_candidate_headers(
+    run: Vec<Vec<AtomDto>>,
+    all_rows: &[Vec<AtomDto>],
+) -> Vec<Vec<AtomDto>> {
+    let Some(first_atom) = run.first().and_then(|row| row.first()) else {
+        return run;
+    };
+    let Some(first_index) = all_rows
+        .iter()
+        .position(|row| row.iter().any(|atom| atom.order == first_atom.order))
+    else {
+        return run;
+    };
+    let table_box = rect_for_atoms(&run.iter().flatten().cloned().collect::<Vec<_>>()).unwrap();
+    let mut result = run;
+    for prior in all_rows[first_index.saturating_sub(2)..first_index]
+        .iter()
+        .rev()
+    {
+        if prior.len() >= 2 {
+            break;
+        }
+        let Some(prior_box) = table_row_box(prior) else {
+            continue;
+        };
+        let vertical_gap = result[0][0].rect.y0 - prior_box.y1;
+        let overlaps_table_width = prior_box.x1 >= table_box.x0 && prior_box.x0 <= table_box.x1;
+        if vertical_gap <= 28.0 && overlaps_table_width {
+            result.insert(0, prior.clone());
+        }
+    }
+    result
+}
+
 fn full_page_atom_runs(atoms: Vec<AtomDto>) -> Vec<(Rect4, Vec<AtomDto>)> {
     if atoms.is_empty() {
         return Vec::new();
@@ -620,85 +948,70 @@ fn full_page_atom_runs(atoms: Vec<AtomDto>) -> Vec<(Rect4, Vec<AtomDto>)> {
                     .partial_cmp(&right.rect.x0)
                     .unwrap_or(std::cmp::Ordering::Equal)
             })
+            .then_with(|| left.order.cmp(&right.order))
     });
 
-    let mut rows: Vec<Vec<AtomDto>> = Vec::new();
+    let tolerance = (median_positive(
+        ordered.iter().map(|atom| rect_height(&atom.rect)),
+        10.0,
+    ) * 0.48)
+        .max(3.5);
+    let mut visual_rows: Vec<Vec<AtomDto>> = Vec::new();
     let mut row_centers: Vec<f64> = Vec::new();
     for atom in ordered {
         let center = center_y(&atom.rect);
         if let Some(last_center) = row_centers.last() {
-            if (center - last_center).abs() <= 3.5 {
-                let index = rows.len() - 1;
-                rows[index].push(atom);
-                row_centers[index] = rows[index]
+            if (center - last_center).abs() <= tolerance {
+                let index = visual_rows.len() - 1;
+                visual_rows[index].push(atom);
+                row_centers[index] = visual_rows[index]
                     .iter()
                     .map(|item| center_y(&item.rect))
                     .sum::<f64>()
-                    / rows[index].len() as f64;
+                    / visual_rows[index].len() as f64;
                 continue;
             }
         }
-        rows.push(vec![atom]);
+        visual_rows.push(vec![atom]);
         row_centers.push(center);
     }
-
-    let row_heights: Vec<f64> = rows
+    for row in &mut visual_rows {
+        row.sort_by(|left, right| {
+            left.rect
+                .x0
+                .partial_cmp(&right.rect.x0)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| left.order.cmp(&right.order))
+        });
+    }
+    let visual_rows = merge_wrapped_candidate_rows(visual_rows);
+    let row_boxes: Vec<Rect4> = visual_rows
         .iter()
-        .map(|row| {
-            row.iter()
-                .map(|atom| atom.rect.y1 - atom.rect.y0)
-                .fold(0.0, f64::max)
-        })
-        .filter(|height| *height > 0.0)
+        .filter_map(|row| table_row_box(row))
         .collect();
-    let median_height = if row_heights.is_empty() {
-        10.0
-    } else {
-        let mut sorted = row_heights;
-        sorted.sort_by(|left, right| left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal));
-        sorted[sorted.len() / 2]
-    };
-    let gap_limit = (median_height * 2.4).max(30.0);
+    let row_heights = row_boxes.iter().map(rect_height).filter(|height| *height > 0.0);
+    let gap_limit = (median_positive(row_heights, 10.0) * 2.4).max(30.0);
 
     let mut runs: Vec<Vec<Vec<AtomDto>>> = Vec::new();
     let mut current: Vec<Vec<AtomDto>> = Vec::new();
-    for (row_index, row) in rows.into_iter().enumerate() {
-        let row_y0 = row
-            .iter()
-            .map(|atom| atom.rect.y0)
-            .fold(f64::INFINITY, f64::min);
-        let row_y1 = row
-            .iter()
-            .map(|atom| atom.rect.y1)
-            .fold(f64::NEG_INFINITY, f64::max);
-        let previous_y1 = current.last().map(|previous| {
-            previous
-                .iter()
-                .map(|atom| atom.rect.y1)
-                .fold(f64::NEG_INFINITY, f64::max)
-        });
-        let close = row_index == 0
-            || previous_y1
-                .map(|y1| row_y0 - y1 <= gap_limit)
-                .unwrap_or(false);
-        let multiple = row.len() >= 2;
-        let full_width_single = row.len() == 1 && row_y1 - row_y0 > median_height * 2.5;
-
-        if close && (multiple || (!full_width_single && !current.is_empty())) {
-            current.push(row);
+    for (row_index, row) in visual_rows.iter().enumerate() {
+        let row_box = &row_boxes[row_index];
+        let field_only_row = row.len() == 1 && is_table_field_label(&row[0].text);
+        let full_width_field = field_only_row && row_box.x1 - row_box.x0 >= 350.0;
+        let close = row_index == 0 || row_box.y0 - row_boxes[row_index - 1].y1 <= gap_limit;
+        let multiple_items = row.len() >= 2;
+        if (multiple_items || (field_only_row && !current.is_empty() && !full_width_field))
+            && close
+        {
+            current.push(row.clone());
         } else {
-            if current
-                .iter()
-                .filter(|candidate| candidate.len() >= 2)
-                .count()
-                >= 2
-            {
+            if current.iter().filter(|item| item.len() >= 2).count() >= 2 {
                 runs.push(std::mem::take(&mut current));
             } else {
                 current.clear();
             }
-            if multiple {
-                current.push(row);
+            if multiple_items {
+                current.push(row.clone());
             }
         }
     }
@@ -707,33 +1020,156 @@ fn full_page_atom_runs(atoms: Vec<AtomDto>) -> Vec<(Rect4, Vec<AtomDto>)> {
     }
 
     runs.into_iter()
+        .map(|run| prepend_candidate_headers(run, &visual_rows))
         .filter_map(|rows| {
-            let run_atoms = rows.into_iter().flatten().collect::<Vec<_>>();
-            if run_atoms.is_empty() {
-                return None;
+            let mut run_atoms = Vec::new();
+            for (row_index, mut row) in rows.into_iter().enumerate() {
+                for atom in &mut row {
+                    atom.row_hint = Some(row_index as i64);
+                }
+                run_atoms.extend(row);
             }
-            let rect = Rect4 {
-                schema_version: 1,
-                x0: run_atoms
-                    .iter()
-                    .map(|atom| atom.rect.x0)
-                    .fold(f64::INFINITY, f64::min),
-                y0: run_atoms
-                    .iter()
-                    .map(|atom| atom.rect.y0)
-                    .fold(f64::INFINITY, f64::min),
-                x1: run_atoms
-                    .iter()
-                    .map(|atom| atom.rect.x1)
-                    .fold(f64::NEG_INFINITY, f64::max),
-                y1: run_atoms
-                    .iter()
-                    .map(|atom| atom.rect.y1)
-                    .fold(f64::NEG_INFINITY, f64::max),
-            };
+            let rect = rect_for_atoms(&run_atoms)?;
             Some((rect, run_atoms))
         })
         .collect()
+}
+
+fn build_candidate_from_tracks(
+    atoms: &[AtomDto],
+    tracks: &[f64],
+    source: &str,
+) -> Option<TableCandidateDto> {
+    if tracks.len() < 2 || atoms.is_empty() {
+        return None;
+    }
+    let row_count = atoms
+        .iter()
+        .filter_map(|atom| atom.row_hint)
+        .max()?
+        .checked_add(1)? as usize;
+    let mut rows = vec![Vec::new(); row_count];
+    for atom in atoms {
+        let row = usize::try_from(atom.row_hint?).ok()?;
+        rows.get_mut(row)?
+            .extend(split_wide_candidate_atom_geometry(atom, tracks));
+    }
+    let table_atoms: Vec<AtomDto> = rows.iter().flatten().cloned().collect();
+    let table_box = rect_for_atoms(&table_atoms)?;
+    let table_center = (table_box.x0 + table_box.x1) / 2.0;
+    let centered_single_rows: std::collections::BTreeSet<usize> = rows
+        .iter()
+        .enumerate()
+        .filter_map(|(index, row)| {
+            let atom = row.first()?;
+            (row.len() == 1
+                && ((atom.rect.x0 + atom.rect.x1) / 2.0 - table_center).abs()
+                    <= (32.0_f64).max((table_box.x1 - table_box.x0) * 0.18))
+                .then_some(index)
+        })
+        .collect();
+    let short_title_rows: std::collections::BTreeSet<usize> = rows
+        .iter()
+        .enumerate()
+        .take(rows.len().saturating_sub(1))
+        .filter_map(|(index, row)| {
+            let atom = row.first()?;
+            (row.len() == 1
+                && rows[index + 1].len() >= 2
+                && atom.rect.x1 - atom.rect.x0 <= 180.0
+                && !is_table_field_label(&atom.text))
+                .then_some(index)
+        })
+        .collect();
+
+    let mut grouped: std::collections::BTreeMap<(usize, usize), Vec<&AtomDto>> =
+        std::collections::BTreeMap::new();
+    for (row_index, row) in rows.iter().enumerate() {
+        for atom in row {
+            let column = nearest_candidate_track(&atom.text, &atom.rect, tracks)?;
+            grouped.entry((row_index, column)).or_default().push(atom);
+        }
+    }
+    let active_columns: std::collections::BTreeSet<usize> =
+        grouped.keys().map(|(_, column)| *column).collect();
+    if active_columns.len() < 2 {
+        return None;
+    }
+    let column_map: std::collections::BTreeMap<usize, usize> = active_columns
+        .iter()
+        .enumerate()
+        .map(|(index, column)| (*column, index))
+        .collect();
+    let mut cells = Vec::with_capacity(grouped.len());
+    for ((row, original_column), mut members) in grouped {
+        members.sort_by(|left, right| {
+            left.rect
+                .y0
+                .partial_cmp(&right.rect.y0)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| {
+                    left.rect
+                        .x0
+                        .partial_cmp(&right.rect.x0)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .then_with(|| left.order.cmp(&right.order))
+        });
+        let mut rect = members[0].rect.clone();
+        let mut text = String::new();
+        for (index, atom) in members.iter().enumerate() {
+            if index > 0 && atom.rect.y0 > members[index - 1].rect.y1 + 1.0 {
+                text.push('\n');
+            }
+            text.push_str(&atom.text);
+            rect = rect_union(&rect, &atom.rect);
+        }
+        let spanning_single_row = centered_single_rows.contains(&row)
+            || short_title_rows.contains(&row);
+        let col = if spanning_single_row {
+            0
+        } else {
+            *column_map.get(&original_column)?
+        };
+        let covered_columns = active_columns
+            .iter()
+            .filter(|column| rect.x0 <= tracks[**column] && tracks[**column] <= rect.x1)
+            .count();
+        let colspan = if spanning_single_row {
+            active_columns.len()
+        } else {
+            covered_columns.max(1)
+        };
+        cells.push(CellDto {
+            schema_version: 1,
+            text: text.trim().to_string(),
+            row: row as i64,
+            col: col as i64,
+            rect,
+            rowspan: 1,
+            colspan: colspan as i64,
+            source: None,
+        });
+    }
+
+    let candidate_rect = cells
+        .iter()
+        .map(|cell| cell.rect.clone())
+        .reduce(|left, right| rect_union(&left, &right))?;
+    let support_count = rows.iter().filter(|row| row.len() >= 2).count();
+    let confidence = (0.5
+        + 0.15 * support_count.saturating_sub(1).min(3) as f64
+        + 0.05 * active_columns.len().saturating_sub(2).min(3) as f64)
+        .min(0.95);
+    Some(TableCandidateDto {
+        schema_version: 1,
+        rect: candidate_rect,
+        source: source.to_string(),
+        confidence: Some(confidence),
+        rows: row_count as i64,
+        cols: active_columns.len() as i64,
+        cells,
+    })
 }
 
 fn append_empty_cells(
@@ -950,6 +1386,9 @@ fn merge_source_contiguous_vertical_cells(cells: &mut Vec<CellDto>) {
                 continue;
             }
             if is_numeric_body_text(&current.text) && is_numeric_body_text(&candidate.text) {
+                continue;
+            }
+            if current.text.trim_end().ends_with(':') || current.text.trim_end().ends_with('：') {
                 continue;
             }
             if is_single_cjk(&current.text) && is_single_cjk(&candidate.text) {
@@ -1702,7 +2141,15 @@ fn rescue_header_only_bands(atoms: &[AtomDto], bands: Vec<ColumnBandDto>) -> Vec
 }
 
 fn cell_from_physical(cell: PhysicalCell, bands: &[ColumnBandDto]) -> CellDto {
-    let (col_start, col_end) = physical_cell_span(&cell, bands);
+    let (col_start, col_end) = if cell.colspan > 1 {
+        let col_start = cell.col.max(0) as usize;
+        (
+            col_start,
+            col_start.saturating_add(cell.colspan as usize - 1),
+        )
+    } else {
+        physical_cell_span(&cell, bands)
+    };
     CellDto {
         schema_version: 1,
         text: cell.text.clone(),
@@ -1757,6 +2204,9 @@ fn merge_vertical_continuations(cells: &mut Vec<CellDto>, header_rows: usize) {
                 continue;
             }
             if is_numeric_body_text(&current.text) && is_numeric_body_text(&candidate.text) {
+                continue;
+            }
+            if current.text.trim_end().ends_with(':') || current.text.trim_end().ends_with('：') {
                 continue;
             }
             if is_single_cjk(&current.text) && is_single_cjk(&candidate.text) {
@@ -2422,6 +2872,12 @@ fn commit_header_span_proposal(
     }
 }
 
+fn has_explicit_column_span(cell: &CellDto) -> bool {
+    cell.source
+        .as_ref()
+        .is_some_and(|source| source.colspan > 1)
+}
+
 fn complete_two_leaf_header_row(
     cells: &[CellDto],
     parent_index: usize,
@@ -2487,6 +2943,7 @@ fn infer_header_spans(cells: &[CellDto], header_rows: usize) -> Vec<CellDto> {
     let mut invalid_two_leaf_tiers = std::collections::BTreeSet::new();
     for (parent_index, parent_row, _, _) in &parents {
         if cells[*parent_index].colspan.max(1) == 2
+            && !has_explicit_column_span(&cells[*parent_index])
             && complete_two_leaf_header_row(cells, *parent_index, header_rows).is_none()
         {
             invalid_two_leaf_tiers.insert(*parent_row);
@@ -2494,6 +2951,7 @@ fn infer_header_spans(cells: &[CellDto], header_rows: usize) -> Vec<CellDto> {
     }
     for cell in &mut proposed {
         if cell.colspan.max(1) == 2
+            && !has_explicit_column_span(cell)
             && invalid_two_leaf_tiers.contains(&(cell.row.max(0) as usize))
         {
             cell.colspan = 1;
@@ -2502,6 +2960,7 @@ fn infer_header_spans(cells: &[CellDto], header_rows: usize) -> Vec<CellDto> {
     let mut proven_groups = Vec::new();
     for (parent_index, parent_row, parent_start, parent_end) in parents {
         if cells[parent_index].colspan.max(1) == 2
+            && !has_explicit_column_span(&cells[parent_index])
             && invalid_two_leaf_tiers.contains(&parent_row)
         {
             continue;
@@ -2691,6 +3150,7 @@ pub fn build_logical_grid(atoms: Vec<AtomDto>, grid: GridDto) -> LogicalGridDto 
                             rect: atom.rect.clone(),
                             row: r as i64,
                             col: c as i64,
+                            colspan: 1,
                             source_refs: atom.run_refs.clone(),
                         }),
                     });
@@ -3046,6 +3506,7 @@ pub fn recover_cells_from_snapshot(
             run_refs: a.run_refs.clone(),
             row_hint: None,
             col_hint: None,
+            col_end_hint: None,
             order: idx as i64,
         })
         .collect();
@@ -3156,6 +3617,7 @@ pub fn recover_cells_from_snapshot(
                     rect: a.rect.clone(),
                     row: r_idx as i64,
                     col,
+                    colspan: 1,
                     source_refs: a.run_refs.clone(),
                 }),
             });
@@ -3365,13 +3827,14 @@ pub fn recover_cells_from_snapshot(
 
 pub fn recover_native_region(input: NativeRegionInput) -> NativeRegionOutput {
     let bands = if input.bands.is_empty() {
-        infer_column_bands(input.atoms.clone(), input.region.rect.clone())
+        let inferred = infer_column_bands(input.atoms.clone(), input.region.rect.clone());
+        let (refined, _) = refine_leaf_bands(input.atoms.clone(), inferred);
+        rescue_header_only_bands(&input.atoms, refined)
     } else {
+        // Supplied bands come from Python's completed preparation pipeline.
+        // Re-pruning here can remove a sparse leaf that Python just rescued.
         input.bands
     };
-    let (bands, _) = refine_leaf_bands(input.atoms.clone(), bands);
-    let bands = rescue_header_only_bands(&input.atoms, bands);
-
     let (rows, bands, mut phys_cells, _) = build_grid(input.atoms.clone(), bands);
     merge_physical_inline_fragments(&mut phys_cells);
     let mut diags = physical_occupancy_diagnostics(
@@ -3586,7 +4049,10 @@ pub fn recover_wireless_tables(input: WirelessRecoveryInput) -> WirelessRecovery
     };
 
     let target_runs: Vec<(Rect4, Vec<AtomDto>)> = if allowed_regions.is_empty() {
-        let page_runs = native_span::build_text_runs(input.spans.clone(), full_page_region.clone());
+        let page_runs = native_span::build_text_runs_preserving_separators(
+            input.spans.clone(),
+            full_page_region.clone(),
+        );
         let page_atoms = native_span::build_atoms(page_runs, Some(full_page_region));
         full_page_atom_runs(page_atoms)
     } else {
@@ -3594,7 +4060,10 @@ pub fn recover_wireless_tables(input: WirelessRecoveryInput) -> WirelessRecovery
             .iter()
             .cloned()
             .map(|region| {
-                let runs = native_span::build_text_runs(input.spans.clone(), region.clone());
+                let runs = native_span::build_text_runs_preserving_separators(
+                    input.spans.clone(),
+                    region.clone(),
+                );
                 let atoms = native_span::build_atoms(runs, Some(region.clone()));
                 (region, atoms)
             })
@@ -3606,6 +4075,48 @@ pub fn recover_wireless_tables(input: WirelessRecoveryInput) -> WirelessRecovery
             continue;
         }
 
+        let candidate_tracks = if region_atoms.iter().all(|atom| atom.row_hint.is_some()) {
+            infer_python_candidate_tracks(&region_atoms)
+        } else {
+            None
+        };
+        if let Some(tracks) = candidate_tracks {
+            if let Some(candidate) =
+                build_candidate_from_tracks(&region_atoms, &tracks, "wireless_span_recovery")
+            {
+                let row_count = candidate.rows.max(0) as usize;
+                let column_count = candidate.cols.max(0) as usize;
+                let (_, conflicts) =
+                    rebuild_occupancy_indices(&candidate.cells, row_count, column_count);
+                let out_of_bounds = candidate.cells.iter().find(|cell| {
+                    cell.row < 0
+                        || cell.col < 0
+                        || cell.row as usize >= row_count
+                        || (cell.col as usize).saturating_add(cell.colspan.max(1) as usize)
+                            > column_count
+                });
+                if conflicts.is_empty() && out_of_bounds.is_none() {
+                    candidates.push(candidate);
+                } else {
+                    for (row, col) in conflicts {
+                        diagnostics.push(occupancy_conflict_diagnostic(
+                            "wireless_table_recovery.recover_wireless_tables",
+                            row,
+                            col,
+                        ));
+                    }
+                    if let Some(cell) = out_of_bounds {
+                        diagnostics.push(occupancy_out_of_bounds_diagnostic(
+                            "wireless_table_recovery.recover_wireless_tables",
+                            cell.row,
+                            cell.col,
+                            "candidate cell span is outside inferred tracks",
+                        ));
+                    }
+                }
+            }
+            continue;
+        }
         let bands = rescue_header_only_bands(
             &region_atoms,
             infer_column_bands(region_atoms.clone(), reg.clone()),
@@ -3618,8 +4129,12 @@ pub fn recover_wireless_tables(input: WirelessRecoveryInput) -> WirelessRecovery
         if rows.len() < 2 || bands_out.len() < 2 {
             continue;
         }
-
         merge_physical_inline_fragments(&mut phys_cells);
+        let active_column_count = phys_cells
+            .iter()
+            .filter_map(|cell| usize::try_from(cell.col).ok())
+            .collect::<std::collections::BTreeSet<_>>()
+            .len();
         diagnostics.extend(physical_occupancy_diagnostics(
             &phys_cells,
             "wireless_table_recovery.recover_wireless_tables",
@@ -3720,12 +4235,20 @@ pub fn recover_wireless_tables(input: WirelessRecoveryInput) -> WirelessRecovery
             x1,
             y1,
         };
+        let support_count = rows
+            .iter()
+            .filter(|row| row.item_indices.len() >= 2)
+            .count();
+        let confidence = (0.5
+            + 0.15 * support_count.saturating_sub(1).min(3) as f64
+            + 0.05 * active_column_count.saturating_sub(2).min(3) as f64)
+            .min(0.95);
 
         let candidate = TableCandidateDto {
             schema_version: 1,
             rect: cand_rect,
             source: "wireless_span_recovery".to_string(),
-            confidence: Some(0.90),
+            confidence: Some(confidence),
             rows: num_rows as i64,
             cols: num_cols as i64,
             cells,
@@ -3763,6 +4286,7 @@ mod tests {
             run_refs: vec![order],
             row_hint: None,
             col_hint: None,
+            col_end_hint: None,
             order,
         }
     }
@@ -3829,6 +4353,28 @@ mod tests {
             colspan,
             source: None,
         }
+    }
+
+    #[test]
+    fn test_wide_candidate_atom_split_requires_one_labeled_part_per_track() {
+        let prose = make_atom("普通说明   继续说明", 10.0, 10.0, 190.0, 20.0, 0);
+        let three_fields = make_atom(
+            "字段一：a   字段二：b   字段三：c",
+            10.0,
+            10.0,
+            190.0,
+            20.0,
+            1,
+        );
+
+        assert_eq!(
+            split_wide_candidate_atom_geometry(&prose, &[10.0, 150.0]),
+            vec![prose]
+        );
+        assert_eq!(
+            split_wide_candidate_atom_geometry(&three_fields, &[10.0, 150.0]),
+            vec![three_fields]
+        );
     }
 
     #[test]
@@ -3922,6 +4468,25 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![2, 2]
         );
+    }
+
+    #[test]
+    fn test_full_page_candidate_runs_split_at_unlabeled_single_row() {
+        let runs = full_page_atom_runs(vec![
+            make_atom("项目", 10.0, 10.0, 40.0, 20.0, 0),
+            make_atom("金额", 100.0, 10.0, 130.0, 20.0, 1),
+            make_atom("甲", 10.0, 30.0, 30.0, 40.0, 2),
+            make_atom("100", 100.0, 30.0, 125.0, 40.0, 3),
+            make_atom("下一节", 10.0, 55.0, 45.0, 65.0, 4),
+            make_atom("项目", 10.0, 75.0, 40.0, 85.0, 5),
+            make_atom("金额", 100.0, 75.0, 130.0, 85.0, 6),
+            make_atom("乙", 10.0, 95.0, 30.0, 105.0, 7),
+            make_atom("200", 100.0, 95.0, 125.0, 105.0, 8),
+        ]);
+
+        assert_eq!(runs.len(), 2);
+        assert_eq!((runs[0].0.y0, runs[0].0.y1), (10.0, 40.0));
+        assert_eq!((runs[1].0.y0, runs[1].0.y1), (55.0, 105.0));
     }
 
     #[test]
@@ -4197,6 +4762,7 @@ mod tests {
             },
             row,
             col: 0,
+            colspan: 1,
             source_refs: vec![source_ref],
         };
         let mut cells = vec![
@@ -4227,6 +4793,33 @@ mod tests {
         assert_eq!(cells.len(), 1);
         assert_eq!(cells[0].text, "上半部\n下半部");
         assert_eq!(cells[0].rowspan, 2);
+
+        let mut colon_cells = vec![
+            CellDto {
+                schema_version: 1,
+                text: "其他应收款项：".to_string(),
+                row: 0,
+                col: 0,
+                rect: source("其他应收款项：", 0, 10.0, 1).rect.clone(),
+                rowspan: 1,
+                colspan: 1,
+                source: Some(source("其他应收款项：", 0, 10.0, 1)),
+            },
+            CellDto {
+                schema_version: 1,
+                text: "广东龙发股份有限公司".to_string(),
+                row: 1,
+                col: 0,
+                rect: source("广东龙发股份有限公司", 1, 22.0, 2).rect.clone(),
+                rowspan: 1,
+                colspan: 1,
+                source: Some(source("广东龙发股份有限公司", 1, 22.0, 2)),
+            },
+        ];
+
+        merge_vertical_continuations(&mut colon_cells, 3);
+
+        assert_eq!(colon_cells.len(), 2);
     }
 
     #[test]
@@ -4675,22 +5268,7 @@ mod tests {
                 make_atom("乙", 10.0, 50.0, 30.0, 60.0, 5),
                 make_atom("200", 210.0, 50.0, 245.0, 60.0, 6),
             ],
-            bands: vec![
-                ColumnBandDto {
-                    schema_version: 1,
-                    x0: 0.0,
-                    x1: 90.0,
-                    source_atoms: vec![0, 3, 5],
-                    order: 0,
-                },
-                ColumnBandDto {
-                    schema_version: 1,
-                    x0: 190.0,
-                    x1: 280.0,
-                    source_atoms: vec![2, 4, 6],
-                    order: 1,
-                },
-            ],
+            bands: Vec::new(),
             atom_evidence: None,
             band_evidence: None,
             config: StructureConfig {

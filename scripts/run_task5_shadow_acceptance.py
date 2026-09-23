@@ -209,6 +209,38 @@ def _compare_page_modes(
     return mismatches
 
 
+def _summarize_mismatches(mismatches: list[dict[str, Any]]) -> dict[str, Any]:
+    classifications = sorted(
+        {item.get("classification", "unclassified") for item in mismatches}
+    )
+    return {
+        "mismatch_count": len(mismatches),
+        "structural_mismatch_count": sum(
+            1 for item in mismatches if item.get("layer") != "routing_diagnostics"
+        ),
+        "routing_diagnostic_count": sum(
+            1 for item in mismatches if item.get("layer") == "routing_diagnostics"
+        ),
+        "unclassified_count": sum(
+            1 for item in mismatches if not item.get("classification")
+        ),
+        "by_classification": {
+            classification: sum(
+                1
+                for item in mismatches
+                if item.get("classification") == classification
+            )
+            for classification in classifications
+        },
+        "by_mode": {
+            mode: sum(
+                1 for item in mismatches if item["entry"].startswith(f"{mode}:")
+            )
+            for mode in ("shadow", "rust")
+        },
+    }
+
+
 def run_acceptance(pdf_path: Path, pages: list[int], output_dir: Path, dpi: int) -> dict[str, Any]:
     pdf_path = pdf_path.resolve()
     output_dir = output_dir.resolve()
@@ -273,28 +305,8 @@ def run_acceptance(pdf_path: Path, pages: list[int], output_dir: Path, dpi: int)
         "input_sha256": input_sha256,
         "pages": pages,
         "mismatches": mismatches,
-        "summary": {
-            "mismatch_count": len(mismatches),
-            "unclassified_count": len(mismatches),
-            "by_classification": {
-                classification: sum(
-                    1
-                    for item in mismatches
-                    if item.get("classification") == classification
-                )
-                for classification in sorted(
-                    {item.get("classification", "unclassified") for item in mismatches}
-                )
-            },
-            "by_mode": {
-                mode: sum(1 for item in mismatches if item["entry"].startswith(f"{mode}:"))
-                for mode in ("shadow", "rust")
-            },
-        },
+        "summary": _summarize_mismatches(mismatches),
     }
-    comparison["summary"]["unclassified_count"] = sum(
-        1 for item in mismatches if not item.get("classification")
-    )
     _write_json(output_dir / "comparison" / "comparison.json", comparison)
     return comparison
 

@@ -1256,6 +1256,7 @@ def _ensure_atom_dto(a: Any, idx: int = 0) -> Dict[str, Any]:
     ad.setdefault("run_refs", [idx])
     ad.setdefault("row_hint", None)
     ad.setdefault("col_hint", None)
+    ad.setdefault("col_end_hint", ad["col_hint"])
     ad.setdefault("order", idx)
     ad.setdefault("text", "")
     return ad

@@ -233,7 +233,7 @@ fn normalize_span_text(mut span: NativeSpanDto) -> NativeSpanDto {
 
 fn split_packed_numeric_span(span: NativeSpanDto) -> Vec<PreparedSpan> {
     let text = span.text.trim();
-    if text.is_empty() || !text.chars().all(is_packed_numeric_char) {
+    if text.is_empty() || is_separator_span(text) || !text.chars().all(is_packed_numeric_char) {
         return vec![prepared_unsplit(span)];
     }
 
@@ -962,6 +962,21 @@ fn merge_wrapped_field_runs(mut runs: Vec<WrappedRun>) -> Vec<TextRunDto> {
 }
 
 pub fn build_text_runs(spans: Vec<NativeSpanDto>, region: Rect4) -> Vec<TextRunDto> {
+    build_text_runs_with_separator_policy(spans, region, false)
+}
+
+pub(crate) fn build_text_runs_preserving_separators(
+    spans: Vec<NativeSpanDto>,
+    region: Rect4,
+) -> Vec<TextRunDto> {
+    build_text_runs_with_separator_policy(spans, region, true)
+}
+
+fn build_text_runs_with_separator_policy(
+    spans: Vec<NativeSpanDto>,
+    region: Rect4,
+    preserve_separators: bool,
+) -> Vec<TextRunDto> {
     if spans.is_empty() {
         return Vec::new();
     }
@@ -981,7 +996,7 @@ pub fn build_text_runs(spans: Vec<NativeSpanDto>, region: Rect4) -> Vec<TextRunD
                 return false;
             }
             let is_sep = is_separator_span(t);
-            if is_sep && t.chars().count() > 3 {
+            if !preserve_separators && is_sep && t.chars().count() > 3 {
                 return false;
             }
             true
@@ -989,7 +1004,7 @@ pub fn build_text_runs(spans: Vec<NativeSpanDto>, region: Rect4) -> Vec<TextRunD
         .flat_map(split_packed_numeric_span)
         .filter(|s| {
             let text = s.span.text.trim();
-            !(is_separator_span(text) && text.chars().count() > 3)
+            preserve_separators || !(is_separator_span(text) && text.chars().count() > 3)
         })
         .collect();
 
@@ -1225,6 +1240,7 @@ pub fn build_atoms(runs: Vec<TextRunDto>, _region: Option<Rect4>) -> Vec<AtomDto
                 run_refs: run.span_refs,
                 row_hint: None,
                 col_hint: None,
+                col_end_hint: None,
                 order,
             }
         })
@@ -1476,5 +1492,88 @@ mod tests {
         assert_eq!(runs.len(), 2);
         assert_eq!(runs[0].text, "项目");
         assert_eq!(runs[1].text, "500");
+    }
+
+    #[test]
+    fn test_table_recovery_text_runs_preserve_separator_rows() {
+        let region = Rect4 {
+            schema_version: 1,
+            x0: 0.0,
+            y0: 0.0,
+            x1: 500.0,
+            y1: 500.0,
+        };
+        let spans = vec![make_span("=================", 10.0, 10.0, 180.0, 20.0, 0)];
+
+        let runs = build_text_runs_preserving_separators(spans, region);
+
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].text, "=================");
+    }
+
+    #[test]
+    fn test_table_recovery_keeps_spaced_separator_span_together() {
+        let text = "----  ---------";
+        let mut cursor = 0.0;
+        let characters = text
+            .chars()
+            .enumerate()
+            .map(|(index, character)| {
+                if index == 4 {
+                    cursor += 5.0;
+                }
+                let rect = Rect4 {
+                    schema_version: 1,
+                    x0: cursor,
+                    y0: 10.0,
+                    x1: cursor + 1.0,
+                    y1: 20.0,
+                };
+                cursor += 1.0;
+                CharacterDto {
+                    schema_version: 1,
+                    text: character.to_string(),
+                    rect,
+                    order: index as i64,
+                }
+            })
+            .collect();
+        let span = NativeSpanDto {
+            schema_version: 1,
+            text: text.to_string(),
+            rect: Rect4 {
+                schema_version: 1,
+                x0: 0.0,
+                y0: 10.0,
+                x1: cursor,
+                y1: 20.0,
+            },
+            font: Some("SimSun".to_string()),
+            size: Some(10.0),
+            flags: Some(0),
+            order: 0,
+            characters,
+            source_position: SourcePositionDto {
+                schema_version: 1,
+                block: 0,
+                line: 0,
+            },
+            block: 0,
+            line: 0,
+        };
+        let region = Rect4 {
+            schema_version: 1,
+            x0: 0.0,
+            y0: 0.0,
+            x1: 30.0,
+            y1: 30.0,
+        };
+
+        let runs = build_text_runs_preserving_separators(vec![span], region);
+
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].text, text);
+        assert_eq!(runs[0].rect.x0, 0.0);
+        assert_eq!(runs[0].rect.x1, cursor);
     }
 }

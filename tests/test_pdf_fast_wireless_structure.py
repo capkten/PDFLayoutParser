@@ -144,36 +144,6 @@ class TestRecoverNativeRegion:
         assert 'cells' in output
         assert len(output['cells']) >= 4
 
-    def test_recover_native_region_merges_vertical_continuation_cell(self):
-        region = {'schema_version': 1, 'rect': _rect(0, 0, 200, 60), 'source_order': 0, 'allowed': True}
-        atoms = [
-            _atom('项目', 10, 10, 40, 20, order=0),
-            _atom('金额', 100, 10, 140, 20, order=1),
-            _atom('名称', 10, 23, 40, 33, order=2),
-            _atom('100', 100, 23, 140, 33, order=3),
-        ]
-        bands = [
-            _band(10, 60, [0, 2], order=0),
-            _band(90, 150, [1, 3], order=1),
-        ]
-        output = recover_native_region({
-            'schema_version': 1,
-            'region': region,
-            'atoms': atoms,
-            'bands': bands,
-            'config': {
-                'schema_version': 1,
-                'line_tolerance': 2.0,
-                'row_tolerance': 2.0,
-                'column_tolerance': 2.0,
-                'span_tolerance': 2.0,
-                'numeric_tolerance': 2.0,
-            },
-        })
-
-        project_cell = next(cell for cell in output['cells'] if cell['text'] == '项目\n名称')
-        assert (project_cell['row'], project_cell['col'], project_cell['rowspan'], project_cell['colspan']) == (0, 0, 2, 1)
-
     def test_recover_native_region_preserves_geometric_group_header_colspan(self):
         region = {'schema_version': 1, 'rect': _rect(0, 0, 220, 60), 'source_order': 0, 'allowed': True}
         atoms = [

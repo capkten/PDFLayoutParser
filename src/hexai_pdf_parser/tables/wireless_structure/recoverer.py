@@ -325,7 +325,10 @@ def _native_atom_evidence(
 
 
 def _native_atom_core(
-    atom: dict[str, Any], atom_index: int, valid_span_orders: set[int] | None = None
+    atom: dict[str, Any],
+    atom_index: int,
+    valid_span_orders: set[int] | None = None,
+    column_id_to_position: Mapping[int, int] | None = None,
 ) -> dict[str, Any]:
     text = atom["text"]
     if not isinstance(text, str):
@@ -334,13 +337,32 @@ def _native_atom_core(
     evidence = _native_atom_evidence(atom, atom_index)
     row_hint = _native_optional_nonnegative_int(atom, "row_hint")
     column_id = evidence["column_id"]
+    column_start = _native_optional_nonnegative_int(atom, "column_start")
+    column_end = _native_optional_nonnegative_int(atom, "column_end")
+    if column_start is None:
+        column_start = column_id
+    if column_end is None:
+        column_end = column_start
+    col_hint = (
+        column_id_to_position.get(column_start)
+        if column_start is not None and column_id_to_position is not None
+        else None
+    )
+    col_end_hint = (
+        column_id_to_position.get(column_end)
+        if column_end is not None
+        and col_hint is not None
+        and column_id_to_position is not None
+        else None
+    )
     return {
         "schema_version": 1,
         "text": text,
         "rect": rect,
         "run_refs": _native_run_refs(atom, atom_index, valid_span_orders),
         "row_hint": row_hint,
-        "col_hint": column_id,
+        "col_hint": col_hint,
+        "col_end_hint": col_end_hint,
         "order": evidence["flow_start"],
         **evidence,
     }
@@ -408,8 +430,17 @@ def _normalize_native_region_atoms_and_bands(
     bands: list[dict[str, Any]],
     valid_span_orders: set[int] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    column_id_to_position = {
+        _native_band_evidence(band, band_index)["id"]: band_index
+        for band_index, band in enumerate(bands)
+    }
     normalized_atoms = [
-        _native_atom_core(atom, atom_index, valid_span_orders)
+        _native_atom_core(
+            atom,
+            atom_index,
+            valid_span_orders,
+            column_id_to_position,
+        )
         for atom_index, atom in enumerate(atoms)
     ]
     normalized_bands = [
@@ -633,13 +664,12 @@ def recover_cells_from_region(
     mode = rust_adapter.get_rust_mode("wireless_structure")
     if mode in ("rust", "shadow"):
         def _recover_cells_from_region_rust():
-            result = rust_adapter.recover_cells_from_snapshot(snapshot, region_bbox)
-            if not isinstance(result, tuple) or len(result) != 3:
-                raise TypeError("Rust native recovery result must be a (rows, cols, cells) tuple")
-            rows, columns, cells = result
-            if rows <= 0 or columns <= 0 or not cells:
-                raise ValueError("Rust native recovery returned an empty grid")
-            return result
+            native_output = _recover_native_region_from_snapshot_rust(
+                snapshot, region_bbox
+            )
+            if native_output is None:
+                return 0, 0, []
+            return _recover_cells_from_rust(native_output, region_bbox)
 
         return rust_adapter.run_python_or_rust(
             mode=mode,

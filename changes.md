@@ -1,5 +1,14 @@
 # Changes
 
+## 2026-09-23
+
+- Task 5 bounded Rust parity repair：修正 NativeRegion band ID 到零基列位置映射，保留 `column_id` 原证据；Rust native table recovery 使用保留 separator 的 text-run helper，避免把 Python 候选分隔行过滤掉。页面候选分组按 Python 规则拆开未标注单字段行，并补回相邻短标题；Rust vertical continuation 拒绝以冒号结尾的字段，匹配 Python 字段标签语义。页面候选 confidence 从固定 `0.90` 改为按 Python 的多列行支持数与活动列数计算。
+- Python/Rust bridge 对“没有稳定列带、无 native region 输入”的情况直接返回 Python oracle 同样的空网格，不再把 `None` 误报成 Rust 输出类型错误。添加 RED/GREEN 路由与候选 confidence 回归；迁移 focused pytest `186 passed`，最终源码 `cargo test --lib` `62 passed`，`git diff --check` 通过。
+- 五页验收输出：`D:\codes\PDFLayoutParser\output\rust_migration_task5_confidence_20260923_r10\`，输入 PDF SHA256 `376162411d0d5b75ad2a4dc2d5249b8531d20fa81e26af792c04b76d6fc85a89`。结构 mismatch `0`、routing diagnostics `12`；Python/Rust 表格数在 184/188/189/191/192 页分别为 `2/2/2/2/4`，五页 overlay PNG 哈希逐页相同。此结构相等依赖 occupancy fallback，不能记作 Rust 独立 page parity；Rust primary 仍关闭。页面基线 49 个 Python occupancy conflict 保留为明确未决合同。
+- 一次按同 row/column 无条件聚合的试验导致 `1475` 条结构 mismatch，已撤回，未留在最终代码；该结果说明还需先对齐 Python `_column_tracks()`、cell assignment、span 和 bbox 语义，不能只合并重复槽位。
+- 页面候选路径新增 Python `_column_tracks()` 锚点规则：数字按右沿、标签按左沿分配到重复列轨迹；只对带完整 `row_hint` 且轨迹数与推断列带数一致的候选重映射，避免改变区域入口或不匹配的网格。宽标签跨入数值列 bbox 的 synthetic differential 按 Rust fallback diagnostic 从 RED 到 GREEN；focused pytest `187 passed`，`cargo test --lib` `62 passed`，release 扩展构建成功。
+- 新五页输出为 `D:\codes\PDFLayoutParser\output\rust_migration_task5_left_anchor_20260923_r11\`，PDF SHA256 不变。summary 仍为结构 mismatch `0`、routing diagnostics `12`；table count 仍为 `2/2/2/2/4`，五页 Rust/Python PNG 哈希一致且与 r10 相同。Rust 页面及 188 页区域入口仍发生 occupancy fallback，因此该 slice 没有完成真实页 Rust 独立 parity，也没有证明提速；Python 默认路由保持不变。
+
 ## 2026-09-22
 
 - Task 4D logical row/header-span transaction：以 native continuation 的拥有关系压缩物理行；只有同层父标题与下一层连续叶子列形成完整、无重叠 `1:2` 配对时恢复 `colspan=2`，不完整层整层回退为 `colspan=1`。`rowspan` 在逻辑网格生成后才推断，覆盖槽位出现非空标题时拒绝扩展；跨度 proposal 在 clone 上重建 occupancy，冲突或越界时回滚。
@@ -823,3 +832,5 @@
 - 使用 `D:\codes\PDFLayoutParser\fix\zh_all_table_pages.pdf` 的 0-based 页面 `184,188,189,191,192`，分别运行 `python`、`shadow`、`rust`，覆盖 `recover_wireless_tables()` 和 `recover_cells_from_region()`。新输出位于 `D:\codes\PDFLayoutParser\output\rust_migration_task5_20260922\`，包含 15 个 page JSON、15 个 overlay PNG、三份 manifest 和 comparison JSON；输入 SHA256 和绝对 artifact 路径均通过审计。
 - 页面结果明确显示 shadow 的结构化结果与 Python 语义结果一致并保留 17 条 Rust 观测诊断；Rust page/region 在 188、189 以及固定区域输入上存在真实结构差异，184、191、192 的 page route 因 occupancy conflict 走 Python fallback。比较报告共 2894 条差异，全部标为 `defect`，`unclassified_count=0`；默认 Python route、fallback policy、用户 dirty 测试文件均保持不变。
 - Task 5/6 最终验证：normalizer/runner `8 passed`，组合迁移矩阵 `140 passed`，`cargo test --lib` `60 passed`，`cargo check` 与 `git diff --check` 通过。结论为验收和审计交付完成，但 Rust primary gate 仍不通过；后续修复必须逐项处理 defect ledger，并在新的独立输出目录重跑 JSON/PNG。
+- Rust 页面无线表格候选对齐 Python 的 track-first 列分配；纯 separator span 不再被 packed-number 拆分器按空格切开。新增分隔符 span 与宽字段连接 overlap band 的差分回归。五页 r12 acceptance 结构差异为 0、路由诊断仍为 12，真实候选 occupancy 冲突继续触发 fallback；Python primary 未变，未运行性能门禁。
+- NativeRegion 非空列带现在沿用 Python 完成 rescue 后的最终结果，避免 Rust 二次剪枝删除稀疏表头列；页 188 两个真实 region 直出与 Python 逐字段一致。Rust 页面 track-first 补齐 Python 对“三空白分隔、字段数与轨迹数相同、全为冒号字段”的宽 span 切分。新增正反例。五页 r14 输出结构差异为 0、route diagnostic 降至 10（仅 page route fallback），region route 不再 fallback；Python 默认行为保持，Rust primary 仍关闭。验证：pytest 190 passed、cargo lib 64 passed、release binding 构建成功；未测性能。

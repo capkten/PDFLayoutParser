@@ -11,6 +11,7 @@ from hexai_pdf_parser.debug.rust_task5_acceptance import (
 from scripts.run_task5_shadow_acceptance import (
     build_page_payload,
     clear_mode_overrides,
+    _summarize_mismatches,
 )
 
 
@@ -189,3 +190,17 @@ def test_clear_mode_overrides_forces_one_global_mode(monkeypatch):
 
     assert rust_adapter.get_rust_mode("wireless_structure") == "rust"
     assert rust_adapter.get_rust_mode("wireless_table_recovery") == "rust"
+
+
+def test_mismatch_summary_separates_structure_from_routing_diagnostics():
+    mismatches = [
+        {"entry": "rust:page-184", "layer": "tables"},
+        {"entry": "rust:page-184", "layer": "routing_diagnostics"},
+    ]
+
+    summary = _summarize_mismatches(mismatches)
+
+    assert summary["structural_mismatch_count"] == 1
+    assert summary["routing_diagnostic_count"] == 1
+    assert summary["mismatch_count"] == 2
+    assert len(mismatches) == 2

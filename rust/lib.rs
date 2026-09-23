@@ -559,6 +559,7 @@ fn infer_output_order_mode_binding<'py>(
             run_refs: Vec::new(),
             row_hint: None,
             col_hint: None,
+            col_end_hint: None,
             order,
         });
     }

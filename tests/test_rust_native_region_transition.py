@@ -12,14 +12,18 @@ from hexai_pdf_parser.tables.wireless_structure import recoverer
 
 def _snapshot_for_rows(rows):
     lines = []
+    span_count = max((len(values) for values in rows), default=0)
     for row_index, values in enumerate(rows):
         y0 = 10.0 + row_index * 20.0
         spans = []
         spans.extend(
             {
+                "text": text,
                 "bbox": (x0, y0, x0 + 30.0, y0 + 10.0),
                 "font": "SimSun",
                 "size": 10.0,
+                "raw_source_position": (0, row_index, column_index),
+                "source_order": row_index * span_count + column_index,
                 "chars": tuple(
                     {
                         "c": character,
@@ -28,6 +32,16 @@ def _snapshot_for_rows(rows):
                             y0,
                             x0 + (char_index + 1) * 8.0,
                             y0 + 10.0,
+                        ),
+                        "raw_source_position": (
+                            0,
+                            row_index,
+                            column_index,
+                            char_index,
+                        ),
+                        "source_order": (
+                            (row_index * span_count + column_index) * 10
+                            + char_index
                         ),
                     }
                     for char_index, character in enumerate(text)
@@ -39,6 +53,8 @@ def _snapshot_for_rows(rows):
         lines.append(
             {
                 "bbox": (0.0, y0, 240.0, y0 + 10.0),
+                "raw_source_position": (0, row_index),
+                "source_order": row_index,
                 "spans": tuple(spans),
             }
         )
@@ -60,6 +76,8 @@ def _snapshot_for_rows(rows):
             {
                 "type": 0,
                 "bbox": (0.0, 0.0, 240.0, 100.0),
+                "raw_source_position": (0,),
+                "source_order": 0,
                 "lines": tuple(lines),
             },
         ),
@@ -72,6 +90,31 @@ def _snapshot_for_rows(rows):
         extraction_options={},
         summary={},
     )
+
+
+def test_two_row_region_snapshot_locks_python_oracle_cells():
+    snapshot = _snapshot_for_rows((("项目", "金额"), ("名称", "100")))
+
+    rows, columns, cells = recoverer._recover_cells_from_snapshot_python(
+        snapshot, BBox(0.0, 0.0, 200.0, 60.0)
+    )
+
+    assert (rows, columns) == (2, 2)
+    assert sorted(
+        (
+            cell.row_index,
+            cell.col_index,
+            cell.text,
+            cell.rowspan,
+            cell.colspan,
+        )
+        for cell in cells
+    ) == [
+        (0, 0, "项目", 1, 1),
+        (0, 1, "金额", 1, 1),
+        (1, 0, "名称", 1, 1),
+        (1, 1, "100", 1, 1),
+    ]
 
 
 def test_native_region_bridge_contains_shared_atoms_bands_region_and_config(
@@ -197,6 +240,7 @@ def test_native_region_bridge_atoms_and_bands_are_owned_and_keep_python_evidence
             "run_refs",
             "row_hint",
             "col_hint",
+            "col_end_hint",
             "order",
         } <= atom.keys()
         assert atom_evidence <= atom.keys()
@@ -601,6 +645,256 @@ def _native_band_for_evidence_validation():
         "support": 1,
         "y_support": 1,
     }
+
+
+def test_native_region_maps_column_ids_to_band_positions_and_bbox_fallback():
+    raw_bands = [
+        {"id": 41, "x0": 0.0, "x1": 100.0, "support": 1, "y_support": 1},
+        {"id": 9, "x0": 100.0, "x1": 200.0, "support": 1, "y_support": 1},
+    ]
+    raw_atoms = []
+    for order, (column_id, x0, y0, row_hint) in enumerate(
+        ((41, 10.0, 0.0, 0), (9, 110.0, 0.0, 0), (404, 110.0, 20.0, 1))
+    ):
+        atom = _native_atom_for_evidence_validation()
+        atom.update(
+            {
+                "text": str(order),
+                "bbox": [x0, y0, x0 + 30.0, y0 + 10.0],
+                "flow_start": order,
+                "flow_end": order,
+                "column_id": column_id,
+                "column_start": column_id,
+                "column_end": column_id,
+                "row_hint": row_hint,
+            }
+        )
+        raw_atoms.append(atom)
+
+    atoms, bands = recoverer._normalize_native_region_atoms_and_bands(
+        raw_atoms, raw_bands
+    )
+
+    assert [atom["col_hint"] for atom in atoms] == [0, 1, None]
+    assert [atom["col_end_hint"] for atom in atoms] == [0, 1, None]
+    assert [atom["column_id"] for atom in atoms] == [41, 9, 404]
+    _, _, cells, diagnostics = recoverer.rust_adapter.build_grid(atoms, bands)
+    assert [cell["col"] for cell in cells] == [0, 1, 1]
+    assert diagnostics == []
+
+
+def test_native_region_grid_preserves_annotated_column_span():
+    atom = {
+        "schema_version": 1,
+        "text": "父标题",
+        "rect": {
+            "schema_version": 1,
+            "x0": 10.0,
+            "y0": 10.0,
+            "x1": 110.0,
+            "y1": 20.0,
+        },
+        "run_refs": [0],
+        "row_hint": None,
+        "col_hint": 0,
+        "col_end_hint": 1,
+        "order": 0,
+    }
+    bands = [
+        {
+            "schema_version": 1,
+            "x0": 0.0,
+            "x1": 50.0,
+            "source_atoms": [0],
+            "order": 0,
+        },
+        {
+            "schema_version": 1,
+            "x0": 70.0,
+            "x1": 120.0,
+            "source_atoms": [0],
+            "order": 1,
+        },
+    ]
+
+    _, _, cells, diagnostics = recoverer.rust_adapter.build_grid([atom], bands)
+
+    assert [(cell["col"], cell["colspan"]) for cell in cells] == [(0, 2)]
+    assert diagnostics == []
+
+
+def test_native_region_keeps_explicit_header_span_through_logical_grid():
+    rect = lambda x0, y0, x1, y1: {
+        "schema_version": 1,
+        "x0": x0,
+        "y0": y0,
+        "x1": x1,
+        "y1": y1,
+    }
+    atoms = [
+        {
+            "schema_version": 1,
+            "text": "父标题",
+            "rect": rect(50.0, 10.0, 80.0, 20.0),
+            "run_refs": [0],
+            "row_hint": None,
+            "col_hint": 0,
+            "col_end_hint": 1,
+            "order": 0,
+        },
+        {
+            "schema_version": 1,
+            "text": "本期",
+            "rect": rect(10.0, 30.0, 40.0, 40.0),
+            "run_refs": [1],
+            "row_hint": None,
+            "col_hint": 0,
+            "col_end_hint": 0,
+            "order": 1,
+        },
+        {
+            "schema_version": 1,
+            "text": "上期",
+            "rect": rect(80.0, 30.0, 110.0, 40.0),
+            "run_refs": [2],
+            "row_hint": None,
+            "col_hint": 1,
+            "col_end_hint": 1,
+            "order": 2,
+        },
+        {
+            "schema_version": 1,
+            "text": "10",
+            "rect": rect(10.0, 60.0, 40.0, 70.0),
+            "run_refs": [3],
+            "row_hint": None,
+            "col_hint": 0,
+            "col_end_hint": 0,
+            "order": 3,
+        },
+        {
+            "schema_version": 1,
+            "text": "20",
+            "rect": rect(80.0, 60.0, 110.0, 70.0),
+            "run_refs": [4],
+            "row_hint": None,
+            "col_hint": 1,
+            "col_end_hint": 1,
+            "order": 4,
+        },
+    ]
+    input_dto = {
+        "schema_version": 1,
+        "region": {
+            "schema_version": 1,
+            "rect": rect(0.0, 0.0, 120.0, 90.0),
+            "source_order": 0,
+            "allowed": True,
+        },
+        "atoms": atoms,
+        "bands": [
+            {
+                "schema_version": 1,
+                "x0": 10.0,
+                "x1": 50.0,
+                "source_atoms": [1, 3],
+                "order": 0,
+            },
+            {
+                "schema_version": 1,
+                "x0": 70.0,
+                "x1": 110.0,
+                "source_atoms": [2, 4],
+                "order": 1,
+            },
+        ],
+        "config": {
+            "schema_version": 1,
+            "line_tolerance": 2.0,
+            "row_tolerance": 2.0,
+            "column_tolerance": 2.0,
+            "span_tolerance": 2.0,
+            "numeric_tolerance": 2.0,
+        },
+    }
+
+    output = recoverer.rust_adapter.recover_native_region(input_dto)
+    parent = next(cell for cell in output["cells"] if cell["text"] == "父标题")
+
+    assert (parent["row"], parent["col"], parent["rowspan"], parent["colspan"]) == (
+        0,
+        0,
+        1,
+        2,
+    )
+    assert not any(
+        item["status"] == "occupancy_conflict" for item in output["diagnostics"]
+    )
+
+
+def test_native_region_does_not_reprune_python_rescued_sparse_column():
+    rect = lambda x0, y0, x1, y1: {
+        "schema_version": 1,
+        "x0": x0,
+        "y0": y0,
+        "x1": x1,
+        "y1": y1,
+    }
+    rows = [
+        [(1, "项目", 82.0, 98.0)],
+        [(0, "部门甲", 10.0, 40.0), (2, "100", 210.0, 240.0), (3, "90", 330.0, 360.0)],
+        [(0, "部门乙", 10.0, 40.0), (2, "200", 210.0, 240.0), (3, "180", 330.0, 360.0)],
+        [(0, "部门丙", 10.0, 40.0), (2, "300", 210.0, 240.0), (3, "270", 330.0, 360.0)],
+        [(1, "合计", 82.0, 98.0), (2, "600", 210.0, 240.0), (3, "540", 330.0, 360.0)],
+    ]
+    atoms = []
+    for row_index, row in enumerate(rows):
+        y0 = 10.0 + row_index * 20.0
+        for column, text, x0, x1 in row:
+            atoms.append(
+                {
+                    "schema_version": 1,
+                    "text": text,
+                    "rect": rect(x0, y0, x1, y0 + 10.0),
+                    "run_refs": [len(atoms)],
+                    "row_hint": None,
+                    "col_hint": column,
+                    "col_end_hint": column,
+                    "order": len(atoms),
+                }
+            )
+    input_dto = {
+        "schema_version": 1,
+        "region": {
+            "schema_version": 1,
+            "rect": rect(0.0, 0.0, 420.0, 120.0),
+            "source_order": 0,
+            "allowed": True,
+        },
+        "atoms": atoms,
+        "bands": [
+            {"schema_version": 1, "x0": 0.0, "x1": 80.0, "source_atoms": [1, 4, 7], "order": 0},
+            {"schema_version": 1, "x0": 76.0, "x1": 110.0, "source_atoms": [0, 10], "order": 1},
+            {"schema_version": 1, "x0": 200.0, "x1": 280.0, "source_atoms": [2, 5, 8, 11], "order": 2},
+            {"schema_version": 1, "x0": 320.0, "x1": 400.0, "source_atoms": [3, 6, 9, 12], "order": 3},
+        ],
+        "config": {
+            "schema_version": 1,
+            "line_tolerance": 2.0,
+            "row_tolerance": 2.0,
+            "column_tolerance": 2.0,
+            "span_tolerance": 2.0,
+            "numeric_tolerance": 2.0,
+        },
+    }
+
+    output = recoverer.rust_adapter.recover_native_region(input_dto)
+
+    assert output["grid"]["grid"]["cols"] == 4
+    assert not any(
+        item["status"] in {"occupancy_conflict", "occupancy_out_of_bounds"}
+        for item in output["diagnostics"]
+    )
 
 
 @pytest.mark.parametrize(

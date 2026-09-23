@@ -7,6 +7,16 @@
 
 Python → Rust 的迁移已经完成 Rust 审计、计划重排、Python-derived `NativeRegionInput` 边界、Snapshot/strict-output 边界、span/text-run/atom 的字段级差分观测、Task 3B、Task 4A–4D，以及 Task 5/6 的页面验收与最终审计。Task 5/6 已完成交付闭环，但五个真实页面仍暴露 Rust page/region parity defects；默认生产路径继续保持 Python，不能切换 Rust primary。
 
+## 2026-09-23 bounded follow-up
+
+在 `C:\Users\23662\.codex\worktrees\task5-parity-repair\PDFLayoutParser-Fast` 的 `codex/task5-parity-repair` worktree 中继续执行了 Task 5 修复。该分支独立于上文记录的 dirty replan worktree；未提交、合并或切换默认路由。细节见[Task 5 问题审计](task5-problem-audit-2026-09-23.md)和[修复计划](../../plans/2026-09-23-rust-task5-parity-repair.md)。
+
+最新五页结果在 `D:\codes\PDFLayoutParser\output\rust_migration_task5_tracks_20260923_r12\`：结构 mismatch `0`、routing diagnostic `12`；Python/Rust 表格数仍为 `2/2/2/2/4`，五页 overlay PNG 与 Python 及 r11 相同。结构相等仍由 fallback 后输出相同产生，不构成 Rust 独立 parity；Python page baseline 的 49 个 occupancy conflict 保留。focused pytest `188 passed`、`cargo test --lib` `63 passed`、`cargo check` 与 `git diff --check` 通过；全仓 `cargo fmt --all -- --check` 仍被既有 rustfmt 差异挡住，未做全仓格式化。未运行性能门禁，Rust primary 仍关闭。
+
+本轮确认页 184 多出一条轨迹的直接原因：Python 保留原始 '----  ---------' separator span 为一个 strip，Rust `split_packed_numeric_span()` 将其按空格拆成两个 atom，令 x≈446 的片段与 x≈449 标签形成额外轨迹。现在纯 separator span 不再按 packed-number 规则拆分；完整页面候选在具有 `row_hint` 时改为 Python track-first 分配、spanning-row 和轨迹覆盖 colspan，region 路径仍使用原 band/grid。新增三轨迹但只有两条 overlap band 的宽字段 oracle 测试通过。真实页候选依然受 Python 候选本身的 occupancy conflict 限制：页 184 raw Rust 保留首张 4×5 候选，第二张 9×10 因 19 个冲突未进入结果并触发 fallback；固定五页 fallback 总数没有减少。
+
+下一步先遵守明确的 occupancy 检查，不通过隐藏冲突降低 fallback；完成冲突兼容约定后，再继续处理 188/189 的候选分组与 region 路径差异。
+
 ## 工作区与权威入口
 
 - Worktree：`D:\codes\PDFLayoutParser-Fast\.worktrees\rust-migration-replan`
@@ -194,3 +204,10 @@ Task 3B-1 的报告记录了以下结果：
 - `git diff --check`：通过
 
 下一窗口每次修改后都要重新运行覆盖该 slice 的 focused tests；最终声明任何任务完成前，必须补 fresh verification，并在对应 report/ledger 写入命令、完整计数和 verdict。
+
+## Task 5 follow-up（2026-09-23）
+
+- Rust NativeRegion 对非空 `bands` 不再重复 refine/rescue；这些是 Python preparation 已完成后的最终列带。页 188 两个真实区域现由 Rust 独立输出，逐字段匹配 Python，且无 occupancy diagnostics。
+- 页面候选 track-first 按 Python `_split_wide_field_strip()` 条件拆分宽字段临时片段；不是冒号字段、片段数不匹配轨迹数或不足三个分隔空白时保留原 atom。
+- r14 五页结构比较 0 diff，10 条 routing diagnostics 全是 page route 的 occupancy fallback；region route 在五页都没有 fallback。PNG 哈希三种模式逐页相同。page-level Python/Rust parity 仍未通过，Python occupancy 合同待用户确认，Rust primary 维持关闭。
+- 最近验证：focused pytest 190 passed；`cargo test --lib` 64 passed；release binding 构建通过。未做 benchmark。
