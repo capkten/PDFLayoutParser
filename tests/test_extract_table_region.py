@@ -12,9 +12,14 @@ from pathlib import Path
 import fitz
 import pytest
 
-from hexai_pdf_parser.core.models import BBox, Table
+from hexai_pdf_parser.core.models import BBox, Cell, Table
 from hexai_pdf_parser.core.pdf_parser import PDFParser
-from hexai_pdf_parser.tables.table_extractor import TableExtractor, extract_table_from_region
+from hexai_pdf_parser.tables.table_extractor import (
+    TableExtractor,
+    extract_table_from_region,
+    extract_table_html_from_region,
+    table_to_html,
+)
 
 
 def _create_wired_table_pdf(path: Path) -> BBox:
@@ -93,6 +98,48 @@ def test_extract_table_in_region_wired(tmp_path: Path):
     assert len(table.cells) == 9
 
     doc.close()
+
+
+def test_table_to_html_escapes_text_and_preserves_spans():
+    table = Table(
+        bbox=BBox(0, 0, 200, 100),
+        rows=2,
+        cols=2,
+        cells=[
+            Cell("A & <B>", 0, 0, BBox(0, 0, 100, 50), colspan=2),
+            Cell("C", 1, 0, BBox(0, 50, 100, 100), rowspan=2),
+            Cell("", 1, 1, BBox(100, 50, 200, 100)),
+        ],
+    )
+
+    assert table_to_html(table) == (
+        "<table><tr><td colspan=\"2\">A &amp; &lt;B&gt;</td></tr>"
+        "<tr><td rowspan=\"2\">C</td><td></td></tr></table>"
+    )
+
+
+def test_extract_table_html_from_region_returns_html_result(tmp_path: Path):
+    pdf_path = tmp_path / "wired-html.pdf"
+    table_bbox = _create_wired_table_pdf(pdf_path)
+
+    result = extract_table_html_from_region(str(pdf_path), table_bbox)
+
+    assert result.code == 1
+    assert result.message == "table html extracted"
+    assert result.data.startswith("<table>")
+    assert "10" in result.data
+
+
+def test_extract_table_html_from_region_preserves_empty_and_error_results(tmp_path: Path):
+    pdf_path = tmp_path / "wired-html-empty.pdf"
+    _create_wired_table_pdf(pdf_path)
+
+    empty = extract_table_html_from_region(str(pdf_path), (400, 300, 490, 390))
+    error = extract_table_html_from_region("missing-table-html.pdf", (0, 0, 100, 100))
+
+    assert (empty.code, empty.data) == (0, None)
+    assert error.code == -1
+    assert error.data is None
 
 
 def test_extract_table_in_region_wireless(tmp_path: Path):
@@ -254,4 +301,3 @@ def test_pdf_parser_extract_table_in_region_multi(tmp_path: Path):
     assert isinstance(tables, list)
     assert len(tables) == 1
     assert tables[0].source == "line_projection"
-

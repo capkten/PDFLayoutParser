@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import re
 import bisect
+from html import escape
 from pathlib import Path
 from collections import Counter, defaultdict
 from dataclasses import dataclass
@@ -5638,3 +5639,51 @@ def extract_table_from_region(
     except Exception as exc:
         return ApiResult(code=-1, message=str(exc), data=None)
 
+
+def table_to_html(table: Table) -> str:
+    """Convert a table model to a semantic HTML table."""
+    cells_by_row: Dict[int, List[Cell]] = defaultdict(list)
+    for cell in table.cells:
+        cells_by_row[cell.row_index].append(cell)
+
+    rows = []
+    for row_index in range(max(table.rows, 0)):
+        cells = []
+        for cell in sorted(cells_by_row.get(row_index, []), key=lambda item: item.col_index):
+            attributes = []
+            if cell.rowspan > 1:
+                attributes.append(f'rowspan="{cell.rowspan}"')
+            if cell.colspan > 1:
+                attributes.append(f'colspan="{cell.colspan}"')
+            suffix = f" {' '.join(attributes)}" if attributes else ""
+            cells.append(f"<td{suffix}>{escape(cell.text or '')}</td>")
+        rows.append(f"<tr>{''.join(cells)}</tr>")
+
+    return f"<table>{''.join(rows)}</table>"
+
+
+def extract_table_html_from_region(
+    source: str | Path | fitz.Page | fitz.Document,
+    table_bbox: BBox | tuple[float, float, float, float] | list[float] | dict,
+    page_index: int = 0,
+    *,
+    table_config: Optional[TableConfig] = None,
+    confidence: Optional[float] = None,
+    page_language: Optional[str] = None,
+) -> ApiResult:
+    """Extract a table from a region and return its HTML representation."""
+    result = extract_table_from_region(
+        source,
+        table_bbox,
+        page_index=page_index,
+        table_config=table_config,
+        confidence=confidence,
+        page_language=page_language,
+    )
+    if result.code != 1 or result.data is None:
+        return ApiResult(code=result.code, message=result.message, data=None)
+    return ApiResult(
+        code=1,
+        message="table html extracted",
+        data=table_to_html(result.data),
+    )
