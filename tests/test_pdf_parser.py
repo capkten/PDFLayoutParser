@@ -393,6 +393,28 @@ def test_extract_images_with_page_indices(tmp_dir):
     assert len(result.data) >= 1
 
 
+def test_extract_images_and_render_pages_reuse_parser_handle(tmp_dir, monkeypatch):
+    pdf_path = os.path.join(tmp_dir, "media.pdf")
+    make_pdf_with_image(pdf_path)
+    real_open = fitz.open
+    opened = []
+
+    def counted_open(*args, **kwargs):
+        document = real_open(*args, **kwargs)
+        opened.append(document)
+        return document
+
+    monkeypatch.setattr(fitz, "open", counted_open)
+    parser = PDFParser(pdf_path)
+    images = parser.extract_images(os.path.join(tmp_dir, "images"), page_indices=[0])
+    renders = parser.render_pages(os.path.join(tmp_dir, "renders"), page_indices=[0])
+
+    assert_success_result(images)
+    assert_success_result(renders)
+    assert len(opened) == 1
+    parser.close()
+
+
 def test_render_pages_writes_png(tmp_dir):
     pdf_path = os.path.join(tmp_dir, "test.pdf")
     output_dir = os.path.join(tmp_dir, "renders")

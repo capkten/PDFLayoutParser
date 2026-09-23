@@ -255,13 +255,14 @@ class PDFParser:
             pdf_path = self._pdf_path
             if pdf_path is None:
                 raise ValueError("extract_images requires a PDF file path, not a Document")
-            document = Loader(pdf_path).load()
+            pdf_doc = self._get_pdf_doc()
+            document = Loader(pdf_path).load(pdf_doc)
             extractor = ImageExtractor(output_dir)
             images: List[Image] = []
             for page in document.pages:
                 if page_indices is not None and page.index not in page_indices:
                     continue
-                images.extend(extractor.extract(pdf_path, page.index))
+                images.extend(extractor.extract_page(pdf_doc, page.index))
             return images
 
         return self._execute_result(_do, "images extracted", "no images extracted")
@@ -282,15 +283,16 @@ class PDFParser:
             if pdf_path is None:
                 raise ValueError("render_pages requires a PDF file path, not a Document")
             effective_dpi = dpi if dpi is not None else self._render_dpi
-            document = Loader(pdf_path).load()
+            pdf_doc = self._get_pdf_doc()
+            document = Loader(pdf_path).load(pdf_doc)
             engine = RenderEngine(output_dir, effective_dpi)
             renders: List[RenderInfo] = []
             for page in document.pages:
                 if page_indices is not None and page.index not in page_indices:
                     continue
                 renders.append(
-                    engine.render(
-                        pdf_path,
+                    engine.render_page(
+                        pdf_doc,
                         page.index,
                         page_type=page.page_type,
                     )

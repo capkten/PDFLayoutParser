@@ -2,6 +2,8 @@
 
 ## 2026-09-23
 
+- 修复轻量图片与渲染 API 重复打开 PDF 的问题：此前 `Loader.load()` 为读取元数据打开文档，`ImageExtractor.extract()` / `RenderEngine.render()` 又按路径逐页打开，导致同一解析器调用图片和渲染时共打开 4 次。现在 `extract_images()` 与 `render_pages()` 通过 `PDFParser._get_pdf_doc()` 获取实例句柄，并将其传给 `Loader.load(pdf_doc)`、`ImageExtractor.extract_page()` 和 `RenderEngine.render_page()`；`extract_image_in_region()`、`render_region()` 随之复用相同路径。句柄由 `close()` 释放，退出上下文管理器时也会关闭；完整 `parse()` 及 Pipeline worker 句柄管理保持不变。验证：共享句柄回归先红（原实现 `1 failed, 1 passed`，观察到 4 次打开），修复后目标测试 `2 passed`；Parser、Loader、ImageExtractor、RenderEngine 目标测试 `64 passed, 32 skipped`。
+
 - 修复个人信用报告元数据过滤误删有线表格的问题。根因位于 `PersonalCreditReportTableExtractor.extract()` 和 `_extract_via_text_alignment()`：两处都会按表格文本过滤报告编号、报告时间等元数据表，未区分有线表格与无线候选表，导致第一页报告身份表被降级成普通文本。
 - 现在对 `line_projection`、`hybrid_line_span_recovery`、`PyMuPDF.find_tables` 来源，或同时带有水平线和垂直线证据的表格跳过该元数据过滤；无线表格的原过滤规则及编号正文过滤保持不变。
 - 新增 `tests/test_personal_credit_report.py::test_report_metadata_filter_does_not_remove_wired_tables`，覆盖三种有线来源、物理线证据和无线来源仍过滤。个人报告专项测试 `19 passed`；个人报告批量回归 `37 passed`。与表格提取器相关测试合跑为 `113 passed, 1 failed`；唯一失败是混合有线恢复用例 `test_hybrid_wired_table_replaces_full_rowspan_body_before_shifting_footer`，在原始基线也可复现，与本次改动无关。
