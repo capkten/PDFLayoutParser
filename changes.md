@@ -3,6 +3,7 @@
 ## 2026-09-23
 
 - 修复轻量图片与渲染 API 重复打开 PDF 的问题：此前 `Loader.load()` 为读取元数据打开文档，`ImageExtractor.extract()` / `RenderEngine.render()` 又按路径逐页打开，导致同一解析器调用图片和渲染时共打开 4 次。现在 `extract_images()` 与 `render_pages()` 通过 `PDFParser._get_pdf_doc()` 获取实例句柄，并将其传给 `Loader.load(pdf_doc)`、`ImageExtractor.extract_page()` 和 `RenderEngine.render_page()`；`extract_image_in_region()`、`render_region()` 随之复用相同路径。句柄由 `close()` 释放，退出上下文管理器时也会关闭；完整 `parse()` 及 Pipeline worker 句柄管理保持不变。验证：共享句柄回归先红（原实现 `1 failed, 1 passed`，观察到 4 次打开），修复后目标测试 `2 passed`；Parser、Loader、ImageExtractor、RenderEngine 目标测试 `64 passed, 32 skipped`。
+- 修复轻量 API 将旋转归一化和渲染标签写入持久 PDF 页面导致的状态泄漏。表格区域/结构提取、图片提取和页面渲染现在在同一已打开 PDF 的单页内存副本上执行会修改页面的 helper；原页面的旋转、尺寸和文本保持不变，渲染仍绘制 page-type 标签并保留原页索引输出名，重复渲染结果一致。单页副本在调用结束时关闭，不增加按路径打开次数；独立 `ImageExtractor`、`RenderEngine` 的行为保持原样。回归先红（状态对比失败），后绿：focused `4 passed`；Parser、Loader、ImageExtractor、RenderEngine 测试 `65 passed, 32 skipped`。
 
 - 修复个人信用报告元数据过滤误删有线表格的问题。根因位于 `PersonalCreditReportTableExtractor.extract()` 和 `_extract_via_text_alignment()`：两处都会按表格文本过滤报告编号、报告时间等元数据表，未区分有线表格与无线候选表，导致第一页报告身份表被降级成普通文本。
 - 现在对 `line_projection`、`hybrid_line_span_recovery`、`PyMuPDF.find_tables` 来源，或同时带有水平线和垂直线证据的表格跳过该元数据过滤；无线表格的原过滤规则及编号正文过滤保持不变。

@@ -10,7 +10,7 @@ import os
 from typing import List, Optional
 
 from hexai_pdf_parser.core.models import ApiResult, BBox, Block, Document, Image, Line, RenderInfo, Table
-from hexai_pdf_parser.page_normalizer import normalize_page_rotation
+from hexai_pdf_parser.page_normalizer import isolated_page, normalize_page_rotation
 
 
 class PDFParser:
@@ -262,7 +262,14 @@ class PDFParser:
             for page in document.pages:
                 if page_indices is not None and page.index not in page_indices:
                     continue
-                images.extend(extractor.extract_page(pdf_doc, page.index))
+                with isolated_page(pdf_doc[page.index]) as working_page:
+                    images.extend(
+                        extractor.extract_page(
+                            working_page.parent,
+                            page.index,
+                            page=working_page,
+                        )
+                    )
             return images
 
         return self._execute_result(_do, "images extracted", "no images extracted")
@@ -290,13 +297,15 @@ class PDFParser:
             for page in document.pages:
                 if page_indices is not None and page.index not in page_indices:
                     continue
-                renders.append(
-                    engine.render_page(
-                        pdf_doc,
-                        page.index,
-                        page_type=page.page_type,
+                with isolated_page(pdf_doc[page.index]) as working_page:
+                    renders.append(
+                        engine.render_page(
+                            working_page.parent,
+                            page.index,
+                            page=working_page,
+                            page_type=page.page_type,
+                        )
                     )
-                )
             return renders
 
         return self._execute_result(_do, "pages rendered", "no pages rendered")
@@ -537,7 +546,8 @@ class PDFParser:
                 page_idx = r["page_index"]
                 page_handle = pdf_doc[page_idx]
                 r_bbox = BBox(r["x0"], r["y0"], r["x1"], r["y1"])
-                table = extractor.extract_table_in_region(page_handle, r_bbox)
+                with isolated_page(page_handle) as working_page:
+                    table = extractor.extract_table_in_region(working_page, r_bbox)
                 if is_single:
                     return table
                 if table is not None:
@@ -578,7 +588,8 @@ class PDFParser:
                 for r in regions:
                     page_idx = r["page_index"]
                     page_handle = pdf_doc[page_idx]
-                    structures = extractor.extract_table_structure(page_handle)
+                    with isolated_page(page_handle) as working_page:
+                        structures = extractor.extract_table_structure(working_page)
                     for s in structures:
                         if self._bbox_intersects(s.bbox, r):
                             all_results.append(s)
@@ -591,9 +602,10 @@ class PDFParser:
                     if page_indices is not None and page.index not in page_indices:
                         continue
                     page_handle = pdf_doc[page.index]
-                    all_results.extend(
-                        extractor.extract_table_structure(page_handle)
-                    )
+                    with isolated_page(page_handle) as working_page:
+                        all_results.extend(
+                            extractor.extract_table_structure(working_page)
+                        )
                 return all_results
 
         return self._execute_result(_do, "table structure extracted", "no table structure extracted")
