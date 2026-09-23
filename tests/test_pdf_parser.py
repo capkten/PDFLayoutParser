@@ -406,13 +406,15 @@ def test_extract_images_and_render_pages_reuse_parser_handle(tmp_dir, monkeypatc
 
     monkeypatch.setattr(fitz, "open", counted_open)
     parser = PDFParser(pdf_path)
-    images = parser.extract_images(os.path.join(tmp_dir, "images"), page_indices=[0])
-    renders = parser.render_pages(os.path.join(tmp_dir, "renders"), page_indices=[0])
+    try:
+        images = parser.extract_images(os.path.join(tmp_dir, "images"), page_indices=[0])
+        renders = parser.render_pages(os.path.join(tmp_dir, "renders"), page_indices=[0])
 
-    assert_success_result(images)
-    assert_success_result(renders)
-    assert len(opened) == 1
-    parser.close()
+        assert_success_result(images)
+        assert_success_result(renders)
+        assert len(opened) == 1
+    finally:
+        parser.close()
 
 
 def test_render_pages_writes_png(tmp_dir):
