@@ -629,17 +629,11 @@ def _recover_cells_from_rust(
     grid = grid_output.get("grid", grid_output)
     if not isinstance(grid, dict):
         raise TypeError("Rust native recovery inner grid must be a mapping")
-    diagnostics = output.get("diagnostics", [])
-    if any(
-        isinstance(item, dict) and item.get("status") == "occupancy_conflict"
-        for item in diagnostics
-    ):
-        raise ValueError("Rust native recovery reported an occupancy conflict")
     rows = int(grid["rows"])
     columns = int(grid["cols"])
     cells = output.get("cells", grid_output.get("cells", []))
     if rows <= 0 or columns <= 0 or not cells:
-        raise ValueError("Rust native recovery returned an empty grid")
+        return 0, 0, []
     return rows, columns, _rust_cells_to_project(
         cells, rows, columns
     )

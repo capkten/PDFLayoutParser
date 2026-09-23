@@ -1100,57 +1100,118 @@ fn build_candidate_from_tracks(
         .enumerate()
         .map(|(index, column)| (*column, index))
         .collect();
-    let mut cells = Vec::with_capacity(grouped.len());
-    for ((row, original_column), mut members) in grouped {
-        members.sort_by(|left, right| {
-            left.rect
-                .y0
-                .partial_cmp(&right.rect.y0)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| {
-                    left.rect
-                        .x0
-                        .partial_cmp(&right.rect.x0)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                })
-                .then_with(|| left.order.cmp(&right.order))
-        });
-        let mut rect = members[0].rect.clone();
-        let mut text = String::new();
-        for (index, atom) in members.iter().enumerate() {
-            if index > 0 && atom.rect.y0 > members[index - 1].rect.y1 + 1.0 {
-                text.push('\n');
-            }
-            text.push_str(&atom.text);
-            rect = rect_union(&rect, &atom.rect);
-        }
+    let mut row_grouped: std::collections::BTreeMap<usize, Vec<(usize, Vec<&AtomDto>)>> =
+        std::collections::BTreeMap::new();
+    for ((row, original_column), members) in grouped {
+        row_grouped.entry(row).or_default().push((original_column, members));
+    }
+
+    let mut cells = Vec::new();
+    for (row, mut row_members) in row_grouped {
+        row_members.sort_by_key(|(orig_col, _)| *orig_col);
+        let orig_cols: Vec<usize> = row_members.iter().map(|(c, _)| *c).collect();
+        let num_members = row_members.len();
         let spanning_single_row = centered_single_rows.contains(&row)
             || short_title_rows.contains(&row);
-        let col = if spanning_single_row {
-            0
-        } else {
-            *column_map.get(&original_column)?
-        };
-        let covered_columns = active_columns
-            .iter()
-            .filter(|column| rect.x0 <= tracks[**column] && tracks[**column] <= rect.x1)
-            .count();
-        let colspan = if spanning_single_row {
-            active_columns.len()
-        } else {
-            covered_columns.max(1)
-        };
-        cells.push(CellDto {
-            schema_version: 1,
-            text: text.trim().to_string(),
-            row: row as i64,
-            col: col as i64,
-            rect,
-            rowspan: 1,
-            colspan: colspan as i64,
-            source: None,
-        });
+
+        for (member_idx, (original_column, mut members)) in row_members.into_iter().enumerate() {
+            members.sort_by(|left, right| {
+                left.rect
+                    .y0
+                    .partial_cmp(&right.rect.y0)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then_with(|| {
+                        left.rect
+                            .x0
+                            .partial_cmp(&right.rect.x0)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    })
+                    .then_with(|| left.order.cmp(&right.order))
+            });
+            let mut rect = members[0].rect.clone();
+            let mut text = String::new();
+            for (index, atom) in members.iter().enumerate() {
+                if index > 0 && atom.rect.y0 > members[index - 1].rect.y1 + 1.0 {
+                    text.push('\n');
+                }
+                text.push_str(&atom.text);
+                rect = rect_union(&rect, &atom.rect);
+            }
+            let col = if spanning_single_row {
+                0
+            } else {
+                *column_map.get(&original_column)?
+            };
+            let covered_columns = active_columns
+                .iter()
+                .filter(|column| rect.x0 <= tracks[**column] && tracks[**column] <= rect.x1)
+                .count();
+            let colspan = if spanning_single_row {
+                active_columns.len()
+            } else {
+                let next_col = if member_idx + 1 < num_members {
+                    *column_map.get(&orig_cols[member_idx + 1])?
+                } else {
+                    active_columns.len()
+                };
+                let max_span = next_col.saturating_sub(col).max(1);
+                covered_columns.max(1).min(max_span)
+            };
+            cells.push(CellDto {
+                schema_version: 1,
+                text: text.trim().to_string(),
+                row: row as i64,
+                col: col as i64,
+                rect,
+                rowspan: 1,
+                colspan: colspan as i64,
+                source: None,
+            });
+        }
     }
+
+    let col_count = active_columns.len();
+    let mut occupancy = vec![vec![None; col_count]; row_count];
+    for (idx, cell) in cells.iter().enumerate() {
+        let r = cell.row as usize;
+        let c = cell.col as usize;
+        let cs = cell.colspan.max(1) as usize;
+        let rs = cell.rowspan.max(1) as usize;
+        for rr in r..r + rs {
+            for cc in c..c + cs {
+                if rr < row_count && cc < col_count {
+                    occupancy[rr][cc] = Some(idx as i64);
+                }
+            }
+        }
+    }
+
+    let mut row_edges = Vec::with_capacity(row_count + 1);
+    row_edges.push(table_box.y0);
+    for r in 0..row_count.saturating_sub(1) {
+        let y_cur_max = rows[r].iter().map(|a| a.rect.y1).fold(f64::NEG_INFINITY, f64::max);
+        let y_next_min = rows[r + 1].iter().map(|a| a.rect.y0).fold(f64::INFINITY, f64::min);
+        let split_y = if y_cur_max.is_finite() && y_next_min.is_finite() && y_cur_max <= y_next_min {
+            (y_cur_max + y_next_min) / 2.0
+        } else if y_cur_max.is_finite() {
+            y_cur_max
+        } else {
+            table_box.y0 + (table_box.y1 - table_box.y0) * ((r + 1) as f64 / row_count as f64)
+        };
+        row_edges.push(split_y);
+    }
+    row_edges.push(table_box.y1);
+
+    let active_tracks: Vec<f64> = active_columns.iter().map(|&c| tracks[c]).collect();
+    let mut col_edges = Vec::with_capacity(col_count + 1);
+    col_edges.push(table_box.x0);
+    for c in 0..col_count.saturating_sub(1) {
+        let split_x = (active_tracks[c] + active_tracks[c + 1]) / 2.0;
+        col_edges.push(split_x);
+    }
+    col_edges.push(table_box.x1);
+
+    append_empty_cells(&mut cells, &mut occupancy, &row_edges, &col_edges);
 
     let candidate_rect = cells
         .iter()
@@ -3917,12 +3978,32 @@ pub fn recover_native_region(input: NativeRegionInput) -> NativeRegionOutput {
         other => other,
     });
     let (occupancy, conflicts) = rebuild_occupancy_indices(&cells, num_rows, num_cols);
-    for (row, col) in conflicts {
-        diags.push(occupancy_conflict_diagnostic(
-            "wireless_structure.recover_native_region",
-            row,
-            col,
-        ));
+    if !conflicts.is_empty() {
+        for (row, col) in conflicts {
+            diags.push(occupancy_conflict_diagnostic(
+                "wireless_structure.recover_native_region",
+                row,
+                col,
+            ));
+        }
+        return NativeRegionOutput {
+            schema_version: 1,
+            grid: LogicalGridDto {
+                schema_version: 1,
+                grid: GridDto {
+                    schema_version: 1,
+                    rows: 0,
+                    cols: 0,
+                    row_edges: Vec::new(),
+                    col_edges: Vec::new(),
+                    occupancy: Vec::new(),
+                },
+                empty_slots: Vec::new(),
+                cells: Vec::new(),
+            },
+            cells: Vec::new(),
+            diagnostics: diags,
+        };
     }
 
     let grid_dto = GridDto {

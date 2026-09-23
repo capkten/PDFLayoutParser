@@ -1044,11 +1044,6 @@ def _wireless_recovery_from_rust(output: Dict[str, Any]) -> WirelessRecovery:
     if not isinstance(output, dict):
         raise TypeError("Rust wireless recovery output must be a mapping")
     diagnostics = output.get("diagnostics", [])
-    if any(
-        isinstance(item, dict) and item.get("status") == "occupancy_conflict"
-        for item in diagnostics
-    ):
-        raise ValueError("Rust wireless recovery reported an occupancy conflict")
     tables = [_table_from_rust_candidate(item) for item in output.get("candidates", [])]
     return WirelessRecovery(
         tables=tables,

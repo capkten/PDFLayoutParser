@@ -625,12 +625,6 @@ def recover_cells_from_snapshot(
         raise TypeError("Rust native recovery inner grid must be a mapping")
     rows = int(grid.get("rows", 0))
     cols = int(grid.get("cols", 0))
-    diagnostics = raw_output.get("diagnostics", ())
-    if any(
-        isinstance(item, Mapping) and item.get("status") == "occupancy_conflict"
-        for item in diagnostics
-    ):
-        raise ValueError("Rust native recovery reported an occupancy conflict")
     raw_cells = raw_output.get("cells", grid_output.get("cells", []))
     cells = _rust_cells_to_project(
         raw_cells,
@@ -638,7 +632,7 @@ def recover_cells_from_snapshot(
         cols,
     )
     if rows <= 0 or cols <= 0 or not cells:
-        raise ValueError("Rust native recovery returned an empty grid")
+        return 0, 0, []
     return rows, cols, cells
 
 
