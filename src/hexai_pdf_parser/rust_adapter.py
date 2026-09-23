@@ -1366,7 +1366,16 @@ def select_candidates(
     return _pdf_fast.select_candidates(owned_candidates, owned_excluded, owned_allowed)
 
 
-def recover_wireless_tables(input_dto: Dict[str, Any]) -> Dict[str, Any]:
+def recover_wireless_tables(input_dto: Union[Dict[str, Any], Tuple[Any, ...]]) -> Dict[str, Any]:
+    if isinstance(input_dto, tuple):
+        return recover_wireless_tables_packed(*input_dto)
+
+    try:
+        packed = pack_wireless_recovery_input(input_dto)
+        return recover_wireless_tables_packed(*packed)
+    except Exception:
+        pass
+
     d = dict(input_dto)
     if "schema_version" not in d:
         d["schema_version"] = 1
@@ -1417,6 +1426,199 @@ def recover_wireless_tables(input_dto: Dict[str, Any]) -> Dict[str, Any]:
     d["config"] = config
 
     return _pdf_fast.recover_wireless_tables(d)
+
+
+def pack_wireless_recovery_input(input_dto: Dict[str, Any]) -> Tuple[Any, ...]:
+    """Convert a dictionary input_dto into compact flat arrays for fast FFI."""
+    page = input_dto.get("page", {})
+    page_info = (
+        float(page.get("width", 595.0)),
+        float(page.get("height", 842.0)),
+        int(page.get("rotation", 0)),
+    )
+
+    regions_flat = []
+    for r in input_dto.get("regions", []):
+        rect = r.get("rect", {})
+        regions_flat.append((
+            float(rect.get("x0", 0.0)),
+            float(rect.get("y0", 0.0)),
+            float(rect.get("x1", 0.0)),
+            float(rect.get("y1", 0.0)),
+            bool(r.get("allowed", True)),
+        ))
+
+    config = input_dto.get("config", {})
+    config_tuple = (
+        float(config.get("line_tolerance", 2.0)),
+        float(config.get("row_tolerance", 2.0)),
+        float(config.get("column_tolerance", 2.0)),
+        float(config.get("span_tolerance", 2.0)),
+        float(config.get("numeric_tolerance", 2.0)),
+    )
+
+    spans = input_dto.get("spans", [])
+    spans_num: List[float] = []
+    spans_text: List[str] = []
+    spans_font: List[Optional[str]] = []
+    chars_num: List[float] = []
+    chars_text: List[str] = []
+    has_custom_chars = False
+
+    char_idx = 0
+    for s in spans:
+        rect = s.get("rect", {})
+        x0 = float(rect.get("x0", 0.0))
+        y0 = float(rect.get("y0", 0.0))
+        x1 = float(rect.get("x1", 0.0))
+        y1 = float(rect.get("y1", 0.0))
+        size = float(s.get("size") or 0.0)
+        order = float(s.get("order", 0))
+        sp = s.get("source_position", {})
+        block = float(s.get("block", sp.get("block", 0)))
+        line = float(s.get("line", sp.get("line", 0)))
+
+        text = str(s.get("text", ""))
+        spans_text.append(text)
+        spans_font.append(s.get("font"))
+
+        chars = s.get("characters", [])
+        char_count = len(chars)
+        char_start = char_idx
+
+        spans_num.extend([x0, y0, x1, y1, size, order, block, line, float(char_start), float(char_count)])
+
+        text_chars = list(text)
+        for i, c in enumerate(chars):
+            c_rect = c.get("rect", {})
+            cx0 = float(c_rect.get("x0", 0.0))
+            cy0 = float(c_rect.get("y0", 0.0))
+            cx1 = float(c_rect.get("x1", 0.0))
+            cy1 = float(c_rect.get("y1", 0.0))
+            c_order = float(c.get("order", i))
+            chars_num.extend([cx0, cy0, cx1, cy1, c_order])
+            c_text = str(c.get("text", ""))
+            chars_text.append(c_text)
+            if i >= len(text_chars) or c_text != text_chars[i]:
+                has_custom_chars = True
+            char_idx += 1
+
+    return (
+        page_info,
+        regions_flat,
+        config_tuple,
+        spans_num,
+        spans_text,
+        spans_font,
+        chars_num,
+        chars_text if has_custom_chars else None,
+    )
+
+
+def recover_wireless_tables_packed(
+    page_info: Tuple[float, float, int],
+    regions_flat: List[Tuple[float, float, float, float, bool]],
+    config: Tuple[float, float, float, float, float],
+    spans_num: List[float],
+    spans_text: List[str],
+    spans_font: List[Optional[str]],
+    chars_num: List[float],
+    chars_text: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    return _pdf_fast.recover_wireless_tables_packed(
+        page_info,
+        regions_flat,
+        config,
+        spans_num,
+        spans_text,
+        spans_font,
+        chars_num,
+        chars_text,
+    )
+
+
+def pack_native_spans(
+    spans: Sequence[Any],
+    page_width: float = 595.0,
+    page_height: float = 842.0,
+    rotation: int = 0,
+    allowed_regions: Optional[Sequence[Any]] = None,
+    excluded_regions: Optional[Sequence[Any]] = None,
+    config: Optional[Mapping[str, float]] = None,
+) -> Tuple[Any, ...]:
+    """Directly pack a list of NativeSpan objects into flat FFI buffers without intermediate dicts."""
+    page_info = (float(page_width), float(page_height), int(rotation))
+
+    regions_flat = []
+    for r in allowed_regions or []:
+        regions_flat.append((float(r.x0), float(r.y0), float(r.x1), float(r.y1), True))
+    for r in excluded_regions or []:
+        regions_flat.append((float(r.x0), float(r.y0), float(r.x1), float(r.y1), False))
+
+    cfg = config or {}
+    config_tuple = (
+        float(cfg.get("line_tolerance", 2.0)),
+        float(cfg.get("row_tolerance", 2.0)),
+        float(cfg.get("column_tolerance", 2.0)),
+        float(cfg.get("span_tolerance", 2.0)),
+        float(cfg.get("numeric_tolerance", 2.0)),
+    )
+
+    spans_num: List[float] = []
+    spans_text: List[str] = []
+    spans_font: List[Optional[str]] = []
+    chars_num: List[float] = []
+    chars_text: List[str] = []
+    has_custom_chars = False
+
+    char_idx = 0
+    for s in spans:
+        bbox = s.bbox
+        x0 = float(bbox.x0)
+        y0 = float(bbox.y0)
+        x1 = float(bbox.x1)
+        y1 = float(bbox.y1)
+        size = float(s.size or 0.0)
+        order = float(s.order)
+        sp = getattr(s, "source_position", None) or (0, 0, 0)
+        block = float(sp[0]) if len(sp) > 0 else 0.0
+        line = float(sp[1]) if len(sp) > 1 else 0.0
+
+        text = s.text
+        spans_text.append(text)
+        spans_font.append(s.font)
+
+        chars = s.characters
+        char_count = len(chars)
+        char_start = char_idx
+
+        spans_num.extend([x0, y0, x1, y1, size, order, block, line, float(char_start), float(char_count)])
+
+        text_chars = list(text)
+        for i, (c_str, c_bbox) in enumerate(chars):
+            cx0 = float(c_bbox.x0)
+            cy0 = float(c_bbox.y0)
+            cx1 = float(c_bbox.x1)
+            cy1 = float(c_bbox.y1)
+            c_order = float(i)
+            chars_num.extend([cx0, cy0, cx1, cy1, c_order])
+            chars_text.append(c_str)
+            if i >= len(text_chars) or c_str != text_chars[i]:
+                has_custom_chars = True
+            char_idx += 1
+
+    return (
+        page_info,
+        regions_flat,
+        config_tuple,
+        spans_num,
+        spans_text,
+        spans_font,
+        chars_num,
+        chars_text if has_custom_chars else None,
+    )
+
+
 def _ensure_background_dto(bg: Dict[str, Any], default_order: int = 0) -> Dict[str, Any]:
     b = dict(bg)
     if "schema_version" not in b:

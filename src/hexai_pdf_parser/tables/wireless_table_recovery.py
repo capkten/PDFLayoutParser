@@ -1241,73 +1241,27 @@ def recover_wireless_tables(
                 allowed_regions=allowed_regions,
             )
             geometry = getattr(snapshot, "geometry", {}) or {}
-            page_dto = {
-                "schema_version": 1,
-                "width": float(geometry.get("width", 0.0)),
-                "height": float(geometry.get("height", 0.0)),
-                "rotation": int(geometry.get("rotation", 0)),
-            }
-            spans_dto = [
-                {
-                    "schema_version": 1,
-                    "text": s.text,
-                    "rect": {"schema_version": 1, "x0": s.bbox.x0, "y0": s.bbox.y0, "x1": s.bbox.x1, "y1": s.bbox.y1},
-                    "font": s.font,
-                    "size": s.size,
-                    "flags": 0,
-                    "order": s.order,
-                    "characters": [
-                        {
-                            "schema_version": 1,
-                            "text": ch[0],
-                            "rect": {"schema_version": 1, "x0": ch[1].x0, "y0": ch[1].y0, "x1": ch[1].x1, "y1": ch[1].y1},
-                            "order": idx,
-                        }
-                        for idx, ch in enumerate(s.characters)
-                    ],
-                    "source_position": {
-                        "schema_version": 1,
-                        "block": s.source_position[0] if s.source_position else 0,
-                        "line": s.source_position[1] if s.source_position else 0,
-                    },
-                    "block": s.source_position[0] if s.source_position else 0,
-                    "line": s.source_position[1] if s.source_position else 0,
-                }
-                for s in spans
-            ]
-            regions_dto = [
-                {
-                    "schema_version": 1,
-                    "rect": {"schema_version": 1, "x0": r.x0, "y0": r.y0, "x1": r.x1, "y1": r.y1},
-                    "source_order": idx,
-                    "allowed": True,
-                }
-                for idx, r in enumerate(allowed_regions or [])
-            ] + [
-                {
-                    "schema_version": 1,
-                    "rect": {"schema_version": 1, "x0": r.x0, "y0": r.y0, "x1": r.x1, "y1": r.y1},
-                    "source_order": idx,
-                    "allowed": False,
-                }
-                for idx, r in enumerate(excluded_regions or [])
-            ]
-            input_dto = {
-                "schema_version": 1,
-                "page": page_dto,
-                "spans": spans_dto,
-                "regions": regions_dto,
-                "config": {
-                    "schema_version": 1,
+            page_w = float(geometry.get("width", 0.0))
+            page_h = float(geometry.get("height", 0.0))
+            rotation = int(geometry.get("rotation", 0))
+
+            packed_args = rust_adapter.pack_native_spans(
+                spans=spans,
+                page_width=page_w,
+                page_height=page_h,
+                rotation=rotation,
+                allowed_regions=allowed_regions,
+                excluded_regions=excluded_regions,
+                config={
                     "line_tolerance": 2.0,
                     "row_tolerance": 2.0,
                     "column_tolerance": 2.0,
                     "span_tolerance": 2.0,
                     "numeric_tolerance": 2.0,
                 },
-            }
+            )
             return _wireless_recovery_from_rust(
-                rust_adapter.recover_wireless_tables(input_dto)
+                rust_adapter.recover_wireless_tables(packed_args)
             )
 
         return rust_adapter.run_python_or_rust(

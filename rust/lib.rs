@@ -737,6 +737,132 @@ fn recover_wireless_tables_binding<'py>(
     output.to_py(py)
 }
 
+#[pyfunction(name = "recover_wireless_tables_packed")]
+#[pyo3(signature = (page_info, regions_flat, config, spans_num, spans_text, spans_font, chars_num, chars_text=None))]
+fn recover_wireless_tables_packed_binding<'py>(
+    py: Python<'py>,
+    page_info: (f64, f64, i64),
+    regions_flat: Vec<(f64, f64, f64, f64, bool)>,
+    config: (f64, f64, f64, f64, f64),
+    spans_num: Vec<f64>,
+    spans_text: Vec<String>,
+    spans_font: Vec<Option<String>>,
+    chars_num: Vec<f64>,
+    chars_text: Option<Vec<String>>,
+) -> PyResult<Bound<'py, PyDict>> {
+    let page = types::PageDto {
+        schema_version: 1,
+        width: page_info.0,
+        height: page_info.1,
+        rotation: page_info.2,
+    };
+    let mut regions = Vec::with_capacity(regions_flat.len());
+    for (idx, (x0, y0, x1, y1, allowed)) in regions_flat.into_iter().enumerate() {
+        regions.push(types::RegionDto {
+            schema_version: 1,
+            rect: Rect4 {
+                schema_version: 1,
+                x0,
+                y0,
+                x1,
+                y1,
+            },
+            source_order: idx as i64,
+            allowed,
+        });
+    }
+    let config = types::StructureConfig {
+        schema_version: 1,
+        line_tolerance: config.0,
+        row_tolerance: config.1,
+        column_tolerance: config.2,
+        span_tolerance: config.3,
+        numeric_tolerance: config.4,
+    };
+    let span_count = spans_num.len() / 10;
+    let mut spans = Vec::with_capacity(span_count);
+    for i in 0..span_count {
+        let base = i * 10;
+        let x0 = spans_num[base];
+        let y0 = spans_num[base + 1];
+        let x1 = spans_num[base + 2];
+        let y1 = spans_num[base + 3];
+        let size = spans_num[base + 4];
+        let order = spans_num[base + 5] as i64;
+        let block = spans_num[base + 6] as i64;
+        let line = spans_num[base + 7] as i64;
+        let char_start = spans_num[base + 8] as usize;
+        let char_count = spans_num[base + 9] as usize;
+
+        let text = spans_text.get(i).cloned().unwrap_or_default();
+        let font = spans_font.get(i).cloned().flatten();
+        let char_chars: Vec<char> = text.chars().collect();
+
+        let mut characters = Vec::with_capacity(char_count);
+        for c_idx in 0..char_count {
+            let c_base = (char_start + c_idx) * 5;
+            if c_base + 4 < chars_num.len() {
+                let cx0 = chars_num[c_base];
+                let cy0 = chars_num[c_base + 1];
+                let cx1 = chars_num[c_base + 2];
+                let cy1 = chars_num[c_base + 3];
+                let c_order = chars_num[c_base + 4] as i64;
+                let c_text = if let Some(ref ct) = chars_text {
+                    ct.get(char_start + c_idx).cloned().unwrap_or_default()
+                } else if c_idx < char_chars.len() {
+                    char_chars[c_idx].to_string()
+                } else {
+                    String::new()
+                };
+                characters.push(types::CharacterDto {
+                    schema_version: 1,
+                    text: c_text,
+                    rect: Rect4 {
+                        schema_version: 1,
+                        x0: cx0,
+                        y0: cy0,
+                        x1: cx1,
+                        y1: cy1,
+                    },
+                    order: c_order,
+                });
+            }
+        }
+        spans.push(types::NativeSpanDto {
+            schema_version: 1,
+            text,
+            rect: Rect4 {
+                schema_version: 1,
+                x0,
+                y0,
+                x1,
+                y1,
+            },
+            font,
+            size: if size > 0.0 { Some(size) } else { None },
+            flags: Some(0),
+            order,
+            characters,
+            source_position: types::SourcePositionDto {
+                schema_version: 1,
+                block,
+                line,
+            },
+            block,
+            line,
+        });
+    }
+    let input = types::WirelessRecoveryInput {
+        schema_version: 1,
+        page,
+        spans,
+        regions,
+        config,
+    };
+    let output = py.allow_threads(move || wireless_structure::recover_wireless_tables(input));
+    output.to_py(py)
+}
+
 #[pyfunction(name = "group_backgrounds")]
 fn group_backgrounds_binding<'py>(
     py: Python<'py>,
@@ -910,6 +1036,7 @@ fn _pdf_fast(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(table_quality_binding, module)?)?;
     module.add_function(wrap_pyfunction!(select_candidates_binding, module)?)?;
     module.add_function(wrap_pyfunction!(recover_wireless_tables_binding, module)?)?;
+    module.add_function(wrap_pyfunction!(recover_wireless_tables_packed_binding, module)?)?;
     module.add_function(wrap_pyfunction!(group_backgrounds_binding, module)?)?;
     module.add_function(wrap_pyfunction!(detect_zebra_rows_binding, module)?)?;
     module.add_function(wrap_pyfunction!(
