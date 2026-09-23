@@ -555,6 +555,15 @@ class PersonalCreditReportTableExtractor(TableExtractor):
         return sum(marker in text for marker in markers) >= 2
 
     @staticmethod
+    def _is_wired_table(table: Table) -> bool:
+        """Return whether a table has explicit wired-extraction evidence."""
+        return table.source in {
+            "line_projection",
+            "hybrid_line_span_recovery",
+            "PyMuPDF.find_tables",
+        } or (bool(table.h_lines) and bool(table.v_lines))
+
+    @staticmethod
     def _split_repeated_record_table(table: Table) -> list[Table]:
         """Split repeated personal-report records sharing one layout."""
         record_starts = (
@@ -626,7 +635,10 @@ class PersonalCreditReportTableExtractor(TableExtractor):
             _trim_query_table(table)
             for table in tables
             if not self._is_numbered_prose_candidate(table)
-            and not self._is_report_metadata_candidate(table)
+            and (
+                self._is_wired_table(table)
+                or not self._is_report_metadata_candidate(table)
+            )
         ]
         return [
             split
@@ -649,7 +661,10 @@ class PersonalCreditReportTableExtractor(TableExtractor):
             _trim_query_table(table)
             for table in tables
             if not self._is_numbered_prose_candidate(table)
-            and not self._is_report_metadata_candidate(table)
+            and (
+                self._is_wired_table(table)
+                or not self._is_report_metadata_candidate(table)
+            )
         ]
         return [
             split
