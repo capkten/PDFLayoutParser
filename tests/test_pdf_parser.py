@@ -155,8 +155,10 @@ def test_context_manager_closes_handle(tmp_dir):
     pdf_path = os.path.join(tmp_dir, "test.pdf")
     make_text_pdf(pdf_path, text="Hello")
     with PDFParser(pdf_path) as parser:
-        assert parser is not None
-    # Context manager exits cleanly without error
+        assert parser.classify_page(0).code == 1
+        pdf_doc = parser._pdf_doc
+        assert not pdf_doc.is_closed
+    assert pdf_doc.is_closed
 
 
 def test_context_manager_with_document():
@@ -964,6 +966,8 @@ def test_region_apis_reuse_one_pdf_handle_and_close_reopens(tmp_dir, monkeypatch
     monkeypatch.setattr(fitz, "open", counted_open)
     parser = PDFParser(pdf_path)
 
+    assert parser.extract_tables().code in {0, 1}
+    assert parser.extract_text().code == 1
     assert parser.extract_text_in_region(region).code == 1
     assert parser.extract_text_in_region(other_region).code == 1
     assert parser.extract_table_in_region(region).code in {0, 1}
@@ -976,6 +980,52 @@ def test_region_apis_reuse_one_pdf_handle_and_close_reopens(tmp_dir, monkeypatch
     assert parser.extract_text_in_region(region).code == 1
     assert len(opened) == 2
     parser.close()
+
+
+def test_text_and_table_extraction_preserve_rotated_page_for_region_reads(tmp_dir, monkeypatch):
+    pdf_path = os.path.join(tmp_dir, "rotated.pdf")
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_text((50, 80), "Rotation State")
+    page.set_rotation(90)
+    doc.save(pdf_path)
+    doc.close()
+
+    parser = PDFParser(pdf_path)
+    pdf_doc = parser._get_pdf_doc()
+    page = pdf_doc[0]
+    original_rotation = page.rotation
+    original_size = (page.rect.width, page.rect.height)
+    region = {"page_index": 0, "x0": 0.0, "y0": 0.0, "x1": 1.0, "y1": 1.0}
+    before = parser.extract_text_in_region(region)
+    before_text = " ".join(block.text for block in before.data)
+    assert "Rotation State" in before_text
+
+    assert parser.extract_tables().code in {0, 1}
+    assert page.rotation == original_rotation
+    assert (page.rect.width, page.rect.height) == original_size
+    assert parser.extract_text().code == 1
+    assert page.rotation == original_rotation
+    assert (page.rect.width, page.rect.height) == original_size
+
+    after = parser.extract_text_in_region(region)
+    after_text = " ".join(block.text for block in after.data)
+    assert after_text == before_text
+    parser.close()
+
+    failing_parser = PDFParser(pdf_path)
+    failing_page = failing_parser._get_pdf_doc()[0]
+
+    def fail_extraction(*args, **kwargs):
+        raise RuntimeError("extractor failed")
+
+    monkeypatch.setattr(
+        "hexai_pdf_parser.extractors.text_extractor.TextExtractor.extract_blocks",
+        fail_extraction,
+    )
+    assert failing_parser.extract_text().code == -1
+    assert failing_page.rotation == original_rotation
+    assert (failing_page.rect.width, failing_page.rect.height) == original_size
 
 
 def test_separate_parser_instances_open_separate_documents(tmp_dir, monkeypatch):

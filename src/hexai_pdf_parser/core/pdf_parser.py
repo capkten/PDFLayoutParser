@@ -179,13 +179,18 @@ class PDFParser:
                 if page_indices is not None and page.index not in page_indices:
                     continue
                 page_handle = pdf_doc[page.index]
-                normalize_page_rotation(page_handle)
-                page.blocks = TextExtractor().extract_blocks(page_handle)
-                page.tables = table_extractor.extract(page_handle)
-                page.blocks = TextExtractor().extract_layout_blocks(
-                    page_handle,
-                    page.tables,
-                )
+                original_rotation = page_handle.rotation
+                try:
+                    normalize_page_rotation(page_handle)
+                    page.blocks = TextExtractor().extract_blocks(page_handle)
+                    page.tables = table_extractor.extract(page_handle)
+                    page.blocks = TextExtractor().extract_layout_blocks(
+                        page_handle,
+                        page.tables,
+                    )
+                finally:
+                    if page_handle.rotation != original_rotation:
+                        page_handle.set_rotation(original_rotation)
             self._document = document
             self._text_ready = True
             self._document_complete = False
@@ -222,8 +227,13 @@ class PDFParser:
                 if page_indices is not None and page.index not in page_indices:
                     continue
                 page_handle = pdf_doc[page.index]
-                normalize_page_rotation(page_handle)
-                page.tables = extractor.extract(page_handle)
+                original_rotation = page_handle.rotation
+                try:
+                    normalize_page_rotation(page_handle)
+                    page.tables = extractor.extract(page_handle)
+                finally:
+                    if page_handle.rotation != original_rotation:
+                        page_handle.set_rotation(original_rotation)
             self._document = document
             self._text_ready = False
             self._document_complete = False
