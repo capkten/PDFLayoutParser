@@ -60,6 +60,21 @@ def real_pdf_path() -> str:
     return REAL_PDF_PATH
 
 
+@pytest.fixture(autouse=True)
+def close_parsers_after_test(monkeypatch, tmp_dir):
+    parsers = []
+    original_init = PDFParser.__init__
+
+    def tracked_init(parser, *args, **kwargs):
+        original_init(parser, *args, **kwargs)
+        parsers.append(parser)
+
+    monkeypatch.setattr(PDFParser, "__init__", tracked_init)
+    yield
+    for parser in parsers:
+        parser.close()
+
+
 # ---------------------------------------------------------------------------
 # Shared response assertions
 # ---------------------------------------------------------------------------
@@ -930,3 +945,61 @@ def test_parse_with_process_backend(real_pdf_path):
 
     from hexai_pdf_parser.pipeline import _PROCESS_POOL
     assert _PROCESS_POOL is not None
+
+
+def test_region_apis_reuse_one_pdf_handle_and_close_reopens(tmp_dir, monkeypatch):
+    pdf_path = os.path.join(tmp_dir, "reuse.pdf")
+    make_text_pdf(pdf_path, text="Hello Region")
+    region = {"page_index": 0, "x0": 0.0, "y0": 0.0, "x1": 1.0, "y1": 1.0}
+    other_region = {"page_index": 0, "x0": 0.0, "y0": 0.0, "x1": 0.8, "y1": 0.2}
+
+    real_open = fitz.open
+    opened = []
+
+    def counted_open(*args, **kwargs):
+        document = real_open(*args, **kwargs)
+        opened.append(document)
+        return document
+
+    monkeypatch.setattr(fitz, "open", counted_open)
+    parser = PDFParser(pdf_path)
+
+    assert parser.extract_text_in_region(region).code == 1
+    assert parser.extract_text_in_region(other_region).code == 1
+    assert parser.extract_table_in_region(region).code in {0, 1}
+    assert len(opened) == 1
+
+    parser.close()
+    assert opened[0].is_closed
+    parser.close()
+
+    assert parser.extract_text_in_region(region).code == 1
+    assert len(opened) == 2
+    parser.close()
+
+
+def test_separate_parser_instances_open_separate_documents(tmp_dir, monkeypatch):
+    pdf_path = os.path.join(tmp_dir, "two-parsers.pdf")
+    make_text_pdf(pdf_path, text="Hello")
+    real_open = fitz.open
+    opened = []
+
+    def counted_open(*args, **kwargs):
+        document = real_open(*args, **kwargs)
+        opened.append(document)
+        return document
+
+    monkeypatch.setattr(fitz, "open", counted_open)
+    first = PDFParser(pdf_path)
+    second = PDFParser(pdf_path)
+    assert first.classify_page(0).code == 1
+    assert second.classify_page(0).code == 1
+
+    assert len(opened) == 2
+    assert opened[0] is not opened[1]
+    assert not opened[0].is_closed
+    assert not opened[1].is_closed
+    first.close()
+    second.close()
+    assert opened[0].is_closed
+    assert opened[1].is_closed
