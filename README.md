@@ -5,7 +5,7 @@ PDF矢量文件解析器组件，将 PDF 解析为结构化 JSON、Markdown 和�
 ## Quick Start
 
 ```bash
-pip install dist/hexai_pdf_parser-0.1.0-py3-none-any.whl
+pip install dist/hexai_pdf_parser-1.1.4-py3-none-any.whl
 python -m hexai_pdf_parser.cli input.pdf -o out
 ```
 
