@@ -10,6 +10,31 @@ from hexai_pdf_parser.extractors.personal_credit_report import (
 )
 
 
+def _three_table_gap_lines():
+    horizontal_lines = [
+        (28.0, y, 100.0, y)
+        for y in (10.0, 20.0, 23.0, 33.0, 36.0, 46.0)
+    ]
+    vertical_lines = []
+    for x in (28.38, 100.0):
+        vertical_lines.extend(
+            [
+                (x, 9.625, x, 20.375),
+                (x, 22.627, x, 33.375),
+                (x, 35.627, x, 46.375),
+            ]
+        )
+    return horizontal_lines, vertical_lines
+
+
+def _regions_for_extractor(extractor):
+    horizontal_lines, vertical_lines = _three_table_gap_lines()
+    wired = extractor._wired_extractor
+    horizontal_lines = wired._merge_h_lines(horizontal_lines)
+    vertical_lines = wired._merge_v_lines(vertical_lines, h_lines=horizontal_lines)
+    return wired._find_table_regions(horizontal_lines, vertical_lines)
+
+
 def test_join_query_items():
     items = [
         (10.0, 20.0, 30.0, 40.0, "招商"),
@@ -17,6 +42,70 @@ def test_join_query_items():
     ]
     result = _join_query_items(items)
     assert result == "招商银行"
+
+
+def test_personal_report_default_wired_tolerance_keeps_three_tables_separate():
+    from hexai_pdf_parser.core.pipeline import Pipeline
+    from hexai_pdf_parser.extractors.personal_credit_report import (
+        PersonalCreditReportPipeline,
+        PersonalCreditReportTableExtractor,
+    )
+
+    personal = PersonalCreditReportTableExtractor(use_ml_table_detector=False)
+    assert personal.line_tolerance == 2.3
+    assert personal._wired_extractor.line_tolerance == 2.0
+    assert personal._wireless_extractor.line_tolerance == 2.3
+    assert len(_regions_for_extractor(personal)) == 3
+
+    generic = Pipeline(pdf_path="unused.pdf", use_ml_table_detector=False)
+    generic_extractor = generic._create_table_extractor()
+    assert generic_extractor._wired_extractor.line_tolerance == 2.3
+
+    default_pipeline = PersonalCreditReportPipeline(
+        pdf_path="unused.pdf", use_ml_table_detector=False
+    )
+    default_extractor = default_pipeline._create_table_extractor()
+    assert default_extractor._wired_extractor.line_tolerance == 2.0
+
+
+def test_personal_report_pipeline_accepts_external_wired_tolerance():
+    from hexai_pdf_parser.extractors.personal_credit_report import (
+        PersonalCreditReportPipeline,
+    )
+
+    pipeline = PersonalCreditReportPipeline(
+        pdf_path="unused.pdf",
+        use_ml_table_detector=False,
+        wired_line_tolerance=1.85,
+    )
+
+    extractor = pipeline._create_table_extractor()
+
+    assert extractor._wired_extractor.line_tolerance == 1.85
+    assert extractor._wireless_extractor.line_tolerance == 2.3
+
+
+def test_parse_personal_credit_report_forwards_external_wired_tolerance(monkeypatch):
+    import hexai_pdf_parser.extractors.personal_credit_report as parser_module
+
+    captured = {}
+
+    class FakePipeline:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        def run(self):
+            return object()
+
+    monkeypatch.setattr(parser_module, "PersonalCreditReportPipeline", FakePipeline)
+    monkeypatch.setattr(parser_module, "_document_result", lambda _document: {"ok": True})
+
+    result = parser_module.parse_personal_credit_report(
+        "sample.pdf", wired_line_tolerance=1.75
+    )
+
+    assert result == {"ok": True}
+    assert captured["wired_line_tolerance"] == 1.75
 
 
 def test_make_query_tables_with_synthetic_page():
