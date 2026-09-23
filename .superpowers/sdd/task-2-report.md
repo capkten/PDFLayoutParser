@@ -1,60 +1,103 @@
-# Task 2 资源生成报告
+# Task 2 Review-Fix 报告
 
 ## 状态
 
-已完成并提交。实现范围严格限定为 `scripts/pdf_diff_review.py` 和 `tests/test_pdf_diff_review.py`；未修改原始 PDF、标签或真实输出目录。
+review-fix 已完成 GREEN 验证。范围限定为：两个 Python native-span 无线入口的统一 Rust fallback 路由，以及 Rust 排序后的 occupancy 索引重建。
 
-## Commit
+## RED
 
-- `d36b1886185ca036c3d94348bcc01b905e92faa3`
-- message: `feat: generate PDF diff review assets`
-
-## 实现摘要
-
-- 读取并校验 Task 1 manifest，按 `page_index` 配对实际页面。
-- 调用 `scan_page_outputs`；当实际 Markdown 或 PNG 缺失时使用容错索引保留页面记录，并写入明确的 `errors`。
-- 按 `testset_root/source_visual_path`、`testset_root.parent/source_visual_path`、`testset_root.parent/source_table_png` 顺序寻找标签图。
-- 使用 `difflib.unified_diff` 生成标签到当前的 unified diff。
-- 输出 UTF-8 `classification.json`、`summary.json`、`images/page-XXX.png` 和供 Task 3 完善的 `index.html` 数据壳。
-- 使用 PyMuPDF 生成带 LABEL/CURRENT/PAGE 标识的并排 PNG；缺图绘制占位框。
-
-## 测试
-
-命令：
+### Python 入口诊断
 
 ```powershell
-$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; $env:PYTHONPATH='src'; pytest tests/test_pdf_diff_review.py -q
+$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; & 'C:\Users\23662\AppData\Local\Programs\Python\Python312\Scripts\pytest.exe' -q tests/test_wireless_structure_recoverer.py -k 'routes_native_span_exception_to_diagnostic'
 ```
 
-结果：`9 passed, 5 warnings`。警告均为当前 PyMuPDF 运行环境的弃用警告。
+结果：
 
-额外自检：
+```text
+2 failed, 16 deselected
+```
 
-- `python -m py_compile scripts\\pdf_diff_review.py tests\\test_pdf_diff_review.py`：通过。
-- `git diff --check`：通过。
-- 临时目录测试确认生成的并排 PNG 可被测试打开。
+两个失败都表现为 `len(diagnostics) == 0`。根因是 native span/DTO 构造在 `run_python_or_rust` 调用之前，入口级 `except` 直接回退 Python，绕过了 `rust_fallback` 记录。
+
+### Rust occupancy
+
+```powershell
+cargo test wireless_structure
+```
+
+结果：`1 passed; 1 failed; 13 filtered out`。失败断言显示 occupancy 中的索引仍指向排序前 cell。
+
+## GREEN
+
+### 目标 review-fix 测试
+
+```powershell
+$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; & 'C:\Users\23662\AppData\Local\Programs\Python\Python312\Scripts\pytest.exe' -q tests/test_wireless_structure_recoverer.py -k 'routes_native_span_exception_to_diagnostic'
+```
+
+结果：`2 passed, 16 deselected`。
+
+```powershell
+cargo test wireless_structure
+```
+
+结果：`2 passed, 0 failed; 13 filtered out`。
+
+### 相关 wireless 测试
+
+执行了以下 wireless 相关测试文件：
+
+```powershell
+$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; & 'C:\Users\23662\AppData\Local\Programs\Python\Python312\Scripts\pytest.exe' -q tests/test_wireless_table_recovery.py tests/test_wireless_structure_text_runs.py tests/test_wireless_structure_span_chain.py tests/test_wireless_structure_recoverer.py tests/test_wireless_structure_merges.py tests/test_wireless_structure_header_topology.py tests/test_wireless_structure_grid.py tests/test_wireless_structure_columns.py tests/test_wireless_output_order.py tests/test_wireless_extractor_split.py tests/test_unify_wireless_recovery.py tests/test_rust_migration_routing.py tests/test_pdf_fast_wireless_structure.py tests/test_pdf_fast_wireless.py tests/test_pdf_fast_english_wireless.py tests/test_hybrid_body_recovery.py
+```
+
+结果：`270 passed in 2.00s`。
+
+### 完整 Rust 测试
+
+```powershell
+cargo test
+```
+
+结果：Rust 单元测试 `15 passed, 0 failed`；Doc-tests `0 passed, 0 failed`。
+
+### 差异检查
+
+```powershell
+git diff --check
+```
+
+结果：通过，无输出。
+
+## 修复摘要
+
+- `recover_cells_from_region` 和 `recover_wireless_tables` 将 native span 收集、DTO 构造、Rust 调用和结果转换放入 `rust_fn`，统一由 `run_python_or_rust` 捕获异常。
+- `python` 模式不构造 Rust DTO；`rust` 模式在异常时记录 path 对应的 `rust_fallback` 并回退 Python；`shadow` 模式保留 Python 返回语义并记录 Rust 异常/差异。
+- `build_logical_grid` 和 `recover_native_region` 在 cells 排序后按行列及跨度重建 occupancy，不使用旧索引；跨度冲突继续生成 `occupancy_conflict` diagnostics。
+- native span 进入 atom 后，结构恢复阶段不回读 `page.get_text("words")`。
+- 空槽位继续按逻辑网格逐槽物化为独立空 Cell；最终 occupancy 索引指向排序后的 cell。
+
+## 差异分类
+
+- Python 路由：修复诊断可见性和 fallback 边界，未改 `rust_adapter.py`。
+- Rust 结构：修复排序后的索引一致性，保留 occupancy 冲突诊断。
+- 测试：已有 review-fix RED 测试转 GREEN，相关 wireless 和 Rust 回归均通过。
+- 文档：本报告替换旧 PDF diff review 内容；新增 `迁移记录/sprints/sprint-002.md`。未修改 `scripts/pdf_diff_review.py` 或其他历史报告。
+
+## 文件范围
+
+本次提交只包含：
+
+- `rust/wireless_structure.rs`
+- `src/hexai_pdf_parser/tables/wireless_structure/recoverer.py`
+- `src/hexai_pdf_parser/tables/wireless_table_recovery.py`
+- `tests/test_wireless_structure_recoverer.py`
+- `迁移记录/sprints/sprint-002.md`
+- `.superpowers/sdd/task-2-report.md`
+
+工作区已有的 `迁移记录/baseline.md`、`capability-matrix.md`、`decisions.md`、`migration-plan.md` 未纳入本次提交。
 
 ## Concerns
 
-- `index.html` 仅提供页面链接和 `window.reviewPages` 数据，不包含 Task 3 的交互逻辑。
-- 当扫描器遇到不完整实际页面时，容错索引会把扫描器的总体错误保存在 `summary.json.scan_errors`；页面级资源错误保存在对应页面的 `errors`。
-- 当前测试输出保留了 5 个既有 PyMuPDF 弃用警告，但没有测试失败。
-
-## Task 2 审阅修复
-
-- C1：并排页面先由 PyMuPDF 页面渲染为 pixmap，再使用 `pixmap.save(...png)` 输出真实 PNG；测试校验 PNG 签名并用 PyMuPDF 解码。
-- I1：`absent_expected` 和 `excluded` 页面不要求标签/实际 Markdown，不再仅因合法无 Markdown 状态归入 `missing_resource`。
-- I2：scanner 失败后保留原始 `scan_error`，fallback 继续校验 JSON `index`、`page_type` 和页索引；无法索引的坏页错误同时写入对应页面记录。
-- M1：标签图候选严格按 `testset_root/source_visual_path`、`testset_root.parent/source_visual_path`、`testset_root.parent/source_table_png` 顺序查找。
-- M2：损坏 PNG 的 PyMuPDF 读取异常原因写入对应页面 `errors`，其余页面仍继续生成。
-
-新增回归测试覆盖上述五项行为，测试命令及结果：
-
-```powershell
-$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; $env:PYTHONPATH='src'; pytest tests/test_pdf_diff_review.py -q
-```
-
-结果：`13 passed, 5 warnings`。
-
-- `python -m py_compile scripts\\pdf_diff_review.py tests\\test_pdf_diff_review.py`：通过。
-- `git diff --check`：通过。
+本轮没有执行 PDF 页面级全量重跑、最终 PNG 视觉核对或 PDF diff review；这些不属于本次指定的 review-fix 测试集合。其余要求的 RED/GREEN、相关 wireless 测试、完整 Rust 测试和 `git diff --check` 均有上方实测结果。

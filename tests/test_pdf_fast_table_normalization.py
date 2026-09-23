@@ -3,9 +3,9 @@
 
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 import pytest
 
 SRC_DIR = Path(__file__).resolve().parent.parent / "src"
@@ -14,7 +14,10 @@ if str(SRC_DIR) not in sys.path:
 
 from hexai_pdf_parser.core.models import BBox, Cell, Table
 from hexai_pdf_parser import rust_adapter
-from hexai_pdf_parser.tables.normalizers.table_header_normalizer import _promote_grouped_header
+from hexai_pdf_parser.tables.normalizers.table_header_normalizer import (
+    _promote_grouped_header,
+    _rebuild_text_aligned_table,
+)
 
 
 def test_roundtrip_table_normalization_dtos():
@@ -261,7 +264,7 @@ def test_normalize_financial_header_tokens_rust():
     assert out["cells"][1]["text"] == "合计 999"
 
 
-def test_promote_grouped_header_modes():
+def test_promote_grouped_header_modes(monkeypatch):
     """Test _promote_grouped_header across python, shadow, and rust modes."""
     cells = [
         Cell(
@@ -323,7 +326,7 @@ def test_promote_grouped_header_modes():
     dummy_page = DummyPage()
 
     # 1. Python mode
-    os.environ["PDF_RUST_MODE"] = "python"
+    monkeypatch.setenv("PDF_RUST_MODE", "python")
     t_py = _promote_grouped_header(table, dummy_page)
     anchor_py = next(c for c in t_py.cells if c.text == "项目")
     group_py = next(c for c in t_py.cells if "本期金额" in c.text)
@@ -331,7 +334,7 @@ def test_promote_grouped_header_modes():
     assert group_py.colspan == 2
 
     # 2. Shadow mode
-    os.environ["PDF_RUST_MODE"] = "shadow"
+    monkeypatch.setenv("PDF_RUST_MODE", "shadow")
     t_shadow = _promote_grouped_header(table, dummy_page)
     anchor_shadow = next(c for c in t_shadow.cells if c.text == "项目")
     group_shadow = next(c for c in t_shadow.cells if "本期金额" in c.text)
@@ -339,7 +342,7 @@ def test_promote_grouped_header_modes():
     assert group_shadow.colspan == 2
 
     # 3. Rust mode
-    os.environ["PDF_RUST_MODE"] = "rust"
+    monkeypatch.setenv("PDF_RUST_MODE", "rust")
     t_rust = _promote_grouped_header(table, dummy_page)
     anchor_rust = next(c for c in t_rust.cells if c.text == "项目")
     group_rust = next(c for c in t_rust.cells if "本期金额" in c.text)
@@ -353,3 +356,140 @@ def test_promote_grouped_header_modes():
         assert c_py.col_index == c_r.col_index
         assert c_py.rowspan == c_r.rowspan
         assert c_py.colspan == c_r.colspan
+
+
+def test_unknown_grouped_header_uses_geometry_in_production_route(monkeypatch):
+    table = Table(
+        bbox=BBox(0.0, 0.0, 150.0, 40.0),
+        rows=2,
+        cols=3,
+        cells=[
+            Cell("Stub-X", 0, 0, BBox(0.0, 0.0, 50.0, 20.0)),
+            Cell("Group-X", 0, 1, BBox(50.0, 0.0, 150.0, 20.0)),
+            Cell("Leaf-A", 1, 1, BBox(50.0, 20.0, 100.0, 40.0)),
+            Cell("Leaf-B", 1, 2, BBox(100.0, 20.0, 150.0, 40.0)),
+        ],
+        confidence=1.0,
+        source="unit_test",
+    )
+
+    monkeypatch.setenv(
+        "PDF_RUST_MODE_TABLE_HEADER_NORMALIZATION_GROUPED_HEADER", "rust"
+    )
+    result = _promote_grouped_header(table, SimpleNamespace())
+
+    assert next(cell for cell in result.cells if cell.text == "Group-X").colspan == 2
+    assert next(cell for cell in result.cells if cell.text == "Stub-X").rowspan == 2
+
+
+def _text_alignment_fixture():
+    table = Table(
+        bbox=BBox(0.0, 0.0, 200.0, 50.0),
+        rows=1,
+        cols=1,
+        cells=[],
+        confidence=0.5,
+        source="text_alignment",
+    )
+    words = [
+        (10.0, 10.0, 30.0, 20.0, "A"),
+        (110.0, 10.0, 130.0, 20.0, "B"),
+        (10.0, 25.0, 30.0, 35.0, "C"),
+        (110.0, 25.0, 130.0, 35.0, "D"),
+        (10.0, 40.0, 30.0, 48.0, "E"),
+        (110.0, 40.0, 130.0, 48.0, "F"),
+        (10.0, 49.0, 30.0, 50.0, "G"),
+        (110.0, 49.0, 130.0, 50.0, "H"),
+    ]
+
+    class DummyPage:
+        def get_text(self, kind, *args, **kwargs):
+            assert kind == "words"
+            return words
+
+    return table, DummyPage()
+
+
+def test_text_alignment_normalizer_honors_path_override(monkeypatch):
+    table, page = _text_alignment_fixture()
+    rust_cells = [{
+        "text": "rust-rebuild",
+        "row": 0,
+        "col": 0,
+        "rowspan": 1,
+        "colspan": 1,
+        "rect": {"x0": 1.0, "y0": 2.0, "x1": 3.0, "y1": 4.0},
+    }]
+    monkeypatch.setenv("PDF_RUST_MODE", "python")
+    monkeypatch.setenv(
+        "PDF_RUST_MODE_TABLE_HEADER_NORMALIZATION_TEXT_ALIGNMENT_REBUILD",
+        "rust",
+    )
+    monkeypatch.setattr(
+        rust_adapter,
+        "build_legacy_text_alignment",
+        lambda input_dto: rust_cells,
+    )
+
+    result = _rebuild_text_aligned_table(table, page)
+
+    assert result is not None
+    assert result.cells[0].text == "rust-rebuild"
+
+
+def test_text_alignment_normalizer_records_rust_fallback(monkeypatch):
+    table, page = _text_alignment_fixture()
+    monkeypatch.setenv("PDF_RUST_MODE", "rust")
+    monkeypatch.setattr(
+        rust_adapter,
+        "build_legacy_text_alignment",
+        lambda input_dto: (_ for _ in ()).throw(RuntimeError("broken Rust")),
+    )
+    rust_adapter.clear_diagnostics()
+
+    result = _rebuild_text_aligned_table(table, page)
+
+    assert result is not None
+    diagnostic = rust_adapter.get_diagnostics()[-1]
+    assert diagnostic["status"] == "rust_fallback"
+    assert diagnostic["path"] == "table-header-normalization/text-alignment-rebuild"
+
+
+def test_grouped_header_normalizer_records_shadow_mismatch(monkeypatch):
+    table = Table(
+        bbox=BBox(0.0, 0.0, 150.0, 40.0),
+        rows=2,
+        cols=3,
+        cells=[
+            Cell("项目", 0, 0, BBox(0.0, 0.0, 50.0, 20.0)),
+            Cell("本期金额", 0, 1, BBox(50.0, 0.0, 150.0, 20.0)),
+            Cell("主营业务收入", 1, 0, BBox(0.0, 20.0, 50.0, 40.0)),
+            Cell("1000", 1, 1, BBox(50.0, 20.0, 100.0, 40.0)),
+            Cell("2000", 1, 2, BBox(100.0, 20.0, 150.0, 40.0)),
+        ],
+        confidence=1.0,
+        source="unit_test",
+    )
+
+    class DummyPage:
+        def get_text(self, kind, *args, **kwargs):
+            return {"blocks": []} if kind == "dict" else []
+
+    monkeypatch.setenv("PDF_RUST_MODE", "python")
+    monkeypatch.setenv(
+        "PDF_RUST_MODE_TABLE_HEADER_NORMALIZATION_GROUPED_HEADER",
+        "shadow",
+    )
+    monkeypatch.setattr(
+        rust_adapter,
+        "infer_header_structure",
+        lambda input_dto: {"cells": input_dto["grid"]["cells"]},
+    )
+    rust_adapter.clear_diagnostics()
+
+    result = _promote_grouped_header(table, DummyPage())
+
+    assert next(cell for cell in result.cells if cell.text == "项目").rowspan == 2
+    diagnostic = rust_adapter.get_diagnostics()[-1]
+    assert diagnostic["status"] == "rust_output_mismatch"
+    assert diagnostic["path"] == "table-header-normalization/grouped-header"

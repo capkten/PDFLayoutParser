@@ -6,6 +6,9 @@ from hexai_pdf_parser.rust_adapter import (
     select_candidates,
     recover_wireless_tables,
 )
+from hexai_pdf_parser.tables.wireless_structure.recoverer import recover_cells_from_region
+from hexai_pdf_parser.tables.wireless_table_recovery import _wireless_recovery_from_rust
+from hexai_pdf_parser.models import BBox
 
 
 def _rect(x0, y0, x1, y1):
@@ -145,9 +148,64 @@ class TestRecoverWirelessTables:
         class PageSpy:
             def __init__(self):
                 self.calls = []
+                self.schema_version = 1
+                self.text_blocks = ()
+                self.geometry = {"y0": 0.0, "height": 100.0}
             def get_text(self, kind, **kwargs):
                 self.calls.append(kind)
                 return []
 
         page = PageSpy()
+        assert recover_cells_from_region(page, BBox(0, 0, 100, 100)) == (0, 0, [])
         assert 'words' not in page.calls
+
+    def test_rust_candidate_conversion_rejects_bbox_without_explicit_rect(self):
+        cell = _cell('A', 0, 0, 0, 0, 100, 100)
+        cell.pop('rect')
+        cell['bbox'] = _rect(0, 0, 100, 100)
+        candidate = _candidate(0, 0, 100, 100, 1, 1, [cell])
+
+        with pytest.raises(ValueError, match="missing a rectangle"):
+            _wireless_recovery_from_rust({"candidates": [candidate], "diagnostics": []})
+
+    def test_rust_candidate_conversion_rejects_zero_by_zero_grid(self):
+        candidate = _candidate(0, 0, 100, 100, 0, 0, [])
+
+        with pytest.raises(ValueError, match="positive"):
+            _wireless_recovery_from_rust({"candidates": [candidate], "diagnostics": []})
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("row", -0.5),
+            ("row", 0.0),
+            ("row", False),
+            ("col", -0.5),
+            ("col", 0.0),
+            ("col", False),
+            ("rowspan", -0.5),
+            ("rowspan", 1.0),
+            ("rowspan", False),
+            ("colspan", -0.5),
+            ("colspan", 1.0),
+            ("colspan", False),
+        ],
+    )
+    def test_rust_candidate_conversion_rejects_non_strict_integer_grid_fields(
+        self, field, value
+    ):
+        cell = {
+            "schema_version": 1,
+            "text": "A",
+            "row": 0,
+            "col": 0,
+            "rect": _rect(0, 0, 100, 100),
+            "rowspan": 1,
+            "colspan": 1,
+            "source": None,
+        }
+        cell[field] = value
+        candidate = _candidate(0, 0, 100, 100, 1, 1, [cell])
+
+        with pytest.raises(TypeError, match="strict integer"):
+            _wireless_recovery_from_rust({"candidates": [candidate], "diagnostics": []})

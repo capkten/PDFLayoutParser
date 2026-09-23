@@ -1,6 +1,7 @@
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList};
+use pyo3::types::{PyBool, PyDict, PyList, PyTuple};
+use std::collections::BTreeMap;
 
 pub fn check_schema_version(version: i64) -> PyResult<()> {
     if version != 1 {
@@ -13,7 +14,15 @@ pub fn check_schema_version(version: i64) -> PyResult<()> {
 }
 
 pub fn extract_finite_f64(val: &Bound<'_, PyAny>, field_name: &str) -> PyResult<f64> {
-    let num: f64 = val.extract()?;
+    if val.is_instance_of::<PyBool>() {
+        return Err(PyValueError::new_err(format!(
+            "Field '{}' must be a finite float",
+            field_name
+        )));
+    }
+    let num: f64 = val.extract().map_err(|_| {
+        PyValueError::new_err(format!("Field '{}' must be a float", field_name))
+    })?;
     if !num.is_finite() {
         return Err(PyValueError::new_err(format!(
             "Field '{}' must be a finite float, got NaN or Inf",
@@ -41,6 +50,275 @@ pub fn get_opt<'py>(dict: &Bound<'py, PyDict>, key: &str) -> PyResult<Option<Bou
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub enum OwnedValue {
+    Null,
+    Bool(bool),
+    Integer(i64),
+    Float(f64),
+    String(String),
+    Array(Vec<OwnedValue>),
+    Object(BTreeMap<String, OwnedValue>),
+}
+
+impl OwnedValue {
+    pub fn from_py(value: &Bound<'_, PyAny>, field_name: &str) -> PyResult<Self> {
+        if value.is_none() {
+            return Ok(Self::Null);
+        }
+        if value.is_instance_of::<PyBool>() {
+            return value
+                .extract::<bool>()
+                .map(Self::Bool)
+                .map_err(|_| PyValueError::new_err(format!("Field '{}' must be a boolean", field_name)));
+        }
+        if let Ok(integer) = value.extract::<i64>() {
+            return Ok(Self::Integer(integer));
+        }
+        if let Ok(float) = value.extract::<f64>() {
+            if !float.is_finite() {
+                return Err(PyValueError::new_err(format!(
+                    "Field '{}' must be finite, got NaN or Inf",
+                    field_name
+                )));
+            }
+            return Ok(Self::Float(float));
+        }
+        if let Ok(string) = value.extract::<String>() {
+            return Ok(Self::String(string));
+        }
+        if let Ok(list) = value.downcast::<PyList>() {
+            let mut values = Vec::with_capacity(list.len());
+            for (index, item) in list.iter().enumerate() {
+                values.push(Self::from_py(&item, &format!("{}[{}]", field_name, index))?);
+            }
+            return Ok(Self::Array(values));
+        }
+        if let Ok(tuple) = value.downcast::<PyTuple>() {
+            let mut values = Vec::with_capacity(tuple.len());
+            for (index, item) in tuple.iter().enumerate() {
+                values.push(Self::from_py(&item, &format!("{}[{}]", field_name, index))?);
+            }
+            return Ok(Self::Array(values));
+        }
+        if let Ok(dict) = value.downcast::<PyDict>() {
+            let mut values = BTreeMap::new();
+            for (key, item) in dict.iter() {
+                let key = key.extract::<String>().map_err(|_| {
+                    PyValueError::new_err(format!("Field '{}' object keys must be strings", field_name))
+                })?;
+                values.insert(key.clone(), Self::from_py(&item, &format!("{}.{}", field_name, key))?);
+            }
+            return Ok(Self::Object(values));
+        }
+        Err(PyValueError::new_err(format!(
+            "Field '{}' contains an unsupported value type",
+            field_name
+        )))
+    }
+
+    pub fn to_py<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        match self {
+            Self::Null => Ok(py.None().into_bound(py)),
+            Self::Bool(value) => Ok(value.into_py(py).into_bound(py)),
+            Self::Integer(value) => Ok(value.into_py(py).into_bound(py)),
+            Self::Float(value) => Ok(value.into_py(py).into_bound(py)),
+            Self::String(value) => Ok(value.into_py(py).into_bound(py)),
+            Self::Array(values) => {
+                let list = PyList::empty_bound(py);
+                for value in values {
+                    list.append(value.to_py(py)?)?;
+                }
+                Ok(list.into_any())
+            }
+            Self::Object(values) => {
+                let dict = PyDict::new_bound(py);
+                for (key, value) in values {
+                    dict.set_item(key, value.to_py(py)?)?;
+                }
+                Ok(dict.into_any())
+            }
+        }
+    }
+}
+
+fn required_i64(dict: &Bound<'_, PyDict>, key: &str) -> PyResult<i64> {
+    let value = get_req(dict, key)?;
+    if value.is_instance_of::<PyBool>() {
+        return Err(PyValueError::new_err(format!("Field '{}' must be an integer", key)));
+    }
+    value.extract::<i64>().map_err(|_| {
+        PyValueError::new_err(format!("Field '{}' must be an integer", key))
+    })
+}
+
+fn required_f64(dict: &Bound<'_, PyDict>, key: &str) -> PyResult<f64> {
+    extract_finite_f64(&get_req(dict, key)?, key)
+}
+
+fn required_string(dict: &Bound<'_, PyDict>, key: &str) -> PyResult<String> {
+    get_req(dict, key)?.extract::<String>().map_err(|_| {
+        PyValueError::new_err(format!("Field '{}' must be a string", key))
+    })
+}
+
+fn required_bool(dict: &Bound<'_, PyDict>, key: &str) -> PyResult<bool> {
+    let value = get_req(dict, key)?;
+    if !value.is_instance_of::<PyBool>() {
+        return Err(PyValueError::new_err(format!("Field '{}' must be a boolean", key)));
+    }
+    value.extract::<bool>().map_err(|_| {
+        PyValueError::new_err(format!("Field '{}' must be a boolean", key))
+    })
+}
+
+fn optional_i64(dict: &Bound<'_, PyDict>, key: &str) -> PyResult<Option<i64>> {
+    let value = match get_opt(dict, key)? {
+        Some(value) => value,
+        None => return Ok(None),
+    };
+    if value.is_instance_of::<PyBool>() {
+        return Err(PyValueError::new_err(format!("Field '{}' must be an integer", key)));
+    }
+    value.extract::<i64>().map(Some).map_err(|_| {
+        PyValueError::new_err(format!("Field '{}' must be an integer", key))
+    })
+}
+
+fn optional_f64(dict: &Bound<'_, PyDict>, key: &str) -> PyResult<Option<f64>> {
+    let value = match get_opt(dict, key)? {
+        Some(value) => value,
+        None => return Ok(None),
+    };
+    extract_finite_f64(&value, key).map(Some)
+}
+
+fn optional_string(dict: &Bound<'_, PyDict>, key: &str) -> PyResult<Option<String>> {
+    let value = match get_opt(dict, key)? {
+        Some(value) => value,
+        None => return Ok(None),
+    };
+    value.extract::<String>().map(Some).map_err(|_| {
+        PyValueError::new_err(format!("Field '{}' must be a string", key))
+    })
+}
+
+fn required_dict<'py>(dict: &Bound<'py, PyDict>, key: &str) -> PyResult<Bound<'py, PyDict>> {
+    get_req(dict, key)?.downcast::<PyDict>().map(|value| value.clone()).map_err(|_| {
+        PyValueError::new_err(format!("Field '{}' must be an object", key))
+    })
+}
+
+fn required_list<'py>(dict: &Bound<'py, PyDict>, key: &str) -> PyResult<Bound<'py, PyList>> {
+    get_req(dict, key)?.downcast::<PyList>().map(|value| value.clone()).map_err(|_| {
+        PyValueError::new_err(format!("Field '{}' must be a list", key))
+    })
+}
+
+fn required_i64_list(dict: &Bound<'_, PyDict>, key: &str) -> PyResult<Vec<i64>> {
+    let list = required_list(dict, key)?;
+    list.iter()
+        .enumerate()
+        .map(|(index, value)| {
+            if value.is_instance_of::<PyBool>() {
+                return Err(PyValueError::new_err(format!(
+                    "Field '{}[{}]' must be an integer",
+                    key, index
+                )));
+            }
+            value.extract::<i64>().map_err(|_| {
+                PyValueError::new_err(format!("Field '{}[{}]' must be an integer", key, index))
+            })
+        })
+        .collect()
+}
+
+fn optional_string_list(dict: &Bound<'_, PyDict>, key: &str) -> PyResult<Vec<Option<String>>> {
+    let list = required_list(dict, key)?;
+    list.iter()
+        .enumerate()
+        .map(|(index, value)| {
+            if value.is_none() {
+                return Ok(None);
+            }
+            value.extract::<String>().map(Some).map_err(|_| {
+                PyValueError::new_err(format!(
+                    "Field '{}[{}]' must be a string or null",
+                    key, index
+                ))
+            })
+        })
+        .collect()
+}
+
+fn optional_f64_list(dict: &Bound<'_, PyDict>, key: &str) -> PyResult<Vec<Option<f64>>> {
+    let list = required_list(dict, key)?;
+    list.iter()
+        .enumerate()
+        .map(|(index, value)| {
+            if value.is_none() {
+                return Ok(None);
+            }
+            extract_finite_f64(&value, &format!("{}[{}]", key, index)).map(Some)
+        })
+        .collect()
+}
+
+fn optional_i64_list(dict: &Bound<'_, PyDict>, key: &str) -> PyResult<Vec<Option<i64>>> {
+    let list = required_list(dict, key)?;
+    list.iter()
+        .enumerate()
+        .map(|(index, value)| {
+            if value.is_none() {
+                return Ok(None);
+            }
+            if value.is_instance_of::<PyBool>() {
+                return Err(PyValueError::new_err(format!(
+                    "Field '{}[{}]' must be an integer or null",
+                    key, index
+                )));
+            }
+            value.extract::<i64>().map(Some).map_err(|_| {
+                PyValueError::new_err(format!(
+                    "Field '{}[{}]' must be an integer or null",
+                    key, index
+                ))
+            })
+        })
+        .collect()
+}
+
+fn optional_i64_list_present(
+    dict: &Bound<'_, PyDict>,
+    key: &str,
+) -> PyResult<Option<Vec<i64>>> {
+    let value = match dict.get_item(key)? {
+        Some(value) if !value.is_none() => value,
+        _ => return Ok(None),
+    };
+    let list = value.downcast::<PyList>().map_err(|_| {
+        PyValueError::new_err(format!("Field '{}' must be a list", key))
+    })?;
+    list.iter()
+        .enumerate()
+        .map(|(index, value)| {
+            if value.is_instance_of::<PyBool>() {
+                return Err(PyValueError::new_err(format!(
+                    "Field '{}[{}]' must be an integer",
+                    key, index
+                )));
+            }
+            value.extract::<i64>().map_err(|_| {
+                PyValueError::new_err(format!(
+                    "Field '{}[{}]' must be an integer",
+                    key, index
+                ))
+            })
+        })
+        .collect::<PyResult<Vec<_>>>()
+        .map(Some)
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct PageDto {
     pub schema_version: i64,
     pub width: f64,
@@ -50,11 +328,11 @@ pub struct PageDto {
 
 impl PageDto {
     pub fn from_py(dict: &Bound<'_, PyDict>) -> PyResult<Self> {
-        let sv: i64 = get_req(dict, "schema_version")?.extract()?;
+        let sv = required_i64(dict, "schema_version")?;
         check_schema_version(sv)?;
-        let width = extract_finite_f64(&get_req(dict, "width")?, "width")?;
-        let height = extract_finite_f64(&get_req(dict, "height")?, "height")?;
-        let rotation: i64 = get_req(dict, "rotation")?.extract()?;
+        let width = required_f64(dict, "width")?;
+        let height = required_f64(dict, "height")?;
+        let rotation = required_i64(dict, "rotation")?;
         if rotation != 0 && rotation != 90 && rotation != 180 && rotation != 270 {
             return Err(PyValueError::new_err(format!(
                 "Invalid rotation: {}, must be 0, 90, 180, or 270",
@@ -90,12 +368,12 @@ pub struct Rect4 {
 
 impl Rect4 {
     pub fn from_py(dict: &Bound<'_, PyDict>) -> PyResult<Self> {
-        let sv: i64 = get_req(dict, "schema_version")?.extract()?;
+        let sv = required_i64(dict, "schema_version")?;
         check_schema_version(sv)?;
-        let x0 = extract_finite_f64(&get_req(dict, "x0")?, "x0")?;
-        let y0 = extract_finite_f64(&get_req(dict, "y0")?, "y0")?;
-        let x1 = extract_finite_f64(&get_req(dict, "x1")?, "x1")?;
-        let y1 = extract_finite_f64(&get_req(dict, "y1")?, "y1")?;
+        let x0 = required_f64(dict, "x0")?;
+        let y0 = required_f64(dict, "y0")?;
+        let x1 = required_f64(dict, "x1")?;
+        let y1 = required_f64(dict, "y1")?;
         Ok(Self {
             schema_version: sv,
             x0,
@@ -164,9 +442,9 @@ pub struct LineDto {
 
 impl LineDto {
     pub fn from_py(dict: &Bound<'_, PyDict>) -> PyResult<Self> {
-        let sv: i64 = get_req(dict, "schema_version")?.extract()?;
+        let sv = required_i64(dict, "schema_version")?;
         check_schema_version(sv)?;
-        let rect = Rect4::from_py(&get_req(dict, "rect")?.downcast::<PyDict>()?.clone())?;
+        let rect = Rect4::from_py(&required_dict(dict, "rect")?)?;
         let width = match get_opt(dict, "width")? {
             Some(w) => Some(extract_finite_f64(&w, "width")?),
             None => None,
@@ -175,7 +453,7 @@ impl LineDto {
             Some(c) => Some(extract_finite_f64(&c, "color")?),
             None => None,
         };
-        let source_order: i64 = get_req(dict, "source_order")?.extract()?;
+        let source_order = required_i64(dict, "source_order")?;
         Ok(Self {
             schema_version: sv,
             rect,
@@ -202,37 +480,83 @@ pub struct DrawingDto {
     pub kind: String,
     pub lines: Vec<LineDto>,
     pub rect: Rect4,
-    pub fill: Option<f64>,
-    pub stroke: Option<f64>,
+    pub fill: Option<OwnedValue>,
+    pub stroke: Option<OwnedValue>,
     pub clip: Option<Rect4>,
     pub source_order: i64,
+    pub color: Option<OwnedValue>,
+    pub opacity: Option<f64>,
+    pub fill_opacity: Option<f64>,
+    pub width: Option<f64>,
+    pub items: Option<Vec<OwnedValue>>,
+    pub extra: BTreeMap<String, OwnedValue>,
 }
 
 impl DrawingDto {
     pub fn from_py(dict: &Bound<'_, PyDict>) -> PyResult<Self> {
-        let sv: i64 = get_req(dict, "schema_version")?.extract()?;
+        let sv = required_i64(dict, "schema_version")?;
         check_schema_version(sv)?;
-        let kind: String = get_req(dict, "kind")?.extract()?;
-        let lines_list: Bound<'_, PyList> = get_req(dict, "lines")?.extract()?;
+        let kind = required_string(dict, "kind")?;
+        let lines_list = required_list(dict, "lines")?;
         let mut lines = Vec::with_capacity(lines_list.len());
         for item in lines_list.iter() {
-            let l_dict = item.downcast::<PyDict>()?;
+            let l_dict = item.downcast::<PyDict>().map_err(|_| {
+                PyValueError::new_err("Field 'lines' items must be objects")
+            })?;
             lines.push(LineDto::from_py(&l_dict)?);
         }
-        let rect = Rect4::from_py(&get_req(dict, "rect")?.downcast::<PyDict>()?.clone())?;
+        let rect = Rect4::from_py(&required_dict(dict, "rect")?)?;
         let fill = match get_opt(dict, "fill")? {
-            Some(f) => Some(extract_finite_f64(&f, "fill")?),
+            Some(f) => Some(OwnedValue::from_py(&f, "fill")?),
             None => None,
         };
         let stroke = match get_opt(dict, "stroke")? {
-            Some(s) => Some(extract_finite_f64(&s, "stroke")?),
+            Some(s) => Some(OwnedValue::from_py(&s, "stroke")?),
             None => None,
         };
         let clip = match get_opt(dict, "clip")? {
-            Some(c) => Some(Rect4::from_py(&c.downcast::<PyDict>()?.clone())?),
+            Some(c) => Some(Rect4::from_py(&c.downcast::<PyDict>().map_err(|_| {
+                PyValueError::new_err("Field 'clip' must be an object")
+            })?.clone())?),
             None => None,
         };
-        let source_order: i64 = get_req(dict, "source_order")?.extract()?;
+        let source_order = required_i64(dict, "source_order")?;
+        let color = match get_opt(dict, "color")? {
+            Some(value) => Some(OwnedValue::from_py(&value, "color")?),
+            None => None,
+        };
+        let opacity = match get_opt(dict, "opacity")? {
+            Some(value) => Some(extract_finite_f64(&value, "opacity")?),
+            None => None,
+        };
+        let fill_opacity = match get_opt(dict, "fill_opacity")? {
+            Some(value) => Some(extract_finite_f64(&value, "fill_opacity")?),
+            None => None,
+        };
+        let width = match get_opt(dict, "width")? {
+            Some(value) => Some(extract_finite_f64(&value, "width")?),
+            None => None,
+        };
+        let items = match get_opt(dict, "items")? {
+            Some(value) => {
+                let list = value.downcast::<PyList>().map_err(|_| {
+                    PyValueError::new_err("Field 'items' must be a list")
+                })?;
+                let mut owned = Vec::with_capacity(list.len());
+                for (index, item) in list.iter().enumerate() {
+                    owned.push(OwnedValue::from_py(&item, &format!("items[{}]", index))?);
+                }
+                Some(owned)
+            }
+            None => None,
+        };
+        let extra = match get_opt(dict, "extra")? {
+            Some(value) => match OwnedValue::from_py(&value, "extra")? {
+                OwnedValue::Object(values) => values,
+                _ => return Err(PyValueError::new_err("Field 'extra' must be an object")),
+            },
+            None => BTreeMap::new(),
+        };
         Ok(Self {
             schema_version: sv,
             kind,
@@ -242,6 +566,12 @@ impl DrawingDto {
             stroke,
             clip,
             source_order,
+            color,
+            opacity,
+            fill_opacity,
+            width,
+            items,
+            extra,
         })
     }
 
@@ -255,13 +585,45 @@ impl DrawingDto {
         }
         d.set_item("lines", lines_list)?;
         d.set_item("rect", self.rect.to_py(py)?)?;
-        d.set_item("fill", self.fill)?;
-        d.set_item("stroke", self.stroke)?;
+        match &self.fill {
+            Some(value) => d.set_item("fill", value.to_py(py)?)?,
+            None => d.set_item("fill", py.None())?,
+        }
+        match &self.stroke {
+            Some(value) => d.set_item("stroke", value.to_py(py)?)?,
+            None => d.set_item("stroke", py.None())?,
+        }
         match &self.clip {
             Some(c) => d.set_item("clip", c.to_py(py)?)?,
             None => d.set_item("clip", py.None())?,
         }
         d.set_item("source_order", self.source_order)?;
+        if let Some(value) = &self.color {
+            d.set_item("color", value.to_py(py)?)?;
+        }
+        if let Some(value) = self.opacity {
+            d.set_item("opacity", value)?;
+        }
+        if let Some(value) = self.fill_opacity {
+            d.set_item("fill_opacity", value)?;
+        }
+        if let Some(value) = self.width {
+            d.set_item("width", value)?;
+        }
+        if let Some(values) = &self.items {
+            let list = PyList::empty_bound(py);
+            for value in values {
+                list.append(value.to_py(py)?)?;
+            }
+            d.set_item("items", list)?;
+        }
+        if !self.extra.is_empty() {
+            let extra = PyDict::new_bound(py);
+            for (key, value) in &self.extra {
+                extra.set_item(key, value.to_py(py)?)?;
+            }
+            d.set_item("extra", extra)?;
+        }
         Ok(d)
     }
 }
@@ -309,11 +671,11 @@ pub struct CharacterDto {
 
 impl CharacterDto {
     pub fn from_py(dict: &Bound<'_, PyDict>) -> PyResult<Self> {
-        let sv: i64 = get_req(dict, "schema_version")?.extract()?;
+        let sv = required_i64(dict, "schema_version")?;
         check_schema_version(sv)?;
-        let text: String = get_req(dict, "text")?.extract()?;
-        let rect = Rect4::from_py(&get_req(dict, "rect")?.downcast::<PyDict>()?.clone())?;
-        let order: i64 = get_req(dict, "order")?.extract()?;
+        let text = required_string(dict, "text")?;
+        let rect = Rect4::from_py(&required_dict(dict, "rect")?)?;
+        let order = required_i64(dict, "order")?;
         Ok(Self {
             schema_version: sv,
             text,
@@ -344,19 +706,13 @@ pub struct WordDto {
 
 impl WordDto {
     pub fn from_py(dict: &Bound<'_, PyDict>) -> PyResult<Self> {
-        let sv: i64 = get_req(dict, "schema_version")?.extract()?;
+        let sv = required_i64(dict, "schema_version")?;
         check_schema_version(sv)?;
-        let text: String = get_req(dict, "text")?.extract()?;
-        let rect = Rect4::from_py(&get_req(dict, "rect")?.downcast::<PyDict>()?.clone())?;
-        let order: i64 = get_req(dict, "order")?.extract()?;
-        let block: Option<i64> = match get_opt(dict, "block")? {
-            Some(b) => Some(b.extract()?),
-            None => None,
-        };
-        let line: Option<i64> = match get_opt(dict, "line")? {
-            Some(l) => Some(l.extract()?),
-            None => None,
-        };
+        let text = required_string(dict, "text")?;
+        let rect = Rect4::from_py(&required_dict(dict, "rect")?)?;
+        let order = required_i64(dict, "order")?;
+        let block = optional_i64(dict, "block")?;
+        let line = optional_i64(dict, "line")?;
         Ok(Self {
             schema_version: sv,
             text,
@@ -388,10 +744,10 @@ pub struct SourcePositionDto {
 
 impl SourcePositionDto {
     pub fn from_py(dict: &Bound<'_, PyDict>) -> PyResult<Self> {
-        let sv: i64 = get_req(dict, "schema_version")?.extract()?;
+        let sv = required_i64(dict, "schema_version")?;
         check_schema_version(sv)?;
-        let block: i64 = get_req(dict, "block")?.extract()?;
-        let line: i64 = get_req(dict, "line")?.extract()?;
+        let block = required_i64(dict, "block")?;
+        let line = required_i64(dict, "line")?;
         Ok(Self {
             schema_version: sv,
             block,
@@ -425,36 +781,28 @@ pub struct NativeSpanDto {
 
 impl NativeSpanDto {
     pub fn from_py(dict: &Bound<'_, PyDict>) -> PyResult<Self> {
-        let sv: i64 = get_req(dict, "schema_version")?.extract()?;
+        let sv = required_i64(dict, "schema_version")?;
         check_schema_version(sv)?;
-        let text: String = get_req(dict, "text")?.extract()?;
-        let rect = Rect4::from_py(&get_req(dict, "rect")?.downcast::<PyDict>()?.clone())?;
-        let font: Option<String> = match get_opt(dict, "font")? {
-            Some(f) => Some(f.extract()?),
-            None => None,
-        };
+        let text = required_string(dict, "text")?;
+        let rect = Rect4::from_py(&required_dict(dict, "rect")?)?;
+        let font = optional_string(dict, "font")?;
         let size = match get_opt(dict, "size")? {
             Some(s) => Some(extract_finite_f64(&s, "size")?),
             None => None,
         };
-        let flags: Option<i64> = match get_opt(dict, "flags")? {
-            Some(f) => Some(f.extract()?),
-            None => None,
-        };
-        let order: i64 = get_req(dict, "order")?.extract()?;
-        let char_list: Bound<'_, PyList> = get_req(dict, "characters")?.extract()?;
+        let flags = optional_i64(dict, "flags")?;
+        let order = required_i64(dict, "order")?;
+        let char_list = required_list(dict, "characters")?;
         let mut characters = Vec::with_capacity(char_list.len());
         for c in char_list.iter() {
-            let cd = c.downcast::<PyDict>()?;
+            let cd = c.downcast::<PyDict>().map_err(|_| {
+                PyValueError::new_err("Field 'characters' items must be objects")
+            })?;
             characters.push(CharacterDto::from_py(&cd)?);
         }
-        let sp = SourcePositionDto::from_py(
-            &get_req(dict, "source_position")?
-                .downcast::<PyDict>()?
-                .clone(),
-        )?;
-        let block: i64 = get_req(dict, "block")?.extract()?;
-        let line: i64 = get_req(dict, "line")?.extract()?;
+        let sp = SourcePositionDto::from_py(&required_dict(dict, "source_position")?)?;
+        let block = required_i64(dict, "block")?;
+        let line = required_i64(dict, "line")?;
         Ok(Self {
             schema_version: sv,
             text,
@@ -491,6 +839,503 @@ impl NativeSpanDto {
     }
 }
 
+/// Snapshot input extends the native span representation with the complete
+/// raw source position captured from PyMuPDF.  Native text stages keep using
+/// NativeSpanDto, whose historical block/line source position is sufficient
+/// for their current algorithms.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NativeSpanInputDto {
+    pub span: NativeSpanDto,
+    pub raw_source_position: Vec<i64>,
+    /// Snapshot-only extension preserving each character's complete source position.
+    pub character_raw_source_positions: Vec<Vec<i64>>,
+}
+
+impl NativeSpanInputDto {
+    pub fn from_py(dict: &Bound<'_, PyDict>) -> PyResult<Self> {
+        let raw_source_position = required_i64_list(dict, "raw_source_position")?;
+        let character_list = required_list(dict, "characters")?;
+        let mut character_raw_source_positions = Vec::with_capacity(character_list.len());
+        for item in character_list.iter() {
+            let character = item.downcast::<PyDict>().map_err(|_| {
+                PyValueError::new_err("Field 'characters' items must be objects")
+            })?;
+            character_raw_source_positions
+                .push(required_i64_list(&character, "raw_source_position")?);
+        }
+        Ok(Self {
+            span: NativeSpanDto::from_py(dict)?,
+            raw_source_position,
+            character_raw_source_positions,
+        })
+    }
+
+    pub fn to_py<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let dict = self.span.to_py(py)?;
+        dict.set_item("raw_source_position", &self.raw_source_position)?;
+        let characters_value = dict
+            .get_item("characters")?
+            .ok_or_else(|| PyValueError::new_err("Serialized span is missing characters"))?;
+        let characters = characters_value
+            .downcast::<PyList>()
+            .map_err(|_| PyValueError::new_err("Serialized span characters must be a list"))?;
+        if characters.len() != self.character_raw_source_positions.len() {
+            return Err(PyValueError::new_err(
+                "Character source-position extension length does not match characters",
+            ));
+        }
+        for (item, raw_source_position) in characters
+            .iter()
+            .zip(&self.character_raw_source_positions)
+        {
+            let character = item
+                .downcast::<PyDict>()
+                .map_err(|_| PyValueError::new_err("Serialized characters must be objects"))?;
+            character.set_item("raw_source_position", raw_source_position)?;
+        }
+        Ok(dict)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextLineDto {
+    pub schema_version: i64,
+    pub rect: Rect4,
+    pub spans: Vec<NativeSpanInputDto>,
+    pub source_position: Vec<i64>,
+    pub source_order: i64,
+}
+
+impl TextLineDto {
+    pub fn from_py(dict: &Bound<'_, PyDict>) -> PyResult<Self> {
+        let schema_version = required_i64(dict, "schema_version")?;
+        check_schema_version(schema_version)?;
+        let rect = Rect4::from_py(&required_dict(dict, "rect")?)?;
+        let span_list = required_list(dict, "spans")?;
+        let mut spans = Vec::with_capacity(span_list.len());
+        for item in span_list.iter() {
+            let span = item.downcast::<PyDict>().map_err(|_| {
+                PyValueError::new_err("Field 'spans' items must be objects")
+            })?;
+            spans.push(NativeSpanInputDto::from_py(&span)?);
+        }
+        Ok(Self {
+            schema_version,
+            rect,
+            spans,
+            source_position: required_i64_list(dict, "source_position")?,
+            source_order: required_i64(dict, "source_order")?,
+        })
+    }
+
+    pub fn to_py<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let dict = PyDict::new_bound(py);
+        dict.set_item("schema_version", self.schema_version)?;
+        dict.set_item("rect", self.rect.to_py(py)?)?;
+        let spans = PyList::empty_bound(py);
+        for span in &self.spans {
+            spans.append(span.to_py(py)?)?;
+        }
+        dict.set_item("spans", spans)?;
+        dict.set_item("source_position", &self.source_position)?;
+        dict.set_item("source_order", self.source_order)?;
+        Ok(dict)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextBlockDto {
+    pub schema_version: i64,
+    pub block_type: Option<i64>,
+    pub rect: Rect4,
+    pub lines: Vec<TextLineDto>,
+    pub source_position: Vec<i64>,
+    pub source_order: i64,
+}
+
+impl TextBlockDto {
+    pub fn from_py(dict: &Bound<'_, PyDict>) -> PyResult<Self> {
+        let schema_version = required_i64(dict, "schema_version")?;
+        check_schema_version(schema_version)?;
+        let block_type = match dict.get_item("type")? {
+            None => Some(0),
+            Some(value) if value.is_none() => None,
+            Some(value) => {
+                if value.is_instance_of::<PyBool>() {
+                    return Err(PyValueError::new_err("Field 'type' must be an integer"));
+                }
+                Some(value.extract::<i64>().map_err(|_| {
+                    PyValueError::new_err("Field 'type' must be an integer")
+                })?)
+            }
+        };
+        let rect = Rect4::from_py(&required_dict(dict, "rect")?)?;
+        let line_list = if block_type == Some(0) {
+            required_list(dict, "lines")?
+        } else {
+            match dict.get_item("lines")? {
+                Some(value) if !value.is_none() => value.downcast::<PyList>()?.clone(),
+                _ => PyList::empty_bound(dict.py()),
+            }
+        };
+        let mut lines = Vec::with_capacity(line_list.len());
+        for item in line_list.iter() {
+            let line = item.downcast::<PyDict>().map_err(|_| {
+                PyValueError::new_err("Field 'lines' items must be objects")
+            })?;
+            lines.push(TextLineDto::from_py(&line)?);
+        }
+        Ok(Self {
+            schema_version,
+            block_type,
+            rect,
+            lines,
+            source_position: required_i64_list(dict, "source_position")?,
+            source_order: required_i64(dict, "source_order")?,
+        })
+    }
+
+    pub fn to_py<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let dict = PyDict::new_bound(py);
+        dict.set_item("schema_version", self.schema_version)?;
+        match self.block_type {
+            Some(value) if value != 0 => dict.set_item("type", value)?,
+            None => dict.set_item("type", py.None())?,
+            _ => {}
+        }
+        dict.set_item("rect", self.rect.to_py(py)?)?;
+        let lines = PyList::empty_bound(py);
+        for line in &self.lines {
+            lines.append(line.to_py(py)?)?;
+        }
+        dict.set_item("lines", lines)?;
+        dict.set_item("source_position", &self.source_position)?;
+        dict.set_item("source_order", self.source_order)?;
+        Ok(dict)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExtractionOptionsDto {
+    pub schema_version: i64,
+    pub options: BTreeMap<String, OwnedValue>,
+}
+
+impl ExtractionOptionsDto {
+    pub fn from_py(dict: &Bound<'_, PyDict>) -> PyResult<Self> {
+        let schema_version = required_i64(dict, "schema_version")?;
+        check_schema_version(schema_version)?;
+        let options = match OwnedValue::from_py(&get_req(dict, "options")?, "options")? {
+            OwnedValue::Object(values) => values,
+            _ => return Err(PyValueError::new_err("Field 'options' must be an object")),
+        };
+        Ok(Self {
+            schema_version,
+            options,
+        })
+    }
+
+    pub fn to_py<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let dict = PyDict::new_bound(py);
+        dict.set_item("schema_version", self.schema_version)?;
+        let options = PyDict::new_bound(py);
+        for (key, value) in &self.options {
+            options.set_item(key, value.to_py(py)?)?;
+        }
+        dict.set_item("options", options)?;
+        Ok(dict)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PageSnapshotDto {
+    pub schema_version: i64,
+    pub page_index: i64,
+    pub page: PageDto,
+    pub page_y0: f64,
+    pub text_blocks: Vec<TextBlockDto>,
+    pub spans: Vec<NativeSpanInputDto>,
+    pub words: Vec<WordDto>,
+    pub drawings: Vec<DrawingDto>,
+    pub allowed_regions: Vec<RegionDto>,
+    pub excluded_regions: Vec<RegionDto>,
+    pub extraction_options: ExtractionOptionsDto,
+    /// Snapshot-only extensions for records whose shared algorithm DTOs predate
+    /// the full PyMuPDF source-position shape.
+    pub word_raw_source_positions: Vec<Vec<i64>>,
+    pub drawing_raw_source_positions: Vec<Vec<i64>>,
+}
+
+impl PageSnapshotDto {
+    pub fn from_py(dict: &Bound<'_, PyDict>) -> PyResult<Self> {
+        let schema_version = required_i64(dict, "schema_version")?;
+        check_schema_version(schema_version)?;
+        let page_index = required_i64(dict, "page_index")?;
+        let page = PageDto::from_py(&required_dict(dict, "page")?)?;
+        let page_y0 = optional_f64(dict, "page_y0")?.unwrap_or(0.0);
+
+        let text_block_list = required_list(dict, "text_blocks")?;
+        let mut text_blocks = Vec::with_capacity(text_block_list.len());
+        for item in text_block_list.iter() {
+            let value = item.downcast::<PyDict>().map_err(|_| {
+                PyValueError::new_err("Field 'text_blocks' items must be objects")
+            })?;
+            text_blocks.push(TextBlockDto::from_py(&value)?);
+        }
+
+        let span_list = required_list(dict, "spans")?;
+        let mut spans = Vec::with_capacity(span_list.len());
+        for item in span_list.iter() {
+            let value = item.downcast::<PyDict>().map_err(|_| {
+                PyValueError::new_err("Field 'spans' items must be objects")
+            })?;
+            spans.push(NativeSpanInputDto::from_py(&value)?);
+        }
+
+        let word_list = required_list(dict, "words")?;
+        let mut words = Vec::with_capacity(word_list.len());
+        let mut word_raw_source_positions = Vec::with_capacity(word_list.len());
+        for item in word_list.iter() {
+            let value = item.downcast::<PyDict>().map_err(|_| {
+                PyValueError::new_err("Field 'words' items must be objects")
+            })?;
+            word_raw_source_positions.push(required_i64_list(&value, "raw_source_position")?);
+            words.push(WordDto::from_py(&value)?);
+        }
+
+        let drawing_list = required_list(dict, "drawings")?;
+        let mut drawings = Vec::with_capacity(drawing_list.len());
+        let mut drawing_raw_source_positions = Vec::with_capacity(drawing_list.len());
+        for item in drawing_list.iter() {
+            let value = item.downcast::<PyDict>().map_err(|_| {
+                PyValueError::new_err("Field 'drawings' items must be objects")
+            })?;
+            drawing_raw_source_positions.push(required_i64_list(&value, "raw_source_position")?);
+            drawings.push(DrawingDto::from_py(&value)?);
+        }
+
+        let parse_regions = |key: &str| -> PyResult<Vec<RegionDto>> {
+            let list = required_list(dict, key)?;
+            let mut regions = Vec::with_capacity(list.len());
+            for item in list.iter() {
+                let value = item.downcast::<PyDict>().map_err(|_| {
+                    PyValueError::new_err(format!("Field '{}' items must be objects", key))
+                })?;
+                regions.push(RegionDto::from_py(&value)?);
+            }
+            Ok(regions)
+        };
+
+        let extraction_options = ExtractionOptionsDto::from_py(&required_dict(
+            dict,
+            "extraction_options",
+        )?)?;
+        Ok(Self {
+            schema_version,
+            page_index,
+            page,
+            page_y0,
+            text_blocks,
+            spans,
+            words,
+            drawings,
+            allowed_regions: parse_regions("allowed_regions")?,
+            excluded_regions: parse_regions("excluded_regions")?,
+            extraction_options,
+            word_raw_source_positions,
+            drawing_raw_source_positions,
+        })
+    }
+
+    pub fn to_py<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let dict = PyDict::new_bound(py);
+        dict.set_item("schema_version", self.schema_version)?;
+        dict.set_item("page_index", self.page_index)?;
+        dict.set_item("page", self.page.to_py(py)?)?;
+        if self.page_y0 != 0.0 {
+            dict.set_item("page_y0", self.page_y0)?;
+        }
+
+        let text_blocks = PyList::empty_bound(py);
+        for value in &self.text_blocks {
+            text_blocks.append(value.to_py(py)?)?;
+        }
+        dict.set_item("text_blocks", text_blocks)?;
+
+        let spans = PyList::empty_bound(py);
+        for value in &self.spans {
+            spans.append(value.to_py(py)?)?;
+        }
+        dict.set_item("spans", spans)?;
+
+        let words = PyList::empty_bound(py);
+        for (index, value) in self.words.iter().enumerate() {
+            let word = value.to_py(py)?;
+            word.set_item(
+                "raw_source_position",
+                self.word_raw_source_positions
+                    .get(index)
+                    .ok_or_else(|| PyValueError::new_err("Missing word source-position extension"))?,
+            )?;
+            words.append(word)?;
+        }
+        dict.set_item("words", words)?;
+
+        let drawings = PyList::empty_bound(py);
+        for (index, value) in self.drawings.iter().enumerate() {
+            let drawing = value.to_py(py)?;
+            drawing.set_item(
+                "raw_source_position",
+                self.drawing_raw_source_positions
+                    .get(index)
+                    .ok_or_else(|| PyValueError::new_err("Missing drawing source-position extension"))?,
+            )?;
+            drawings.append(drawing)?;
+        }
+        dict.set_item("drawings", drawings)?;
+
+        for (key, values) in [
+            ("allowed_regions", &self.allowed_regions),
+            ("excluded_regions", &self.excluded_regions),
+        ] {
+            let list = PyList::empty_bound(py);
+            for value in values {
+                list.append(value.to_py(py)?)?;
+            }
+            dict.set_item(key, list)?;
+        }
+        dict.set_item("extraction_options", self.extraction_options.to_py(py)?)?;
+        Ok(dict)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextRunEvidenceDto {
+    pub schema_version: i64,
+    pub source_positions: Vec<SourcePositionDto>,
+    pub fonts: Vec<Option<String>>,
+    pub sizes: Vec<Option<f64>>,
+    pub flags: Vec<Option<i64>>,
+    pub source_fragment_indices: Option<Vec<i64>>,
+    pub source_fragment_counts: Option<Vec<i64>>,
+}
+
+impl TextRunEvidenceDto {
+    pub fn from_py(dict: &Bound<'_, PyDict>) -> PyResult<Self> {
+        let schema_version = required_i64(dict, "schema_version")?;
+        check_schema_version(schema_version)?;
+        let source_list = required_list(dict, "source_positions")?;
+        let mut source_positions = Vec::with_capacity(source_list.len());
+        for (index, value) in source_list.iter().enumerate() {
+            let source = value.downcast::<PyDict>().map_err(|_| {
+                PyValueError::new_err(format!(
+                    "Field 'source_positions[{}]' must be an object",
+                    index
+                ))
+            })?;
+            source_positions.push(SourcePositionDto::from_py(&source.clone())?);
+        }
+        let fonts = optional_string_list(dict, "fonts")?;
+        let sizes = optional_f64_list(dict, "sizes")?;
+        let flags = optional_i64_list(dict, "flags")?;
+        let source_fragment_indices = optional_i64_list_present(dict, "source_fragment_indices")?;
+        let source_fragment_counts = optional_i64_list_present(dict, "source_fragment_counts")?;
+        if source_fragment_indices.is_some() != source_fragment_counts.is_some() {
+            return Err(PyValueError::new_err(
+                "Fragment evidence fields must be provided together",
+            ));
+        }
+        let expected_len = source_positions.len();
+        for (field_name, actual_len) in [
+            ("fonts", fonts.len()),
+            ("sizes", sizes.len()),
+            ("flags", flags.len()),
+        ] {
+            if actual_len != expected_len {
+                return Err(PyValueError::new_err(format!(
+                    "Field '{}' evidence length {} does not match source_positions length {}",
+                    field_name, actual_len, expected_len
+                )));
+            }
+        }
+        if let Some(indices) = &source_fragment_indices {
+            if indices.len() != expected_len {
+                return Err(PyValueError::new_err(format!(
+                    "Field 'source_fragment_indices' evidence length {} does not match source_positions length {}",
+                    indices.len(), expected_len
+                )));
+            }
+        }
+        if let Some(counts) = &source_fragment_counts {
+            if counts.len() != expected_len {
+                return Err(PyValueError::new_err(format!(
+                    "Field 'source_fragment_counts' evidence length {} does not match source_positions length {}",
+                    counts.len(), expected_len
+                )));
+            }
+        }
+        if let (Some(indices), Some(counts)) = (&source_fragment_indices, &source_fragment_counts) {
+            for (index, count) in indices.iter().zip(counts) {
+                if *index < 0 || *count <= 0 || *index >= *count {
+                    return Err(PyValueError::new_err(
+                        "Fragment evidence index/count must satisfy 0 <= index < count",
+                    ));
+                }
+            }
+        }
+        Ok(Self {
+            schema_version,
+            source_positions,
+            fonts,
+            sizes,
+            flags,
+            source_fragment_indices,
+            source_fragment_counts,
+        })
+    }
+
+    pub fn to_py<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let d = PyDict::new_bound(py);
+        d.set_item("schema_version", self.schema_version)?;
+        let source_positions = PyList::empty_bound(py);
+        for position in &self.source_positions {
+            source_positions.append(position.to_py(py)?)?;
+        }
+        d.set_item("source_positions", source_positions)?;
+        let fonts = PyList::empty_bound(py);
+        for font in &self.fonts {
+            match font {
+                Some(value) => fonts.append(value)?,
+                None => fonts.append(py.None())?,
+            }
+        }
+        d.set_item("fonts", fonts)?;
+        let sizes = PyList::empty_bound(py);
+        for size in &self.sizes {
+            match size {
+                Some(value) => sizes.append(value)?,
+                None => sizes.append(py.None())?,
+            }
+        }
+        d.set_item("sizes", sizes)?;
+        let flags = PyList::empty_bound(py);
+        for flag in &self.flags {
+            match flag {
+                Some(value) => flags.append(value)?,
+                None => flags.append(py.None())?,
+            }
+        }
+        d.set_item("flags", flags)?;
+        if let Some(indices) = &self.source_fragment_indices {
+            d.set_item("source_fragment_indices", indices)?;
+        }
+        if let Some(counts) = &self.source_fragment_counts {
+            d.set_item("source_fragment_counts", counts)?;
+        }
+        Ok(d)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct TextRunDto {
     pub schema_version: i64,
@@ -500,6 +1345,9 @@ pub struct TextRunDto {
     pub source_start: i64,
     pub source_end: i64,
     pub order: i64,
+    pub flow_start: Option<i64>,
+    pub flow_end: Option<i64>,
+    pub evidence: Option<TextRunEvidenceDto>,
 }
 
 impl TextRunDto {
@@ -512,6 +1360,23 @@ impl TextRunDto {
         let source_start: i64 = get_req(dict, "source_start")?.extract()?;
         let source_end: i64 = get_req(dict, "source_end")?.extract()?;
         let order: i64 = get_req(dict, "order")?.extract()?;
+        let flow_start = optional_i64(dict, "flow_start")?;
+        let flow_end = optional_i64(dict, "flow_end")?;
+        let evidence = match get_opt(dict, "evidence")? {
+            Some(value) => Some(TextRunEvidenceDto::from_py(
+                &value.downcast::<PyDict>()?.clone(),
+            )?),
+            None => None,
+        };
+        if let Some(evidence) = &evidence {
+            if evidence.source_positions.len() != span_refs.len() {
+                return Err(PyValueError::new_err(format!(
+                    "TextRun evidence length {} does not match span_refs length {}",
+                    evidence.source_positions.len(),
+                    span_refs.len()
+                )));
+            }
+        }
         Ok(Self {
             schema_version: sv,
             text,
@@ -520,6 +1385,9 @@ impl TextRunDto {
             source_start,
             source_end,
             order,
+            flow_start,
+            flow_end,
+            evidence,
         })
     }
 
@@ -532,6 +1400,15 @@ impl TextRunDto {
         d.set_item("source_start", self.source_start)?;
         d.set_item("source_end", self.source_end)?;
         d.set_item("order", self.order)?;
+        if let Some(flow_start) = self.flow_start {
+            d.set_item("flow_start", flow_start)?;
+        }
+        if let Some(flow_end) = self.flow_end {
+            d.set_item("flow_end", flow_end)?;
+        }
+        if let Some(evidence) = &self.evidence {
+            d.set_item("evidence", evidence.to_py(py)?)?;
+        }
         Ok(d)
     }
 }
@@ -544,25 +1421,21 @@ pub struct AtomDto {
     pub run_refs: Vec<i64>,
     pub row_hint: Option<i64>,
     pub col_hint: Option<i64>,
+    pub col_end_hint: Option<i64>,
     pub order: i64,
 }
 
 impl AtomDto {
     pub fn from_py(dict: &Bound<'_, PyDict>) -> PyResult<Self> {
-        let sv: i64 = get_req(dict, "schema_version")?.extract()?;
+        let sv = required_i64(dict, "schema_version")?;
         check_schema_version(sv)?;
-        let text: String = get_req(dict, "text")?.extract()?;
-        let rect = Rect4::from_py(&get_req(dict, "rect")?.downcast::<PyDict>()?.clone())?;
-        let run_refs: Vec<i64> = get_req(dict, "run_refs")?.extract()?;
-        let row_hint: Option<i64> = match get_opt(dict, "row_hint")? {
-            Some(rh) => Some(rh.extract()?),
-            None => None,
-        };
-        let col_hint: Option<i64> = match get_opt(dict, "col_hint")? {
-            Some(ch) => Some(ch.extract()?),
-            None => None,
-        };
-        let order: i64 = get_req(dict, "order")?.extract()?;
+        let text = required_string(dict, "text")?;
+        let rect = Rect4::from_py(&required_dict(dict, "rect")?)?;
+        let run_refs = required_i64_list(dict, "run_refs")?;
+        let row_hint = optional_i64(dict, "row_hint")?;
+        let col_hint = optional_i64(dict, "col_hint")?;
+        let col_end_hint = optional_i64(dict, "col_end_hint")?;
+        let order = required_i64(dict, "order")?;
         Ok(Self {
             schema_version: sv,
             text,
@@ -570,6 +1443,7 @@ impl AtomDto {
             run_refs,
             row_hint,
             col_hint,
+            col_end_hint,
             order,
         })
     }
@@ -582,6 +1456,9 @@ impl AtomDto {
         d.set_item("run_refs", &self.run_refs)?;
         d.set_item("row_hint", self.row_hint)?;
         d.set_item("col_hint", self.col_hint)?;
+        if let Some(col_end_hint) = self.col_end_hint {
+            d.set_item("col_end_hint", col_end_hint)?;
+        }
         d.set_item("order", self.order)?;
         Ok(d)
     }
@@ -598,12 +1475,15 @@ pub struct ColumnBandDto {
 
 impl ColumnBandDto {
     pub fn from_py(dict: &Bound<'_, PyDict>) -> PyResult<Self> {
-        let sv: i64 = get_req(dict, "schema_version")?.extract()?;
+        let sv = required_i64(dict, "schema_version")?;
         check_schema_version(sv)?;
         let x0 = extract_finite_f64(&get_req(dict, "x0")?, "x0")?;
         let x1 = extract_finite_f64(&get_req(dict, "x1")?, "x1")?;
-        let source_atoms: Vec<i64> = get_req(dict, "source_atoms")?.extract()?;
-        let order: i64 = get_req(dict, "order")?.extract()?;
+        if x0 >= x1 {
+            return Err(PyValueError::new_err("Column band requires x0 < x1"));
+        }
+        let source_atoms = required_i64_list(dict, "source_atoms")?;
+        let order = required_i64(dict, "order")?;
         Ok(Self {
             schema_version: sv,
             x0,
@@ -634,11 +1514,11 @@ pub struct RegionDto {
 
 impl RegionDto {
     pub fn from_py(dict: &Bound<'_, PyDict>) -> PyResult<Self> {
-        let sv: i64 = get_req(dict, "schema_version")?.extract()?;
+        let sv = required_i64(dict, "schema_version")?;
         check_schema_version(sv)?;
-        let rect = Rect4::from_py(&get_req(dict, "rect")?.downcast::<PyDict>()?.clone())?;
-        let source_order: i64 = get_req(dict, "source_order")?.extract()?;
-        let allowed: bool = get_req(dict, "allowed")?.extract()?;
+        let rect = Rect4::from_py(&required_dict(dict, "rect")?)?;
+        let source_order = required_i64(dict, "source_order")?;
+        let allowed = required_bool(dict, "allowed")?;
         Ok(Self {
             schema_version: sv,
             rect,
@@ -743,6 +1623,7 @@ pub struct PhysicalCell {
     pub rect: Rect4,
     pub row: i64,
     pub col: i64,
+    pub colspan: i64,
     pub source_refs: Vec<i64>,
 }
 
@@ -754,6 +1635,10 @@ impl PhysicalCell {
         let rect = Rect4::from_py(&get_req(dict, "rect")?.downcast::<PyDict>()?.clone())?;
         let row: i64 = get_req(dict, "row")?.extract()?;
         let col: i64 = get_req(dict, "col")?.extract()?;
+        let colspan = optional_i64(dict, "colspan")?.unwrap_or(1);
+        if colspan < 1 {
+            return Err(PyValueError::new_err("Field 'colspan' must be positive"));
+        }
         let source_refs: Vec<i64> = get_req(dict, "source_refs")?.extract()?;
         Ok(Self {
             schema_version: sv,
@@ -761,6 +1646,7 @@ impl PhysicalCell {
             rect,
             row,
             col,
+            colspan,
             source_refs,
         })
     }
@@ -772,6 +1658,7 @@ impl PhysicalCell {
         d.set_item("rect", self.rect.to_py(py)?)?;
         d.set_item("row", self.row)?;
         d.set_item("col", self.col)?;
+        d.set_item("colspan", self.colspan)?;
         d.set_item("source_refs", &self.source_refs)?;
         Ok(d)
     }
@@ -1047,9 +1934,22 @@ pub struct StructureConfig {
     pub numeric_tolerance: f64,
 }
 
+impl Default for StructureConfig {
+    fn default() -> Self {
+        Self {
+            schema_version: 1,
+            line_tolerance: 2.0,
+            row_tolerance: 2.0,
+            column_tolerance: 2.0,
+            span_tolerance: 2.0,
+            numeric_tolerance: 2.0,
+        }
+    }
+}
+
 impl StructureConfig {
     pub fn from_py(dict: &Bound<'_, PyDict>) -> PyResult<Self> {
-        let sv: i64 = get_req(dict, "schema_version")?.extract()?;
+        let sv = required_i64(dict, "schema_version")?;
         check_schema_version(sv)?;
         let line_tolerance =
             extract_finite_f64(&get_req(dict, "line_tolerance")?, "line_tolerance")?;
@@ -1320,37 +2220,183 @@ impl NativeRecoveryOutput {
     }
 }
 
+fn aligned_evidence<T>(values: Vec<Option<T>>, field_name: &str) -> PyResult<Option<Vec<T>>> {
+    if values.iter().all(Option::is_none) {
+        return Ok(None);
+    }
+    if values.iter().any(Option::is_none) {
+        return Err(PyValueError::new_err(format!(
+            "{} evidence must be present for every item",
+            field_name
+        )));
+    }
+    Ok(Some(
+        values
+            .into_iter()
+            .map(|value| value.expect("checked aligned evidence"))
+            .collect(),
+    ))
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct NativeRegionInput {
     pub schema_version: i64,
     pub region: RegionDto,
     pub atoms: Vec<AtomDto>,
     pub bands: Vec<ColumnBandDto>,
+    pub atom_evidence: Option<Vec<AtomEvidenceDto>>,
+    pub band_evidence: Option<Vec<BandEvidenceDto>>,
     pub config: StructureConfig,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AtomEvidenceDto {
+    pub flow_start: i64,
+    pub flow_end: i64,
+    pub source_blocks: Vec<i64>,
+    pub source_line_start: i64,
+    pub source_line_end: i64,
+    pub source_position_known: bool,
+    pub column_id: Option<i64>,
+}
+
+impl AtomEvidenceDto {
+    fn from_py(dict: &Bound<'_, PyDict>) -> PyResult<Option<Self>> {
+        let present = [
+            "flow_start",
+            "flow_end",
+            "source_blocks",
+            "source_line_start",
+            "source_line_end",
+            "source_position_known",
+            "column_id",
+        ]
+        .iter()
+        .try_fold(false, |present, key| -> PyResult<bool> {
+            Ok(present || dict.contains(*key)?)
+        })?;
+        if !present {
+            return Ok(None);
+        }
+        Ok(Some(Self {
+            flow_start: required_i64(dict, "flow_start")?,
+            flow_end: required_i64(dict, "flow_end")?,
+            source_blocks: required_i64_list(dict, "source_blocks")?,
+            source_line_start: required_i64(dict, "source_line_start")?,
+            source_line_end: required_i64(dict, "source_line_end")?,
+            source_position_known: required_bool(dict, "source_position_known")?,
+            column_id: optional_i64(dict, "column_id")?.map(|value| {
+                if value < 0 {
+                    return Err(PyValueError::new_err("Field 'column_id' must be non-negative"));
+                }
+                Ok(value)
+            }).transpose()?,
+        }))
+    }
+
+    fn to_py<'py>(&self, py: Python<'py>, dict: &Bound<'py, PyDict>) -> PyResult<()> {
+        dict.set_item("flow_start", self.flow_start)?;
+        dict.set_item("flow_end", self.flow_end)?;
+        dict.set_item("source_blocks", &self.source_blocks)?;
+        dict.set_item("source_line_start", self.source_line_start)?;
+        dict.set_item("source_line_end", self.source_line_end)?;
+        dict.set_item("source_position_known", self.source_position_known)?;
+        dict.set_item("column_id", self.column_id)?;
+        let _ = py;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct BandEvidenceDto {
+    pub id: i64,
+    pub kind: Option<String>,
+    pub support: i64,
+    pub y_support: i64,
+    pub parent_x0: Option<f64>,
+    pub parent_x1: Option<f64>,
+    pub parent_leaf_count: Option<i64>,
+}
+
+impl BandEvidenceDto {
+    fn from_py(dict: &Bound<'_, PyDict>) -> PyResult<Option<Self>> {
+        let present = ["id", "kind", "support", "y_support", "parent_x0", "parent_x1", "parent_leaf_count"]
+            .iter()
+            .try_fold(false, |present, key| -> PyResult<bool> {
+                Ok(present || dict.contains(*key)?)
+            })?;
+        if !present {
+            return Ok(None);
+        }
+        Ok(Some(Self {
+            id: required_i64(dict, "id")?,
+            kind: optional_string(dict, "kind")?,
+            support: required_i64(dict, "support")?,
+            y_support: required_i64(dict, "y_support")?,
+            parent_x0: optional_f64(dict, "parent_x0")?,
+            parent_x1: optional_f64(dict, "parent_x1")?,
+            parent_leaf_count: optional_i64(dict, "parent_leaf_count")?,
+        }))
+    }
+
+    fn to_py<'py>(&self, py: Python<'py>, dict: &Bound<'py, PyDict>) -> PyResult<()> {
+        dict.set_item("id", self.id)?;
+        dict.set_item("kind", self.kind.as_deref())?;
+        dict.set_item("support", self.support)?;
+        dict.set_item("y_support", self.y_support)?;
+        dict.set_item("parent_x0", self.parent_x0)?;
+        dict.set_item("parent_x1", self.parent_x1)?;
+        dict.set_item("parent_leaf_count", self.parent_leaf_count)?;
+        let _ = py;
+        Ok(())
+    }
 }
 
 impl NativeRegionInput {
     pub fn from_py(dict: &Bound<'_, PyDict>) -> PyResult<Self> {
-        let sv: i64 = get_req(dict, "schema_version")?.extract()?;
+        let sv = required_i64(dict, "schema_version")?;
         check_schema_version(sv)?;
-        let region = RegionDto::from_py(&get_req(dict, "region")?.downcast::<PyDict>()?.clone())?;
-        let atoms_list: Bound<'_, PyList> = get_req(dict, "atoms")?.extract()?;
+        let region = RegionDto::from_py(&required_dict(dict, "region")?)?;
+        let atoms_list = required_list(dict, "atoms")?;
         let mut atoms = Vec::with_capacity(atoms_list.len());
+        let mut atom_evidence = Vec::with_capacity(atoms_list.len());
         for a in atoms_list.iter() {
-            atoms.push(AtomDto::from_py(&a.downcast::<PyDict>()?.clone())?);
+            let atom = a
+                .downcast::<PyDict>()
+                .map_err(|_| PyValueError::new_err("Field 'atoms' items must be objects"))?
+                .clone();
+            atoms.push(AtomDto::from_py(&atom)?);
+            atom_evidence.push(AtomEvidenceDto::from_py(&atom)?);
         }
-        let bands_list: Bound<'_, PyList> = get_req(dict, "bands")?.extract()?;
+        let bands_list = required_list(dict, "bands")?;
         let mut bands = Vec::with_capacity(bands_list.len());
+        let mut band_evidence = Vec::with_capacity(bands_list.len());
         for b in bands_list.iter() {
-            bands.push(ColumnBandDto::from_py(&b.downcast::<PyDict>()?.clone())?);
+            let band = b
+                .downcast::<PyDict>()
+                .map_err(|_| PyValueError::new_err("Field 'bands' items must be objects"))?
+                .clone();
+            bands.push(ColumnBandDto::from_py(&band)?);
+            band_evidence.push(BandEvidenceDto::from_py(&band)?);
         }
-        let config =
-            StructureConfig::from_py(&get_req(dict, "config")?.downcast::<PyDict>()?.clone())?;
+        for (band_index, band) in bands.iter().enumerate() {
+            for source_atom in &band.source_atoms {
+                if *source_atom < 0 || (*source_atom as usize) >= atoms.len() {
+                    return Err(PyValueError::new_err(format!(
+                        "bands[{}].source_atoms contains an out-of-range atom reference",
+                        band_index
+                    )));
+                }
+            }
+        }
+        let config = StructureConfig::from_py(&required_dict(dict, "config")?)?;
         Ok(Self {
             schema_version: sv,
             region,
             atoms,
             bands,
+            atom_evidence: aligned_evidence(atom_evidence, "atoms")?,
+            band_evidence: aligned_evidence(band_evidence, "bands")?,
             config,
         })
     }
@@ -1363,10 +2409,26 @@ impl NativeRegionInput {
         for a in &self.atoms {
             al.append(a.to_py(py)?)?;
         }
+        if let Some(evidence) = &self.atom_evidence {
+            if evidence.len() != self.atoms.len() {
+                return Err(PyValueError::new_err("Atom evidence length must match atoms"));
+            }
+            for (item, evidence) in al.iter().zip(evidence) {
+                evidence.to_py(py, &item.downcast::<PyDict>()?.clone())?;
+            }
+        }
         d.set_item("atoms", al)?;
         let bl = PyList::empty_bound(py);
         for b in &self.bands {
             bl.append(b.to_py(py)?)?;
+        }
+        if let Some(evidence) = &self.band_evidence {
+            if evidence.len() != self.bands.len() {
+                return Err(PyValueError::new_err("Band evidence length must match bands"));
+            }
+            for (item, evidence) in bl.iter().zip(evidence) {
+                evidence.to_py(py, &item.downcast::<PyDict>()?.clone())?;
+            }
         }
         d.set_item("bands", bl)?;
         d.set_item("config", self.config.to_py(py)?)?;
@@ -1588,6 +2650,7 @@ pub struct EnglishGridInput {
     pub region: RegionDto,
     pub words: Vec<WordDto>,
     pub backgrounds: Vec<BackgroundDto>,
+    pub horizontal_lines: Vec<f64>,
     pub config: StructureConfig,
 }
 
@@ -1606,6 +2669,10 @@ impl EnglishGridInput {
         for b in bg_list.iter() {
             backgrounds.push(BackgroundDto::from_py(&b.downcast::<PyDict>()?.clone())?);
         }
+        let horizontal_lines = match get_opt(dict, "horizontal_lines")? {
+            Some(value) => value.extract()?,
+            None => Vec::new(),
+        };
         let config =
             StructureConfig::from_py(&get_req(dict, "config")?.downcast::<PyDict>()?.clone())?;
         Ok(Self {
@@ -1613,6 +2680,7 @@ impl EnglishGridInput {
             region,
             words,
             backgrounds,
+            horizontal_lines,
             config,
         })
     }
@@ -1631,6 +2699,7 @@ impl EnglishGridInput {
             bl.append(b.to_py(py)?)?;
         }
         d.set_item("backgrounds", bl)?;
+        d.set_item("horizontal_lines", &self.horizontal_lines)?;
         d.set_item("config", self.config.to_py(py)?)?;
         Ok(d)
     }
@@ -2174,6 +3243,10 @@ pub fn roundtrip_dto_py<'py>(
             let dto = PageDto::from_py(data)?;
             dto.to_py(py)
         }
+        "page_snapshot" => {
+            let dto = PageSnapshotDto::from_py(data)?;
+            dto.to_py(py)
+        }
         "rect" => {
             let dto = Rect4::from_py(data)?;
             dto.to_py(py)
@@ -2350,5 +3423,238 @@ pub fn roundtrip_dto_py<'py>(
             "Unknown dto_type '{}'",
             other
         ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pyo3::types::PyList;
+    use std::sync::Once;
+
+    static PYTHON_INIT: Once = Once::new();
+
+    fn with_test_python<F, R>(f: F) -> R
+    where
+        F: for<'py> FnOnce(Python<'py>) -> R,
+    {
+        PYTHON_INIT.call_once(|| pyo3::prepare_freethreaded_python());
+        Python::with_gil(f)
+    }
+
+    fn base_native_region<'py>(py: Python<'py>) -> Bound<'py, PyDict> {
+        let input = PyDict::new_bound(py);
+        let region = PyDict::new_bound(py);
+        let rect = PyDict::new_bound(py);
+        rect.set_item("schema_version", 1).unwrap();
+        rect.set_item("x0", 0.0).unwrap();
+        rect.set_item("y0", 0.0).unwrap();
+        rect.set_item("x1", 100.0).unwrap();
+        rect.set_item("y1", 100.0).unwrap();
+        region.set_item("schema_version", 1).unwrap();
+        region.set_item("rect", rect).unwrap();
+        region.set_item("source_order", 0).unwrap();
+        region.set_item("allowed", true).unwrap();
+
+        let atom = PyDict::new_bound(py);
+        atom.set_item("schema_version", 1).unwrap();
+        atom.set_item("text", "项目").unwrap();
+        let atom_rect = PyDict::new_bound(py);
+        atom_rect.set_item("schema_version", 1).unwrap();
+        atom_rect.set_item("x0", 10.0).unwrap();
+        atom_rect.set_item("y0", 10.0).unwrap();
+        atom_rect.set_item("x1", 40.0).unwrap();
+        atom_rect.set_item("y1", 20.0).unwrap();
+        atom.set_item("rect", atom_rect).unwrap();
+        atom.set_item("run_refs", PyList::new_bound(py, [0])).unwrap();
+        atom.set_item("row_hint", 0).unwrap();
+        atom.set_item("col_hint", 0).unwrap();
+        atom.set_item("order", 0).unwrap();
+        let atoms = PyList::empty_bound(py);
+        atoms.append(atom).unwrap();
+
+        let band = PyDict::new_bound(py);
+        band.set_item("schema_version", 1).unwrap();
+        band.set_item("x0", 0.0).unwrap();
+        band.set_item("x1", 50.0).unwrap();
+        band.set_item("source_atoms", PyList::new_bound(py, [0])).unwrap();
+        band.set_item("order", 0).unwrap();
+        let bands = PyList::empty_bound(py);
+        bands.append(band).unwrap();
+
+        let config = PyDict::new_bound(py);
+        config.set_item("schema_version", 1).unwrap();
+        config.set_item("line_tolerance", 2.0).unwrap();
+        config.set_item("row_tolerance", 2.0).unwrap();
+        config.set_item("column_tolerance", 2.0).unwrap();
+        config.set_item("span_tolerance", 2.0).unwrap();
+        config.set_item("numeric_tolerance", 2.0).unwrap();
+
+        input.set_item("schema_version", 1).unwrap();
+        input.set_item("region", region).unwrap();
+        input.set_item("atoms", atoms).unwrap();
+        input.set_item("bands", bands).unwrap();
+        input.set_item("config", config).unwrap();
+        input
+    }
+
+    fn assert_value_error(result: PyResult<NativeRegionInput>, py: Python<'_>) {
+        let error = result.expect_err("invalid DTO input must fail");
+        assert_eq!(error.get_type_bound(py).name().unwrap(), "ValueError");
+    }
+
+    #[test]
+    fn native_region_without_evidence_keeps_legacy_shape() {
+        with_test_python(|py| {
+            let input = base_native_region(py);
+            let dto = NativeRegionInput::from_py(&input).unwrap();
+            assert!(dto.atom_evidence.is_none());
+            assert!(dto.band_evidence.is_none());
+
+            let output = dto.to_py(py).unwrap();
+            let atoms_value = output.get_item("atoms").unwrap().unwrap();
+            let atoms = atoms_value.downcast::<PyList>().unwrap();
+            let atom_value = atoms.get_item(0).unwrap();
+            let atom = atom_value.downcast::<PyDict>().unwrap();
+            assert!(!atom.contains("flow_start").unwrap());
+            assert!(!atom.contains("unknown_debug_field").unwrap());
+        });
+    }
+
+    #[test]
+    fn native_region_roundtrips_aligned_owned_evidence_and_drops_unknown_fields() {
+        with_test_python(|py| {
+            let input = base_native_region(py);
+            let atoms_value = input.get_item("atoms").unwrap().unwrap();
+            let atoms = atoms_value.downcast::<PyList>().unwrap();
+            let atom_value = atoms.get_item(0).unwrap();
+            let atom = atom_value.downcast::<PyDict>().unwrap();
+            atom.set_item("flow_start", 0).unwrap();
+            atom.set_item("flow_end", 1).unwrap();
+            atom.set_item("source_blocks", PyList::new_bound(py, [14])).unwrap();
+            atom.set_item("source_line_start", 3).unwrap();
+            atom.set_item("source_line_end", 3).unwrap();
+            atom.set_item("source_position_known", true).unwrap();
+            atom.set_item("column_id", 0).unwrap();
+            atom.set_item("unknown_debug_field", "ignored").unwrap();
+
+            let bands_value = input.get_item("bands").unwrap().unwrap();
+            let bands = bands_value.downcast::<PyList>().unwrap();
+            let band_value = bands.get_item(0).unwrap();
+            let band = band_value.downcast::<PyDict>().unwrap();
+            band.set_item("id", 0).unwrap();
+            band.set_item("kind", "body").unwrap();
+            band.set_item("support", 3).unwrap();
+            band.set_item("y_support", 3).unwrap();
+            band.set_item("parent_x0", 0.0).unwrap();
+            band.set_item("parent_x1", 50.0).unwrap();
+            band.set_item("parent_leaf_count", 1).unwrap();
+
+            let dto = NativeRegionInput::from_py(&input).unwrap();
+            assert_eq!(dto.atom_evidence.as_ref().unwrap().len(), 1);
+            assert_eq!(dto.band_evidence.as_ref().unwrap().len(), 1);
+            let output = dto.to_py(py).unwrap();
+            let output_atoms_value = output.get_item("atoms").unwrap().unwrap();
+            let output_atoms = output_atoms_value.downcast::<PyList>().unwrap();
+            let output_atom_value = output_atoms.get_item(0).unwrap();
+            let output_atom = output_atom_value.downcast::<PyDict>().unwrap();
+            assert_eq!(output_atom.get_item("flow_start").unwrap().unwrap().extract::<i64>().unwrap(), 0);
+            assert!(!output_atom.contains("unknown_debug_field").unwrap());
+        });
+    }
+
+    #[test]
+    fn native_region_rejects_partial_or_invalid_evidence_and_references() {
+        with_test_python(|py| {
+            let input = base_native_region(py);
+            let atoms_value = input.get_item("atoms").unwrap().unwrap();
+            let atoms = atoms_value.downcast::<PyList>().unwrap();
+            let atom_value = atoms.get_item(0).unwrap();
+            let atom = atom_value.downcast::<PyDict>().unwrap();
+            atom.set_item("flow_start", 0).unwrap();
+            assert_value_error(NativeRegionInput::from_py(&input), py);
+
+            atom.del_item("flow_start").unwrap();
+            let bands_value = input.get_item("bands").unwrap().unwrap();
+            let bands = bands_value.downcast::<PyList>().unwrap();
+            let band_value = bands.get_item(0).unwrap();
+            let band = band_value.downcast::<PyDict>().unwrap();
+            band.set_item("source_atoms", PyList::new_bound(py, [1])).unwrap();
+            assert_value_error(NativeRegionInput::from_py(&input), py);
+
+            band.set_item("source_atoms", PyList::new_bound(py, [0])).unwrap();
+            band.set_item("x0", f64::NAN).unwrap();
+            assert_value_error(NativeRegionInput::from_py(&input), py);
+        });
+    }
+
+    #[test]
+    fn atom_and_band_dtos_reject_non_core_types() {
+        with_test_python(|py| {
+            let input = base_native_region(py);
+            let atoms_value = input.get_item("atoms").unwrap().unwrap();
+            let atoms = atoms_value.downcast::<PyList>().unwrap();
+            let atom_value = atoms.get_item(0).unwrap();
+            let atom = atom_value.downcast::<PyDict>().unwrap();
+            atom.set_item("text", 7).unwrap();
+            assert_value_error(
+                AtomDto::from_py(&atom).map(|_| NativeRegionInput::from_py(&input).unwrap()),
+                py,
+            );
+        });
+    }
+
+    #[test]
+    fn native_region_rejects_wrong_container_types_as_value_error() {
+        with_test_python(|py| {
+            let input = base_native_region(py);
+            input.set_item("region", PyList::empty_bound(py)).unwrap();
+            assert_value_error(NativeRegionInput::from_py(&input), py);
+
+            let input = base_native_region(py);
+            input.set_item("atoms", PyDict::new_bound(py)).unwrap();
+            assert_value_error(NativeRegionInput::from_py(&input), py);
+
+            let input = base_native_region(py);
+            input.set_item("bands", PyDict::new_bound(py)).unwrap();
+            assert_value_error(NativeRegionInput::from_py(&input), py);
+
+            let input = base_native_region(py);
+            input.set_item("config", PyList::empty_bound(py)).unwrap();
+            assert_value_error(NativeRegionInput::from_py(&input), py);
+
+            let input = base_native_region(py);
+            let atoms = PyList::empty_bound(py);
+            atoms.append(PyList::empty_bound(py)).unwrap();
+            input.set_item("atoms", atoms).unwrap();
+            assert_value_error(NativeRegionInput::from_py(&input), py);
+        });
+    }
+
+    #[test]
+    fn atom_rect_and_config_schema_reject_wrong_types_as_value_error() {
+        with_test_python(|py| {
+            let input = base_native_region(py);
+            let atoms_value = input.get_item("atoms").unwrap().unwrap();
+            let atoms = atoms_value.downcast::<PyList>().unwrap();
+            let atom_value = atoms.get_item(0).unwrap();
+            let atom = atom_value.downcast::<PyDict>().unwrap();
+            atom.set_item("rect", PyList::empty_bound(py)).unwrap();
+            let error = AtomDto::from_py(&atom).expect_err("invalid atom rect must fail");
+            assert_eq!(error.get_type_bound(py).name().unwrap(), "ValueError");
+
+            let input = base_native_region(py);
+            let config_value = input.get_item("config").unwrap().unwrap();
+            let config = config_value.downcast::<PyDict>().unwrap();
+            config.set_item("schema_version", true).unwrap();
+            let error = StructureConfig::from_py(&config)
+                .expect_err("boolean schema_version must fail");
+            assert_eq!(error.get_type_bound(py).name().unwrap(), "ValueError");
+
+            config.set_item("schema_version", "1").unwrap();
+            let error = StructureConfig::from_py(&config)
+                .expect_err("string schema_version must fail");
+            assert_eq!(error.get_type_bound(py).name().unwrap(), "ValueError");
+        });
     }
 }

@@ -144,6 +144,37 @@ class TestRecoverNativeRegion:
         assert 'cells' in output
         assert len(output['cells']) >= 4
 
+    def test_recover_native_region_preserves_geometric_group_header_colspan(self):
+        region = {'schema_version': 1, 'rect': _rect(0, 0, 220, 60), 'source_order': 0, 'allowed': True}
+        atoms = [
+            _atom('项目', 10, 10, 40, 20, order=0),
+            _atom('本期变动', 95, 10, 175, 20, order=1),
+            _atom('数量', 100, 30, 130, 40, order=2),
+            _atom('金额', 145, 30, 175, 40, order=3),
+        ]
+        bands = [
+            _band(10, 60, [0], order=0),
+            _band(90, 135, [1, 2], order=1),
+            _band(135, 185, [1, 3], order=2),
+        ]
+        output = recover_native_region({
+            'schema_version': 1,
+            'region': region,
+            'atoms': atoms,
+            'bands': bands,
+            'config': {
+                'schema_version': 1,
+                'line_tolerance': 2.0,
+                'row_tolerance': 2.0,
+                'column_tolerance': 2.0,
+                'span_tolerance': 2.0,
+                'numeric_tolerance': 2.0,
+            },
+        })
+
+        group = next(cell for cell in output['cells'] if cell['text'] == '本期变动')
+        assert (group['row'], group['col'], group['rowspan'], group['colspan']) == (0, 1, 1, 2)
+
     def test_independent_leaf_columns_do_not_merge(self):
         # 独立字段默认保留为独立叶子列，不得仅因位于同一候选槽位就合并它们
         region = {'schema_version': 1, 'rect': _rect(0, 0, 500, 500), 'source_order': 0, 'allowed': True}
@@ -217,4 +248,3 @@ class TestRecoverNativeRegion:
         page = PageSpy()
         # 验证在消费 atoms/bands 进行结构恢复时，绝不调用 get_text('words')
         assert 'words' not in page.calls
-

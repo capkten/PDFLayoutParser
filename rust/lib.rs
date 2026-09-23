@@ -1,9 +1,10 @@
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList, PyModule, PyTuple};
+use pyo3::types::{PyBytes, PyDict, PyList, PyModule, PyTuple};
 
 pub mod english_wireless;
 pub mod geometry;
 pub mod native_span;
+pub mod snapshot;
 pub mod table_normalization;
 pub mod types;
 pub mod wired;
@@ -251,6 +252,98 @@ fn roundtrip_dto_binding<'py>(
     types::roundtrip_dto_py(py, dto_type, data)
 }
 
+fn canonical_digest<'py>(py: Python<'py>, data: &Bound<'py, PyDict>) -> PyResult<String> {
+    let json = PyModule::import_bound(py, "json")?;
+    let kwargs = PyDict::new_bound(py);
+    kwargs.set_item("ensure_ascii", false)?;
+    kwargs.set_item("sort_keys", true)?;
+    kwargs.set_item("separators", PyTuple::new_bound(py, [",", ":"]))?;
+    kwargs.set_item("allow_nan", false)?;
+    let encoded: String = json
+        .getattr("dumps")?
+        .call((data,), Some(&kwargs))?
+        .extract()?;
+
+    let hashlib = PyModule::import_bound(py, "hashlib")?;
+    let digest: String = hashlib
+        .getattr("sha256")?
+        .call1((PyBytes::new_bound(py, encoded.as_bytes()),))?
+        .getattr("hexdigest")?
+        .call0()?
+        .extract()?;
+    Ok(digest)
+}
+
+#[pyfunction(name = "collect_native_spans_from_snapshot")]
+#[pyo3(signature = (snapshot_dict, allowed_regions=None, excluded_regions=None))]
+fn collect_native_spans_from_snapshot_binding<'py>(
+    py: Python<'py>,
+    snapshot_dict: &Bound<'py, PyDict>,
+    allowed_regions: Option<&Bound<'py, PyList>>,
+    excluded_regions: Option<&Bound<'py, PyList>>,
+) -> PyResult<Bound<'py, PyList>> {
+    let snapshot = types::PageSnapshotDto::from_py(snapshot_dict)?;
+    let parse_regions = |list_opt: Option<&Bound<'py, PyList>>| -> PyResult<Option<Vec<Rect4>>> {
+        match list_opt {
+            Some(list) => {
+                let mut rects = Vec::with_capacity(list.len());
+                for item in list.iter() {
+                    let d = item.downcast::<PyDict>().map_err(|_| {
+                        pyo3::exceptions::PyValueError::new_err("Region item must be a dict")
+                    })?;
+                    rects.push(Rect4::from_py(&d)?);
+                }
+                Ok(Some(rects))
+            }
+            None => Ok(None),
+        }
+    };
+    let allowed = parse_regions(allowed_regions)?;
+    let excluded = parse_regions(excluded_regions)?;
+
+    let spans = snapshot::collect_native_spans_from_snapshot(
+        &snapshot,
+        allowed.as_deref(),
+        excluded.as_deref(),
+    );
+
+    let result = PyList::empty_bound(py);
+    for s in spans {
+        result.append(s.to_py(py)?)?;
+    }
+    Ok(result)
+}
+
+#[pyfunction(name = "recover_cells_from_snapshot")]
+fn recover_cells_from_snapshot_binding<'py>(
+    py: Python<'py>,
+    snapshot_dict: &Bound<'py, PyDict>,
+    region_dict: &Bound<'py, PyDict>,
+) -> PyResult<Bound<'py, PyDict>> {
+    let snapshot = types::PageSnapshotDto::from_py(snapshot_dict)?;
+    let region = types::Rect4::from_py(region_dict)?;
+    let output = wireless_structure::recover_cells_from_snapshot(&snapshot, &region);
+    output.to_py(py)
+}
+
+#[pyfunction(name = "page_snapshot_digest")]
+fn page_snapshot_digest_binding<'py>(
+    py: Python<'py>,
+    data: &Bound<'py, PyDict>,
+) -> PyResult<String> {
+    types::PageSnapshotDto::from_py(data)?;
+    canonical_digest(py, data)
+}
+
+#[pyfunction(name = "stage_input_digest")]
+fn stage_input_digest_binding<'py>(
+    py: Python<'py>,
+    data: &Bound<'py, PyDict>,
+) -> PyResult<String> {
+    types::OwnedValue::from_py(data.as_any(), "stage")?;
+    canonical_digest(py, data)
+}
+
 #[pyfunction(name = "rect_overlap")]
 fn rect_overlap_binding<'py>(
     _py: Python<'py>,
@@ -387,10 +480,45 @@ fn build_atoms_binding<'py>(
         Some(dict) => Some(Rect4::from_py(dict)?),
         None => None,
     };
-    let atoms = py.allow_threads(move || native_span::build_atoms(rust_runs, rust_region));
+    let runs_for_build = rust_runs.clone();
+    let atoms = py.allow_threads(move || native_span::build_atoms(runs_for_build, rust_region));
     let list = PyList::empty_bound(py);
-    for a in atoms {
-        list.append(a.to_py(py)?)?;
+    for (a, run) in atoms.into_iter().zip(rust_runs.iter()) {
+        let atom = a.to_py(py)?;
+        if let (Some(flow_start), Some(flow_end), Some(evidence)) = (
+            run.flow_start,
+            run.flow_end,
+            run.evidence.as_ref(),
+        ) {
+            if !evidence.source_positions.is_empty() {
+                let mut source_blocks: Vec<i64> = evidence
+                    .source_positions
+                    .iter()
+                    .map(|position| position.block)
+                    .collect();
+                source_blocks.sort_unstable();
+                source_blocks.dedup();
+                let source_line_start = evidence
+                    .source_positions
+                    .iter()
+                    .map(|position| position.line)
+                    .min()
+                    .unwrap();
+                let source_line_end = evidence
+                    .source_positions
+                    .iter()
+                    .map(|position| position.line)
+                    .max()
+                    .unwrap();
+                atom.set_item("flow_start", flow_start)?;
+                atom.set_item("flow_end", flow_end)?;
+                atom.set_item("source_blocks", source_blocks)?;
+                atom.set_item("source_line_start", source_line_start)?;
+                atom.set_item("source_line_end", source_line_end)?;
+                atom.set_item("source_position_known", true)?;
+            }
+        }
+        list.append(atom)?;
     }
     Ok(list)
 }
@@ -431,6 +559,7 @@ fn infer_output_order_mode_binding<'py>(
             run_refs: Vec::new(),
             row_hint: None,
             col_hint: None,
+            col_end_hint: None,
             order,
         });
     }
@@ -820,6 +949,16 @@ fn _pdf_fast(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(assign_text_to_line_cells_binding, module)?)?;
     module.add_function(wrap_pyfunction!(extract_wired_region_binding, module)?)?;
     module.add_function(wrap_pyfunction!(roundtrip_dto_binding, module)?)?;
+    module.add_function(wrap_pyfunction!(
+        collect_native_spans_from_snapshot_binding,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        recover_cells_from_snapshot_binding,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(page_snapshot_digest_binding, module)?)?;
+    module.add_function(wrap_pyfunction!(stage_input_digest_binding, module)?)?;
     module.add_function(wrap_pyfunction!(infer_header_structure_binding, module)?)?;
     module.add_function(wrap_pyfunction!(merge_header_spans_binding, module)?)?;
     module.add_function(wrap_pyfunction!(

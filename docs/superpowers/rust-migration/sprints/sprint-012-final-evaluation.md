@@ -1,5 +1,7 @@
 # Sprint 012：完整前后 Benchmark、页面视觉验证和发布物最终评估
 
+> 历史验收快照：本文使用较早的代表页/输出集合，不代表 2026-09-22 Task 5/6 的 Rust wireless parity 结论。当前页面级权威结果见 [`evaluations/sprint-007.md`](../evaluations/sprint-007.md)；最新问题清单见 [`task5-problem-audit-2026-09-23.md`](../task5-problem-audit-2026-09-23.md)。
+
 ## 目标与范围
 
 Sprint 012 是 PDF 表格纯算法极限迁移计划的收官阶段，主要目标包括：

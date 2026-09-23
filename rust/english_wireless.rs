@@ -343,200 +343,505 @@ pub fn assign_words_to_zebra_rows(
     rows
 }
 
-pub fn infer_english_columns(input: &EnglishGridInput) -> Vec<ColumnBandDto> {
-    if input.words.is_empty() {
-        return Vec::new();
-    }
+fn has_digit(text: &str) -> bool {
+    text.chars().any(|ch| ch.is_ascii_digit())
+}
 
-    // Cluster words into rows by center_y
-    let mut rows_by_y: Vec<(f64, Vec<&WordDto>)> = Vec::new();
-    for w in &input.words {
-        let mid_y = center_y(&w.rect);
-        let mut found = false;
-        for (ey, rwords) in rows_by_y.iter_mut() {
-            if (mid_y - *ey).abs() <= 3.5 {
-                rwords.push(w);
-                found = true;
-                break;
-            }
-        }
-        if !found {
-            rows_by_y.push((mid_y, vec![w]));
+fn is_currency_token(text: &str) -> bool {
+    let trimmed = text.trim();
+    trimmed == "$" || trimmed.starts_with('$')
+}
+
+fn is_percentage_token(text: &str) -> bool {
+    text.contains('%') && has_digit(text)
+}
+
+fn amount_dollar_is_pure(dollar: &WordDto, row_words: &[&WordDto]) -> bool {
+    if !dollar.text.contains('$') {
+        return false;
+    }
+    let same_row: Vec<&WordDto> = row_words
+        .iter()
+        .copied()
+        .filter(|word| (center_y(&word.rect) - center_y(&dollar.rect)).abs() <= 3.5)
+        .collect();
+    if has_digit(&dollar.text) {
+        return true;
+    }
+    let dollar_index = same_row.iter().position(|word| std::ptr::eq(*word, dollar));
+    let Some(index) = dollar_index else {
+        return false;
+    };
+    same_row
+        .iter()
+        .skip(index + 1)
+        .any(|word| word.rect.x0 - dollar.rect.x1 <= 45.0 && has_digit(&word.text))
+}
+
+fn cluster_word_rows<'a>(words: &'a [WordDto], tolerance: f64) -> Vec<(f64, Vec<&'a WordDto>)> {
+    let mut rows: Vec<(f64, Vec<&WordDto>)> = Vec::new();
+    for word in words {
+        let word_y = center_y(&word.rect);
+        if let Some((_row_y, row_words)) = rows
+            .iter_mut()
+            .find(|(row_y, _)| (word_y - *row_y).abs() <= tolerance)
+        {
+            row_words.push(word);
+        } else {
+            rows.push((word_y, vec![word]));
         }
     }
+    rows.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    rows
+}
 
-    let mut all_row_segs: Vec<(f64, Vec<(f64, f64)>)> = Vec::new();
-    for (ry, mut rwords) in rows_by_y {
-        rwords.sort_by(|a, b| {
+fn phrase_bounds(words: &[WordDto]) -> Vec<(f64, f64)> {
+    let mut phrases = Vec::new();
+    for (_, mut row_words) in cluster_word_rows(words, 3.5) {
+        row_words.sort_by(|a, b| {
             a.rect
                 .x0
                 .partial_cmp(&b.rect.x0)
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
-        let mut cur: Vec<&WordDto> = Vec::new();
-        let mut row_segs: Vec<(f64, f64)> = Vec::new();
-
-        for w in rwords {
-            if cur.is_empty() {
-                cur.push(w);
-            } else {
-                let prev = cur.last().unwrap();
-                let gap = w.rect.x0 - prev.rect.x1;
-                let is_new_currency = (w.text.starts_with('$') || w.text.trim() == "$")
-                    && !prev.text.starts_with('$');
-                if is_new_currency || gap > 6.0 {
-                    let seg_x0 = cur
+        let mut current: Vec<&WordDto> = Vec::new();
+        for word in row_words {
+            let joins = current
+                .last()
+                .map(|previous| word.rect.x0 - previous.rect.x1 <= 5.0)
+                .unwrap_or(false);
+            if !joins && !current.is_empty() {
+                phrases.push((
+                    current
                         .iter()
                         .map(|item| item.rect.x0)
-                        .fold(f64::INFINITY, f64::min);
-                    let seg_x1 = cur
+                        .fold(f64::INFINITY, f64::min),
+                    current
                         .iter()
                         .map(|item| item.rect.x1)
-                        .fold(f64::NEG_INFINITY, f64::max);
-                    row_segs.push((seg_x0, seg_x1));
-                    cur = vec![w];
-                } else {
-                    cur.push(w);
-                }
+                        .fold(f64::NEG_INFINITY, f64::max),
+                ));
+                current.clear();
             }
+            current.push(word);
         }
-        if !cur.is_empty() {
-            let seg_x0 = cur
-                .iter()
-                .map(|item| item.rect.x0)
-                .fold(f64::INFINITY, f64::min);
-            let seg_x1 = cur
-                .iter()
-                .map(|item| item.rect.x1)
-                .fold(f64::NEG_INFINITY, f64::max);
-            row_segs.push((seg_x0, seg_x1));
+        if !current.is_empty() {
+            phrases.push((
+                current
+                    .iter()
+                    .map(|item| item.rect.x0)
+                    .fold(f64::INFINITY, f64::min),
+                current
+                    .iter()
+                    .map(|item| item.rect.x1)
+                    .fold(f64::NEG_INFINITY, f64::max),
+            ));
         }
-        all_row_segs.push((ry, row_segs));
+    }
+    phrases
+}
+
+fn prune_english_columns(
+    mut columns: Vec<(f64, f64)>,
+    words: &[WordDto],
+    table_x0: f64,
+    table_x1: f64,
+) -> Vec<(f64, f64)> {
+    if columns.len() <= 2 {
+        return columns;
     }
 
-    let mut line_segments: Vec<(f64, f64)> = Vec::new();
-    for (ry, r_segs) in &all_row_segs {
-        for s in r_segs {
-            let mut spanning_count = 0;
-            for (other_ry, other_r_segs) in &all_row_segs {
-                if (other_ry - ry).abs() < 1e-4 {
-                    continue;
-                }
-                let overlapping_count = other_r_segs
+    loop {
+        if columns.len() <= 2 {
+            break;
+        }
+        let counts: Vec<usize> = columns
+            .iter()
+            .map(|(x0, x1)| {
+                words
                     .iter()
-                    .filter(|os| (s.1.min(os.1) - s.0.max(os.0)) >= 2.0)
-                    .count();
-                if overlapping_count >= 2 {
-                    spanning_count += 1;
-                }
+                    .filter(|word| {
+                        let x = center_x(&word.rect);
+                        *x0 - 2.0 <= x && x <= *x1 + 2.0
+                    })
+                    .count()
+            })
+            .collect();
+        let empty_index = counts.iter().position(|count| *count == 0);
+        let Some(index) = empty_index else {
+            break;
+        };
+        if index == 0 {
+            let left = columns[index].0;
+            columns[index + 1].0 = left;
+        } else {
+            let right = columns[index].1;
+            columns[index - 1].1 = right;
+        }
+        columns.remove(index);
+    }
+
+    let phrases = phrase_bounds(words);
+    let mut index = 0;
+    while index < columns.len() && columns.len() > 2 {
+        let (x0, x1) = columns[index];
+        let width = x1 - x0;
+        let contained = phrases
+            .iter()
+            .filter(|(px0, px1)| *px0 >= x0 - 3.0 && *px1 <= x1 + 3.0)
+            .count();
+        let spanning = phrases
+            .iter()
+            .filter(|(px0, px1)| *px0 < x0 + 3.0 && *px1 > x1 - 3.0 && (*px1 - *px0) > width * 1.3)
+            .count();
+        if contained == 0 || (contained <= 1 && spanning >= 3) {
+            if index == 0 {
+                columns[index + 1].0 = x0;
+            } else {
+                columns[index - 1].1 = x1;
             }
-            if spanning_count >= 2 {
+            columns.remove(index);
+        } else {
+            index += 1;
+        }
+    }
+
+    if let Some(first) = columns.first_mut() {
+        first.0 = table_x0;
+    }
+    if let Some(last) = columns.last_mut() {
+        last.1 = table_x1;
+    }
+    for index in 1..columns.len() {
+        let boundary = columns[index].0;
+        columns[index - 1].1 = boundary;
+    }
+    columns.retain(|(x0, x1)| x0 < x1);
+    columns
+}
+
+fn make_english_cell(
+    text: String,
+    row: usize,
+    col: usize,
+    x0: f64,
+    y0: f64,
+    x1: f64,
+    y1: f64,
+    rowspan: usize,
+    colspan: usize,
+) -> CellDto {
+    CellDto {
+        schema_version: 1,
+        text,
+        row: row as i64,
+        col: col as i64,
+        rect: Rect4 {
+            schema_version: 1,
+            x0,
+            y0,
+            x1,
+            y1,
+        },
+        rowspan: rowspan as i64,
+        colspan: colspan as i64,
+        source: None,
+    }
+}
+
+fn merge_wrapped_header_rows(row_cells: &mut [Vec<CellDto>], header_rows: usize) {
+    for row_index in 0..header_rows.saturating_sub(1) {
+        let mut cell_index = 0;
+        while cell_index < row_cells[row_index].len() {
+            if row_cells[row_index][cell_index].text.trim().is_empty() {
+                cell_index += 1;
                 continue;
             }
-            line_segments.push(*s);
+            let mut next_row = row_index + 1;
+            while next_row < header_rows {
+                let top = row_cells[row_index][cell_index].clone();
+                let target = row_cells[next_row].iter().position(|candidate| {
+                    !candidate.text.trim().is_empty()
+                        && candidate.col == top.col
+                        && candidate.colspan == top.colspan
+                        && candidate.row == next_row as i64
+                });
+                let Some(target_index) = target else {
+                    let blocked = row_cells[next_row].iter().any(|candidate| {
+                        !candidate.text.trim().is_empty()
+                            && candidate.col < top.col + top.colspan
+                            && candidate.col + candidate.colspan > top.col
+                    });
+                    if blocked {
+                        break;
+                    }
+                    next_row += 1;
+                    continue;
+                };
+
+                if next_row > row_index + 1 && header_rows < 4 {
+                    break;
+                }
+
+                let bottom = row_cells[next_row][target_index].clone();
+                row_cells[row_index][cell_index].text =
+                    format!("{} {}", top.text.trim(), bottom.text.trim());
+                row_cells[row_index][cell_index].rect = Rect4 {
+                    schema_version: 1,
+                    x0: top.rect.x0.min(bottom.rect.x0),
+                    y0: top.rect.y0.min(bottom.rect.y0),
+                    x1: top.rect.x1.max(bottom.rect.x1),
+                    y1: top.rect.y1.max(bottom.rect.y1),
+                };
+                row_cells[next_row][target_index].text.clear();
+                next_row += 1;
+            }
+            cell_index += 1;
+        }
+    }
+}
+
+fn compress_english_header_rows(
+    mut row_cells: Vec<Vec<CellDto>>,
+    row_bounds: Vec<(f64, f64)>,
+    header_rows: usize,
+) -> (Vec<Vec<CellDto>>, Vec<(f64, f64)>, usize) {
+    merge_wrapped_header_rows(&mut row_cells, header_rows);
+
+    if header_rows >= 4 && !row_cells.is_empty() {
+        let mut promote = Vec::new();
+        for row_index in 1..header_rows.min(row_cells.len()) {
+            for cell_index in 0..row_cells[row_index].len() {
+                let cell = &row_cells[row_index][cell_index];
+                if cell.text.trim().is_empty() {
+                    continue;
+                }
+                let cell_end = cell.col + cell.colspan;
+                let has_top_parent = row_cells[0].iter().any(|top| {
+                    !top.text.trim().is_empty()
+                        && top.col < cell_end
+                        && top.col + top.colspan > cell.col
+                });
+                if has_top_parent {
+                    continue;
+                }
+                let has_other_header_support = row_cells
+                    .iter()
+                    .enumerate()
+                    .take(header_rows.min(row_cells.len()))
+                    .any(|(other_row, cells)| {
+                        cells.iter().enumerate().any(|(other_index, other)| {
+                            (other_row != row_index || other_index != cell_index)
+                                && !other.text.trim().is_empty()
+                                && other.col < cell_end
+                                && other.col + other.colspan > cell.col
+                        })
+                    });
+                if !has_other_header_support {
+                    promote.push((row_index, cell_index));
+                }
+            }
+        }
+
+        for (row_index, cell_index) in promote.into_iter().rev() {
+            let mut cell = row_cells[row_index].remove(cell_index);
+            cell.row = 0;
+            if let Some((y0, _)) = row_bounds.first() {
+                cell.rect.y0 = *y0;
+            }
+            if let Some((_, y1)) = row_bounds.get(header_rows.saturating_sub(1)) {
+                cell.rect.y1 = *y1;
+            }
+            row_cells[0].push(cell);
+        }
+    }
+
+    let mut compacted_cells = Vec::with_capacity(row_cells.len());
+    let mut compacted_bounds = Vec::with_capacity(row_bounds.len());
+    let mut compacted_header_rows = 0;
+    for (row_index, mut cells) in row_cells.into_iter().enumerate() {
+        let removed =
+            row_index < header_rows && cells.iter().all(|cell| cell.text.trim().is_empty());
+        if removed {
+            continue;
+        }
+        let new_row = compacted_cells.len() as i64;
+        for cell in &mut cells {
+            cell.row = new_row;
+        }
+        if row_index < header_rows {
+            compacted_header_rows += 1;
+        }
+        compacted_bounds.push(row_bounds[row_index]);
+        compacted_cells.push(cells);
+    }
+    (compacted_cells, compacted_bounds, compacted_header_rows)
+}
+
+pub fn infer_english_columns(input: &EnglishGridInput) -> Vec<ColumnBandDto> {
+    if input.words.is_empty() {
+        return Vec::new();
+    }
+
+    let rows = cluster_word_rows(&input.words, 3.5);
+    let mut row_segments: Vec<(f64, Vec<(f64, f64)>)> = Vec::new();
+    for (row_y, mut row_words) in rows {
+        row_words.sort_by(|a, b| {
+            a.rect
+                .x0
+                .partial_cmp(&b.rect.x0)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        let mut segments = Vec::new();
+        let mut current: Vec<&WordDto> = Vec::new();
+        for word in row_words {
+            let starts_currency = is_currency_token(&word.text);
+            let starts_percentage = is_percentage_token(&word.text);
+            let joins = current.last().map(|previous| {
+                let gap = word.rect.x0 - previous.rect.x1;
+                gap <= 6.0
+                    && !(starts_currency && !is_currency_token(&previous.text))
+                    && !(starts_percentage && gap > 2.0 && !is_percentage_token(&previous.text))
+            });
+            if !joins.unwrap_or(false) && !current.is_empty() {
+                segments.push((
+                    current
+                        .iter()
+                        .map(|item| item.rect.x0)
+                        .fold(f64::INFINITY, f64::min),
+                    current
+                        .iter()
+                        .map(|item| item.rect.x1)
+                        .fold(f64::NEG_INFINITY, f64::max),
+                ));
+                current.clear();
+            }
+            current.push(word);
+        }
+        if !current.is_empty() {
+            segments.push((
+                current
+                    .iter()
+                    .map(|item| item.rect.x0)
+                    .fold(f64::INFINITY, f64::min),
+                current
+                    .iter()
+                    .map(|item| item.rect.x1)
+                    .fold(f64::NEG_INFINITY, f64::max),
+            ));
+        }
+        row_segments.push((row_y, segments));
+    }
+
+    let mut line_segments = Vec::new();
+    for (row_y, segments) in &row_segments {
+        for segment in segments {
+            let spans_two_columns_in_two_rows =
+                row_segments.iter().any(|(other_y, other_segments)| {
+                    (other_y - row_y).abs() >= 1e-4
+                        && other_segments
+                            .iter()
+                            .filter(|other| {
+                                (segment.1.min(other.1) - segment.0.max(other.0)) >= 2.0
+                            })
+                            .count()
+                            >= 2
+                });
+            if !spans_two_columns_in_two_rows {
+                line_segments.push(*segment);
+            }
         }
     }
 
     line_segments.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
     let mut col_spans: Vec<(f64, f64)> = Vec::new();
-    for s in line_segments {
-        if col_spans.is_empty() {
-            col_spans.push(s);
-        } else {
-            let mut merged = false;
-            for cs in col_spans.iter_mut() {
-                if !(s.1 < cs.0 || s.0 > cs.1) {
-                    cs.0 = cs.0.min(s.0);
-                    cs.1 = cs.1.max(s.1);
-                    merged = true;
-                    break;
-                }
-            }
-            if !merged {
-                col_spans.push(s);
+    for segment in line_segments {
+        if let Some(last) = col_spans.last_mut() {
+            if segment.0 <= last.1 {
+                last.1 = last.1.max(segment.1);
+                continue;
             }
         }
+        col_spans.push(segment);
     }
 
-    col_spans.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    let min_word_x = input
+        .words
+        .iter()
+        .map(|word| word.rect.x0)
+        .fold(f64::INFINITY, f64::min);
+    let max_word_x = input
+        .words
+        .iter()
+        .map(|word| word.rect.x1)
+        .fold(f64::NEG_INFINITY, f64::max);
+    let table_x0 = if input.region.rect.x1 > input.region.rect.x0 {
+        input.region.rect.x0
+    } else {
+        min_word_x
+    };
+    let table_x1 = if input.region.rect.x1 > input.region.rect.x0 {
+        input.region.rect.x1
+    } else {
+        max_word_x
+    };
+
     if col_spans.len() < 2 {
-        let min_x = input
-            .words
-            .iter()
-            .map(|w| w.rect.x0)
-            .fold(f64::INFINITY, f64::min);
-        let max_x = input
-            .words
-            .iter()
-            .map(|w| w.rect.x1)
-            .fold(f64::NEG_INFINITY, f64::max);
         return vec![ColumnBandDto {
             schema_version: 1,
-            x0: min_x,
-            x1: max_x,
+            x0: table_x0,
+            x1: table_x1,
             source_atoms: Vec::new(),
             order: 0,
         }];
     }
 
-    let has_region = input.region.rect.x1 > input.region.rect.x0;
-    let table_x0 = if has_region {
-        input.region.rect.x0
-    } else {
-        input
-            .words
-            .iter()
-            .map(|w| w.rect.x0)
-            .fold(f64::INFINITY, f64::min)
-    };
-    let table_x1 = if has_region {
-        input.region.rect.x1
-    } else {
-        input
-            .words
-            .iter()
-            .map(|w| w.rect.x1)
-            .fold(f64::NEG_INFINITY, f64::max)
-    };
-
-    let mut boundaries = Vec::new();
-    for k in 0..col_spans.len() - 1 {
-        let prev_end = col_spans[k].1;
-        let next_start = col_spans[k + 1].0;
-        let bk = if prev_end < next_start {
-            (prev_end + next_start) / 2.0
+    let mut columns = Vec::new();
+    let mut current_x = table_x0;
+    for pair in col_spans.windows(2) {
+        let mut boundary = if pair[0].1 < pair[1].0 {
+            (pair[0].1 + pair[1].0) / 2.0
         } else {
-            prev_end + 1.5
+            pair[0].1 + 1.5
         };
-        boundaries.push(bk);
+        boundary = boundary.max(current_x).min(table_x1);
+        if boundary > current_x + 1e-6 {
+            columns.push((current_x, boundary));
+            current_x = boundary;
+        }
+    }
+    if table_x1 > current_x + 1e-6 {
+        columns.push((current_x, table_x1));
     }
 
-    let mut columns: Vec<(f64, f64)> = Vec::new();
-    let mut curr_x = table_x0;
-    for b in boundaries {
-        columns.push((curr_x, b));
-        curr_x = b;
-    }
-    columns.push((curr_x, table_x1));
+    columns = prune_english_columns(columns, &input.words, table_x0, table_x1);
 
-    // Currency adjust
-    let dollar_words: Vec<&WordDto> = input
-        .words
-        .iter()
-        .filter(|w| w.text.starts_with('$') || w.text.trim() == "$")
-        .collect();
-    for dollar in dollar_words {
-        let x0 = dollar.rect.x0;
-        for ci in 1..columns.len() {
-            let (cx0, cx1) = columns[ci];
-            let (prev_x0, _) = columns[ci - 1];
-            if prev_x0 < x0 && x0 < cx0 && (cx0 - x0).abs() <= 6.0 {
-                columns[ci - 1] = (prev_x0, x0);
-                columns[ci] = (x0, cx1);
+    for dollar in input.words.iter().filter(|word| word.text.contains('$')) {
+        let row_words = cluster_word_rows(&input.words, 3.5)
+            .into_iter()
+            .find(|(_, words)| words.iter().any(|word| std::ptr::eq(*word, dollar)))
+            .map(|(_, words)| words)
+            .unwrap_or_default();
+        if !amount_dollar_is_pure(dollar, &row_words) {
+            continue;
+        }
+        if let Some(index) = columns
+            .iter()
+            .position(|(x0, x1)| *x0 <= dollar.rect.x0 && dollar.rect.x0 < *x1)
+        {
+            if index > 0 && dollar.rect.x0 > columns[index - 1].0 + 1e-6 {
+                let boundary = dollar.rect.x0.min(columns[index].1 - 1e-6);
+                columns[index - 1].1 = boundary;
+                columns[index].0 = boundary;
             }
         }
     }
 
+    for index in 1..columns.len() {
+        let boundary = columns[index].0;
+        columns[index - 1].1 = boundary;
+    }
+    columns.retain(|(x0, x1)| x0 < x1);
     columns
         .into_iter()
         .enumerate()
@@ -554,206 +859,249 @@ pub fn build_english_cells(input: &EnglishGridInput) -> Vec<CellDto> {
     if input.words.is_empty() {
         return Vec::new();
     }
-
     let columns = infer_english_columns(input);
     if columns.is_empty() {
         return Vec::new();
     }
 
-    // Cluster words into rows by y
-    let mut row_clusters: Vec<(f64, Vec<&WordDto>)> = Vec::new();
-    for w in &input.words {
-        let yc = center_y(&w.rect);
-        let mut found = false;
-        for (ry, rwords) in row_clusters.iter_mut() {
-            if (yc - *ry).abs() <= 4.0 {
-                rwords.push(w);
-                found = true;
-                break;
-            }
-        }
-        if !found {
-            row_clusters.push((yc, vec![w]));
-        }
-    }
-    row_clusters.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-
-    let _num_rows = row_clusters.len();
+    let row_clusters = cluster_word_rows(&input.words, 4.0);
     let num_cols = columns.len();
-    let mut cells = Vec::new();
+    let row_bounds: Vec<(f64, f64)> = row_clusters
+        .iter()
+        .map(|(_, words)| {
+            (
+                words
+                    .iter()
+                    .map(|word| word.rect.y0)
+                    .fold(f64::INFINITY, f64::min),
+                words
+                    .iter()
+                    .map(|word| word.rect.y1)
+                    .fold(f64::NEG_INFINITY, f64::max),
+            )
+        })
+        .collect();
 
-    for (row_idx, (_, mut rwords)) in row_clusters.into_iter().enumerate() {
-        rwords.sort_by(|a, b| {
+    let mut row_cells: Vec<Vec<CellDto>> = Vec::new();
+    for (row_index, (_, row_words_ref)) in row_clusters.iter().enumerate() {
+        let mut row_words = row_words_ref.clone();
+        row_words.sort_by(|a, b| {
             a.rect
                 .x0
                 .partial_cmp(&b.rect.x0)
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
-
-        // Group into phrases
         let mut phrases: Vec<Vec<&WordDto>> = Vec::new();
-        for w in rwords {
-            if phrases.is_empty() {
-                phrases.push(vec![w]);
+        for word in row_words {
+            let joins = phrases
+                .last()
+                .and_then(|phrase| phrase.last())
+                .map(|previous| word.rect.x0 - previous.rect.x1 <= 6.0)
+                .unwrap_or(false);
+            if joins {
+                phrases.last_mut().unwrap().push(word);
             } else {
-                let prev = phrases.last().unwrap().last().unwrap();
-                let gap = w.rect.x0 - prev.rect.x1;
-                if gap <= 10.0 {
-                    phrases.last_mut().unwrap().push(w);
-                } else {
-                    phrases.push(vec![w]);
-                }
+                phrases.push(vec![word]);
             }
         }
 
-        // Single phrase covering multiple columns check (spanning header)
-        if phrases.len() == 1 {
-            let p = &phrases[0];
-            let px0 = p.iter().map(|w| w.rect.x0).fold(f64::INFINITY, f64::min);
-            let px1 = p
+        let mut cells = Vec::new();
+        for phrase in phrases {
+            let phrase_x0 = phrase
                 .iter()
-                .map(|w| w.rect.x1)
+                .map(|word| word.rect.x0)
+                .fold(f64::INFINITY, f64::min);
+            let phrase_x1 = phrase
+                .iter()
+                .map(|word| word.rect.x1)
                 .fold(f64::NEG_INFINITY, f64::max);
             let covered_cols: Vec<usize> = columns
                 .iter()
                 .enumerate()
-                .filter(|(_, col)| (px1.min(col.x1) - px0.max(col.x0)) >= 2.0)
-                .map(|(ci, _)| ci)
+                .filter(|(_, column)| (phrase_x1.min(column.x1) - phrase_x0.max(column.x0)) >= 2.0)
+                .map(|(index, _)| index)
                 .collect();
-            if covered_cols.len() >= 2 {
-                let sc = *covered_cols.first().unwrap();
-                let ec = *covered_cols.last().unwrap();
-                let text = p
-                    .iter()
-                    .map(|w| w.text.as_str())
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                let y0 = p.iter().map(|w| w.rect.y0).fold(f64::INFINITY, f64::min);
-                let y1 = p
-                    .iter()
-                    .map(|w| w.rect.y1)
-                    .fold(f64::NEG_INFINITY, f64::max);
-
-                for col_idx in 0..sc {
-                    cells.push(CellDto {
-                        schema_version: 1,
-                        text: String::new(),
-                        row: row_idx as i64,
-                        col: col_idx as i64,
-                        rect: Rect4 {
-                            schema_version: 1,
-                            x0: columns[col_idx].x0,
-                            y0,
-                            x1: columns[col_idx].x1,
-                            y1,
-                        },
-                        rowspan: 1,
-                        colspan: 1,
-                        source: None,
-                    });
-                }
-                cells.push(CellDto {
-                    schema_version: 1,
-                    text,
-                    row: row_idx as i64,
-                    col: sc as i64,
-                    rect: Rect4 {
-                        schema_version: 1,
-                        x0: columns[sc].x0,
-                        y0,
-                        x1: columns[ec].x1,
-                        y1,
-                    },
-                    rowspan: 1,
-                    colspan: (ec - sc + 1) as i64,
-                    source: None,
-                });
-                for col_idx in (ec + 1)..num_cols {
-                    cells.push(CellDto {
-                        schema_version: 1,
-                        text: String::new(),
-                        row: row_idx as i64,
-                        col: col_idx as i64,
-                        rect: Rect4 {
-                            schema_version: 1,
-                            x0: columns[col_idx].x0,
-                            y0,
-                            x1: columns[col_idx].x1,
-                            y1,
-                        },
-                        rowspan: 1,
-                        colspan: 1,
-                        source: None,
-                    });
-                }
+            if covered_cols.is_empty() {
                 continue;
             }
-        }
-
-        // Standard column assignment
-        let mut col_words: Vec<Vec<&WordDto>> = vec![Vec::new(); num_cols];
-        for p in phrases {
-            let px_mid = p.iter().map(|w| center_x(&w.rect)).sum::<f64>() / p.len() as f64;
-            let mut assigned_col = 0;
-            for (ci, col) in columns.iter().enumerate() {
-                if col.x0 <= px_mid && px_mid < col.x1 {
-                    assigned_col = ci;
-                    break;
-                } else if ci == columns.len() - 1 && px_mid >= col.x0 {
-                    assigned_col = ci;
-                }
-            }
-            col_words[assigned_col].extend(p);
-        }
-
-        let y0 = if !col_words.iter().all(|cw| cw.is_empty()) {
-            col_words
-                .iter()
-                .flat_map(|cw| cw.iter())
-                .map(|w| w.rect.y0)
-                .fold(f64::INFINITY, f64::min)
-        } else {
-            0.0
-        };
-        let y1 = if !col_words.iter().all(|cw| cw.is_empty()) {
-            col_words
-                .iter()
-                .flat_map(|cw| cw.iter())
-                .map(|w| w.rect.y1)
-                .fold(f64::NEG_INFINITY, f64::max)
-        } else {
-            y0 + 15.0
-        };
-
-        for col_idx in 0..num_cols {
-            let ws = &col_words[col_idx];
-            let text = if ws.is_empty() {
-                String::new()
+            let start_col = *covered_cols.first().unwrap();
+            let end_col = *covered_cols.last().unwrap();
+            let center =
+                phrase.iter().map(|word| center_x(&word.rect)).sum::<f64>() / phrase.len() as f64;
+            let (start_col, end_col) = if covered_cols.len() >= 2 {
+                (start_col, end_col)
             } else {
-                ws.iter()
-                    .map(|w| w.text.as_str())
-                    .collect::<Vec<_>>()
-                    .join(" ")
+                let assigned = columns
+                    .iter()
+                    .enumerate()
+                    .find(|(_, column)| column.x0 <= center && center < column.x1)
+                    .map(|(index, _)| index)
+                    .unwrap_or(num_cols - 1);
+                (assigned, assigned)
             };
-            cells.push(CellDto {
-                schema_version: 1,
+            let text = phrase
+                .iter()
+                .map(|word| word.text.trim())
+                .filter(|text| !text.is_empty())
+                .collect::<Vec<_>>()
+                .join(" ")
+                .replace("$ ", "$")
+                .replace("% ", "%");
+            cells.push(make_english_cell(
                 text,
-                row: row_idx as i64,
-                col: col_idx as i64,
-                rect: Rect4 {
-                    schema_version: 1,
-                    x0: columns[col_idx].x0,
-                    y0,
-                    x1: columns[col_idx].x1,
-                    y1,
-                },
-                rowspan: 1,
-                colspan: 1,
-                source: None,
-            });
+                row_index,
+                start_col,
+                columns[start_col].x0,
+                row_bounds[row_index].0,
+                columns[end_col].x1,
+                row_bounds[row_index].1,
+                1,
+                end_col - start_col + 1,
+            ));
+        }
+        cells.sort_by_key(|cell| (cell.col, cell.text.clone()));
+        row_cells.push(cells);
+    }
+
+    let header_end = input
+        .backgrounds
+        .iter()
+        .take_while(|background| background.color.is_none())
+        .map(|background| background.rect.y1)
+        .last();
+    let header_rows = header_end
+        .map(|end| {
+            row_bounds
+                .iter()
+                .take_while(|(y0, _)| *y0 <= end + 2.0)
+                .count()
+        })
+        .unwrap_or(0)
+        .min(row_cells.len());
+
+    let source_header_rows = header_rows;
+    let background_header_rows = input
+        .backgrounds
+        .iter()
+        .take_while(|background| background.color.is_none())
+        .count();
+    let (mut row_cells, row_bounds, header_rows) =
+        compress_english_header_rows(row_cells, row_bounds, header_rows);
+
+    for row_index in 0..header_rows {
+        for cell_index in 0..row_cells[row_index].len() {
+            let mut rowspan = 1usize;
+            let col_start = row_cells[row_index][cell_index].col as usize;
+            let col_end = col_start + row_cells[row_index][cell_index].colspan as usize;
+            while row_index + rowspan < header_rows {
+                let occupied_by_child = row_cells[row_index + rowspan].iter().any(|child| {
+                    let child_start = child.col as usize;
+                    let child_end = child_start + child.colspan as usize;
+                    child_start < col_end && child_end > col_start
+                });
+                if occupied_by_child {
+                    break;
+                }
+                rowspan += 1;
+            }
+            if rowspan > 1 {
+                row_cells[row_index][cell_index].rowspan = rowspan as i64;
+                row_cells[row_index][cell_index].rect.y1 = row_bounds[row_index + rowspan - 1].1;
+            }
         }
     }
 
+    let mut cells = row_cells.into_iter().flatten().collect::<Vec<_>>();
+    for row in 0..row_bounds.len() {
+        for col in 0..num_cols {
+            let occupied = cells.iter().any(|cell| {
+                let row_start = cell.row as usize;
+                let row_end = row_start + cell.rowspan as usize;
+                let col_start = cell.col as usize;
+                let col_end = col_start + cell.colspan as usize;
+                row_start <= row && row < row_end && col_start <= col && col < col_end
+            });
+            if !occupied {
+                cells.push(make_english_cell(
+                    String::new(),
+                    row,
+                    col,
+                    columns[col].x0,
+                    row_bounds[row].0,
+                    columns[col].x1,
+                    row_bounds[row].1,
+                    1,
+                    1,
+                ));
+            }
+        }
+    }
+
+    // Python closes the physical rows into a table grid after header
+    // normalization: the region edges are the outer bounds and every inner
+    // edge is the midpoint between adjacent row intervals.  Word bboxes are
+    // only used to discover rows; using them directly here makes a Rust Cell
+    // stop at the glyphs instead of at the same logical row boundary as
+    // Python, especially for zebra/general wireless tables.
+    let mut row_intervals = Vec::with_capacity(row_bounds.len());
+    for row in 0..header_rows {
+        if let Some(background) = input.backgrounds.get(row) {
+            row_intervals.push((background.rect.y0, background.rect.y1));
+        } else if let Some(bounds) = row_bounds.get(row) {
+            row_intervals.push(*bounds);
+        }
+    }
+    for row in header_rows..row_bounds.len() {
+        let source_row = if input.backgrounds.is_empty() {
+            source_header_rows.saturating_add(row - header_rows)
+        } else {
+            background_header_rows.saturating_add(row - header_rows)
+        };
+        if let Some(background) = input.backgrounds.get(source_row) {
+            row_intervals.push((background.rect.y0, background.rect.y1));
+        } else if let Some(bounds) = row_bounds.get(row) {
+            row_intervals.push(*bounds);
+        }
+    }
+    if row_intervals.len() != row_bounds.len() {
+        row_intervals = row_bounds.clone();
+    }
+
+    let round_tenth = |value: f64| (value * 10.0).round() / 10.0;
+    let mut row_edges = vec![input.region.rect.y0];
+    for pair in row_intervals.windows(2) {
+        let midpoint = (pair[0].1 + pair[1].0) / 2.0;
+        let minimum = row_edges.last().copied().unwrap_or(input.region.rect.y0) + 2.0;
+        let snapped = input
+            .horizontal_lines
+            .iter()
+            .copied()
+            .filter(|line| *line >= minimum && (*line - midpoint).abs() <= 4.0)
+            .min_by(|left, right| {
+                (left - midpoint)
+                    .abs()
+                    .partial_cmp(&(right - midpoint).abs())
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .unwrap_or(midpoint.max(minimum));
+        row_edges.push(round_tenth(snapped));
+    }
+    row_edges.push(round_tenth(input.region.rect.y1));
+
+    for cell in &mut cells {
+        let row = cell.row.max(0) as usize;
+        let end_row = row.saturating_add(cell.rowspan.max(1) as usize);
+        if row < row_edges.len().saturating_sub(1) && end_row < row_edges.len() {
+            cell.rect.y0 = row_edges[row];
+            cell.rect.y1 = row_edges[end_row];
+        }
+    }
+
+    cells.sort_by(|a, b| {
+        (a.row, a.col)
+            .cmp(&(b.row, b.col))
+            .then_with(|| a.text.cmp(&b.text))
+    });
     cells
 }
 
@@ -1208,6 +1556,7 @@ mod tests {
             },
             words,
             backgrounds: Vec::new(),
+            horizontal_lines: Vec::new(),
             config: StructureConfig {
                 schema_version: 1,
                 line_tolerance: 2.0,
@@ -1221,5 +1570,353 @@ mod tests {
         assert!(cols.len() >= 2);
         // Column boundary adjusted to dollar position
         assert!(cols[0].x1 <= 200.0);
+    }
+
+    #[test]
+    fn test_infer_english_columns_keeps_intermediate_percentage_column_without_empty_band() {
+        let words = vec![
+            make_word("Revenue", 10.0, 10.0, 55.0, 20.0),
+            make_word("12%", 105.0, 10.0, 130.0, 20.0),
+            make_word("$", 205.0, 10.0, 210.0, 20.0),
+            make_word("1,000", 213.0, 10.0, 250.0, 20.0),
+            make_word("Margin", 10.0, 30.0, 55.0, 40.0),
+            make_word("8%", 105.0, 30.0, 125.0, 40.0),
+            make_word("$", 205.0, 30.0, 210.0, 40.0),
+            make_word("900", 213.0, 30.0, 245.0, 40.0),
+        ];
+        let input = EnglishGridInput {
+            schema_version: 1,
+            region: crate::types::RegionDto {
+                schema_version: 1,
+                rect: Rect4 {
+                    schema_version: 1,
+                    x0: 0.0,
+                    y0: 0.0,
+                    x1: 300.0,
+                    y1: 50.0,
+                },
+                source_order: 0,
+                allowed: true,
+            },
+            words,
+            backgrounds: Vec::new(),
+            horizontal_lines: Vec::new(),
+            config: StructureConfig {
+                schema_version: 1,
+                line_tolerance: 2.0,
+                row_tolerance: 2.0,
+                column_tolerance: 2.0,
+                span_tolerance: 2.0,
+                numeric_tolerance: 2.0,
+            },
+        };
+
+        let cols = infer_english_columns(&input);
+
+        assert_eq!(cols.len(), 3);
+        for pair in cols.windows(2) {
+            assert!(pair[0].x0 < pair[0].x1);
+            assert!(pair[0].x1 <= pair[1].x0);
+        }
+        assert!(cols[1].x0 < 105.0);
+        assert_eq!(cols[1].x1, 205.0);
+        assert_eq!(cols[2].x0, 205.0);
+    }
+
+    #[test]
+    fn test_build_english_cells_restores_header_spans_rowspan_and_empty_slots() {
+        let input = EnglishGridInput {
+            schema_version: 1,
+            region: crate::types::RegionDto {
+                schema_version: 1,
+                rect: Rect4 {
+                    schema_version: 1,
+                    x0: 0.0,
+                    y0: 0.0,
+                    x1: 240.0,
+                    y1: 50.0,
+                },
+                source_order: 0,
+                allowed: true,
+            },
+            words: vec![
+                make_word("Item", 10.0, 5.0, 45.0, 15.0),
+                make_word("Portfolio", 100.0, 5.0, 195.0, 15.0),
+                make_word("Amount", 100.0, 22.0, 135.0, 32.0),
+                make_word("Rate", 165.0, 22.0, 195.0, 32.0),
+                make_word("Alpha", 10.0, 39.0, 45.0, 49.0),
+                make_word("100", 100.0, 39.0, 130.0, 49.0),
+            ],
+            backgrounds: vec![
+                make_bg(0.0, 18.0, None, 0),
+                make_bg(18.0, 35.0, None, 1),
+                make_bg(35.0, 50.0, Some(0.5), 2),
+            ],
+            horizontal_lines: Vec::new(),
+            config: StructureConfig {
+                schema_version: 1,
+                line_tolerance: 2.0,
+                row_tolerance: 2.0,
+                column_tolerance: 2.0,
+                span_tolerance: 2.0,
+                numeric_tolerance: 2.0,
+            },
+        };
+
+        let cells = build_english_cells(&input);
+
+        let item = cells
+            .iter()
+            .find(|cell| cell.text == "Item")
+            .expect("label header cell");
+        let portfolio = cells
+            .iter()
+            .find(|cell| cell.text == "Portfolio")
+            .expect("group header cell");
+        assert_eq!(
+            (item.row, item.col, item.rowspan, item.colspan),
+            (0, 0, 2, 1)
+        );
+        assert_eq!((item.rect.y0, item.rect.y1), (0.0, 35.0));
+        assert_eq!(
+            (
+                portfolio.row,
+                portfolio.col,
+                portfolio.rowspan,
+                portfolio.colspan
+            ),
+            (0, 1, 1, 2)
+        );
+        assert_eq!((portfolio.rect.y0, portfolio.rect.y1), (0.0, 18.0));
+
+        let occupied = cells
+            .iter()
+            .flat_map(|cell| {
+                (cell.row..cell.row + cell.rowspan).flat_map(move |row| {
+                    (cell.col..cell.col + cell.colspan).map(move |col| (row, col))
+                })
+            })
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(occupied.len(), 9);
+        assert!(cells
+            .iter()
+            .any(|cell| cell.text.is_empty() && cell.row == 2 && cell.col == 2));
+    }
+
+    #[test]
+    fn test_build_english_cells_compresses_same_span_wrapped_header_rows() {
+        let input = EnglishGridInput {
+            schema_version: 1,
+            region: crate::types::RegionDto {
+                schema_version: 1,
+                rect: Rect4 {
+                    schema_version: 1,
+                    x0: 0.0,
+                    y0: 0.0,
+                    x1: 240.0,
+                    y1: 70.0,
+                },
+                source_order: 0,
+                allowed: true,
+            },
+            words: vec![
+                make_word("Item", 10.0, 5.0, 45.0, 15.0),
+                make_word("Interest", 100.0, 5.0, 140.0, 15.0),
+                make_word("Variance", 100.0, 20.0, 145.0, 30.0),
+                make_word("Amount", 100.0, 35.0, 130.0, 45.0),
+                make_word("Rate", 160.0, 35.0, 190.0, 45.0),
+                make_word("Alpha", 10.0, 50.0, 45.0, 60.0),
+                make_word("100", 100.0, 50.0, 130.0, 60.0),
+                make_word("5%", 160.0, 50.0, 180.0, 60.0),
+            ],
+            backgrounds: vec![
+                make_bg(0.0, 47.0, None, 0),
+                make_bg(47.0, 65.0, Some(0.5), 1),
+            ],
+            horizontal_lines: Vec::new(),
+            config: StructureConfig {
+                schema_version: 1,
+                line_tolerance: 2.0,
+                row_tolerance: 2.0,
+                column_tolerance: 2.0,
+                span_tolerance: 2.0,
+                numeric_tolerance: 2.0,
+            },
+        };
+
+        let cells = build_english_cells(&input);
+
+        assert!(cells.iter().any(|cell| cell.text == "Interest Variance"));
+        assert!(!cells.iter().any(|cell| cell.text == "Variance"));
+        assert_eq!(
+            cells
+                .iter()
+                .map(|cell| cell.row)
+                .max()
+                .expect("non-empty cells"),
+            2
+        );
+        let occupied = cells
+            .iter()
+            .flat_map(|cell| {
+                (cell.row..cell.row + cell.rowspan).flat_map(move |row| {
+                    (cell.col..cell.col + cell.colspan).map(move |col| (row, col))
+                })
+            })
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(occupied.len(), 9);
+    }
+
+    #[test]
+    fn test_merge_wrapped_header_rows_skips_cleared_intermediate_rows() {
+        let mut rows = vec![
+            vec![make_english_cell(
+                "Three months".to_string(),
+                0,
+                1,
+                0.0,
+                0.0,
+                100.0,
+                10.0,
+                1,
+                1,
+            )],
+            vec![make_english_cell(
+                "ended".to_string(),
+                1,
+                1,
+                0.0,
+                10.0,
+                100.0,
+                20.0,
+                1,
+                1,
+            )],
+            vec![make_english_cell(
+                "31 Mar 2011".to_string(),
+                2,
+                1,
+                0.0,
+                20.0,
+                100.0,
+                30.0,
+                1,
+                1,
+            )],
+            vec![make_english_cell(
+                "$m".to_string(),
+                3,
+                1,
+                0.0,
+                30.0,
+                100.0,
+                40.0,
+                1,
+                1,
+            )],
+        ];
+
+        merge_wrapped_header_rows(&mut rows, 4);
+
+        assert_eq!(rows[0][0].text, "Three months ended 31 Mar 2011 $m");
+        assert!(rows[1][0].text.is_empty());
+        assert!(rows[2][0].text.is_empty());
+        assert!(rows[3][0].text.is_empty());
+    }
+
+    #[test]
+    fn test_compress_english_header_rows_promotes_isolated_bottom_header() {
+        let rows = vec![
+            vec![make_english_cell(
+                "Three months".to_string(),
+                0,
+                1,
+                0.0,
+                0.0,
+                100.0,
+                10.0,
+                1,
+                1,
+            )],
+            vec![make_english_cell(
+                "ended".to_string(),
+                1,
+                1,
+                0.0,
+                10.0,
+                100.0,
+                20.0,
+                1,
+                1,
+            )],
+            vec![make_english_cell(
+                "31 Mar 2011".to_string(),
+                2,
+                1,
+                0.0,
+                20.0,
+                100.0,
+                30.0,
+                1,
+                1,
+            )],
+            vec![
+                make_english_cell("$m".to_string(), 3, 1, 0.0, 30.0, 100.0, 40.0, 1, 1),
+                make_english_cell("Change".to_string(), 3, 3, 200.0, 30.0, 300.0, 40.0, 1, 1),
+            ],
+        ];
+        let (compacted, bounds, compacted_header_rows) = compress_english_header_rows(
+            rows,
+            vec![(0.0, 10.0), (10.0, 20.0), (20.0, 30.0), (30.0, 40.0)],
+            4,
+        );
+
+        assert_eq!(compacted_header_rows, 1);
+        assert_eq!(bounds.len(), 1);
+        assert!(compacted[0].iter().any(|cell| cell.text == "Change"));
+    }
+
+    #[test]
+    fn test_build_english_cells_snaps_row_edge_to_horizontal_line() {
+        let input = EnglishGridInput {
+            schema_version: 1,
+            region: crate::types::RegionDto {
+                schema_version: 1,
+                rect: Rect4 {
+                    schema_version: 1,
+                    x0: 0.0,
+                    y0: 0.0,
+                    x1: 180.0,
+                    y1: 55.0,
+                },
+                source_order: 0,
+                allowed: true,
+            },
+            words: vec![
+                make_word("A", 10.0, 5.0, 30.0, 15.0),
+                make_word("100", 100.0, 5.0, 130.0, 15.0),
+                make_word("B", 10.0, 20.0, 30.0, 30.0),
+                make_word("200", 100.0, 20.0, 130.0, 30.0),
+                make_word("C", 10.0, 38.0, 30.0, 48.0),
+                make_word("300", 100.0, 38.0, 130.0, 48.0),
+            ],
+            backgrounds: Vec::new(),
+            horizontal_lines: vec![17.0],
+            config: StructureConfig {
+                schema_version: 1,
+                line_tolerance: 2.0,
+                row_tolerance: 2.0,
+                column_tolerance: 2.0,
+                span_tolerance: 2.0,
+                numeric_tolerance: 2.0,
+            },
+        };
+
+        let cells = build_english_cells(&input);
+        let second_row = cells
+            .iter()
+            .find(|cell| cell.text == "B")
+            .expect("second-row label cell");
+        assert_eq!(second_row.rect.y0, 17.0);
     }
 }

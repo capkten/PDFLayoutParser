@@ -36,6 +36,227 @@ class _RowData:
 class EnglishTableExtractor(BaseTableExtractor):
 
     @staticmethod
+    def _english_rect_dto(x0: float, y0: float, x1: float, y1: float) -> Dict[str, Any]:
+        return {
+            "schema_version": 1,
+            "x0": float(x0),
+            "y0": float(y0),
+            "x1": float(x1),
+            "y1": float(y1),
+        }
+
+    @classmethod
+    def _english_word_dtos(cls, words: Sequence[Tuple]) -> List[Dict[str, Any]]:
+        result = []
+        for order, word in enumerate(words or []):
+            result.append({
+                "schema_version": 1,
+                "text": str(word[4]),
+                "rect": cls._english_rect_dto(word[0], word[1], word[2], word[3]),
+                "order": order,
+                "block": int(word[5]) if len(word) > 5 and word[5] is not None else None,
+                "line": int(word[6]) if len(word) > 6 and word[6] is not None else None,
+            })
+        return result
+
+    @classmethod
+    def _english_grid_input(
+        cls,
+        words: Sequence[Tuple],
+        table_bbox: Optional[BBox] = None,
+        rows: Optional[Sequence[_RowData]] = None,
+        horizontal_lines: Optional[Sequence[float]] = None,
+    ) -> Dict[str, Any]:
+        if table_bbox is not None:
+            region_bbox = table_bbox
+        elif words:
+            region_bbox = BBox(
+                min(word[0] for word in words),
+                min(word[1] for word in words),
+                max(word[2] for word in words),
+                max(word[3] for word in words),
+            )
+        else:
+            region_bbox = BBox(0.0, 0.0, 0.0, 0.0)
+
+        backgrounds = []
+        for order, row in enumerate(rows or []):
+            is_header = bool(row.is_header)
+            color = None if is_header else (1.0 if row.color == "white" else 0.5)
+            backgrounds.append({
+                "schema_version": 1,
+                "rect": cls._english_rect_dto(
+                    region_bbox.x0,
+                    row.y0,
+                    region_bbox.x1,
+                    row.y1,
+                ),
+                "color": color,
+                "opacity": None,
+                "source_order": order,
+            })
+
+        return {
+            "schema_version": 1,
+            "region": {
+                "schema_version": 1,
+                "rect": cls._english_rect_dto(
+                    region_bbox.x0,
+                    region_bbox.y0,
+                    region_bbox.x1,
+                    region_bbox.y1,
+                ),
+                "source_order": 0,
+                "allowed": True,
+            },
+            "words": cls._english_word_dtos(words),
+            "backgrounds": backgrounds,
+            "horizontal_lines": [float(value) for value in (horizontal_lines or [])],
+            "config": {
+                "schema_version": 1,
+                "line_tolerance": 2.0,
+                "row_tolerance": 2.0,
+                "column_tolerance": 2.0,
+                "span_tolerance": 2.0,
+                "numeric_tolerance": 2.0,
+            },
+        }
+
+    @staticmethod
+    def _english_horizontal_lines(page: Optional[Any]) -> List[float]:
+        """把可见的长水平 drawing 转成 Rust 行边界吸附坐标。"""
+        if page is None:
+            return []
+        drawings = []
+        if hasattr(page, "drawings") and page.drawings is not None:
+            drawings = page.drawings
+        elif hasattr(page, "get_drawings"):
+            try:
+                drawings = page.get_drawings()
+            except Exception:
+                drawings = []
+        else:
+            return []
+
+        lines: List[float] = []
+        for drawing in drawings:
+            if EnglishTableExtractor._is_invisible_drawing(drawing):
+                continue
+            for item in drawing.get("items", []):
+                kind = item[0]
+                if kind == "l":
+                    pt1 = item[1]
+                    pt2 = item[2]
+                    y = float(pt1[1]) if isinstance(pt1, (tuple, list)) else float(pt1.y)
+                    x1 = float(pt1[0]) if isinstance(pt1, (tuple, list)) else float(pt1.x)
+                    x2 = float(pt2[0]) if isinstance(pt2, (tuple, list)) else float(pt2.x)
+                    width = abs(x2 - x1)
+                    height = 0.0
+                elif kind == "re":
+                    rect = item[1]
+                    if isinstance(rect, (tuple, list)):
+                        y = (float(rect[1]) + float(rect[3])) / 2.0
+                        width = abs(float(rect[2]) - float(rect[0]))
+                        height = abs(float(rect[3]) - float(rect[1]))
+                    else:
+                        y = (float(rect.y0) + float(rect.y1)) / 2.0
+                        width = float(rect.width)
+                        height = float(rect.height)
+                else:
+                    continue
+                if height <= 2.5 and width >= 15.0:
+                    lines.append(round(y, 2))
+        return sorted(set(lines))
+
+    @staticmethod
+    def _columns_from_rust(column_dtos: Sequence[Dict[str, Any]]) -> List[Tuple[float, float]]:
+        ordered = sorted(
+            column_dtos or [],
+            key=lambda column: (
+                int(column.get("order", 0)),
+                float(column["x0"]),
+                float(column["x1"]),
+            ),
+        )
+        columns = []
+        for column in ordered:
+            x0 = float(column["x0"])
+            x1 = float(column["x1"])
+            if not x0 < x1:
+                raise ValueError(f"Invalid English column band: {x0}, {x1}")
+            if columns and x0 < columns[-1][1] - 1e-6:
+                raise ValueError("Overlapping English column bands from Rust")
+            columns.append((x0, x1))
+        return columns
+
+    @staticmethod
+    def _cells_from_rust(cell_dtos: Sequence[Dict[str, Any]]) -> List[Cell]:
+        cells = []
+        occupied = set()
+        for cell in sorted(
+            cell_dtos or [],
+            key=lambda item: (int(item["row"]), int(item["col"])),
+        ):
+            row = int(cell["row"])
+            col = int(cell["col"])
+            rowspan = int(cell["rowspan"])
+            colspan = int(cell["colspan"])
+            rect = cell["rect"]
+            if row < 0 or col < 0 or rowspan < 1 or colspan < 1:
+                raise ValueError("Invalid English Cell DTO span")
+            for occupied_row in range(row, row + rowspan):
+                for occupied_col in range(col, col + colspan):
+                    slot = (occupied_row, occupied_col)
+                    if slot in occupied:
+                        raise ValueError(f"English Cell DTO occupancy conflict at {slot}")
+                    occupied.add(slot)
+            cells.append(Cell(
+                text=str(cell.get("text", "")),
+                row_index=row,
+                col_index=col,
+                rowspan=rowspan,
+                colspan=colspan,
+                bbox=BBox(
+                    float(rect["x0"]),
+                    float(rect["y0"]),
+                    float(rect["x1"]),
+                    float(rect["y1"]),
+                ),
+            ))
+        return cells
+
+    @staticmethod
+    def _table_from_rust_cells(
+        cells: Sequence[Cell],
+        confidence: Optional[float],
+        table_bbox: Optional[BBox],
+        source: Optional[str],
+        columns: Sequence[Tuple[float, float]],
+        rows: Sequence[_RowData],
+    ) -> Optional[Table]:
+        if not cells:
+            return None
+        max_row = max(cell.row_index + cell.rowspan for cell in cells)
+        max_col = max(cell.col_index + cell.colspan for cell in cells)
+        if table_bbox is not None:
+            bbox = table_bbox
+        else:
+            bbox = BBox(
+                min((cell.bbox.x0 for cell in cells), default=min((column[0] for column in columns), default=0.0)),
+                min((cell.bbox.y0 for cell in cells), default=min((row.y0 for row in rows), default=0.0)),
+                max((cell.bbox.x1 for cell in cells), default=max((column[1] for column in columns), default=0.0)),
+                max((cell.bbox.y1 for cell in cells), default=max((row.y1 for row in rows), default=0.0)),
+            )
+        return Table(
+            bbox=bbox,
+            rows=max_row,
+            cols=max_col,
+            cells=list(cells),
+            confidence=round(confidence, 4) if confidence is not None else 0.85,
+            source=source or "english_color_based",
+        )
+
+    @staticmethod
     def _is_invisible_drawing(d: dict) -> bool:
         """判断 drawing 是否为不可见的纯白填充矩形、纯白线条或透明元素。"""
         fill = d.get("fill")
@@ -1248,34 +1469,47 @@ class EnglishTableExtractor(BaseTableExtractor):
         return [(r[0], r[1], r[2]) for r in merged_all]
 
     def _group_into_tables(self, bgs: List[Tuple[float, float, str]]) -> List[List[Tuple[float, float, str]]]:
+        from hexai_pdf_parser import rust_adapter
+
+        mode = rust_adapter.get_rust_mode("english-wireless")
+        input_dto = None
+        if mode != "python":
+            input_dto = [
+                {
+                    "schema_version": 1,
+                    "rect": self._english_rect_dto(0.0, float(bg[0]), 500.0, float(bg[1])),
+                    "color": 1.0 if bg[2] == "white" else 0.5,
+                    "opacity": None,
+                    "source_order": index,
+                }
+                for index, bg in enumerate(bgs)
+            ]
+
+        def rust_groups(backgrounds):
+            grouped = rust_adapter.group_backgrounds(backgrounds, 30.0)
+            return [
+                [
+                    (
+                        float(group["rect"]["y0"]),
+                        float(group["rect"]["y1"]),
+                        "white" if (group.get("color") or 0.0) >= 0.98 else "colored",
+                    )
+                    for group in grouped_group
+                ]
+                for grouped_group in grouped
+            ]
+
+        return rust_adapter.run_python_or_rust(
+            mode=mode,
+            python_fn=lambda: self._group_into_tables_python(bgs),
+            rust_fn=rust_groups,
+            input_dto=input_dto,
+            path="english-wireless/background-groups",
+        )
+
+    def _group_into_tables_python(self, bgs: List[Tuple[float, float, str]]) -> List[List[Tuple[float, float, str]]]:
         if not bgs:
             return []
-
-        mode = os.environ.get("PDF_RUST_MODE", "python").lower()
-        if mode in ("rust", "shadow"):
-            try:
-                from hexai_pdf_parser import rust_adapter
-
-                bg_dicts = [
-                    {
-                        "schema_version": 1,
-                        "rect": {"schema_version": 1, "x0": 0.0, "y0": float(b[0]), "x1": 500.0, "y1": float(b[1])},
-                        "color": 1.0 if b[2] == "white" else 0.5,
-                        "opacity": None,
-                        "source_order": i,
-                    }
-                    for i, b in enumerate(bgs)
-                ]
-                rust_groups = rust_adapter.group_backgrounds(bg_dicts, 30.0)
-                converted = [
-                    [(g["rect"]["y0"], g["rect"]["y1"], "white" if (g.get("color") or 0) >= 0.98 else "colored") for g in grp]
-                    for grp in rust_groups
-                ]
-                if mode == "rust":
-                    return converted
-            except Exception:
-                pass
-
         tables = []
         current_table = [bgs[0]]
 
@@ -1542,57 +1776,71 @@ class EnglishTableExtractor(BaseTableExtractor):
         words: List[Tuple],
         row_backgrounds: List[Tuple[float, float, str]],
     ) -> List[_RowData]:
-        mode = os.environ.get("PDF_RUST_MODE", "python").lower()
-        if mode in ("rust", "shadow"):
-            try:
-                from hexai_pdf_parser import rust_adapter
+        from hexai_pdf_parser import rust_adapter
 
-                w_dicts = [
+        mode = rust_adapter.get_rust_mode("english-wireless")
+        input_dto = None
+        if mode != "python":
+            input_dto = {
+                "words": self._english_word_dtos(words),
+                "rows": [
                     {
                         "schema_version": 1,
-                        "rect": {"schema_version": 1, "x0": float(w[0]), "y0": float(w[1]), "x1": float(w[2]), "y1": float(w[3])},
-                        "text": str(w[4]),
-                        "order": i,
-                        "block": None,
-                        "line": None,
-                    }
-                    for i, w in enumerate(words)
-                ]
-                r_dicts = [
-                    {
-                        "schema_version": 1,
-                        "rect": {"schema_version": 1, "x0": 0.0, "y0": float(b[0]), "x1": 500.0, "y1": float(b[1])},
-                        "row_index": i,
-                        "source_backgrounds": [i],
+                        "rect": self._english_rect_dto(0.0, bg[0], 500.0, bg[1]),
+                        "row_index": index,
+                        "source_backgrounds": [index],
                         "words": [],
                         "cells": [],
                     }
-                    for i, b in enumerate(row_backgrounds)
-                ]
-                res_rows = rust_adapter.assign_words_to_zebra_rows(w_dicts, r_dicts, 2.0)
-                converted_rows = []
-                for rd in res_rows:
-                    row_w = [
-                        (w["rect"]["x0"], w["rect"]["y0"], w["rect"]["x1"], w["rect"]["y1"], w["text"])
-                        for w in rd.get("words", [])
-                    ]
-                    color = None
-                    if rd.get("source_backgrounds"):
-                        bg_idx = rd["source_backgrounds"][0]
-                        if bg_idx < len(row_backgrounds):
-                            color = row_backgrounds[bg_idx][2]
-                    converted_rows.append(_RowData(
-                        words=row_w,
-                        y0=rd["rect"]["y0"],
-                        y1=rd["rect"]["y1"],
-                        color=color,
-                        is_header=False,
-                    ))
-                if mode == "rust":
-                    return converted_rows
-            except Exception:
-                pass
+                    for index, bg in enumerate(row_backgrounds)
+                ],
+            }
 
+        def rust_rows(dto):
+            result = rust_adapter.assign_words_to_zebra_rows(
+                dto["words"],
+                dto["rows"],
+                2.0,
+            )
+            converted_rows = []
+            for row in result:
+                row_words = [
+                    (
+                        float(word["rect"]["x0"]),
+                        float(word["rect"]["y0"]),
+                        float(word["rect"]["x1"]),
+                        float(word["rect"]["y1"]),
+                        str(word["text"]),
+                    )
+                    for word in row.get("words", [])
+                ]
+                color = None
+                if row.get("source_backgrounds"):
+                    bg_index = int(row["source_backgrounds"][0])
+                    if bg_index < len(row_backgrounds):
+                        color = row_backgrounds[bg_index][2]
+                converted_rows.append(_RowData(
+                    words=row_words,
+                    y0=float(row["rect"]["y0"]),
+                    y1=float(row["rect"]["y1"]),
+                    color=color,
+                    is_header=False,
+                ))
+            return converted_rows
+
+        return rust_adapter.run_python_or_rust(
+            mode=mode,
+            python_fn=lambda: self._assign_words_to_zebra_rows_python(words, row_backgrounds),
+            rust_fn=rust_rows,
+            input_dto=input_dto,
+            path="english-wireless/zebra-rows",
+        )
+
+    def _assign_words_to_zebra_rows_python(
+        self,
+        words: List[Tuple],
+        row_backgrounds: List[Tuple[float, float, str]],
+    ) -> List[_RowData]:
         row_words: Dict[int, List[Tuple]] = defaultdict(list)
         unassigned_words: List[Tuple] = []
 
@@ -1644,6 +1892,38 @@ class EnglishTableExtractor(BaseTableExtractor):
         return data_rows
 
     def _detect_columns(
+        self,
+        words: List[Tuple],
+        data_rows: List[_RowData],
+        page: fitz.Page,
+        table_y0: float = 0.0,
+        table_bbox: Optional[BBox] = None,
+    ) -> List[Tuple[float, float]]:
+        from hexai_pdf_parser import rust_adapter
+
+        mode = rust_adapter.get_rust_mode("english-wireless")
+        input_dto = None
+        if mode != "python":
+            input_dto = self._english_grid_input(words, table_bbox, data_rows)
+
+        def rust_columns(dto):
+            return self._columns_from_rust(rust_adapter.infer_english_columns(dto))
+
+        return rust_adapter.run_python_or_rust(
+            mode=mode,
+            python_fn=lambda: self._detect_columns_python(
+                words=words,
+                data_rows=data_rows,
+                page=page,
+                table_y0=table_y0,
+                table_bbox=table_bbox,
+            ),
+            rust_fn=rust_columns,
+            input_dto=input_dto,
+            path="english-wireless/columns",
+        )
+
+    def _detect_columns_python(
         self,
         words: List[Tuple],
         data_rows: List[_RowData],
@@ -3312,6 +3592,58 @@ class EnglishTableExtractor(BaseTableExtractor):
         return output_cells, len(active_tier_indices)
 
     def _build_wireless_table(
+        self,
+        header_rows: List[_RowData],
+        data_rows: List[_RowData],
+        columns: List[Tuple[float, float]],
+        confidence: Optional[float] = None,
+        table_bbox: Optional[BBox] = None,
+        page: Optional[fitz.Page] = None,
+        source: Optional[str] = None,
+    ) -> Optional[Table]:
+        from hexai_pdf_parser import rust_adapter
+
+        mode = rust_adapter.get_rust_mode("english-wireless")
+        all_rows = list(header_rows) + list(data_rows)
+        all_words = [word for row in all_rows for word in row.words]
+        input_dto = None
+        if mode != "python":
+            input_dto = self._english_grid_input(
+                all_words,
+                table_bbox,
+                all_rows,
+                horizontal_lines=self._english_horizontal_lines(page),
+            )
+
+        def rust_table(dto):
+            rust_cells = rust_adapter.build_english_cells(dto)
+            cells = self._cells_from_rust(rust_cells)
+            return self._table_from_rust_cells(
+                cells=cells,
+                confidence=confidence,
+                table_bbox=table_bbox,
+                source=source,
+                columns=columns,
+                rows=all_rows,
+            )
+
+        return rust_adapter.run_python_or_rust(
+            mode=mode,
+            python_fn=lambda: self._build_wireless_table_python(
+                header_rows=header_rows,
+                data_rows=data_rows,
+                columns=columns,
+                confidence=confidence,
+                table_bbox=table_bbox,
+                page=page,
+                source=source,
+            ),
+            rust_fn=rust_table,
+            input_dto=input_dto,
+            path="english-wireless/cells",
+        )
+
+    def _build_wireless_table_python(
         self,
         header_rows: List[_RowData],
         data_rows: List[_RowData],

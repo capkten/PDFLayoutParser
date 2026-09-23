@@ -1,6 +1,7 @@
 import os
+import math
 import traceback
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
 from . import _pdf_fast
 
@@ -8,6 +9,12 @@ Line4 = Tuple[float, float, float, float]
 
 VALID_MODES = {"python", "shadow", "rust"}
 _ROUTING_DIAGNOSTICS: List[Dict[str, Any]] = []
+
+
+def _normalize_diagnostic_path(path: Any) -> str:
+    if isinstance(path, str) and path.strip():
+        return path.strip()
+    return "unknown"
 
 
 def get_diagnostics() -> List[Dict[str, Any]]:
@@ -42,7 +49,7 @@ def assert_equivalent(path: str, python_value: Any, rust_value: Any) -> None:
         diag = {
             "schema_version": 1,
             "status": "rust_output_mismatch",
-            "path": path,
+            "path": _normalize_diagnostic_path(path),
             "field": "__root__",
             "python_value": {"str_val": str(python_value)},
             "rust_value": {"str_val": str(rust_value)},
@@ -54,9 +61,12 @@ def assert_equivalent(path: str, python_value: Any, rust_value: Any) -> None:
 
 def run_python_or_rust(mode: str, python_fn, rust_fn, input_dto: Any = None, path: str = ""):
     """Execute Python or Rust according to mode contract."""
+    if not isinstance(mode, str):
+        raise ValueError(f"Invalid mode '{mode}'. Allowed modes are: {sorted(list(VALID_MODES))}")
     m = mode.strip().lower()
     if m not in VALID_MODES:
         raise ValueError(f"Invalid mode '{mode}'. Allowed modes are: {sorted(list(VALID_MODES))}")
+    diagnostic_path = _normalize_diagnostic_path(path)
 
     if m == "python":
         return python_fn()
@@ -71,7 +81,7 @@ def run_python_or_rust(mode: str, python_fn, rust_fn, input_dto: Any = None, pat
             diag = {
                 "schema_version": 1,
                 "status": "rust_fallback",
-                "path": path or "unknown",
+                "path": diagnostic_path,
                 "error_type": type(exc).__name__,
                 "message": str(exc),
                 "traceback_id": tb_str[-200:],
@@ -90,7 +100,7 @@ def run_python_or_rust(mode: str, python_fn, rust_fn, input_dto: Any = None, pat
                 diag = {
                     "schema_version": 1,
                     "status": "rust_output_mismatch",
-                    "path": path or "unknown",
+                    "path": diagnostic_path,
                     "field": "__root__",
                     "python_value": {"str_val": str(py_res)},
                     "rust_value": {"str_val": str(r_res)},
@@ -102,13 +112,593 @@ def run_python_or_rust(mode: str, python_fn, rust_fn, input_dto: Any = None, pat
             diag = {
                 "schema_version": 1,
                 "status": "rust_fallback",
-                "path": path or "unknown",
+                "path": diagnostic_path,
                 "error_type": type(exc).__name__,
                 "message": str(exc),
                 "traceback_id": tb_str[-200:],
             }
             _ROUTING_DIAGNOSTICS.append(diag)
         return py_res
+
+
+def _require_mapping(value: Any, path: str) -> Mapping[str, Any]:
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{path} must be an object")
+    return value
+
+
+def _require_sequence(value: Any, path: str) -> Union[List[Any], Tuple[Any, ...]]:
+    if not isinstance(value, (list, tuple)):
+        raise ValueError(f"{path} must be a list or tuple")
+    return value
+
+
+def _required_field(record: Mapping[str, Any], name: str, path: str) -> Any:
+    if name not in record or record[name] is None:
+        raise ValueError(f"{path}.{name} is required")
+    return record[name]
+
+
+def _required_string(value: Any, path: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError(f"{path} must be a string")
+    return value
+
+
+def _required_int(value: Any, path: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{path} must be an integer")
+    return value
+
+
+def _finite_float(value: Any, path: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{path} must be a finite number")
+    result = float(value)
+    if not math.isfinite(result):
+        raise ValueError(f"{path} must be finite")
+    return result
+
+
+def _optional_string(record: Mapping[str, Any], name: str, path: str) -> Optional[str]:
+    if name not in record or record[name] is None:
+        return None
+    return _required_string(record[name], f"{path}.{name}")
+
+
+def _optional_int(record: Mapping[str, Any], name: str, path: str) -> Optional[int]:
+    if name not in record or record[name] is None:
+        return None
+    return _required_int(record[name], f"{path}.{name}")
+
+
+def _optional_float(record: Mapping[str, Any], name: str, path: str) -> Optional[float]:
+    if name not in record or record[name] is None:
+        return None
+    return _finite_float(record[name], f"{path}.{name}")
+
+
+def _snapshot_value(value: Any, path: str = "snapshot") -> Any:
+    if isinstance(value, Mapping):
+        copied: Dict[str, Any] = {}
+        for key, item in value.items():
+            if not isinstance(key, str):
+                raise ValueError(f"{path} object keys must be strings")
+            copied[key] = _snapshot_value(item, f"{path}.{key}")
+        return copied
+    if isinstance(value, (list, tuple)):
+        return [_snapshot_value(item, f"{path}[{index}]") for index, item in enumerate(value)]
+    if isinstance(value, bool) or value is None or isinstance(value, (str, int)):
+        return value
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError(f"{path} must be finite")
+        return value
+    raise ValueError(f"{path} contains unsupported value type {type(value).__name__}")
+
+
+def _snapshot_field(snapshot: Any, name: str) -> Any:
+    try:
+        return getattr(snapshot, name)
+    except AttributeError as exc:
+        raise ValueError(f"snapshot is missing required field '{name}'") from exc
+
+
+def _rect_input(value: Any, path: str) -> Dict[str, Any]:
+    if isinstance(value, Mapping):
+        values = [_required_field(value, name, path) for name in ("x0", "y0", "x1", "y1")]
+    else:
+        sequence = _require_sequence(value, path)
+        if len(sequence) != 4:
+            raise ValueError(f"{path} must contain exactly four coordinates")
+        values = list(sequence)
+    return {
+        "schema_version": 1,
+        "x0": _finite_float(values[0], f"{path}.x0"),
+        "y0": _finite_float(values[1], f"{path}.y0"),
+        "x1": _finite_float(values[2], f"{path}.x1"),
+        "y1": _finite_float(values[3], f"{path}.y1"),
+    }
+
+
+def _raw_position(record: Mapping[str, Any], length: int, path: str) -> List[int]:
+    value = _required_field(record, "raw_source_position", path)
+    sequence = _require_sequence(value, f"{path}.raw_source_position")
+    if len(sequence) < length:
+        raise ValueError(f"{path}.raw_source_position must contain at least {length} values")
+    return [
+        _required_int(item, f"{path}.raw_source_position[{index}]")
+        for index, item in enumerate(sequence)
+    ]
+
+
+def _character_to_rust_input(character: Any, index: int) -> Dict[str, Any]:
+    character = _require_mapping(character, f"span.chars[{index}]")
+    raw_source_position = _raw_position(character, 4, f"span.chars[{index}]")
+    return {
+        "schema_version": 1,
+        "text": _required_string(_required_field(character, "c", f"span.chars[{index}]"), f"span.chars[{index}].c"),
+        "rect": _rect_input(_required_field(character, "bbox", f"span.chars[{index}]"), f"span.chars[{index}].bbox"),
+        "order": _required_int(
+            _required_field(character, "source_order", f"span.chars[{index}]"),
+            f"span.chars[{index}].source_order",
+        ),
+        "raw_source_position": raw_source_position,
+    }
+
+
+def _span_to_rust_input(span: Any, index: int) -> Dict[str, Any]:
+    path = f"span[{index}]"
+    span = _require_mapping(span, path)
+    position = _raw_position(span, 3, path)
+    characters = _require_sequence(_required_field(span, "chars", path), f"{path}.chars")
+    return {
+        "schema_version": 1,
+        "text": _required_string(_required_field(span, "text", path), f"{path}.text"),
+        "rect": _rect_input(_required_field(span, "bbox", path), f"{path}.bbox"),
+        "font": _optional_string(span, "font", path),
+        "size": _optional_float(span, "size", path),
+        "flags": _optional_int(span, "flags", path),
+        "order": _required_int(_required_field(span, "source_order", path), f"{path}.source_order"),
+        "characters": [
+            _character_to_rust_input(character, character_index)
+            for character_index, character in enumerate(characters)
+        ],
+        "source_position": {
+            "schema_version": 1,
+            "block": position[0],
+            "line": position[1],
+        },
+        "raw_source_position": position,
+        "block": position[0],
+        "line": position[1],
+    }
+
+
+def _text_line_to_rust_input(line: Any, index: int) -> Dict[str, Any]:
+    path = f"line[{index}]"
+    line = _require_mapping(line, path)
+    position = _raw_position(line, 2, path)
+    spans = _require_sequence(_required_field(line, "spans", path), f"{path}.spans")
+    return {
+        "schema_version": 1,
+        "rect": _rect_input(_required_field(line, "bbox", path), f"{path}.bbox"),
+        "spans": [
+            _span_to_rust_input(span, span_index) for span_index, span in enumerate(spans)
+        ],
+        "source_position": position,
+        "source_order": _required_int(_required_field(line, "source_order", path), f"{path}.source_order"),
+    }
+
+
+def _text_block_to_rust_input(block: Any, index: int) -> Dict[str, Any]:
+    path = f"block[{index}]"
+    block = _require_mapping(block, path)
+    position = _raw_position(block, 1, path)
+    if "type" not in block:
+        block_type = 0
+    elif block["type"] is None:
+        block_type = None
+    else:
+        block_type = _required_int(block["type"], f"{path}.type")
+    line_value = (
+        _required_field(block, "lines", path)
+        if block_type == 0
+        else block.get("lines", ())
+    )
+    lines = _require_sequence(line_value, f"{path}.lines")
+    result = {
+        "schema_version": 1,
+        "rect": _rect_input(_required_field(block, "bbox", path), f"{path}.bbox"),
+        "lines": [
+            _text_line_to_rust_input(line, line_index) for line_index, line in enumerate(lines)
+        ],
+        "source_position": position,
+        "source_order": _required_int(_required_field(block, "source_order", path), f"{path}.source_order"),
+    }
+    if block_type is None:
+        result["type"] = None
+    elif block_type != 0:
+        result["type"] = block_type
+    return result
+
+
+def _drawing_line_items(
+    items: Union[List[Any], Tuple[Any, ...]], width: Optional[float], path: str
+) -> List[Dict[str, Any]]:
+    lines: List[Dict[str, Any]] = []
+    for index, item in enumerate(items):
+        item_path = f"{path}.items[{index}]"
+        item_values = _require_sequence(item, item_path)
+        if not item_values:
+            raise ValueError(f"{item_path} must not be empty")
+        kind = _required_string(item_values[0], f"{item_path}[0]")
+        rect = None
+        if kind == "l":
+            if len(item_values) != 3:
+                raise ValueError(f"{item_path} line item must contain kind and two points")
+            start = _require_sequence(item_values[1], f"{item_path}[1]")
+            end = _require_sequence(item_values[2], f"{item_path}[2]")
+            if len(start) != 2 or len(end) != 2:
+                raise ValueError(f"{item_path} line points must contain two coordinates")
+            x0 = _finite_float(start[0], f"{item_path}[1][0]")
+            y0 = _finite_float(start[1], f"{item_path}[1][1]")
+            x1 = _finite_float(end[0], f"{item_path}[2][0]")
+            y1 = _finite_float(end[1], f"{item_path}[2][1]")
+            rect = _rect_input((min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1)), f"{item_path}.rect")
+        elif kind == "re":
+            if len(item_values) < 2:
+                raise ValueError(f"{item_path} rectangle item must contain a rectangle")
+            rect = _rect_input(item_values[1], f"{item_path}[1]")
+        if rect is not None:
+            lines.append(
+                {
+                    "schema_version": 1,
+                    "rect": rect,
+                    "width": width,
+                    "color": None,
+                    "source_order": index,
+                }
+            )
+    return lines
+
+
+def _drawing_to_rust_input(drawing: Any, index: int) -> Dict[str, Any]:
+    path = f"drawing[{index}]"
+    drawing = _require_mapping(drawing, path)
+    raw_source_position = _raw_position(drawing, 1, path)
+    items = _require_sequence(_required_field(drawing, "items", path), f"{path}.items")
+    width = _optional_float(drawing, "width", path)
+    known = {
+        "type", "kind", "rect", "color", "fill", "stroke", "clip", "opacity",
+        "fill_opacity", "width", "items", "source_order", "schema_version",
+        "raw_source_position",
+    }
+    result: Dict[str, Any] = {
+        "schema_version": 1,
+        "kind": _required_string(
+            _required_field(drawing, "type", path), f"{path}.type"
+        ),
+        "raw_source_position": raw_source_position,
+        "lines": _drawing_line_items(items, width, path),
+        "rect": _rect_input(
+            drawing.get("rect") or drawing.get("scissor") or (0.0, 0.0, 0.0, 0.0),
+            f"{path}.rect",
+        ),
+        "fill": None if drawing.get("fill") is None else _snapshot_value(drawing["fill"], f"{path}.fill"),
+        "stroke": None if drawing.get("stroke") is None else _snapshot_value(drawing["stroke"], f"{path}.stroke"),
+        "clip": None if drawing.get("clip") is None else _rect_input(drawing["clip"], f"{path}.clip"),
+        "source_order": _required_int(_required_field(drawing, "source_order", path), f"{path}.source_order"),
+    }
+    for key in ("color", "opacity", "fill_opacity", "width", "items"):
+        if key in drawing:
+            result[key] = _snapshot_value(drawing[key], f"{path}.{key}")
+    extra = {key: _snapshot_value(value, f"{path}.{key}") for key, value in drawing.items() if key not in known}
+    if extra:
+        result["extra"] = extra
+    return result
+
+
+def _region_to_rust_input(region: Any, source_order: int, allowed: bool) -> Dict[str, Any]:
+    region = _require_mapping(region, "region")
+    return {
+        "schema_version": 1,
+        "rect": _rect_input(region, "region"),
+        "source_order": _required_int(source_order, "region.source_order"),
+        "allowed": bool(allowed),
+    }
+
+
+def _word_to_rust_input(word: Any, index: int) -> Dict[str, Any]:
+    path = f"word[{index}]"
+    word = _require_mapping(word, path)
+    raw_source_position = _raw_position(word, 3, path)
+    return {
+        "schema_version": 1,
+        "text": _required_string(_required_field(word, "text", path), f"{path}.text"),
+        "rect": _rect_input(_required_field(word, "bbox", path), f"{path}.bbox"),
+        "order": _required_int(_required_field(word, "source_order", path), f"{path}.source_order"),
+        "block": _required_int(_required_field(word, "block_index", path), f"{path}.block_index"),
+        "line": _required_int(_required_field(word, "line_index", path), f"{path}.line_index"),
+        "raw_source_position": raw_source_position,
+    }
+
+
+def page_snapshot_to_rust_input(snapshot: Any) -> Dict[str, Any]:
+    """Copy the algorithm-facing, owned DTO from an already captured snapshot."""
+    schema_version = _required_int(_snapshot_field(snapshot, "schema_version"), "snapshot.schema_version")
+    if schema_version != 1:
+        raise ValueError(f"Unsupported schema_version: {schema_version}, expected 1")
+    geometry = _require_mapping(_snapshot_field(snapshot, "geometry"), "snapshot.geometry")
+    page = {
+        "schema_version": 1,
+        "width": _finite_float(_required_field(geometry, "width", "snapshot.geometry"), "snapshot.geometry.width"),
+        "height": _finite_float(_required_field(geometry, "height", "snapshot.geometry"), "snapshot.geometry.height"),
+        "rotation": _required_int(_required_field(geometry, "rotation", "snapshot.geometry"), "snapshot.geometry.rotation"),
+    }
+    page_y0 = _finite_float(geometry.get("y0", 0.0), "snapshot.geometry.y0")
+    blocks = _require_sequence(_snapshot_field(snapshot, "text_blocks"), "snapshot.text_blocks")
+    spans = _require_sequence(_snapshot_field(snapshot, "spans"), "snapshot.spans")
+    words = _require_sequence(_snapshot_field(snapshot, "words"), "snapshot.words")
+    drawings = _require_sequence(_snapshot_field(snapshot, "drawings"), "snapshot.drawings")
+    allowed_regions = _require_sequence(_snapshot_field(snapshot, "allowed_regions"), "snapshot.allowed_regions")
+    excluded_regions = _require_sequence(_snapshot_field(snapshot, "excluded_regions"), "snapshot.excluded_regions")
+    extraction_options = _require_mapping(
+        _snapshot_field(snapshot, "extraction_options"), "snapshot.extraction_options"
+    )
+    result = {
+        "schema_version": 1,
+        "page_index": _required_int(_snapshot_field(snapshot, "page_index"), "snapshot.page_index"),
+        "page": page,
+        "text_blocks": [
+            _text_block_to_rust_input(block, index) for index, block in enumerate(blocks)
+        ],
+        "spans": [_span_to_rust_input(span, index) for index, span in enumerate(spans)],
+        "words": [_word_to_rust_input(word, index) for index, word in enumerate(words)],
+        "drawings": [
+            _drawing_to_rust_input(drawing, index)
+            for index, drawing in enumerate(drawings)
+        ],
+        "allowed_regions": [
+            _region_to_rust_input(region, index, True)
+            for index, region in enumerate(allowed_regions)
+        ],
+        "excluded_regions": [
+            _region_to_rust_input(region, index, False)
+            for index, region in enumerate(excluded_regions)
+        ],
+        "extraction_options": {
+            "schema_version": 1,
+            "options": _snapshot_value(extraction_options, "snapshot.extraction_options"),
+        },
+    }
+    if page_y0 != 0.0:
+        result["page_y0"] = page_y0
+    return result
+
+
+def stage_input_digest(stage_dto: Mapping[str, Any]) -> str:
+    if not isinstance(stage_dto, Mapping):
+        raise ValueError("stage DTO must be an object")
+    return _pdf_fast.stage_input_digest(dict(stage_dto))
+
+
+def page_snapshot_digest(snapshot_dto: Mapping[str, Any]) -> str:
+    """Validate and hash a normalized PageSnapshotDto through Rust."""
+    return _pdf_fast.page_snapshot_digest(dict(snapshot_dto))
+
+
+def collect_native_spans_from_snapshot(
+    snapshot: Any,
+    excluded_regions: Optional[Sequence[Any]] = None,
+    allowed_regions: Optional[Sequence[Any]] = None,
+) -> tuple[Any, ...]:
+    """Extract and spatially filter native spans directly using the Rust kernel."""
+    from hexai_pdf_parser.models import BBox
+    from hexai_pdf_parser.tables.wireless_table_recovery import NativeSpan
+
+    snapshot_dto = (
+        page_snapshot_to_rust_input(snapshot)
+        if not isinstance(snapshot, Mapping) or "schema_version" not in snapshot
+        else dict(snapshot)
+    )
+
+    def _to_rect_list(regions):
+        if not regions:
+            return None
+        rects = []
+        for r in regions:
+            if isinstance(r, Mapping):
+                rects.append(
+                    {
+                        "schema_version": 1,
+                        "x0": float(r["x0"]),
+                        "y0": float(r["y0"]),
+                        "x1": float(r["x1"]),
+                        "y1": float(r["y1"]),
+                    }
+                )
+            elif hasattr(r, "x0"):
+                rects.append(
+                    {
+                        "schema_version": 1,
+                        "x0": float(r.x0),
+                        "y0": float(r.y0),
+                        "x1": float(r.x1),
+                        "y1": float(r.y1),
+                    }
+                )
+            else:
+                rects.append(
+                    {
+                        "schema_version": 1,
+                        "x0": float(r[0]),
+                        "y0": float(r[1]),
+                        "x1": float(r[2]),
+                        "y1": float(r[3]),
+                    }
+                )
+        return rects
+
+    allowed_dicts = _to_rect_list(allowed_regions)
+    excluded_dicts = _to_rect_list(excluded_regions)
+    raw_spans = _pdf_fast.collect_native_spans_from_snapshot(
+        snapshot_dto, allowed_dicts, excluded_dicts
+    )
+    converted = []
+    for s in raw_spans:
+        rect = s["rect"]
+        characters = [
+            (
+                c["text"],
+                BBox(c["rect"]["x0"], c["rect"]["y0"], c["rect"]["x1"], c["rect"]["y1"]),
+            )
+            for c in s.get("characters", [])
+        ]
+        raw_pos = s.get("raw_source_position")
+        source_pos = (
+            (int(raw_pos[0]), int(raw_pos[1]), int(raw_pos[2]))
+            if raw_pos and len(raw_pos) >= 3
+            else (int(s.get("block", 0)), int(s.get("line", 0)), 0)
+        )
+        converted.append(
+            NativeSpan(
+                text=s["text"],
+                bbox=BBox(rect["x0"], rect["y0"], rect["x1"], rect["y1"]),
+                font=s.get("font"),
+                size=s.get("size"),
+                order=int(s["order"]),
+                characters=characters,
+                source_position=source_pos,
+            )
+        )
+    return tuple(converted)
+
+
+def recover_cells_from_snapshot(
+    snapshot: Any,
+    region: Any,
+) -> tuple[int, int, list[Any]]:
+    """Recover table structure (rows, cols, cells) directly from snapshot using Rust kernel."""
+    from hexai_pdf_parser.models import BBox
+    from hexai_pdf_parser.tables.wireless_table_recovery import _rust_cells_to_project
+
+    snapshot_dto = (
+        page_snapshot_to_rust_input(snapshot)
+        if not isinstance(snapshot, Mapping) or "schema_version" not in snapshot
+        else dict(snapshot)
+    )
+
+    if isinstance(region, Mapping):
+        reg_dict = {
+            "schema_version": 1,
+            "x0": float(region["x0"]),
+            "y0": float(region["y0"]),
+            "x1": float(region["x1"]),
+            "y1": float(region["y1"]),
+        }
+    elif hasattr(region, "x0"):
+        reg_dict = {
+            "schema_version": 1,
+            "x0": float(region.x0),
+            "y0": float(region.y0),
+            "x1": float(region.x1),
+            "y1": float(region.y1),
+        }
+    else:
+        reg_dict = {
+            "schema_version": 1,
+            "x0": float(region[0]),
+            "y0": float(region[1]),
+            "x1": float(region[2]),
+            "y1": float(region[3]),
+        }
+
+    raw_output = _pdf_fast.recover_cells_from_snapshot(snapshot_dto, reg_dict)
+    if not isinstance(raw_output, Mapping):
+        raise TypeError("Rust native recovery output must be a mapping")
+    grid_output = raw_output.get("grid", {})
+    if not isinstance(grid_output, Mapping):
+        raise TypeError("Rust native recovery grid must be a mapping")
+    grid = grid_output.get("grid", grid_output)
+    if not isinstance(grid, Mapping):
+        raise TypeError("Rust native recovery inner grid must be a mapping")
+    rows = int(grid.get("rows", 0))
+    cols = int(grid.get("cols", 0))
+    diagnostics = raw_output.get("diagnostics", ())
+    if any(
+        isinstance(item, Mapping) and item.get("status") == "occupancy_conflict"
+        for item in diagnostics
+    ):
+        raise ValueError("Rust native recovery reported an occupancy conflict")
+    raw_cells = raw_output.get("cells", grid_output.get("cells", []))
+    cells = _rust_cells_to_project(
+        raw_cells,
+        rows,
+        cols,
+    )
+    if rows <= 0 or cols <= 0 or not cells:
+        raise ValueError("Rust native recovery returned an empty grid")
+    return rows, cols, cells
+
+
+def recover_native_text_input(
+    snapshot: Any,
+    *,
+    input_snapshot_digest: Optional[str] = None,
+    region: Optional[Mapping[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Return raw spans only from a validated, digest-bearing snapshot input."""
+    required_keys = {
+        "schema_version",
+        "page_index",
+        "page",
+        "text_blocks",
+        "spans",
+        "words",
+        "drawings",
+        "allowed_regions",
+        "excluded_regions",
+        "extraction_options",
+    }
+    allowed_keys = required_keys | {"page_y0"}
+    if isinstance(snapshot, Mapping):
+        owned = _snapshot_value(snapshot, "snapshot_input")
+        if "input_snapshot_digest" not in owned:
+            raise ValueError("input_snapshot_digest is required")
+        input_digest = _required_string(
+            owned.pop("input_snapshot_digest"), "input_snapshot_digest"
+        )
+        if input_snapshot_digest is not None:
+            explicit_digest = _required_string(
+                input_snapshot_digest, "input_snapshot_digest"
+            )
+            if explicit_digest != input_digest:
+                raise ValueError("input_snapshot_digest values do not match")
+        snapshot_dto = owned
+        if not required_keys.issubset(snapshot_dto) or not set(snapshot_dto) <= allowed_keys:
+            raise ValueError("snapshot input must contain exactly the validated PageSnapshotDto fields")
+    else:
+        if input_snapshot_digest is None:
+            raise ValueError("input_snapshot_digest is required")
+        input_digest = _required_string(input_snapshot_digest, "input_snapshot_digest")
+        snapshot_dto = page_snapshot_to_rust_input(snapshot)
+    if len(input_digest) != 64 or any(char not in "0123456789abcdef" for char in input_digest):
+        raise ValueError("input_snapshot_digest must be a lowercase SHA-256 hex digest")
+    canonical_digest = page_snapshot_digest(snapshot_dto)
+    if input_digest != canonical_digest:
+        raise ValueError("input_snapshot_digest does not match the canonical snapshot input")
+    selected_region = None if region is None else _snapshot_value(
+        _require_mapping(region, "region"), "region"
+    )
+    return {
+        "schema_version": 1,
+        "stage": "recover_native_text_input",
+        "input_snapshot_digest": input_digest,
+        "page_index": snapshot_dto["page_index"],
+        "region": selected_region,
+        "spans": _snapshot_value(snapshot_dto["spans"]),
+    }
 
 
 
@@ -666,6 +1256,7 @@ def _ensure_atom_dto(a: Any, idx: int = 0) -> Dict[str, Any]:
     ad.setdefault("run_refs", [idx])
     ad.setdefault("row_hint", None)
     ad.setdefault("col_hint", None)
+    ad.setdefault("col_end_hint", ad["col_hint"])
     ad.setdefault("order", idx)
     ad.setdefault("text", "")
     return ad
