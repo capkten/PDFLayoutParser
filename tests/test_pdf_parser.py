@@ -997,9 +997,19 @@ def test_text_and_table_extraction_preserve_rotated_page_for_region_reads(tmp_di
     original_rotation = page.rotation
     original_size = (page.rect.width, page.rect.height)
     region = {"page_index": 0, "x0": 0.0, "y0": 0.0, "x1": 1.0, "y1": 1.0}
+    partial_region = {
+        "page_index": 0,
+        "x0": 0.0,
+        "y0": 0.0,
+        "x1": 0.2,
+        "y1": 0.3,
+    }
     before = parser.extract_text_in_region(region)
     before_text = " ".join(block.text for block in before.data)
     assert "Rotation State" in before_text
+    partial_before = parser.extract_text_in_region(partial_region)
+    partial_before_text = " ".join(block.text for block in partial_before.data)
+    assert "Rotation State" in partial_before_text
 
     assert parser.extract_tables().code in {0, 1}
     assert page.rotation == original_rotation
@@ -1011,6 +1021,9 @@ def test_text_and_table_extraction_preserve_rotated_page_for_region_reads(tmp_di
     after = parser.extract_text_in_region(region)
     after_text = " ".join(block.text for block in after.data)
     assert after_text == before_text
+    partial_after = parser.extract_text_in_region(partial_region)
+    partial_after_text = " ".join(block.text for block in partial_after.data)
+    assert partial_after_text == partial_before_text
     parser.close()
 
     failing_parser = PDFParser(pdf_path)
