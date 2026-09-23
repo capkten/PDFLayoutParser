@@ -67,6 +67,7 @@ def _get_process_worker_resources(
     table_config,
     table_extractor_cls,
     ml_render_dpi: Optional[int] = None,
+    wired_line_tolerance: Optional[float] = None,
 ):
     """Return process-local PDF and table extractor resources for one run."""
     global _PROCESS_WORKER_DOCUMENT
@@ -87,11 +88,12 @@ def _get_process_worker_resources(
         repr(table_config),
         table_extractor_cls,
         ml_render_dpi,
+        wired_line_tolerance,
     )
     if _PROCESS_WORKER_RESOURCES_KEY != resource_key:
         _close_process_worker_resources()
         _PROCESS_WORKER_DOCUMENT = fitz.open(pdf_path)
-        _PROCESS_WORKER_TABLE_EXTRACTOR = table_extractor_cls(
+        extractor_kwargs = dict(
             ml_model_path=ml_model_path,
             ml_confidence=ml_confidence,
             ml_render_dpi=ml_render_dpi,
@@ -99,6 +101,9 @@ def _get_process_worker_resources(
             debug_pipeline=debug_pipeline,
             use_ml_table_detector=use_ml_table_detector,
         )
+        if wired_line_tolerance is not None:
+            extractor_kwargs["wired_line_tolerance"] = wired_line_tolerance
+        _PROCESS_WORKER_TABLE_EXTRACTOR = table_extractor_cls(**extractor_kwargs)
         _PROCESS_WORKER_RESOURCES_KEY = resource_key
 
     return _PROCESS_WORKER_DOCUMENT, _PROCESS_WORKER_TABLE_EXTRACTOR
@@ -448,6 +453,7 @@ def _process_page_process_worker(
     table_extractor_cls=TableExtractor,
     page_type: str = "vector",
     ml_render_dpi: Optional[int] = None,
+    wired_line_tolerance: Optional[float] = None,
 ) -> tuple[int, Page, dict[str, float], float]:
     """Worker function for process-based parallelism.
 
@@ -474,6 +480,7 @@ def _process_page_process_worker(
         table_config=table_config,
         table_extractor_cls=table_extractor_cls,
         ml_render_dpi=ml_render_dpi,
+        wired_line_tolerance=wired_line_tolerance,
     )
     stage_totals = _run_page_pipeline(
         pdf_doc=pdf_doc,
@@ -525,11 +532,13 @@ class Pipeline:
         backend: str = "thread",
         use_ml_table_detector: bool = True,
         ml_render_dpi: Optional[int] = None,
+        wired_line_tolerance: Optional[float] = None,
     ):
         self.pdf_path = pdf_path
         self.output_dir = output_dir
         self.render_dpi = render_dpi
         self.ml_render_dpi = ml_render_dpi
+        self._wired_line_tolerance = wired_line_tolerance
         self.seal_coords = seal_coords or []
         self.page_indices = page_indices
         self._ml_model_path = ml_model_path
@@ -552,7 +561,7 @@ class Pipeline:
 
     def _create_table_extractor(self):
         """Create the table extractor used for the current page."""
-        return self._get_table_extractor_class()(
+        extractor_kwargs = dict(
             ml_model_path=self._ml_model_path,
             ml_confidence=self._ml_confidence,
             ml_render_dpi=self.ml_render_dpi,
@@ -560,6 +569,9 @@ class Pipeline:
             debug_pipeline=self.debug_pipeline,
             use_ml_table_detector=self._use_ml_table_detector,
         )
+        if self._wired_line_tolerance is not None:
+            extractor_kwargs["wired_line_tolerance"] = self._wired_line_tolerance
+        return self._get_table_extractor_class()(**extractor_kwargs)
 
     def _get_thread_table_extractor(self, page_type: str):
         """Return one table extractor per thread for the current run."""
@@ -783,6 +795,7 @@ class Pipeline:
                                 self._get_table_extractor_class(),
                                 page_type=page.page_type,
                                 ml_render_dpi=self.ml_render_dpi,
+                                wired_line_tolerance=self._wired_line_tolerance,
                             )
                         )
                     for future in futures:

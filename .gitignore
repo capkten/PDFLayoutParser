@@ -44,6 +44,7 @@ src/hexai_pdf_parser/data/*
 test_hehe.py
 src/implement.txt
 demo*
+!demo.py
 .codex
 .agents
 scripts

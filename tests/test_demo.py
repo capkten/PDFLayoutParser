@@ -17,11 +17,19 @@ def test_demo_passes_output_dir_to_parser_and_writes_json(tmp_path, monkeypatch)
     monkeypatch.setattr(
         demo.sys,
         "argv",
-        ["demo.py", str(pdf_path), "--output-dir", str(output_dir)],
+        [
+            "demo.py",
+            str(pdf_path),
+            "--output-dir",
+            str(output_dir),
+            "--wired-line-tolerance",
+            "1.75",
+        ],
     )
 
     demo.main()
 
     assert captured["output_dir"] == str(output_dir)
     assert captured["use_ml_table_detector"] is False
+    assert captured["wired_line_tolerance"] == 1.75
     assert (output_dir / "sample.json").exists()

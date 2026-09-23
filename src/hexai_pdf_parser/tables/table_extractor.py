@@ -125,6 +125,7 @@ class TableExtractor:
         table_config: Optional[TableConfig] = None,
         debug_pipeline: bool = False,
         use_ml_table_detector: bool = True,
+        wired_line_tolerance: Optional[float] = None,
     ):
         self.line_tolerance = line_tolerance
         self.merge_group_tol = merge_group_tol
@@ -146,7 +147,12 @@ class TableExtractor:
 
         # Unified Wired (Chinese line grid + English zebra) and Wireless extractors
         self._wired_extractor = WiredTableExtractor(
-            line_tolerance=self.line_tolerance, merge_group_tol=self.merge_group_tol
+            line_tolerance=(
+                self.line_tolerance
+                if wired_line_tolerance is None
+                else wired_line_tolerance
+            ),
+            merge_group_tol=self.merge_group_tol,
         )
         self._wireless_extractor = WirelessTableExtractor(line_tolerance=self.line_tolerance)
         self._wireless_extractor._legacy_text_alignment_callback = (
