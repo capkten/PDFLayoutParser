@@ -434,3 +434,55 @@ def test_query_continuation_table_absorbs_wrapped_text():
     p2_blocks = res["pages"][1]["blocks"]
     isolated_si_blocks = [b for b in p2_blocks if b["type"] == "text" and b["content"].strip() == "司"]
     assert len(isolated_si_blocks) == 0, f"Found isolated '司' block: {isolated_si_blocks}"
+
+
+@pytest.mark.parametrize(
+    ("source", "should_retain", "has_wired_lines"),
+    [
+        ("line_projection", True, False),
+        ("hybrid_line_span_recovery", True, False),
+        ("PyMuPDF.find_tables", True, False),
+        ("custom_wired_source", True, True),
+        ("wireless_span_recovery", False, False),
+    ],
+)
+def test_report_metadata_filter_does_not_remove_wired_tables(
+    monkeypatch, source, should_retain, has_wired_lines
+):
+    from types import SimpleNamespace
+
+    from hexai_pdf_parser.core.models import BBox, Cell, Table
+    from hexai_pdf_parser.extractors.personal_credit_report import (
+        PersonalCreditReportTableExtractor,
+    )
+    from hexai_pdf_parser.tables.table_extractor import TableExtractor
+
+    bbox = BBox(40, 30, 500, 90)
+    line_metadata = (
+        {
+            "h_lines": [(40, 30, 500, 30), (40, 90, 500, 90)],
+            "v_lines": [(40, 30, 40, 90), (500, 30, 500, 90)],
+        }
+        if has_wired_lines
+        else {}
+    )
+    table = Table(
+        bbox=bbox,
+        rows=2,
+        cols=2,
+        cells=[
+            Cell("报告编号：A", 0, 0, BBox(40, 30, 180, 50)),
+            Cell("报告时间：2025", 0, 1, BBox(300, 30, 500, 50)),
+        ],
+        source=source,
+        **line_metadata,
+    )
+
+    def return_candidate(self, page, *args, **kwargs):
+        return [table]
+
+    monkeypatch.setattr(TableExtractor, "extract", return_candidate)
+    page = SimpleNamespace(get_text=lambda mode: [])
+    result = PersonalCreditReportTableExtractor().extract(page)
+
+    assert (table in result) is should_retain

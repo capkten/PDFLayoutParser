@@ -1,5 +1,12 @@
 # Changes
 
+## 2026-09-23
+
+- 修复个人信用报告元数据过滤误删有线表格的问题。根因位于 `PersonalCreditReportTableExtractor.extract()` 和 `_extract_via_text_alignment()`：两处都会按表格文本过滤报告编号、报告时间等元数据表，未区分有线表格与无线候选表，导致第一页报告身份表被降级成普通文本。
+- 现在对 `line_projection`、`hybrid_line_span_recovery`、`PyMuPDF.find_tables` 来源，或同时带有水平线和垂直线证据的表格跳过该元数据过滤；无线表格的原过滤规则及编号正文过滤保持不变。
+- 新增 `tests/test_personal_credit_report.py::test_report_metadata_filter_does_not_remove_wired_tables`，覆盖三种有线来源、物理线证据和无线来源仍过滤。个人报告专项测试 `19 passed`；个人报告批量回归 `37 passed`。与表格提取器相关测试合跑为 `113 passed, 1 failed`；唯一失败是混合有线恢复用例 `test_hybrid_wired_table_replaces_full_rowspan_body_before_shifting_footer`，在原始基线也可复现，与本次改动无关。
+- 样例 `征信解析样例.pdf` 第 1 页个人报告解析由 4 张表恢复为 5 张；首张为 `hybrid_line_span_recovery`、`11x4`，页面可视化确认它与下方四张表边界独立。输出目录：`tmp/pdfs/wired_metadata_filter_fix/output/`（结构化结果 `output.json`，表格图 `tables/page-000.png`）。
+
 ## 2026-09-21
 
 - 修复表外正文使用大 Span 框参与阅读顺序时的异常跨行问题。根因位于 `src/hexai_pdf_parser/extractors/text_extractor.py::TextExtractor.extract_layout_blocks()`：原路径通过 `dict` 的 Span bbox 构造 `Word/Line/Block` 布局框；用户 PDF 中同一字体、字号的少数字符原生 bbox 高度异常（约 `25.72pt`，正常值约 `9pt`），大框与下一编号行重叠后被 `reading_order.py` 误聚为同一行。
