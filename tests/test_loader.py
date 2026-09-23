@@ -19,6 +19,9 @@ class TestLoader:
             document = Loader(str(pdf_path)).load(pdf)
             assert document.page_count == 1
             assert document.pages[0].page_type == "vector"
+            assert document.pages[0].size["width"] == pytest.approx(pdf[0].rect.width)
+            assert document.pages[0].size["height"] == pytest.approx(pdf[0].rect.height)
+            assert document.pages[0].rotation == pdf[0].rotation
             assert not pdf.is_closed
             assert pdf[0].rect.width == pytest.approx(595.0, rel=1e-3)
         finally:
