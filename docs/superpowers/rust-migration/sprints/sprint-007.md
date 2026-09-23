@@ -55,7 +55,7 @@ Python 基线的页面级 table 结构为：
 
 ## 验收与决策
 
-Task 5 的 runner、字段级报告、JSON/PNG 导出和 visual QA 已完成；Task 6 的审计、分类和最终回归已完成。比较报告中 2894 条差异全部标为 `defect`，`unclassified_count=0`，因此没有未解释差异。
+Task 5 的 runner、字段级报告、JSON/PNG 导出和 visual QA 已完成；Task 6 的审计、分类和最终回归已完成。比较报告共有 `2894` 条记录：结构字段差异 `2874` 条（regions 2241、tables 632、table_count 1），routing diagnostics `20` 条（shadow 17、Rust fallback 3）；当前均标为 `defect`、`unclassified_count=0`，不是独立根因计数。完整拆解见 [`task5-problem-audit-2026-09-23.md`](../task5-problem-audit-2026-09-23.md)。
 
 结论是“验收闭环完成，Rust primary 未通过”：默认模式继续保持 Python；shadow 可用于观测；Rust 直出仍受页面级 parity defect 和 fallback 约束，不能切换为 primary。后续若要推进 Rust primary，应以 comparison.json 中的 defect 字段逐项新增失败用例、修复并重新生成独立输出目录。
 

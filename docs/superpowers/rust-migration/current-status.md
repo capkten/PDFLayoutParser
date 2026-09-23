@@ -23,13 +23,14 @@ Python → Rust 的迁移已经完成 Rust 审计、计划重排、Python-derive
 - Task 4C 报告：[task-4c-report.md](../../../.superpowers/sdd/task-4c-report.md)
 - Task 5/6 sprint handoff：[sprint-007.md](sprints/sprint-007.md)
 - Task 5/6 evaluation：[sprint-007.md](evaluations/sprint-007.md)
+- Task 5 问题审计：[task5-problem-audit-2026-09-23.md](task5-problem-audit-2026-09-23.md)
 - 页面验收输出：`D:\codes\PDFLayoutParser\output\rust_migration_task5_20260922\`
 
 ## 已完成任务
 
 ### Task 0：Rust 审计与计划重排
 
-已完成。审计确认现有 direct Snapshot Rust 重建器与 Python helper 链是两套算法；其中存在简化的 text-run/column/grid/header 规则、`refine_leaf_bands()` no-op 和页面坐标阈值。因此它不能被现有 Rust 单测直接当作 Python parity 证据。
+已完成。审计确认现有 direct Snapshot Rust 重建器与 Python helper 链是两套算法，存在简化的 text-run/column/grid/header 规则和页面坐标阈值。Rust `refine_leaf_bands()` 本身有实现并由 `recover_native_region()` 调用；Task 5 活跃的 direct Snapshot route 绕过这条 helper 链，不能把“未接入”写成“函数 no-op”。因此 Rust 单测不能单独作为 Python page parity 证据。详见[Task 5 问题审计](task5-problem-audit-2026-09-23.md)。
 
 ### Task 1：Python-derived `NativeRegionInput` bridge
 
@@ -131,7 +132,7 @@ Task 4A owned-input differential harness、Task 4B Rust 列带 refine/rescue、T
 
 已完成。新增字段级 normalizer、三模式 runner 和五页 JSON/PNG 输出，覆盖 `recover_wireless_tables()` 与 `recover_cells_from_region()`。输入为 `zh_all_table_pages.pdf` 的 0-based `184,188,189,191,192`，输出目录为 `D:\codes\PDFLayoutParser\output\rust_migration_task5_20260922\`。三个 manifest 均有五页且输入 SHA256 一致；shadow 结构化结果与 Python 语义结果一致，17 条 Rust 观测诊断完整保留。
 
-comparison 报告为 `mismatch_count=2894`、`by_classification.defect=2894`、`unclassified_count=0`。Rust page route 在 188、189 页产生真实结构差异；184、191、192 页因 occupancy conflict 触发既有 Python fallback。固定 Python table bbox 的 Rust region route 在五页均有字段差异。Python page-level baseline 自身累计 49 个 table occupancy conflict、region occupancy conflict 为 0；该基线问题已记录，未被比较器隐藏。视觉核验已覆盖五页 Python/Rust overlay，188、189 的 Rust 边界/行列切分差异与 JSON 一致。
+comparison 报告共有 `2894` 条记录：`2874` 条结构字段差异（regions 2241、tables 632、table_count 1）及 `20` 条 routing diagnostics（shadow 17、Rust fallback 3）；均被分类，`unclassified_count=0`，但不是 2894 个独立根因。Rust page route 在 188、189 页产生真实结构差异；184、191、192 页因 occupancy conflict 触发既有 Python fallback。固定 Python table bbox 的 Rust region route 在五页均有字段差异。Python page-level baseline 自身累计 49 个 table occupancy conflict、region occupancy conflict 为 0；该基线问题已记录。视觉核验已覆盖五页 Python/Rust overlay，188、189 的 Rust 边界/行列切分差异与 JSON 一致。完整清单见[Task 5 问题审计](task5-problem-audit-2026-09-23.md)。
 
 ### Task 6：最终审计与交付门禁
 

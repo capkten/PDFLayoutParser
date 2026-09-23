@@ -24,7 +24,7 @@ Task 5 的双路 shadow、真实 PDF 页面 JSON/PNG 导出、两条高层入口
 - 三个 manifest 均包含完整的五个页面，输入 SHA256 一致，artifact 路径为存在的绝对路径。
 - shadow page/table/region 语义结果与 Python 一致；执行模式字段是报告元数据，不参与结构比较。
 - Rust route 的 17 条 shadow diagnostics 和 fallback/mismatch 都被保留；没有吞掉异常或把 fallback 当作 Rust parity。
-- comparison report：`mismatch_count=2894`、`by_classification.defect=2894`、`unclassified_count=0`。
+- comparison report 有 `2894` 条记录：结构字段差异 `2874` 条（regions 2241、tables 632、table_count 1），routing diagnostics `20` 条（shadow 17、Rust fallback 3）；当前均标为 `defect`、`unclassified_count=0`。该数量是字段/诊断记录数，不是独立根因数；完整拆解见 [`task5-problem-audit-2026-09-23.md`](../task5-problem-audit-2026-09-23.md)。
 - Python page-level baseline 的 table cells 在五页累计 49 个 occupancy conflict，region 入口为 0；这个已知基线问题被保留在验收记录中，未由 normalizer 掩盖。
 
 ## 页面结构差异
