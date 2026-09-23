@@ -7,6 +7,8 @@
 - 修复个人征信报告第一页三张相邻有线表格被合并的问题，并提供可调容差。根因是 `WiredTableExtractor._merge_v_lines()` 按 `gap <= line_tolerance` 合并同一 x 坐标的竖线段；样例中三张表外侧竖线之间的空隙为 `2.2521pt`，通用默认值 `2.3pt` 将三段边框连成一个连通区域。
 - 新增有线专用参数 `wired_line_tolerance`。`PersonalCreditReportTableExtractor`、`PersonalCreditReportPipeline`、`parse_personal_credit_report()` 和 `demo.py` 的默认值为 `2.0pt`，API、Pipeline 构造器和 demo CLI 均支持外部传入；Pipeline 的提取器工厂及进程池 worker 会转交该参数。通用提取器和无线提取器仍分别使用原有 `2.3pt`。
 - 新增合成线段回归、个人报告默认值/外部覆盖/API 转发和 demo CLI 参数测试。`tests/test_demo.py tests/test_personal_credit_report.py tests/test_wired_table_extractor.py tests/test_pipeline.py` 共 `104 passed`。样例 PDF 全量解析及进程池第一页解析都将目标区域分成独立的 `2x4`、`5x4`、`2x5` 三表；页面结构化结果和图片输出在 `C:\Users\23662\.codex\worktrees\personal-credit-wired-tolerance\PDFLayoutParser\tmp\personal_credit_wired_tolerance_20260923\`。
+- 将个人征信报告专用有线表格默认容差从 `2.0pt` 调至 `2.2pt`，修复 2.0 下边框断段导致的“信息概要”及责任信息表漏检、主表表头被裁掉；之前验证过的相邻表分离样例在 2.2 下仍分成独立表格。`PersonalCreditReportTableExtractor`、Pipeline、公开解析函数和 demo CLI 默认值同步更新，外部覆盖能力保留，通用提取器与无线提取器不变。回归测试先在旧默认 2.0 下失败，更新后相关四个测试模块 `106 passed`。
+- 使用默认 2.2 全量运行两份 PDF：`征信解析样例.pdf` 共 12 页、46 张表；`个人信用报告(本人简版).pdf` 共 5 页、12 张表。输出目录分别为 `D:\codes\PDFLayoutParser\output\demo\征信解析样例_tolerance_2_2_20260923\` 和 `D:\codes\PDFLayoutParser\output\demo\个人信用报告(本人简版)_tolerance_2_2_20260923\`；本人简版第一页识别出 `2x3`、`6x5`、`2x3` 三张独立表，样例第一页共有 9 张表，其中三个目标表的框相互独立。逐页检查了 17 张 PNG；另外观察到样例第 12 页页脚被误识别为 `2x2 wireless_span_recovery` 表，以及样例第 1 页第三个红框标签靠近表头。
 
 - 修复个人信用报告元数据过滤误删有线表格的问题。根因位于 `PersonalCreditReportTableExtractor.extract()` 和 `_extract_via_text_alignment()`：两处都会按表格文本过滤报告编号、报告时间等元数据表，未区分有线表格与无线候选表，导致第一页报告身份表被降级成普通文本。
 - 现在对 `line_projection`、`hybrid_line_span_recovery`、`PyMuPDF.find_tables` 来源，或同时带有水平线和垂直线证据的表格跳过该元数据过滤；无线表格的原过滤规则及编号正文过滤保持不变。

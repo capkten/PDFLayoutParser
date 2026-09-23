@@ -505,7 +505,7 @@ class PersonalCreditReportTableExtractor(TableExtractor):
     """Table extractor reserved for personal-credit-report region rules."""
 
     def __init__(self, *args, **kwargs):
-        kwargs.setdefault("wired_line_tolerance", 2.0)
+        kwargs.setdefault("wired_line_tolerance", 2.2)
         super().__init__(*args, **kwargs)
 
     def _get_text_alignment_regions(
@@ -685,7 +685,7 @@ class PersonalCreditReportPipeline(Pipeline):
         self,
         *args,
         use_ml_table_detector: bool = False,
-        wired_line_tolerance: float = 2.0,
+        wired_line_tolerance: float = 2.2,
         **kwargs,
     ):
         super().__init__(
@@ -708,7 +708,7 @@ def parse_personal_credit_report(
     debug_pipeline: bool = False,
     use_ml_table_detector: bool = False,
     ml_render_dpi: int | None = None,
-    wired_line_tolerance: float = 2.0,
+    wired_line_tolerance: float = 2.2,
 ) -> dict:
     """Parse a personal credit report into the compact public result format."""
     document = PersonalCreditReportPipeline(

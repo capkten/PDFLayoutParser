@@ -21,8 +21,8 @@ def main():
     parser.add_argument(
         "--wired-line-tolerance",
         type=float,
-        default=2.0,
-        help="个人征信报告有线表格线段合并容差（默认：2.0）",
+        default=2.2,
+        help="个人征信报告有线表格线段合并容差（默认：2.2）",
     )
     args = parser.parse_args()
 

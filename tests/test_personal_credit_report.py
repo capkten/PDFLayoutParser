@@ -53,7 +53,7 @@ def test_personal_report_default_wired_tolerance_keeps_three_tables_separate():
 
     personal = PersonalCreditReportTableExtractor(use_ml_table_detector=False)
     assert personal.line_tolerance == 2.3
-    assert personal._wired_extractor.line_tolerance == 2.0
+    assert personal._wired_extractor.line_tolerance == 2.2
     assert personal._wireless_extractor.line_tolerance == 2.3
     assert len(_regions_for_extractor(personal)) == 3
 
@@ -65,7 +65,7 @@ def test_personal_report_default_wired_tolerance_keeps_three_tables_separate():
         pdf_path="unused.pdf", use_ml_table_detector=False
     )
     default_extractor = default_pipeline._create_table_extractor()
-    assert default_extractor._wired_extractor.line_tolerance == 2.0
+    assert default_extractor._wired_extractor.line_tolerance == 2.2
 
 
 def test_personal_report_pipeline_accepts_external_wired_tolerance():
@@ -106,6 +106,29 @@ def test_parse_personal_credit_report_forwards_external_wired_tolerance(monkeypa
 
     assert result == {"ok": True}
     assert captured["wired_line_tolerance"] == 1.75
+
+
+def test_parse_personal_credit_report_uses_default_wired_tolerance(monkeypatch):
+    import hexai_pdf_parser.extractors.personal_credit_report as parser_module
+
+    captured = {}
+
+    class FakePipeline:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        def run(self):
+            return object()
+
+    monkeypatch.setattr(parser_module, "PersonalCreditReportPipeline", FakePipeline)
+    monkeypatch.setattr(
+        parser_module, "_document_result", lambda _document: {"ok": True}
+    )
+
+    result = parser_module.parse_personal_credit_report("sample.pdf")
+
+    assert result == {"ok": True}
+    assert captured["wired_line_tolerance"] == 2.2
 
 
 def test_make_query_tables_with_synthetic_page():
