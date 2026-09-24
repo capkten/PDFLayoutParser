@@ -143,16 +143,23 @@ def _plain(value: Any) -> Any:
 
 
 def _freeze(value: Any) -> Any:
-    if isinstance(value, Mapping):
-        return MappingProxyType({str(key): _freeze(item) for key, item in value.items()})
-    if isinstance(value, (list, tuple)):
-        return tuple(_freeze(item) for item in value)
-    if isinstance(value, (set, frozenset)):
-        return tuple(_freeze(item) for item in sorted(value, key=repr))
-    if isinstance(value, float):
-        return _finite_float(value)
     if isinstance(value, (str, int, bool)) or value is None:
         return value
+    if isinstance(value, float):
+        return _finite_float(value)
+    if isinstance(value, MappingProxyType):
+        return value
+    if isinstance(value, dict):
+        return MappingProxyType({str(key): _freeze(item) for key, item in value.items()})
+    if isinstance(value, tuple):
+        # If all items are immutable, return as is; else freeze
+        return tuple(_freeze(item) for item in value)
+    if isinstance(value, list):
+        return tuple(_freeze(item) for item in value)
+    if isinstance(value, Mapping):
+        return MappingProxyType({str(key): _freeze(item) for key, item in value.items()})
+    if isinstance(value, (set, frozenset)):
+        return tuple(_freeze(item) for item in sorted(value, key=repr))
     return _freeze(_plain(value))
 
 
@@ -747,6 +754,7 @@ def capture_page_snapshot(
     allowed_regions: Sequence[Any] = (),
     excluded_regions: Sequence[Any] = (),
     ml_render_dpi: float = 72.0,
+    lightweight: bool = False,
 ) -> PageSnapshot:
     """Capture all page evidence once, before any filtering or parsing."""
 
@@ -796,109 +804,131 @@ def capture_page_snapshot(
     frozen_allowed = _regions(allowed_regions)
     frozen_excluded = _regions(excluded_regions)
 
-    text_variants: dict[str, dict[str, Any]] = {}
-    text_values: dict[str, Any] = {}
-    for mode in ("rawdict", "dict", "text", "blocks"):
-        default_record, default_value = _read_call(page, "get_text", mode)
-        preserve_record, preserve_value = _read_call(
-            page, "get_text", mode, flags=fitz.TEXT_PRESERVE_WHITESPACE
-        )
-        selected_record = (
-            preserve_record if preserve_record.get("status") == "ok" else default_record
-        )
-        selected_value = (
-            preserve_value if preserve_record.get("status") == "ok" else default_value
-        )
-        if preserve_record.get("status") != "ok" and default_record.get("status") != "ok":
-            selected_value = None
-        text_values[mode] = selected_value
-        text_variants[mode] = {
-            "default": default_record,
-            "preserve_whitespace": preserve_record,
+    if lightweight:
+        raw_text_record, raw_text_value = _read_call(page, "get_text", "rawdict")
+        page_reads["text.rawdict"] = raw_text_record
+        page_reads["text.rawdict.default"] = raw_text_record
+        text_variants = {
+            mode: {
+                "default": raw_text_record,
+                "preserve_whitespace": raw_text_record,
+            }
+            for mode in ("rawdict", "dict", "text", "blocks")
         }
-        page_reads[f"text.{mode}.default"] = default_record
-        page_reads[f"text.{mode}.preserve_whitespace"] = preserve_record
-        page_reads[f"text.{mode}"] = selected_record
+        raw_text = raw_text_value if isinstance(raw_text_value, Mapping) else {}
+        words = ()
+        drawings = ()
+        words_record = {"status": "skipped_lightweight"}
+        words_default_record = words_record
+        words_flags_zero_record = words_record
+        words_preserve_record = words_record
+        drawings_record = {"status": "skipped_lightweight"}
+        drawings_default_record = drawings_record
+        drawings_extended_record = drawings_record
+    else:
+        text_variants: dict[str, dict[str, Any]] = {}
+        text_values: dict[str, Any] = {}
+        for mode in ("rawdict", "dict", "text", "blocks"):
+            default_record, default_value = _read_call(page, "get_text", mode)
+            preserve_record, preserve_value = _read_call(
+                page, "get_text", mode, flags=fitz.TEXT_PRESERVE_WHITESPACE
+            )
+            selected_record = (
+                preserve_record if preserve_record.get("status") == "ok" else default_record
+            )
+            selected_value = (
+                preserve_value if preserve_record.get("status") == "ok" else default_value
+            )
+            if preserve_record.get("status") != "ok" and default_record.get("status") != "ok":
+                selected_value = None
+            text_values[mode] = selected_value
+            text_variants[mode] = {
+                "default": default_record,
+                "preserve_whitespace": preserve_record,
+            }
+            page_reads[f"text.{mode}.default"] = default_record
+            page_reads[f"text.{mode}.preserve_whitespace"] = preserve_record
+            page_reads[f"text.{mode}"] = selected_record
 
-    words_default_record, words_default_value = _read_call(page, "get_text", "words")
-    words_flags_zero_record, words_flags_zero_value = _read_call(
-        page, "get_text", "words", flags=0
-    )
-    words_preserve_record, words_preserve_value = _read_call(
-        page, "get_text", "words", flags=fitz.TEXT_PRESERVE_WHITESPACE
-    )
-    words_record = (
-        words_default_record
-        if words_default_record.get("status") == "ok"
-        else words_preserve_record
-    )
-    words_value = (
-        words_default_value
-        if words_default_record.get("status") == "ok"
-        else words_preserve_value
-    )
-    if (
-        words_default_record.get("status") != "ok"
-        and words_preserve_record.get("status") != "ok"
-    ):
-        words_value = None
-    page_reads["text.words.default"] = words_default_record
-    page_reads["text.words.flags_zero"] = words_flags_zero_record
-    page_reads["text.words.preserve_whitespace"] = words_preserve_record
-    page_reads["text.words"] = words_record
-    for index, region in enumerate((*frozen_allowed, *frozen_excluded)):
-        clip_default_record, _ = _read_call(
-            page,
-            "get_text",
-            "words",
-            clip=_clip_value(region),
+        words_default_record, words_default_value = _read_call(page, "get_text", "words")
+        words_flags_zero_record, words_flags_zero_value = _read_call(
+            page, "get_text", "words", flags=0
         )
-        clip_preserve_record, _ = _read_call(
-            page,
-            "get_text",
-            "words",
-            flags=fitz.TEXT_PRESERVE_WHITESPACE,
-            clip=_clip_value(region),
+        words_preserve_record, words_preserve_value = _read_call(
+            page, "get_text", "words", flags=fitz.TEXT_PRESERVE_WHITESPACE
         )
-        page_reads[f"text.words.clip.{index}.default"] = clip_default_record
-        page_reads[f"text.words.clip.{index}.preserve_whitespace"] = clip_preserve_record
-        page_reads[f"text.words.clip.{index}"] = (
-            clip_default_record
-            if clip_default_record.get("status") == "ok"
-            else clip_preserve_record
+        words_record = (
+            words_default_record
+            if words_default_record.get("status") == "ok"
+            else words_preserve_record
         )
+        words_value = (
+            words_default_value
+            if words_default_record.get("status") == "ok"
+            else words_preserve_value
+        )
+        if (
+            words_default_record.get("status") != "ok"
+            and words_preserve_record.get("status") != "ok"
+        ):
+            words_value = None
+        page_reads["text.words.default"] = words_default_record
+        page_reads["text.words.flags_zero"] = words_flags_zero_record
+        page_reads["text.words.preserve_whitespace"] = words_preserve_record
+        page_reads["text.words"] = words_record
+        for index, region in enumerate((*frozen_allowed, *frozen_excluded)):
+            clip_default_record, _ = _read_call(
+                page,
+                "get_text",
+                "words",
+                clip=_clip_value(region),
+            )
+            clip_preserve_record, _ = _read_call(
+                page,
+                "get_text",
+                "words",
+                flags=fitz.TEXT_PRESERVE_WHITESPACE,
+                clip=_clip_value(region),
+            )
+            page_reads[f"text.words.clip.{index}.default"] = clip_default_record
+            page_reads[f"text.words.clip.{index}.preserve_whitespace"] = clip_preserve_record
+            page_reads[f"text.words.clip.{index}"] = (
+                clip_default_record
+                if clip_default_record.get("status") == "ok"
+                else clip_preserve_record
+            )
 
-    drawings_default_record, drawings_default_value = _read_call(page, "get_drawings")
-    drawings_extended_record, drawings_extended_value = _read_call(
-        page, "get_drawings", extended=True
-    )
-    drawings_record = (
-        drawings_extended_record
-        if drawings_extended_record.get("status") == "ok"
-        else drawings_default_record
-    )
-    drawings_value = (
-        drawings_extended_value
-        if drawings_extended_record.get("status") == "ok"
-        else drawings_default_value
-    )
-    if (
-        drawings_extended_record.get("status") != "ok"
-        and drawings_default_record.get("status") != "ok"
-    ):
-        drawings_value = None
-    page_reads["drawings.default"] = drawings_default_record
-    page_reads["drawings.extended"] = drawings_extended_record
-    page_reads["drawings"] = drawings_record
+        drawings_default_record, drawings_default_value = _read_call(page, "get_drawings")
+        drawings_extended_record, drawings_extended_value = _read_call(
+            page, "get_drawings", extended=True
+        )
+        drawings_record = (
+            drawings_extended_record
+            if drawings_extended_record.get("status") == "ok"
+            else drawings_default_record
+        )
+        drawings_value = (
+            drawings_extended_value
+            if drawings_extended_record.get("status") == "ok"
+            else drawings_default_value
+        )
+        if (
+            drawings_extended_record.get("status") != "ok"
+            and drawings_default_record.get("status") != "ok"
+        ):
+            drawings_value = None
+        page_reads["drawings.default"] = drawings_default_record
+        page_reads["drawings.extended"] = drawings_extended_record
+        page_reads["drawings"] = drawings_record
 
-    raw_text_value = text_values["rawdict"]
-    dict_text_value = text_values["dict"]
-    raw_text = raw_text_value if isinstance(raw_text_value, Mapping) else None
-    if raw_text is None and isinstance(dict_text_value, Mapping):
-        raw_text = dict_text_value
-    raw_text = raw_text or {}
-    words = words_value if isinstance(words_value, Iterable) and not isinstance(words_value, (str, bytes, Mapping)) else ()
-    drawings = drawings_value if isinstance(drawings_value, Iterable) and not isinstance(drawings_value, (str, bytes, Mapping)) else ()
+        raw_text_value = text_values["rawdict"]
+        dict_text_value = text_values["dict"]
+        raw_text = raw_text_value if isinstance(raw_text_value, Mapping) else None
+        if raw_text is None and isinstance(dict_text_value, Mapping):
+            raw_text = dict_text_value
+        raw_text = raw_text or {}
+        words = words_value if isinstance(words_value, Iterable) and not isinstance(words_value, (str, bytes, Mapping)) else ()
+        drawings = drawings_value if isinstance(drawings_value, Iterable) and not isinstance(drawings_value, (str, bytes, Mapping)) else ()
 
     text_blocks = []
     lines = []
@@ -979,6 +1009,43 @@ def capture_page_snapshot(
     frozen_characters = tuple(characters)
     frozen_words = _word_records(words)
     frozen_drawings = _drawing_records(drawings)
+
+    if lightweight:
+        summary = _freeze(
+            {
+                "block_count": len(text_blocks),
+                "line_count": line_count,
+                "span_count": len(frozen_spans),
+                "character_count": len(frozen_characters),
+                "word_count": len(frozen_words),
+                "drawing_count": len(frozen_drawings),
+                "allowed_region_count": len(frozen_allowed),
+                "excluded_region_count": len(frozen_excluded),
+                "read_count": len(page_reads),
+            }
+        )
+        return PageSnapshot(
+            schema_version=SCHEMA_VERSION,
+            version=SNAPSHOT_VERSION,
+            page_index=int(page_index),
+            geometry=geometry,
+            text_blocks=tuple(text_blocks),
+            spans=frozen_spans,
+            characters=frozen_characters,
+            words=frozen_words,
+            drawings=frozen_drawings,
+            allowed_regions=frozen_allowed,
+            excluded_regions=frozen_excluded,
+            extraction_options=extraction_options,
+            summary=summary,
+            resources=_freeze({}),
+            raster=_freeze({}),
+            bboxlog=_freeze({}),
+            table_fallback=_freeze({}),
+            page_reads=_freeze(page_reads),
+            lines=tuple(lines),
+            word_variants=_freeze({}),
+        )
 
     fonts_record, fonts_value = _read_call(page, "get_fonts", full=True)
     images_default_record, images_default_value = _read_call(page, "get_images")

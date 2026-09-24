@@ -36,18 +36,40 @@ class Loader:
         with fitz.open(self.file_path) as pdf:
             page_count = len(pdf)
             pages: list[Page] = []
-
-            for idx, page in enumerate(pdf):
-                rect = page.rect
-                should_classify = target_indices is None or idx in target_indices
-                page_type = classify_page_type(page) if should_classify else "vector"
-                pages.append(
-                    Page(
-                        index=idx,
-                        size={"width": rect.width, "height": rect.height},
-                        rotation=page.rotation,
-                        page_type=page_type,
+            if target_indices is None:
+                for idx, page in enumerate(pdf):
+                    rect = page.rect
+                    page_type = classify_page_type(page)
+                    pages.append(
+                        Page(
+                            index=idx,
+                            size={"width": rect.width, "height": rect.height},
+                            rotation=page.rotation,
+                            page_type=page_type,
+                        )
                     )
-                )
+            else:
+                for idx in range(page_count):
+                    if idx in target_indices:
+                        page = pdf[idx]
+                        rect = page.rect
+                        page_type = classify_page_type(page)
+                        pages.append(
+                            Page(
+                                index=idx,
+                                size={"width": rect.width, "height": rect.height},
+                                rotation=page.rotation,
+                                page_type=page_type,
+                            )
+                        )
+                    else:
+                        pages.append(
+                            Page(
+                                index=idx,
+                                size={"width": 0.0, "height": 0.0},
+                                rotation=0,
+                                page_type="vector",
+                            )
+                        )
 
         return Document(file_name=file_name, page_count=page_count, pages=pages)

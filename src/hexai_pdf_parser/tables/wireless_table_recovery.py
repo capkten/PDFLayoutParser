@@ -263,14 +263,24 @@ def collect_native_spans(
     allowed_regions: Sequence[BBox] | None = None,
 ) -> List[NativeSpan]:
     """Return native spans in allowed regions and outside excluded regions."""
-    from hexai_pdf_parser.pdf_snapshot import capture_page_snapshot
+    if hasattr(page, "schema_version") and hasattr(page, "text_blocks"):
+        snapshot = page
+    elif hasattr(page, "_cached_snapshot") and page._cached_snapshot is not None:
+        snapshot = page._cached_snapshot
+    else:
+        from hexai_pdf_parser.pdf_snapshot import capture_page_snapshot
 
-    snapshot = capture_page_snapshot(
-        page,
-        page_index=getattr(page, "number", 0),
-        allowed_regions=allowed_regions or (),
-        excluded_regions=excluded_regions or (),
-    )
+        snapshot = capture_page_snapshot(
+            page,
+            page_index=getattr(page, "number", 0),
+            allowed_regions=allowed_regions or (),
+            excluded_regions=excluded_regions or (),
+            lightweight=True,
+        )
+        try:
+            page._cached_snapshot = snapshot
+        except (AttributeError, TypeError):
+            pass
     return list(
         collect_native_spans_from_snapshot(
             snapshot,
@@ -1193,6 +1203,8 @@ def _recover_wireless_tables_python(
     """Recover borderless tables from a native PDF page and retain evidence."""
     if hasattr(page, "schema_version") and hasattr(page, "text_blocks"):
         snapshot = page
+    elif hasattr(page, "_cached_snapshot") and page._cached_snapshot is not None:
+        snapshot = page._cached_snapshot
     else:
         from hexai_pdf_parser.pdf_snapshot import capture_page_snapshot
 
@@ -1201,7 +1213,12 @@ def _recover_wireless_tables_python(
             page_index=getattr(page, "number", 0),
             allowed_regions=allowed_regions or (),
             excluded_regions=excluded_regions or (),
+            lightweight=True,
         )
+        try:
+            page._cached_snapshot = snapshot
+        except (AttributeError, TypeError):
+            pass
     return _recover_wireless_tables_from_snapshot_python(
         snapshot,
         excluded_regions=excluded_regions,
@@ -1217,6 +1234,8 @@ def recover_wireless_tables(
     """Recover borderless tables from a native PDF page with PDF_RUST_MODE support."""
     if hasattr(page, "schema_version") and hasattr(page, "text_blocks"):
         snapshot = page
+    elif hasattr(page, "_cached_snapshot") and page._cached_snapshot is not None:
+        snapshot = page._cached_snapshot
     else:
         from hexai_pdf_parser.pdf_snapshot import capture_page_snapshot
 
@@ -1225,7 +1244,12 @@ def recover_wireless_tables(
             page_index=getattr(page, "number", 0),
             allowed_regions=allowed_regions or (),
             excluded_regions=excluded_regions or (),
+            lightweight=True,
         )
+        try:
+            page._cached_snapshot = snapshot
+        except (AttributeError, TypeError):
+            pass
 
     mode = rust_adapter.get_rust_mode("wireless_table_recovery")
     if mode in ("rust", "shadow"):

@@ -606,14 +606,20 @@ def _recover_cells_from_region_python(
 ) -> tuple[int, int, list[Cell]]:
     if hasattr(page, "schema_version") and hasattr(page, "text_blocks"):
         snapshot = page
+    elif hasattr(page, "_cached_snapshot") and page._cached_snapshot is not None:
+        snapshot = page._cached_snapshot
     else:
         from hexai_pdf_parser.pdf_snapshot import capture_page_snapshot
 
         snapshot = capture_page_snapshot(
             page,
             page_index=getattr(page, "number", 0),
-            allowed_regions=[region_bbox],
+            lightweight=True,
         )
+        try:
+            page._cached_snapshot = snapshot
+        except (AttributeError, TypeError):
+            pass
     return _recover_cells_from_snapshot_python(snapshot, region_bbox)
 
 
@@ -646,14 +652,20 @@ def recover_cells_from_region(
     """Recover Chinese/mixed wireless cells from one trusted table region."""
     if hasattr(page, "schema_version") and hasattr(page, "text_blocks"):
         snapshot = page
+    elif hasattr(page, "_cached_snapshot") and page._cached_snapshot is not None:
+        snapshot = page._cached_snapshot
     else:
         from hexai_pdf_parser.pdf_snapshot import capture_page_snapshot
 
         snapshot = capture_page_snapshot(
             page,
             page_index=getattr(page, "number", 0),
-            allowed_regions=[region_bbox],
+            lightweight=True,
         )
+        try:
+            page._cached_snapshot = snapshot
+        except (AttributeError, TypeError):
+            pass
 
     mode = rust_adapter.get_rust_mode("wireless_structure")
     if mode in ("rust", "shadow"):
