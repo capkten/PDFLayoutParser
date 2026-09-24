@@ -116,11 +116,45 @@ def _bbox_values(bbox: BBox) -> list[float]:
     return [float(bbox.x0), float(bbox.y0), float(bbox.x1), float(bbox.y1)]
 
 
+def _normalize_spaced_items(
+    items: list[tuple[float, float, float, float, str]],
+) -> list[tuple[float, float, float, float, str]]:
+    """Split items that contain multiple consecutive spaces or strip trailing spaces."""
+    result: list[tuple[float, float, float, float, str]] = []
+    for x0, y0, x1, y1, text in items:
+        stripped = text.strip()
+        if not stripped:
+            continue
+        if re.search(r"\s{2,}", text):
+            matches = list(re.finditer(r"\S+", text))
+            if len(matches) > 1:
+                total_len = max(len(text), 1)
+                char_w = (x1 - x0) / total_len
+                for m in matches:
+                    sub_text = m.group()
+                    sub_x0 = x0 + m.start() * char_w
+                    sub_x1 = x0 + m.end() * char_w
+                    result.append((sub_x0, y0, sub_x1, y1, sub_text))
+                continue
+        if len(stripped) != len(text):
+            m = re.search(r"\S+", text)
+            if m:
+                total_len = max(len(text), 1)
+                char_w = (x1 - x0) / total_len
+                sub_x0 = x0 + m.start() * char_w
+                sub_x1 = x0 + m.end() * char_w
+                result.append((sub_x0, y0, sub_x1, y1, stripped))
+                continue
+        result.append((x0, y0, x1, y1, stripped))
+    return result
+
+
 def _query_rows(
     page: fitz.Page,
     *,
     bbox: BBox | None = None,
     merged: bool = False,
+    row_tolerance: float = 4.5,
 ) -> list[list[tuple[float, float, float, float, str]]]:
     """Group query-region words into rows, optionally using merged spans."""
     rows: list[list[tuple[float, float, float, float, str]]] = []
@@ -134,6 +168,8 @@ def _query_rows(
     else:
         source_words = [word[:5] for word in page.get_text("words")]
 
+    source_words = _normalize_spaced_items(source_words)
+
     for x0, y0, x1, y1, text in source_words:
         if not text.strip():
             continue
@@ -144,7 +180,7 @@ def _query_rows(
                 continue
         center_y = (y0 + y1) / 2.0
         row = next(
-            (candidate for candidate in rows if abs((candidate[0][1] + candidate[0][3]) / 2.0 - center_y) <= 2.0),
+            (candidate for candidate in rows if abs((candidate[0][1] + candidate[0][3]) / 2.0 - center_y) <= row_tolerance),
             None,
         )
         item = (x0, y0, x1, y1, text)
@@ -158,14 +194,15 @@ def _query_rows(
 def _join_query_items(items: list[tuple[float, float, float, float, str]]) -> str:
     """Join span-backed query words with the main text spacing rules."""
     words = [Word(text=item[4], bbox=BBox(*item[:4])) for item in items]
-    return TextExtractor()._join_words(words)
+    text = TextExtractor()._join_words(words)
+    return re.sub(r"(\b\d)\s+(\d{3}年)", r"\1\2", text)
 
 
 def _is_query_record_row(row: list[tuple[float, float, float, float, str]]) -> bool:
     """Return True for a row with the four query-record column anchors."""
     texts = [item[4].strip() for item in row]
     has_number = any(item[0] < 110 and re.fullmatch(r"\d+", text) for item, text in zip(row, texts))
-    has_date = any(item[0] >= 90 and item[0] < 240 and "年" in text for item, text in zip(row, texts))
+    has_date = any(item[0] < 240 and "年" in text for item, text in zip(row, texts))
     has_reason = any(item[0] >= 340 for item in row)
     return has_number and has_date and has_reason
 
@@ -210,19 +247,25 @@ def _make_query_table(
         header_cells: list[Cell] = []
     else:
         start_index = header_index + 1
-        end_index = len(rows) if end_index is None else end_index
+        header_items_by_col: dict[int, list[tuple[float, float, float, float, str]]] = {i: [] for i in range(4)}
+        for item in rows[header_index]:
+            cx = (item[0] + item[2]) / 2.0
+            col = 0 if cx < 105.0 else 1 if cx < 240.0 else 2 if cx < 440.0 else 3
+            header_items_by_col[col].append(item)
         header_cells = [
             Cell(
-                text=header,
+                text=_QUERY_HEADERS[col],
                 row_index=0,
-                col_index=index,
+                col_index=col,
                 bbox=BBox(
-                    item[0], item[1], item[2], item[3]
+                    min(it[0] for it in header_items_by_col[col]),
+                    min(it[1] for it in header_items_by_col[col]),
+                    max(it[2] for it in header_items_by_col[col]),
+                    max(it[3] for it in header_items_by_col[col]),
                 ),
             )
-            for index, header in enumerate(_QUERY_HEADERS)
-            for item in rows[header_index]
-            if header == item[4]
+            for col in range(4)
+            if header_items_by_col[col]
         ]
 
     section_title: str | None = None
@@ -267,7 +310,7 @@ def _make_query_table(
         h_centers = [(c.bbox.x0 + c.bbox.x1) / 2.0 for c in h_sorted]
         boundaries = [(h_centers[i] + h_centers[i + 1]) / 2.0 for i in range(3)]
     else:
-        boundaries = [95.0, 220.0, 355.0]
+        boundaries = [105.0, 240.0, 440.0]
 
     recovered_rows: list[list[tuple[float, float, float, float, str]]] = []
     for row in rows[start_index:end_index]:
@@ -337,7 +380,16 @@ def _make_query_table(
         by_col: dict[int, list[tuple[float, float, float, float, str]]] = {index: [] for index in range(4)}
         for item in row:
             center_x = (item[0] + item[2]) / 2.0
-            col_index = 0 if center_x < boundaries[0] else 1 if center_x < boundaries[1] else 2 if center_x < boundaries[2] else 3
+            if item[4].isdigit() and item[0] < boundaries[0]:
+                col_index = 0
+            elif center_x < boundaries[0]:
+                col_index = 0
+            elif center_x < boundaries[1]:
+                col_index = 1
+            elif center_x < boundaries[2]:
+                col_index = 2
+            else:
+                col_index = 3
             by_col[col_index].append(item)
 
         if not by_col[0]:
