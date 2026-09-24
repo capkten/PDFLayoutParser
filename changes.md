@@ -2,6 +2,16 @@
 
 ## 2026-09-24
 
+- 修复个人信用报告查询记录明细中日期等字段包围盒估算偏小、未完整框住“2025年”等前导文字的问题：
+  - **根因与调用位置**：`_normalize_spaced_items()` 在处理包含大量空格的跨列词块（如 `21                              2025年12月09日`）时，采用了按总字符数线性等宽切分坐标的估算方法（`char_w = (x1 - x0) / total_len`）。由于字体中西文空格排版宽度远小于汉字，线性等宽计算严重放大了空格所占宽度，导致右侧日期文本的推导起始点从真实的 $x_0 = 154.36\text{ pt}$ 被向右大幅推后至 $183.4\text{ pt}$，造成可视化中绿框向右偏移，文字“2025年”露在绿框之外。
+  - **判定与修复**：
+    1. 新增 `_extract_page_char_words(page)`：直接消费 `page.get_text("rawdict")`，读取每一个底层字符原生的真实物理包围盒 `ch["bbox"]`，将非空白字符连续段（token runs）直接 union 为真实坐标，杜绝任何字符宽度估算假设。
+    2. 在 `_query_rows()` 中优先使用 `_extract_page_char_words(page)` 作为真实物理词块来源，并在非 rawdict 场景（如单测 mock）平滑回退至既有逻辑。
+  - **测试与验证**：
+    - 在 `tests/test_personal_credit_report.py` 中新增 `test_extract_page_char_words_exact_bbox`，验证字符真实坐标 union 起始点精确匹配 `154.36`；`tests/test_personal_credit_report.py` 全部 25 项测试通过（`25 passed`）。
+    - 运行 `demo.py` 并检查渲染图像 `output/demo/3_PDFsam_8441c8ac-d8b6-4cd0-9c4e-da03589a2260/tables/page-001.png`，视觉确认 21~25 行日期列“2025年12月09日”等全部文字被绿框 100% 严密、精准贴合地框住。
+
+
 - 修复个人信用报告查询记录明细表格提取中，顶部编号 12、13 丢失，以及编号 21~25（及 3~11、69~74）被错误合并进上一行的问题：
   - **根因与调用位置**：
     1. **顶部 12 丢失**：`src/hexai_pdf_parser/extractors/personal_credit_report.py::_query_rows()` 在使用 `merged=True` 提取词块时，底层将编号 `'12'` 与日期 `'026年04月11日'` 之间的大间距空格合并为一个单词，破坏了 `_is_query_record_row()` 对编号的纯数字正则匹配要求（`re.fullmatch(r"\d+", text)`），导致整行被误判为非记录行丢弃。
