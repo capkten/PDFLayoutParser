@@ -1232,6 +1232,28 @@ def recover_wireless_tables(
     allowed_regions: Sequence[BBox] | None = None,
 ) -> WirelessRecovery:
     """Recover borderless tables from a native PDF page with PDF_RUST_MODE support."""
+    mode = rust_adapter.get_rust_mode("wireless_table_recovery")
+    if mode == "rust" and hasattr(page, "get_text") and not hasattr(page, "schema_version"):
+        try:
+            rect = getattr(page, "rect", None)
+            page_w = float(rect.width) if rect else 595.0
+            page_h = float(rect.height) if rect else 842.0
+            page_y0 = float(rect.y0) if rect else 0.0
+            rotation = int(getattr(page, "rotation", 0))
+            rawdict = page.get_text("rawdict")
+            raw_res = rust_adapter.recover_wireless_tables_from_rawdict(
+                rawdict=rawdict,
+                page_width=page_w,
+                page_height=page_h,
+                rotation=rotation,
+                page_y0=page_y0,
+                allowed_regions=list(allowed_regions) if allowed_regions else None,
+                excluded_regions=list(excluded_regions) if excluded_regions else None,
+            )
+            return _wireless_recovery_from_rust(raw_res)
+        except Exception:
+            pass
+
     if hasattr(page, "schema_version") and hasattr(page, "text_blocks"):
         snapshot = page
     elif hasattr(page, "_cached_snapshot") and page._cached_snapshot is not None:
@@ -1251,7 +1273,6 @@ def recover_wireless_tables(
         except (AttributeError, TypeError):
             pass
 
-    mode = rust_adapter.get_rust_mode("wireless_table_recovery")
     if mode in ("rust", "shadow"):
         def _recover_wireless_tables_rust():
             spans = collect_native_spans_from_snapshot(

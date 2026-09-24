@@ -27,6 +27,7 @@ elif sys.path[0] != src_str:
     sys.path.insert(0, src_str)
 
 sys.stdout.reconfigure(encoding="utf-8")
+os.environ.setdefault("PDF_RUST_MODE", "rust")
 
 try:
     import pymupdf as fitz

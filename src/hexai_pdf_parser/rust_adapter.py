@@ -1422,6 +1422,54 @@ def recover_wireless_tables(input_dto: Union[Dict[str, Any], Tuple[Any, ...]]) -
     return _pdf_fast.recover_wireless_tables(d)
 
 
+def collect_native_spans_from_rawdict(
+    rawdict: Dict[str, Any],
+    page_height: float,
+    page_y0: float = 0.0,
+    allowed_regions: Optional[Sequence[Any]] = None,
+    excluded_regions: Optional[Sequence[Any]] = None,
+) -> List[Dict[str, Any]]:
+    """Directly collect native spans from PyMuPDF rawdict via Rust kernel."""
+    return _pdf_fast.collect_native_spans_from_rawdict(
+        rawdict,
+        float(page_height),
+        float(page_y0),
+        list(allowed_regions) if allowed_regions else None,
+        list(excluded_regions) if excluded_regions else None,
+    )
+
+
+def recover_wireless_tables_from_rawdict(
+    rawdict: Dict[str, Any],
+    page_width: float,
+    page_height: float,
+    rotation: int = 0,
+    page_y0: float = 0.0,
+    allowed_regions: Optional[Sequence[Any]] = None,
+    excluded_regions: Optional[Sequence[Any]] = None,
+    config: Optional[Mapping[str, float]] = None,
+) -> Dict[str, Any]:
+    """Recover wireless tables directly from PyMuPDF rawdict in Rust, bypassing snapshot overhead."""
+    page_info = (float(page_width), float(page_height), int(rotation))
+    cfg_tuple = None
+    if config is not None:
+        cfg_tuple = (
+            float(config.get("line_tolerance", 2.0)),
+            float(config.get("row_tolerance", 2.0)),
+            float(config.get("column_tolerance", 2.0)),
+            float(config.get("span_tolerance", 2.0)),
+            float(config.get("numeric_tolerance", 2.0)),
+        )
+    return _pdf_fast.recover_wireless_tables_from_rawdict(
+        rawdict,
+        page_info,
+        float(page_y0),
+        list(allowed_regions) if allowed_regions else None,
+        list(excluded_regions) if excluded_regions else None,
+        cfg_tuple,
+    )
+
+
 def pack_wireless_recovery_input(input_dto: Dict[str, Any]) -> Tuple[Any, ...]:
     """Convert a dictionary input_dto into compact flat arrays for fast FFI."""
     page = input_dto.get("page", {})

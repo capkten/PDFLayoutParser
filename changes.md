@@ -1,5 +1,19 @@
 # Changes
 
+## 2026-09-24
+
+- **表格候选逻辑下沉至 Rust 优化 (Rawdict 快速路径)**：
+  - **根因分析**：端到端单页表格提取总耗时约 1.5s，其中纯 YOLO ONNX 模型推理仅需约 0.28s，其余 >1.0s 的开销完全集中在 Python 侧 `capture_page_snapshot`（数十万次递归字典包装、`_freeze` 冻结与 SHA256 签名计算）。而 PyMuPDF C 层的 `page.get_text("rawdict")` 耗时仅约 4ms，Rust 端无线结构推断纯计算耗时仅约 5ms。
+  - **核心设计与实现**：
+    1. 在 `rust/snapshot.rs` 实现 `collect_native_spans_from_rawdict`，直接遍历 PyMuPDF 的 `rawdict` C-Python 底层字典结构，就地生成 `Vec<NativeSpanInputDto>`，保留原有的页脚页码检测（`is_footer_page_number`）与空间区域过滤，完全绕过 `PageSnapshot`；
+    2. 在 `rust/lib.rs` 暴露 `collect_native_spans_from_rawdict` 与 `recover_wireless_tables_from_rawdict` 两个 PyO3 绑定，直接在 Rust 内存中打通 `rawdict -> spans -> recover_wireless_tables` 直通链路；
+    3. 在 `src/hexai_pdf_parser/rust_adapter.py` 提供强类型适配接口；在 `src/hexai_pdf_parser/tables/wireless_table_recovery.py::recover_wireless_tables` 中接入极速通道：当 `PDF_RUST_MODE='rust'` 且传入原生 `fitz.Page` 时，直接走 Rust rawdict 快速路径恢复无线表格。若发生异常安全回退到原有 snapshot 路径，传入 snapshot 时保持原有行为不变。
+  - **不回读 words 约束**：严格遵循中文无线表格结构恢复规范，只消费 PyMuPDF 原生 `rawdict` 中的 spans 与字符，严禁回读 `page.get_text("words")`，严格保持 native-span、atom、列带和 Cell 的结构恢复不变量。
+  - **测试与性能对比**：
+    - 新增 `tests/test_rust_rawdict_candidate.py` 覆盖 4 项专属单元测试（span 提取 100% 一致性、恢复表格结构 100% 一致性、page 快速通道、异常安全回退）；
+    - 全套测试：64 项 Rust 单元测试全部通过，99 项核心 Python 测试全绿；
+    - 性能实测：在 `zh_all_table_pages.pdf` 第 0 页上，表格提取阶段（`table_extract`）耗时从 **1.488s 骤降至 0.332s**（包含 0.28s 模型推理），整页候选检测纯计算耗时从 1000+ ms 降至 20ms 以内，单页端到端总解析时间压缩至 **0.531s**。
+
 ## 2026-09-23
 
 - Task 5 bounded Rust parity repair：修正 NativeRegion band ID 到零基列位置映射，保留 `column_id` 原证据；Rust native table recovery 使用保留 separator 的 text-run helper，避免把 Python 候选分隔行过滤掉。页面候选分组按 Python 规则拆开未标注单字段行，并补回相邻短标题；Rust vertical continuation 拒绝以冒号结尾的字段，匹配 Python 字段标签语义。页面候选 confidence 从固定 `0.90` 改为按 Python 的多列行支持数与活动列数计算。

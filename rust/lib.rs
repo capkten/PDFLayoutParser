@@ -274,6 +274,50 @@ fn canonical_digest<'py>(py: Python<'py>, data: &Bound<'py, PyDict>) -> PyResult
     Ok(digest)
 }
 
+fn parse_region_item(item: &Bound<'_, pyo3::PyAny>) -> PyResult<Rect4> {
+    if let Ok(dict) = item.downcast::<PyDict>() {
+        Rect4::from_py(dict)
+    } else if let Ok(tuple) = item.extract::<(f64, f64, f64, f64)>() {
+        Ok(Rect4 {
+            schema_version: 1,
+            x0: tuple.0,
+            y0: tuple.1,
+            x1: tuple.2,
+            y1: tuple.3,
+        })
+    } else if let (Ok(x0), Ok(y0), Ok(x1), Ok(y1)) = (
+        item.getattr("x0").and_then(|v| v.extract::<f64>()),
+        item.getattr("y0").and_then(|v| v.extract::<f64>()),
+        item.getattr("x1").and_then(|v| v.extract::<f64>()),
+        item.getattr("y1").and_then(|v| v.extract::<f64>()),
+    ) {
+        Ok(Rect4 {
+            schema_version: 1,
+            x0,
+            y0,
+            x1,
+            y1,
+        })
+    } else {
+        Err(pyo3::exceptions::PyValueError::new_err(
+            "Region item must be a dict, 4-tuple, or have x0, y0, x1, y1 attributes",
+        ))
+    }
+}
+
+fn parse_region_list(list_opt: Option<&Bound<'_, PyList>>) -> PyResult<Option<Vec<Rect4>>> {
+    match list_opt {
+        Some(list) => {
+            let mut rects = Vec::with_capacity(list.len());
+            for item in list.iter() {
+                rects.push(parse_region_item(&item)?);
+            }
+            Ok(Some(rects))
+        }
+        None => Ok(None),
+    }
+}
+
 #[pyfunction(name = "collect_native_spans_from_snapshot")]
 #[pyo3(signature = (snapshot_dict, allowed_regions=None, excluded_regions=None))]
 fn collect_native_spans_from_snapshot_binding<'py>(
@@ -283,23 +327,8 @@ fn collect_native_spans_from_snapshot_binding<'py>(
     excluded_regions: Option<&Bound<'py, PyList>>,
 ) -> PyResult<Bound<'py, PyList>> {
     let snapshot = types::PageSnapshotDto::from_py(snapshot_dict)?;
-    let parse_regions = |list_opt: Option<&Bound<'py, PyList>>| -> PyResult<Option<Vec<Rect4>>> {
-        match list_opt {
-            Some(list) => {
-                let mut rects = Vec::with_capacity(list.len());
-                for item in list.iter() {
-                    let d = item.downcast::<PyDict>().map_err(|_| {
-                        pyo3::exceptions::PyValueError::new_err("Region item must be a dict")
-                    })?;
-                    rects.push(Rect4::from_py(&d)?);
-                }
-                Ok(Some(rects))
-            }
-            None => Ok(None),
-        }
-    };
-    let allowed = parse_regions(allowed_regions)?;
-    let excluded = parse_regions(excluded_regions)?;
+    let allowed = parse_region_list(allowed_regions)?;
+    let excluded = parse_region_list(excluded_regions)?;
 
     let spans = snapshot::collect_native_spans_from_snapshot(
         &snapshot,
@@ -312,6 +341,123 @@ fn collect_native_spans_from_snapshot_binding<'py>(
         result.append(s.to_py(py)?)?;
     }
     Ok(result)
+}
+
+#[pyfunction(name = "collect_native_spans_from_rawdict")]
+#[pyo3(signature = (rawdict, page_height, page_y0=0.0, allowed_regions=None, excluded_regions=None))]
+fn collect_native_spans_from_rawdict_binding<'py>(
+    py: Python<'py>,
+    rawdict: &Bound<'py, PyDict>,
+    page_height: f64,
+    page_y0: f64,
+    allowed_regions: Option<&Bound<'py, PyList>>,
+    excluded_regions: Option<&Bound<'py, PyList>>,
+) -> PyResult<Bound<'py, PyList>> {
+    let allowed = parse_region_list(allowed_regions)?;
+    let excluded = parse_region_list(excluded_regions)?;
+
+    let spans = snapshot::collect_native_spans_from_rawdict(
+        rawdict,
+        page_height,
+        page_y0,
+        allowed.as_deref(),
+        excluded.as_deref(),
+    )?;
+
+    let result = PyList::empty_bound(py);
+    for s in spans {
+        result.append(s.to_py(py)?)?;
+    }
+    Ok(result)
+}
+
+#[pyfunction(name = "recover_wireless_tables_from_rawdict")]
+#[pyo3(signature = (rawdict, page_info, page_y0=0.0, allowed_regions=None, excluded_regions=None, config=None))]
+fn recover_wireless_tables_from_rawdict_binding<'py>(
+    py: Python<'py>,
+    rawdict: &Bound<'py, PyDict>,
+    page_info: (f64, f64, i64),
+    page_y0: f64,
+    allowed_regions: Option<&Bound<'py, PyList>>,
+    excluded_regions: Option<&Bound<'py, PyList>>,
+    config: Option<(f64, f64, f64, f64, f64)>,
+) -> PyResult<Bound<'py, PyDict>> {
+    let allowed = parse_region_list(allowed_regions)?;
+    let excluded = parse_region_list(excluded_regions)?;
+
+    let page_width = page_info.0;
+    let page_height = page_info.1;
+    let rotation = page_info.2;
+
+    let spans_input = snapshot::collect_native_spans_from_rawdict(
+        rawdict,
+        page_height,
+        page_y0,
+        allowed.as_deref(),
+        excluded.as_deref(),
+    )?;
+
+    let page = types::PageDto {
+        schema_version: 1,
+        width: page_width,
+        height: page_height,
+        rotation,
+    };
+
+    let spans: Vec<types::NativeSpanDto> = spans_input.into_iter().map(|item| item.span).collect();
+
+    let mut regions = Vec::new();
+    if let Some(ref al) = allowed {
+        for (idx, r) in al.iter().enumerate() {
+            regions.push(types::RegionDto {
+                schema_version: 1,
+                rect: r.clone(),
+                source_order: idx as i64,
+                allowed: true,
+            });
+        }
+    }
+    if let Some(ref ex) = excluded {
+        let base_idx = regions.len();
+        for (idx, r) in ex.iter().enumerate() {
+            regions.push(types::RegionDto {
+                schema_version: 1,
+                rect: r.clone(),
+                source_order: (base_idx + idx) as i64,
+                allowed: false,
+            });
+        }
+    }
+
+    let cfg = match config {
+        Some(c) => types::StructureConfig {
+            schema_version: 1,
+            line_tolerance: c.0,
+            row_tolerance: c.1,
+            column_tolerance: c.2,
+            span_tolerance: c.3,
+            numeric_tolerance: c.4,
+        },
+        None => types::StructureConfig {
+            schema_version: 1,
+            line_tolerance: 2.0,
+            row_tolerance: 2.0,
+            column_tolerance: 2.0,
+            span_tolerance: 2.0,
+            numeric_tolerance: 2.0,
+        },
+    };
+
+    let input = types::WirelessRecoveryInput {
+        schema_version: 1,
+        page,
+        spans,
+        regions,
+        config: cfg,
+    };
+
+    let output = py.allow_threads(move || wireless_structure::recover_wireless_tables(input));
+    output.to_py(py)
 }
 
 #[pyfunction(name = "recover_cells_from_snapshot")]
@@ -1078,6 +1224,14 @@ fn _pdf_fast(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(roundtrip_dto_binding, module)?)?;
     module.add_function(wrap_pyfunction!(
         collect_native_spans_from_snapshot_binding,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        collect_native_spans_from_rawdict_binding,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        recover_wireless_tables_from_rawdict_binding,
         module
     )?)?;
     module.add_function(wrap_pyfunction!(
