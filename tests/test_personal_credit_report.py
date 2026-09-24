@@ -641,3 +641,44 @@ def test_query_table_handles_spaced_tokens_and_vertical_tolerances():
         "招商银行股份有限公司信用卡中心",
         "贷后管理",
     ]
+
+
+def test_extract_page_char_words_exact_bbox():
+    from types import SimpleNamespace
+    from hexai_pdf_parser.extractors.personal_credit_report import _extract_page_char_words
+
+    rawdict = {
+        "blocks": [
+            {
+                "lines": [
+                    {
+                        "spans": [
+                            {
+                                "chars": [
+                                    {"c": "2", "bbox": (73.0, 10.0, 78.0, 20.0)},
+                                    {"c": "1", "bbox": (78.0, 10.0, 83.0, 20.0)},
+                                    {"c": " ", "bbox": (83.0, 10.0, 90.0, 20.0)},
+                                    {"c": " ", "bbox": (90.0, 10.0, 150.0, 20.0)},
+                                    {"c": "2", "bbox": (154.36, 10.0, 160.0, 20.0)},
+                                    {"c": "0", "bbox": (160.0, 10.0, 166.0, 20.0)},
+                                    {"c": "2", "bbox": (166.0, 10.0, 172.0, 20.0)},
+                                    {"c": "5", "bbox": (172.0, 10.0, 178.0, 20.0)},
+                                    {"c": "年", "bbox": (178.0, 10.0, 186.0, 20.0)},
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        ]
+    }
+    mock_page = SimpleNamespace(get_text=lambda mode: rawdict if mode == "rawdict" else [])
+    words = _extract_page_char_words(mock_page)
+    assert len(words) == 2
+    assert words[0][4] == "21"
+    assert words[0][:4] == (73.0, 10.0, 83.0, 20.0)
+    assert words[1][4] == "2025年"
+    # 严格检验起始坐标是真实字符的 154.36，而不是被大量空格估算推移的坐标
+    assert words[1][0] == 154.36
+    assert words[1][2] == 186.0
+

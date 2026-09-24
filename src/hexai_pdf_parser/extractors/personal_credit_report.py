@@ -149,6 +149,47 @@ def _normalize_spaced_items(
     return result
 
 
+def _extract_page_char_words(page: fitz.Page) -> list[tuple[float, float, float, float, str]]:
+    """Extract non-whitespace token runs directly from page rawdict using union of exact char bboxes."""
+    try:
+        raw = page.get_text("rawdict")
+    except Exception:
+        return []
+    if not isinstance(raw, dict):
+        return []
+    items: list[tuple[float, float, float, float, str]] = []
+    for b in raw.get("blocks", []):
+        if "lines" not in b:
+            continue
+        for l in b.get("lines", []):
+            for s in l.get("spans", []):
+                chars = s.get("chars", [])
+                if not chars:
+                    continue
+                cur_run = []
+                for ch in chars:
+                    c = ch.get("c", "")
+                    if not c.strip():
+                        if cur_run:
+                            txt = "".join(it["c"] for it in cur_run)
+                            x0 = min(it["bbox"][0] for it in cur_run)
+                            y0 = min(it["bbox"][1] for it in cur_run)
+                            x1 = max(it["bbox"][2] for it in cur_run)
+                            y1 = max(it["bbox"][3] for it in cur_run)
+                            items.append((x0, y0, x1, y1, txt))
+                            cur_run = []
+                    else:
+                        cur_run.append(ch)
+                if cur_run:
+                    txt = "".join(it["c"] for it in cur_run)
+                    x0 = min(it["bbox"][0] for it in cur_run)
+                    y0 = min(it["bbox"][1] for it in cur_run)
+                    x1 = max(it["bbox"][2] for it in cur_run)
+                    y1 = max(it["bbox"][3] for it in cur_run)
+                    items.append((x0, y0, x1, y1, txt))
+    return items
+
+
 def _query_rows(
     page: fitz.Page,
     *,
@@ -156,19 +197,20 @@ def _query_rows(
     merged: bool = False,
     row_tolerance: float = 4.5,
 ) -> list[list[tuple[float, float, float, float, str]]]:
-    """Group query-region words into rows, optionally using merged spans."""
+    """Group query-region words into rows, using exact char bboxes from page."""
     rows: list[list[tuple[float, float, float, float, str]]] = []
-    if merged:
-        source_words = [
-            (word.bbox.x0, word.bbox.y0, word.bbox.x1, word.bbox.y1, word.text)
-            for block in TextExtractor().extract_blocks(page)
-            for line in block.lines
-            for word in line.words
-        ]
-    else:
-        source_words = [word[:5] for word in page.get_text("words")]
-
-    source_words = _normalize_spaced_items(source_words)
+    source_words = _extract_page_char_words(page)
+    if not source_words:
+        if merged:
+            source_words = [
+                (word.bbox.x0, word.bbox.y0, word.bbox.x1, word.bbox.y1, word.text)
+                for block in TextExtractor().extract_blocks(page)
+                for line in block.lines
+                for word in line.words
+            ]
+        else:
+            source_words = [word[:5] for word in page.get_text("words")]
+        source_words = _normalize_spaced_items(source_words)
 
     for x0, y0, x1, y1, text in source_words:
         if not text.strip():
