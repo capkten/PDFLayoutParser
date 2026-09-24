@@ -166,11 +166,46 @@ def _create_session(
     return ort.InferenceSession(model_path, **kwargs)
 
 
+def warmup_session(session: Any, input_size: int = 640) -> None:
+    """Warm up an ONNX Runtime session by running a dummy inference pass.
+
+    Ensures kernel compilation, memory buffer allocation, and graph optimizations
+    are fully finished before the first real page detection.
+    """
+    if not hasattr(session, "get_inputs") or not hasattr(session, "run"):
+        return
+    try:
+        inputs = session.get_inputs()
+        if not inputs:
+            return
+        inp = inputs[0]
+        shape = []
+        for dim in getattr(inp, "shape", []):
+            if isinstance(dim, int) and dim > 0:
+                shape.append(dim)
+            elif dim in ("batch", "batch_size") or dim is None or isinstance(dim, str):
+                shape.append(1)
+            else:
+                shape.append(input_size)
+        if len(shape) == 4:
+            c = shape[1] if isinstance(shape[1], int) and shape[1] > 0 else 3
+            h = shape[2] if isinstance(shape[2], int) and shape[2] > 0 else input_size
+            w = shape[3] if isinstance(shape[3], int) and shape[3] > 0 else input_size
+            shape = [1, c, h, w]
+        elif not shape:
+            shape = [1, 3, input_size, input_size]
+        dummy = np.zeros(shape, dtype=np.float32)
+        session.run(None, {inp.name: dummy})
+    except Exception:
+        pass
+
+
 def get_shared_session(
     model_path: Union[str, Path],
     providers: Optional[list[str]] = None,
     backend: str = "auto",
     provider_options: Optional[dict[str, str]] = None,
+    warmup: bool = True,
 ) -> Any:
     """Get or create a cached, process-level ONNX Runtime InferenceSession."""
     abs_path = str(Path(model_path).resolve())
@@ -215,6 +250,9 @@ def get_shared_session(
                 ) from exc
             else:
                 raise
+
+        if warmup:
+            warmup_session(session)
 
         _GLOBAL_SESSION_CACHE[cache_key] = session
         return session
@@ -308,6 +346,11 @@ class MLTableDetector:
     def close(self) -> None:
         """Release underlying ONNX Runtime session resources."""
         self._session = None
+
+    def warmup(self) -> None:
+        """Explicitly load the session and execute dummy inference to warm up."""
+        session = self._load_session()
+        warmup_session(session, input_size=self.input_size)
 
     # ------------------------------------------------------------------
     # Public API

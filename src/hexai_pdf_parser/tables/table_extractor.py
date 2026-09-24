@@ -356,6 +356,26 @@ class TableExtractor:
             return 0.0
         return ((ix1 - ix0) * (iy1 - iy0)) / left_area
 
+    def _get_or_create_ml_detector(self):
+        """Get or create the ML table detector instance."""
+        if self._ml_detector is None:
+            from hexai_pdf_parser.ml.ml_table_detector import MLTableDetector
+
+            self._ml_detector = MLTableDetector(
+                model_path=self._ml_model_path,
+                confidence_threshold=self._ml_confidence,
+                render_dpi=self.ml_render_dpi,
+            )
+        return self._ml_detector
+
+    def warmup(self) -> None:
+        """Preload and warm up underlying models so page processing runs at peak speed."""
+        if self._use_ml_table_detector:
+            try:
+                self._get_or_create_ml_detector().warmup()
+            except Exception:
+                pass
+
     def _extract_model_tables(
         self,
         page: fitz.Page,
@@ -368,15 +388,8 @@ class TableExtractor:
 
             page_language = detect_page_language(page)
         try:
-            if self._ml_detector is None:
-                from hexai_pdf_parser.ml.ml_table_detector import MLTableDetector
-
-                self._ml_detector = MLTableDetector(
-                    model_path=self._ml_model_path,
-                    confidence_threshold=self._ml_confidence,
-                    render_dpi=self.ml_render_dpi,
-                )
-            model_items = self._ml_detector.detect_with_scores(page)
+            detector = self._get_or_create_ml_detector()
+            model_items = detector.detect_with_scores(page)
             model_items = self._filter_contained_bboxes(model_items)
             model_items = self._refine_overlapping_model_bboxes(model_items, page)
         except Exception:

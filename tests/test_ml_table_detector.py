@@ -216,3 +216,49 @@ def test_detector_passes_backend_options_to_shared_session(monkeypatch):
     assert detector._load_session() is sentinel_session
     assert captured["backend"] == "openvino"
     assert captured["provider_options"] == {"device_type": "CPU"}
+
+
+def test_warmup_session_runs_dummy_inference():
+    called = []
+
+    class DummyInput:
+        name = "images"
+        shape = [1, 3, 640, 640]
+
+    class FakeSessionWithRun:
+        def get_inputs(self):
+            return [DummyInput()]
+
+        def run(self, output_names, input_feed):
+            called.append((output_names, input_feed))
+            return ["dummy_output"]
+
+    fake_sess = FakeSessionWithRun()
+    detector_module.warmup_session(fake_sess, input_size=640)
+
+    assert len(called) == 1
+    out_names, feed = called[0]
+    assert out_names is None
+    assert "images" in feed
+    assert feed["images"].shape == (1, 3, 640, 640)
+
+
+def test_detector_warmup_calls_warmup_session(monkeypatch):
+    warmed = []
+    fake_session = object()
+
+    monkeypatch.setattr(
+        detector_module, "get_shared_session", lambda *args, **kwargs: fake_session
+    )
+    monkeypatch.setattr(
+        detector_module,
+        "warmup_session",
+        lambda sess, input_size: warmed.append((sess, input_size)),
+    )
+
+    detector = MLTableDetector(model_path="dummy.onnx", input_size=640)
+    detector.warmup()
+
+    assert len(warmed) == 1
+    assert warmed[0] == (fake_session, 640)
+

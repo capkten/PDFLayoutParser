@@ -65,6 +65,21 @@ class PDFParser:
     def __exit__(self, *exc) -> None:
         pass
 
+    def warmup(self) -> None:
+        """Preload and warm up models before parsing to eliminate cold-start overhead."""
+        from hexai_pdf_parser.ml.ml_table_detector import (
+            MLTableDetector,
+            _resolve_default_model_path,
+        )
+
+        model_path = self._ml_model_path or _resolve_default_model_path()
+        detector = MLTableDetector(
+            model_path=model_path,
+            confidence_threshold=self._ml_confidence,
+            render_dpi=self._render_dpi,
+        )
+        detector.warmup()
+
     # ------------------------------------------------------------------
     # Response helpers
     # ------------------------------------------------------------------

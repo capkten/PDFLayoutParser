@@ -99,6 +99,8 @@ def _get_process_worker_resources(
             debug_pipeline=debug_pipeline,
             use_ml_table_detector=use_ml_table_detector,
         )
+        if hasattr(_PROCESS_WORKER_TABLE_EXTRACTOR, "warmup"):
+            _PROCESS_WORKER_TABLE_EXTRACTOR.warmup()
         _PROCESS_WORKER_RESOURCES_KEY = resource_key
 
     return _PROCESS_WORKER_DOCUMENT, _PROCESS_WORKER_TABLE_EXTRACTOR
@@ -747,6 +749,18 @@ class Pipeline:
             ):
                 continue
             pages_to_process.append(page.index)
+
+        # Preload and warm up models before per-page processing so that
+        # first-page table_extract measures actual calculation time.
+        if (
+            self._use_ml_table_detector
+            and any(document.pages[i].page_type != "scanned" for i in pages_to_process)
+        ):
+            def _warmup_action():
+                extractor = self._create_table_extractor()
+                if hasattr(extractor, "warmup"):
+                    extractor.warmup()
+            self._time_stage("model_warmup", _warmup_action)
 
         num_workers = self.num_workers
         if num_workers is None:
