@@ -1,6 +1,24 @@
 # Changes
 
-## 2026-09-23
+## 2026-09-24
+
+- 修复个人信用报告查询记录明细表格提取中，顶部编号 12、13 丢失，以及编号 21~25（及 3~11、69~74）被错误合并进上一行的问题：
+  - **根因与调用位置**：
+    1. **顶部 12 丢失**：`src/hexai_pdf_parser/extractors/personal_credit_report.py::_query_rows()` 在使用 `merged=True` 提取词块时，底层将编号 `'12'` 与日期 `'026年04月11日'` 之间的大间距空格合并为一个单词，破坏了 `_is_query_record_row()` 对编号的纯数字正则匹配要求（`re.fullmatch(r"\d+", text)`），导致整行被误判为非记录行丢弃。
+    2. **顶部 13 丢失**：编号词块带有尾随空格 `'13                '`，旧逻辑计算水平中心点时未去除空格宽度，导致中心点 $x=96.35\text{ pt}$ 越过了硬编码分界线（$95.0\text{ pt}$），被错划入日期列，造成第 0 列为空并在首行被过滤丢弃。
+    3. **中间行（21~25、3~11、69~74）错误合并**：在无线表格排版中，PDF 原生左侧（编号+日期）与右侧（机构+原因）存在约 $3.07\text{ pt}$ 的纵向排版高低差，而原 `_query_rows()` 行聚类容差硬编码为 $2.0\text{ pt}$，导致同一行被撕裂成左右两段；左段因缺原因被丢弃，右段因缺编号被误判为“换行续接（continuation）”，全部追加合并进了上一行单元格（如第 20 行）。此外，默认列 2 与列 3 分界线定在 $355.0\text{ pt}$ 过小，易将长机构名称的末尾字截断入原因列。
+  - **判定与修复定制**：
+    1. 新增 `_normalize_spaced_items()`：对词素文本按多连续空格（`\s{2,}`）强制切分并按字符步长重新计算坐标，彻底过滤跨列空格和尾随空格，使编号词块恢复为纯数字并收敛至实际字符宽度。
+    2. 增强编号列归属判定：当文本为纯数字且 $x_0 < \text{boundaries}[0]$ 时优先归入第 0 列。
+    3. 放宽行垂直聚类容差：将 `_query_rows()` 的 `row_tolerance` 由 $2.0\text{ pt}$ 调整为 $4.5\text{ pt}$（安全覆盖 $3.07\text{ pt} \sim 3.55\text{ pt}$ 的微小高低差，且远小于 $18\sim 20\text{ pt}$ 的行间距）。
+    4. 优化续表默认列分界线为 `[105.0, 240.0, 440.0]`，并在存在表头时稳健提取 4 个表头单元格以精确推导列宽。
+  - **测试与验证**：
+    - 在 `tests/test_personal_credit_report.py` 中新增 `test_query_table_handles_spaced_tokens_and_vertical_tolerances`，包含多连续空格拆分、尾随空格坐标校正、以及 $3.07\text{ pt}$ 垂直偏差行聚类单测；`tests/test_personal_credit_report.py` 全部 24 项测试通过（`24 passed`）。
+    - 针对用户 PDF `3_PDFsam_8441c8ac-d8b6-4cd0-9c4e-da03589a2260.pdf` 运行验证：
+      - 第 1 页机构查询记录明细由原先 5 行（3~11 合并）恢复为标准的 **13 行（1~11 逐行清晰独立）**；
+      - 第 2 页机构查询续表由原先 29 行（丢失 12、13，21~25 合并）恢复为完整的 **36 行（12 到 48 全部归入表格并逐行独立）**；
+      - 第 3 页机构查询续表由原先 21 行恢复为 **26 行（49 到 74 全部逐行独立）**；
+      - 独立输出目录：`D:\codes\PDFLayoutParser\.worktrees\fix-personal-credit-query-spacing\output\demo_fixed\3_PDFsam_8441c8ac-d8b6-4cd0-9c4e-da03589a2260`。
 
 - 修复轻量图片与渲染 API 重复打开 PDF 的问题：此前 `Loader.load()` 为读取元数据打开文档，`ImageExtractor.extract()` / `RenderEngine.render()` 又按路径逐页打开，导致同一解析器调用图片和渲染时共打开 4 次。现在 `extract_images()` 与 `render_pages()` 通过 `PDFParser._get_pdf_doc()` 获取实例句柄，并将其传给 `Loader.load(pdf_doc)`、`ImageExtractor.extract_page()` 和 `RenderEngine.render_page()`；`extract_image_in_region()`、`render_region()` 随之复用相同路径。句柄由 `close()` 释放，退出上下文管理器时也会关闭；完整 `parse()` 及 Pipeline worker 句柄管理保持不变。验证：共享句柄回归先红（原实现 `1 failed, 1 passed`，观察到 4 次打开），修复后目标测试 `2 passed`；Parser、Loader、ImageExtractor、RenderEngine 目标测试 `64 passed, 32 skipped`。
 - 修复轻量 API 将旋转归一化和渲染标签写入持久 PDF 页面导致的状态泄漏。表格区域/结构提取、图片提取和页面渲染现在在同一已打开 PDF 的单页内存副本上执行会修改页面的 helper；原页面的旋转、尺寸和文本保持不变，渲染仍绘制 page-type 标签并保留原页索引输出名，重复渲染结果一致。单页副本在调用结束时关闭，不增加按路径打开次数；独立 `ImageExtractor`、`RenderEngine` 的行为保持原样。回归先红（状态对比失败），后绿：focused `4 passed`；Parser、Loader、ImageExtractor、RenderEngine 测试 `65 passed, 32 skipped`。
