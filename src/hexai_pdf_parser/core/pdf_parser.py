@@ -30,6 +30,7 @@ class PDFParser:
         source,
         *,
         render_dpi: int = 72,
+        ml_render_dpi: Optional[int] = None,
         seal_coords: Optional[List[dict]] = None,
         ml_model_path: Optional[str] = None,
         ml_confidence: float = 0.40,
@@ -49,6 +50,7 @@ class PDFParser:
         self._document_complete = self._document is not None
 
         self._render_dpi = render_dpi
+        self._ml_render_dpi = ml_render_dpi
         self._seal_coords = seal_coords or []
         self._ml_model_path = ml_model_path
         self._ml_confidence = ml_confidence
@@ -128,6 +130,7 @@ class PDFParser:
                 pdf_path=self._pdf_path,
                 output_dir=output_dir,
                 render_dpi=self._render_dpi,
+                ml_render_dpi=self._ml_render_dpi,
                 seal_coords=self._seal_coords,
                 page_indices=page_indices,
                 ml_model_path=self._ml_model_path,
