@@ -1,5 +1,28 @@
 # Changes
 
+## 2026-09-25
+
+- **Rust 中文无线表格漏检修复与占位冲突根治（18 个漏检页清零与 1023 页全量验收通过）**：
+  - **根因分析**：
+    1. **`grouped_mixed_leaf_header_span` 几何判定偏差（涉及 Page 467、468、469 等 16 页）**：Rust 端无线结构推断中原实现单行高误判以及 `start.saturating_sub(1)` 向上误并，与 Python `logical_grid.py` 要求叶子单元必须是多行（`rowspan > 1`）不一致，导致父标题与单行叶子标题错误合并并跨行，引发严重的网格占用冲突（OccupancyConflict），根据中文无线表格硬性约束整个表格被安全防护机制丢弃；
+    2. **候选前置门控阻断 ML 检测（涉及 Page 440、923）**：`src/hexai_pdf_parser/tables/table_extractor.py:741-760` 中，当无规则几何候选时直接提前返回 `[]`，即使开启了 ML 模型（`use_model=True`），YOLO 模型检测也无法触发，导致区域恢复没有机会执行；
+    3. **`merge_source_contiguous_vertical_cells` 贪婪垂直合并（涉及 Page 590、591 等财务报表）**：Rust 侧垂直合并缺少序号项及财务科目缩进识别，将带“一、”、“二、”、“（一）”、“1．”、“加：”、“减：”等编号与列表项连续向上贪婪合并，整列 27 行被合并为一个跨度高达 27 的巨无霸 Cell，引发整表格行塌缩并产生大量槽位重叠冲突而整表丢弃；
+    4. **同物理槽位换行折行碎片未合并（涉及 Page 932、935、936、959、960 等）**：中文文本换行/首行悬挂折行时落在同一个 `(row, col)` 槽位内，但第二行水平坐标靠左（换行顶格为负间距），原有 `merge_physical_inline_fragments` 仅合并水平同一视觉行的正向间隙碎片，导致槽位中遗留两个重复的 `PhysicalCell`，直接触发硬性 OccupancyConflict 丢弃整表。
+  - **核心设计与修复实现**：
+    1. **`rust/wireless_structure.rs`::`grouped_mixed_leaf_header_span`**：严格对齐约束 `candidate.rowspan > 1`，删除单行高误判及 `start.saturating_sub(1)` 向上误并逻辑；
+    2. **`src/hexai_pdf_parser/tables/table_extractor.py`**：当 `candidates` 为空时，若 `self.use_model and self.model_detector is not None`，继续调用 `_extract_model_tables`，解除规则候选为空对 ML 检测的硬阻断；
+    3. **`rust/wireless_structure.rs` 防贪婪跨行合并**：新增 `is_numbered_item_start` 和 `is_list_continuation`，在 `merge_source_contiguous_vertical_cells` 中拦截序号项、列表前缀及财务行（“一、”、“（一）”、“1.”、“加：”、“减：”等），杜绝财务报表科目被误并；
+    4. **`rust/wireless_structure.rs` 同物理槽位折行碎片合并**：在 `merge_physical_inline_fragments` 中，对同一 `(row, col)` 物理槽位内来源连续且非编号项的上下折行碎片，合并其 bbox 并用 `\n` 连接文本，消除物理网格内部重复同槽 Cell 引发的占用冲突。
+  - **不回读 words 约束与安全防护**：
+    - 严格遵循中文无线表格结构恢复规范，只消费 native span、atom、列带和物理/逻辑 Cell，**严禁回读 `page.get_text("words")`**；
+    - **绝不放宽 OccupancyConflict 冲突保护**：保留所有占用冲突检测与安全校验，所有槽位严格保持一槽一格或精确跨度覆盖。
+  - **测试与全量验收结果**：
+    - **Rust 与 Python 单元测试**：Rust 36 个测试全绿（`cargo test --lib wireless_structure`）；新增 `tests/test_rust_missing_pages.py`、`tests/test_rust_chinese_wireless_parity.py`、`tests/test_table_extractor.py`，全部测试 PASS；
+    - **18 个漏检页专项复核**：`440, 454, 462, 467, 468, 469, 590, 591, 923, 927, 932, 935, 936, 959, 960, 986, 1014, 1017` 全部 100% 成功出表，漏检数清零，0 占位冲突；
+    - **全量 1023 页端到端验收**：
+      - 输出路径：`D:\codes\PDFLayoutParser-Fast\output\pdf\zh_all_table_pages_rust_missing_fix_20260925_72dpi_final`；
+      - 验收指标：`pages_json = 1023`, `table_png = 1023`, `occupancy_conflicts = 0`, `table_count = 2195`。
+
 ## 2026-09-24
 
 - **表格候选逻辑下沉至 Rust 优化 (Rawdict 快速路径)**：

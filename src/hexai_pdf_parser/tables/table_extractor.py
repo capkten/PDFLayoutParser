@@ -740,19 +740,25 @@ class TableExtractor:
 
         candidates = self._detect_rule_candidates(page, page_language=page_language)
         if not candidates:
-            return []
-
-        wired_tables = [
-            table for table in candidates if table.source == "line_projection"
-        ]
-        if self._use_ml_table_detector:
+            if not self._use_ml_table_detector:
+                return []
             tables = self._extract_model_tables(
-                page, wired_tables=wired_tables, page_language=page_language
+                page,
+                wired_tables=[],
+                page_language=page_language,
             )
         else:
-            tables = self._extract_rule_tables(
-                page, candidates=candidates, page_language=page_language
-            )
+            wired_tables = [
+                table for table in candidates if table.source == "line_projection"
+            ]
+            if self._use_ml_table_detector:
+                tables = self._extract_model_tables(
+                    page, wired_tables=wired_tables, page_language=page_language
+                )
+            else:
+                tables = self._extract_rule_tables(
+                    page, candidates=candidates, page_language=page_language
+                )
 
         # Apply layout rule system when a config with profiles is provided.
         if self._table_config and self._table_config.profiles:

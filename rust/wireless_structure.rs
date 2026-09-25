@@ -1351,18 +1351,89 @@ fn is_single_cjk(text: &str) -> bool {
         )
 }
 
+fn is_numbered_item_start(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    for prefix in &["加：", "加:", "减：", "减:", "其中：", "其中:", "小计", "合计"] {
+        if trimmed.starts_with(prefix) {
+            return true;
+        }
+    }
+    if trimmed.starts_with('(') || trimmed.starts_with('（') {
+        let after_open = &trimmed[trimmed.chars().next().unwrap().len_utf8()..];
+        if let Some(close_pos) = after_open.find(|c| c == ')' || c == '）') {
+            let inner = &after_open[..close_pos];
+            if !inner.is_empty()
+                && (inner.chars().all(|c| c.is_ascii_digit())
+                    || inner.chars().all(|c| matches!(c, '一' | '二' | '三' | '四' | '五' | '六' | '七' | '八' | '九' | '十' | '百')))
+            {
+                return true;
+            }
+        }
+    }
+    let digits_len = trimmed
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .map(|c| c.len_utf8())
+        .sum::<usize>();
+    if digits_len > 0 {
+        let rem = &trimmed[digits_len..];
+        if rem.starts_with('.')
+            || rem.starts_with('、')
+            || rem.starts_with('．')
+            || rem.starts_with(')')
+            || rem.starts_with('）')
+        {
+            return true;
+        }
+    }
+    let cjk_digits_len = trimmed
+        .chars()
+        .take_while(|c| matches!(c, '一' | '二' | '三' | '四' | '五' | '六' | '七' | '八' | '九' | '十' | '百'))
+        .map(|c| c.len_utf8())
+        .sum::<usize>();
+    if cjk_digits_len > 0 {
+        let rem = &trimmed[cjk_digits_len..];
+        if rem.starts_with('、')
+            || rem.starts_with('.')
+            || rem.starts_with('．')
+            || rem.starts_with(')')
+            || rem.starts_with('）')
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn is_list_continuation(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    matches!(trimmed.chars().next().unwrap(), '-' | '–' | '—' | '•' | '·')
+}
+
 fn merge_physical_inline_fragments(cells: &mut Vec<PhysicalCell>) {
     cells.sort_by(|left, right| {
         left.row
             .cmp(&right.row)
             .then_with(|| left.col.cmp(&right.col))
+            .then_with(|| left.source_refs.cmp(&right.source_refs))
+            .then_with(|| {
+                left.rect
+                    .y0
+                    .partial_cmp(&right.rect.y0)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
             .then_with(|| {
                 left.rect
                     .x0
                     .partial_cmp(&right.rect.x0)
                     .unwrap_or(std::cmp::Ordering::Equal)
             })
-            .then_with(|| left.source_refs.cmp(&right.source_refs))
     });
 
     let mut index = 0;
@@ -1371,12 +1442,14 @@ fn merge_physical_inline_fragments(cells: &mut Vec<PhysicalCell>) {
         while candidate_index < cells.len() {
             let current = &cells[index];
             let candidate = &cells[candidate_index];
+            if candidate.row != current.row || candidate.col != current.col {
+                break;
+            }
             let current_height = (current.rect.y1 - current.rect.y0).max(1.0);
             let candidate_height = (candidate.rect.y1 - candidate.rect.y0).max(1.0);
             let horizontal_gap = candidate.rect.x0 - current.rect.x1;
-            let same_visual_row = current.row == candidate.row
-                && (center_y(&current.rect) - center_y(&candidate.rect)).abs()
-                    <= (current_height.min(candidate_height) * 0.38).max(2.4);
+            let same_visual_row = (center_y(&current.rect) - center_y(&candidate.rect)).abs()
+                <= (current_height.min(candidate_height) * 0.38).max(2.4);
             let same_slot = current.col == candidate.col;
             let close_enough = horizontal_gap
                 <= (current_height.min(candidate_height) * 1.25).max(2.0)
@@ -1384,13 +1457,25 @@ fn merge_physical_inline_fragments(cells: &mut Vec<PhysicalCell>) {
             let wide_cjk_pair = is_single_cjk(&current.text)
                 && is_single_cjk(&candidate.text)
                 && horizontal_gap <= (current_height.min(candidate_height) * 3.0).max(2.0);
-            if same_visual_row
-                && same_slot
-                && (close_enough || wide_cjk_pair)
+            let is_horizontal_fragment = same_slot && same_visual_row && (close_enough || wide_cjk_pair);
+
+            let vertical_gap = candidate.rect.y0 - current.rect.y1;
+            let is_vertical_wrap_fragment = same_slot
+                && !same_visual_row
+                && candidate.rect.y0 >= current.rect.y0
+                && vertical_gap <= (current_height.min(candidate_height) * 1.5).max(6.0)
+                && !is_numbered_item_start(&candidate.text)
+                && !is_list_continuation(&candidate.text)
+                && !(is_numeric_body_text(&current.text) && is_numeric_body_text(&candidate.text));
+
+            if (is_horizontal_fragment || is_vertical_wrap_fragment)
                 && source_refs_contiguous(&current.source_refs, &candidate.source_refs)
             {
                 let candidate = cells.remove(candidate_index);
                 let current = &mut cells[index];
+                if is_vertical_wrap_fragment {
+                    current.text.push('\n');
+                }
                 current.text.push_str(&candidate.text);
                 current.rect = rect_union(&current.rect, &candidate.rect);
                 current.source_refs.extend(candidate.source_refs);
@@ -1450,6 +1535,12 @@ fn merge_source_contiguous_vertical_cells(cells: &mut Vec<CellDto>) {
                 continue;
             }
             if current.text.trim_end().ends_with(':') || current.text.trim_end().ends_with('：') {
+                continue;
+            }
+            if is_numbered_item_start(&candidate.text) {
+                continue;
+            }
+            if is_list_continuation(&candidate.text) {
                 continue;
             }
             if is_single_cjk(&current.text) && is_single_cjk(&candidate.text) {
@@ -2657,44 +2748,18 @@ fn grouped_mixed_leaf_header_span(
     let candidate = cells.get(candidate_index)?;
     let start = usize::try_from(candidate.row).ok()?;
     if start >= body_start
+        || candidate.rowspan <= 1
         || !cell_is_nonempty(candidate)
         || !candidate.text.contains('\n')
         || candidate.colspan.max(1) != 1
     {
         return None;
     }
-    let reference_height = cells
-        .iter()
-        .filter(|cell| {
-            (cell.row.max(0) as usize) < body_start
-                && cell_is_nonempty(cell)
-                && !cell.text.contains('\n')
-        })
-        .map(|cell| (cell.rect.y1 - cell.rect.y0).max(0.0))
-        .fold(f64::INFINITY, f64::min);
-    let reference_height = if reference_height.is_finite() {
-        reference_height
-    } else {
-        (candidate.rect.y1 - candidate.rect.y0).max(1.0) / 2.0
-    };
-    if candidate.rowspan <= 1
-        && candidate.rect.y1 - candidate.rect.y0 <= reference_height * 1.35
-    {
-        return None;
-    }
-    let span_start = if candidate.rowspan > 1 {
-        start
-    } else {
-        start.saturating_sub(1)
-    };
-    let end = if candidate.rowspan > 1 {
-        start
-            .saturating_add(candidate.rowspan.max(2) as usize)
-            .saturating_sub(1)
-            .min(body_start.saturating_sub(1))
-    } else {
-        start
-    };
+    let span_start = start;
+    let end = start
+        .saturating_add(candidate.rowspan.max(2) as usize)
+        .saturating_sub(1)
+        .min(body_start.saturating_sub(1));
     if end <= span_start || (span_start == start && end >= body_start) {
         return None;
     }
@@ -3165,7 +3230,7 @@ fn rebuild_occupancy_indices(
                 if row >= rows || col >= cols {
                     continue;
                 }
-                if occupancy[row][col].is_some() {
+                if let Some(_prev_idx) = occupancy[row][col] {
                     conflicts.push((row, col));
                     continue;
                 }
@@ -5833,5 +5898,118 @@ mod tests {
         let proposed = infer_header_spans(&base, 2);
 
         assert_eq!(proposed[1].colspan, 1);
+    }
+
+    #[test]
+    fn test_grouped_mixed_leaf_rejects_tall_single_row_wrapped_text() {
+        let mut child = make_cell("子\n表头", 1, 1, 1, 1);
+        child.rect.y1 = 30.0;
+        let cells = vec![
+            make_cell("父", 0, 1, 1, 2),
+            child,
+            make_cell("同层", 1, 2, 1, 1),
+            make_cell("正文", 2, 0, 1, 1),
+        ];
+
+        let groups = logical_row_components(3, &cells, 2);
+
+        assert_eq!(groups, vec![vec![0], vec![1], vec![2]]);
+    }
+
+    #[test]
+    fn test_merge_source_contiguous_vertical_cells_rejects_numbered_items() {
+        let mut cells = vec![
+            CellDto {
+                schema_version: 1,
+                text: "一、上年年末余额".to_string(),
+                row: 0,
+                col: 0,
+                rect: Rect4 { schema_version: 1, x0: 10.0, y0: 10.0, x1: 100.0, y1: 20.0 },
+                rowspan: 1,
+                colspan: 1,
+                source: Some(PhysicalCell {
+                    schema_version: 1,
+                    text: "一、上年年末余额".to_string(),
+                    rect: Rect4 { schema_version: 1, x0: 10.0, y0: 10.0, x1: 100.0, y1: 20.0 },
+                    row: 0,
+                    col: 0,
+                    colspan: 1,
+                    source_refs: vec![0],
+                }),
+            },
+            CellDto {
+                schema_version: 1,
+                text: "加：会计政策变更".to_string(),
+                row: 1,
+                col: 0,
+                rect: Rect4 { schema_version: 1, x0: 10.0, y0: 22.0, x1: 100.0, y1: 32.0 },
+                rowspan: 1,
+                colspan: 1,
+                source: Some(PhysicalCell {
+                    schema_version: 1,
+                    text: "加：会计政策变更".to_string(),
+                    rect: Rect4 { schema_version: 1, x0: 10.0, y0: 22.0, x1: 100.0, y1: 32.0 },
+                    row: 1,
+                    col: 0,
+                    colspan: 1,
+                    source_refs: vec![1],
+                }),
+            },
+            CellDto {
+                schema_version: 1,
+                text: "二、本年年初余额".to_string(),
+                row: 2,
+                col: 0,
+                rect: Rect4 { schema_version: 1, x0: 10.0, y0: 34.0, x1: 100.0, y1: 44.0 },
+                rowspan: 1,
+                colspan: 1,
+                source: Some(PhysicalCell {
+                    schema_version: 1,
+                    text: "二、本年年初余额".to_string(),
+                    rect: Rect4 { schema_version: 1, x0: 10.0, y0: 34.0, x1: 100.0, y1: 44.0 },
+                    row: 2,
+                    col: 0,
+                    colspan: 1,
+                    source_refs: vec![2],
+                }),
+            },
+        ];
+
+        merge_source_contiguous_vertical_cells(&mut cells);
+
+        assert_eq!(cells.len(), 3, "Numbered items must NOT be vertically merged");
+        assert_eq!(cells[0].rowspan, 1);
+        assert_eq!(cells[1].rowspan, 1);
+        assert_eq!(cells[2].rowspan, 1);
+    }
+
+    #[test]
+    fn test_merge_physical_inline_fragments_merges_vertical_wrap_continuation() {
+        let mut cells = vec![
+            PhysicalCell {
+                schema_version: 1,
+                text: "长春海吉星二期用".to_string(),
+                rect: Rect4 { schema_version: 1, x0: 20.0, y0: 10.0, x1: 100.0, y1: 20.0 },
+                row: 5,
+                col: 0,
+                colspan: 1,
+                source_refs: vec![10],
+            },
+            PhysicalCell {
+                schema_version: 1,
+                text: "地".to_string(),
+                rect: Rect4 { schema_version: 1, x0: 10.0, y0: 22.0, x1: 20.0, y1: 32.0 },
+                row: 5,
+                col: 0,
+                colspan: 1,
+                source_refs: vec![11],
+            },
+        ];
+
+        merge_physical_inline_fragments(&mut cells);
+
+        assert_eq!(cells.len(), 1, "Wrapped fragments in same physical slot must merge");
+        assert_eq!(cells[0].text, "长春海吉星二期用\n地");
+        assert_eq!(cells[0].source_refs, vec![10, 11]);
     }
 }

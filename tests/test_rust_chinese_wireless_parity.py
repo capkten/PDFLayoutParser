@@ -308,3 +308,32 @@ def test_multiline_cell_vertical_merge_and_reject_cross_column():
     assert "研发支出" in multiline_cell.text
     assert "（资本化）" in multiline_cell.text
     assert "\n" in multiline_cell.text
+
+
+def test_real_page_467_chinese_wireless_table_parity(monkeypatch):
+    """Verify Rust end-to-end recovery matches Python and avoids occupancy conflict on page 467."""
+    from pathlib import Path
+    from hexai_pdf_parser.tables.wireless_structure.recoverer import recover_cells_from_region
+
+    pdf_path = Path(r"D:\codes\PDFLayoutParser\fix\zh_all_table_pages.pdf")
+    if not pdf_path.exists():
+        pytest.skip("Local test PDF not found")
+
+    with fitz.open(str(pdf_path)) as doc:
+        page = doc[467]
+        bbox = BBox(84.9, 580.2, 540.3, 775.8)
+
+        monkeypatch.setenv("PDF_RUST_MODE", "python")
+        py_rows, py_cols, py_cells = recover_cells_from_region(page, bbox)
+        assert (py_rows, py_cols, len(py_cells)) == (10, 6, 55)
+
+        monkeypatch.setenv("PDF_RUST_MODE", "rust")
+        rust_rows, rust_cols, rust_cells = recover_cells_from_region(page, bbox)
+        assert (rust_rows, rust_cols, len(rust_cells)) == (10, 6, 55)
+
+        occupied = []
+        for cell in rust_cells:
+            for row in range(cell.row_index, cell.row_index + cell.rowspan):
+                for col in range(cell.col_index, cell.col_index + cell.colspan):
+                    occupied.append((row, col))
+        assert len(occupied) == len(set(occupied)) == rust_rows * rust_cols
