@@ -1,7 +1,7 @@
 use crate::native_span;
 use crate::types::{
-    AtomDto, CellDto, ColumnBandDto, DiagnosticDto, GridDto, LogicalGridDto, NativeRegionInput,
-    NativeRegionOutput, PageSnapshotDto, PhysicalCell, Rect4, RowClusterDto,
+    AtomDto, AtomEvidenceDto, CellDto, ColumnBandDto, DiagnosticDto, GridDto, LogicalGridDto,
+    NativeRegionInput, NativeRegionOutput, PageSnapshotDto, PhysicalCell, Rect4, RowClusterDto,
     TableCandidateDto, WirelessRecoveryInput, WirelessRecoveryOutput,
 };
 
@@ -58,7 +58,17 @@ fn same_visual_row(left: &Rect4, right: &Rect4, tolerance: f64) -> bool {
         && (left.y0 - right.y0).abs() <= 2.4_f64.max(left_height.min(right_height) * 0.4)
 }
 
-fn atom_column_span(rect: &Rect4, bands: &[ColumnBandDto]) -> (usize, usize) {
+fn atom_column_span(atom: &AtomDto, bands: &[ColumnBandDto]) -> (usize, usize) {
+    if let Some(start) = atom.col_hint {
+        if start >= 0 && (start as usize) < bands.len() {
+            let end = atom
+                .col_end_hint
+                .filter(|value| *value >= start && (*value as usize) < bands.len())
+                .unwrap_or(start);
+            return (start as usize, end as usize);
+        }
+    }
+    let rect = &atom.rect;
     let primary = best_column_for_rect(rect, bands).min(bands.len().saturating_sub(1));
     if bands.len() < 2 {
         return (primary, primary);
@@ -128,9 +138,9 @@ fn can_join_visual_row(
         return false;
     }
 
-    let candidate_span = atom_column_span(&candidate.rect, bands);
+    let candidate_span = atom_column_span(candidate, bands);
     for existing in group {
-        let existing_span = atom_column_span(&existing.rect, bands);
+        let existing_span = atom_column_span(existing, bands);
         if !spans_overlap(existing_span, candidate_span) {
             continue;
         }
@@ -156,6 +166,14 @@ fn is_dash_placeholder(text: &str) -> bool {
         && trimmed
             .chars()
             .all(|character| matches!(character, '-' | '—' | '–' | '−'))
+}
+
+fn is_inline_marker(text: &str) -> bool {
+    let trimmed = text.trim();
+    !trimmed.is_empty()
+        && trimmed
+            .chars()
+            .all(|character| matches!(character, '*' | '#' | '†' | '‡' | '-' | '–' | '—'))
 }
 
 fn has_numeric_character(text: &str) -> bool {
@@ -487,30 +505,21 @@ pub fn build_grid(
     ) * 0.70)
         .max(3.0);
     let mut rows: Vec<Vec<AtomDto>> = Vec::new();
-    if sorted_atoms.iter().all(|atom| atom.row_hint.is_some()) {
-        let mut hinted_rows: std::collections::BTreeMap<i64, Vec<AtomDto>> =
-            std::collections::BTreeMap::new();
-        for atom in sorted_atoms {
-            hinted_rows.entry(atom.row_hint.unwrap()).or_default().push(atom);
-        }
-        rows = hinted_rows.into_values().collect();
-    } else {
-        let mut row_centers: Vec<f64> = Vec::new();
-        for atom in sorted_atoms {
-            let last_index = rows.len().checked_sub(1);
-            if let Some(last_index) = last_index {
-                if can_join_visual_row(&rows[last_index], &atom, &bands, row_tolerance) {
-                    rows[last_index].push(atom);
-                    let count = rows[last_index].len() as f64;
-                    let sum: f64 = rows[last_index].iter().map(|a| center_y(&a.rect)).sum();
-                    row_centers[last_index] = sum / count;
-                    continue;
-                }
+    let mut row_centers: Vec<f64> = Vec::new();
+    for atom in sorted_atoms {
+        let last_index = rows.len().checked_sub(1);
+        if let Some(last_index) = last_index {
+            if can_join_visual_row(&rows[last_index], &atom, &bands, row_tolerance) {
+                rows[last_index].push(atom);
+                let count = rows[last_index].len() as f64;
+                let sum: f64 = rows[last_index].iter().map(|a| center_y(&a.rect)).sum();
+                row_centers[last_index] = sum / count;
+                continue;
             }
-            let cy = center_y(&atom.rect);
-            row_centers.push(cy);
-            rows.push(vec![atom]);
         }
+        let cy = center_y(&atom.rect);
+        row_centers.push(cy);
+        rows.push(vec![atom]);
     }
 
     let mut row_clusters = Vec::new();
@@ -542,9 +551,10 @@ pub fn build_grid(
                 .get(&atom.order)
                 .copied()
                 .filter(|column| *column < bands.len());
+            let geometry_span = atom_column_span(&atom, &bands);
             let best_col = hinted_col
                 .or(dash_col)
-                .unwrap_or_else(|| best_column_for_rect(&atom.rect, &bands));
+                .unwrap_or(geometry_span.0);
             let hinted_end = if hinted_col == Some(best_col) {
                 atom.col_end_hint.and_then(|hint| {
                     (hint >= best_col as i64 && (hint as usize) < bands.len())
@@ -555,6 +565,10 @@ pub fn build_grid(
             };
             let colspan = hinted_end
                 .map(|end| end.saturating_sub(best_col) + 1)
+                .or_else(|| {
+                    (hinted_col.is_none() && dash_col.is_none())
+                        .then_some(geometry_span.1.saturating_sub(best_col) + 1)
+                })
                 .unwrap_or(1) as i64;
 
             physical_cells.push(PhysicalCell {
@@ -1298,44 +1312,6 @@ fn source_refs_contiguous(left: &[i64], right: &[i64]) -> bool {
     }
 }
 
-fn source_refs_contiguous_in_interleaved_row(
-    cells: &[CellDto],
-    current_index: usize,
-    candidate_index: usize,
-) -> bool {
-    let current = &cells[current_index];
-    let candidate = &cells[candidate_index];
-    let current_refs = current
-        .source
-        .as_ref()
-        .map(|source| source.source_refs.as_slice())
-        .unwrap_or(&[]);
-    let candidate_refs = candidate
-        .source
-        .as_ref()
-        .map(|source| source.source_refs.as_slice())
-        .unwrap_or(&[]);
-    if source_refs_contiguous(current_refs, candidate_refs) {
-        return true;
-    }
-
-    let (Some(left_end), Some(right_start)) = (current_refs.last(), candidate_refs.first()) else {
-        return false;
-    };
-    if *right_start <= *left_end + 1 {
-        return false;
-    }
-
-    let intervening_refs: std::collections::BTreeSet<i64> = cells
-        .iter()
-        .filter(|cell| cell.row == current.row)
-        .filter_map(|cell| cell.source.as_ref())
-        .flat_map(|source| source.source_refs.iter().copied())
-        .filter(|source_ref| *left_end < *source_ref && *source_ref < *right_start)
-        .collect();
-    ((*left_end + 1)..*right_start).all(|source_ref| intervening_refs.contains(&source_ref))
-}
-
 fn is_single_cjk(text: &str) -> bool {
     let mut chars = text.trim().chars();
     let Some(character) = chars.next() else {
@@ -1468,7 +1444,10 @@ fn merge_physical_inline_fragments(cells: &mut Vec<PhysicalCell>) {
                 && !is_list_continuation(&candidate.text)
                 && !(is_numeric_body_text(&current.text) && is_numeric_body_text(&candidate.text));
 
-            if (is_horizontal_fragment || is_vertical_wrap_fragment)
+            let is_inline_marker_fragment = same_slot
+                && (is_inline_marker(&current.text) || is_inline_marker(&candidate.text));
+
+            if (is_horizontal_fragment || is_vertical_wrap_fragment || is_inline_marker_fragment)
                 && source_refs_contiguous(&current.source_refs, &candidate.source_refs)
             {
                 let candidate = cells.remove(candidate_index);
@@ -1500,7 +1479,35 @@ fn merge_cell_source(current: &mut CellDto, candidate: CellDto, joiner: &str) {
     }
 }
 
-fn merge_source_contiguous_vertical_cells(cells: &mut Vec<CellDto>) {
+fn source_evidence_for_refs(
+    refs: &[i64],
+    evidence: &[AtomEvidenceDto],
+) -> Option<(std::collections::BTreeSet<i64>, i64, i64)> {
+    let matched: Vec<&AtomEvidenceDto> = evidence
+        .iter()
+        .filter(|item| {
+            refs.iter().any(|reference| {
+                *reference >= item.flow_start.saturating_sub(1)
+                    && *reference <= item.flow_end.saturating_sub(1)
+            })
+        })
+        .collect();
+    if matched.is_empty() {
+        return None;
+    }
+    let blocks = matched
+        .iter()
+        .flat_map(|item| item.source_blocks.iter().copied())
+        .collect();
+    let line_start = matched.iter().map(|item| item.source_line_start).min()?;
+    let line_end = matched.iter().map(|item| item.source_line_end).max()?;
+    Some((blocks, line_start, line_end))
+}
+
+fn merge_source_contiguous_vertical_cells(
+    cells: &mut Vec<CellDto>,
+    atom_evidence: Option<&[AtomEvidenceDto]>,
+) {
     cells.sort_by(|left, right| {
         left.row
             .cmp(&right.row)
@@ -1533,6 +1540,27 @@ fn merge_source_contiguous_vertical_cells(cells: &mut Vec<CellDto>) {
             }
             if is_numeric_body_text(&current.text) && is_numeric_body_text(&candidate.text) {
                 continue;
+            }
+            if let Some(evidence) = atom_evidence {
+                let current_evidence = current
+                    .source
+                    .as_ref()
+                    .and_then(|source| source_evidence_for_refs(&source.source_refs, evidence));
+                let candidate_evidence = candidate
+                    .source
+                    .as_ref()
+                    .and_then(|source| source_evidence_for_refs(&source.source_refs, evidence));
+                let Some((current_blocks, _, current_line_end)) = current_evidence else {
+                    continue;
+                };
+                let Some((candidate_blocks, candidate_line_start, _)) = candidate_evidence else {
+                    continue;
+                };
+                if current_blocks != candidate_blocks
+                    || candidate_line_start != current_line_end + 1
+                {
+                    continue;
+                }
             }
             if current.text.trim_end().ends_with(':') || current.text.trim_end().ends_with('：') {
                 continue;
@@ -2292,16 +2320,9 @@ fn rescue_header_only_bands(atoms: &[AtomDto], bands: Vec<ColumnBandDto>) -> Vec
     rescued
 }
 
-fn cell_from_physical(cell: PhysicalCell, bands: &[ColumnBandDto]) -> CellDto {
-    let (col_start, col_end) = if cell.colspan > 1 {
-        let col_start = cell.col.max(0) as usize;
-        (
-            col_start,
-            col_start.saturating_add(cell.colspan as usize - 1),
-        )
-    } else {
-        physical_cell_span(&cell, bands)
-    };
+fn cell_from_physical(cell: PhysicalCell, _bands: &[ColumnBandDto]) -> CellDto {
+    let col_start = cell.col.max(0) as usize;
+    let col_end = col_start.saturating_add(cell.colspan.max(1) as usize - 1);
     CellDto {
         schema_version: 1,
         text: cell.text.clone(),
@@ -2364,7 +2385,17 @@ fn merge_vertical_continuations(cells: &mut Vec<CellDto>, header_rows: usize) {
             if is_single_cjk(&current.text) && is_single_cjk(&candidate.text) {
                 continue;
             }
-            if !source_refs_contiguous_in_interleaved_row(cells, index, other_index) {
+            let current_refs = current
+                .source
+                .as_ref()
+                .map(|source| source.source_refs.as_slice())
+                .unwrap_or(&[]);
+            let candidate_refs = candidate
+                .source
+                .as_ref()
+                .map(|source| source.source_refs.as_slice())
+                .unwrap_or(&[]);
+            if !source_refs_contiguous(current_refs, candidate_refs) {
                 continue;
             }
             let overlap = horizontal_overlap(&current.rect, &candidate.rect);
@@ -2654,9 +2685,9 @@ fn wrapped_leaf_header_span(
     } else {
         (candidate.rect.y1 - candidate.rect.y0).max(1.0) / 2.0
     };
-    let is_wrapped_geometry = candidate.rowspan > 1
-        || candidate.rect.y1 - candidate.rect.y0 > reference_height * 1.35;
-    if !is_wrapped_geometry {
+    if candidate.rowspan <= 1
+        && candidate.rect.y1 - candidate.rect.y0 <= reference_height * 1.35
+    {
         return None;
     }
 
@@ -2681,16 +2712,18 @@ fn wrapped_leaf_header_span(
         return None;
     }
 
-    let (span_start, end) = if candidate.rowspan > 1 {
-        (
-            start,
-            start
-                .saturating_add(candidate.rowspan.max(2) as usize)
-                .saturating_sub(1)
-                .min(body_start.saturating_sub(1)),
-        )
+    let span_start = if candidate.rowspan > 1 {
+        start
     } else {
-        (start.saturating_sub(1), start)
+        start.saturating_sub(1)
+    };
+    let end = if candidate.rowspan > 1 {
+        start
+            .saturating_add(candidate.rowspan.max(2) as usize)
+            .saturating_sub(1)
+            .min(body_start.saturating_sub(1))
+    } else {
+        start
     };
     if end <= span_start || (span_start == start && end >= body_start) {
         return None;
@@ -2737,7 +2770,7 @@ fn wrapped_leaf_header_span(
             .insert(column);
     }
     let sibling_support = sibling_columns_by_row.values().any(|columns| columns.len() >= 2);
-    (sibling_support || candidate.rowspan == 1).then_some((span_start, end))
+    (sibling_support || candidate.rowspan > 1).then_some((span_start, end))
 }
 
 fn grouped_mixed_leaf_header_span(
@@ -3987,7 +4020,7 @@ pub fn recover_native_region(input: NativeRegionInput) -> NativeRegionOutput {
         cells.push(cell_from_physical(pc, &bands));
     }
 
-    merge_source_contiguous_vertical_cells(&mut cells);
+    merge_source_contiguous_vertical_cells(&mut cells, input.atom_evidence.as_deref());
 
     let physical_rows = rows.len();
     let physical_cols = bands.len();
@@ -4341,7 +4374,7 @@ pub fn recover_wireless_tables(input: WirelessRecoveryInput) -> WirelessRecovery
             continue;
         }
 
-        merge_source_contiguous_vertical_cells(&mut cells);
+        merge_source_contiguous_vertical_cells(&mut cells, None);
         let (rebuilt_occupancy, conflicts) = rebuild_occupancy_indices(&cells, num_rows, num_cols);
         if !conflicts.is_empty() {
             for (row, col) in conflicts {
@@ -4966,6 +4999,41 @@ mod tests {
         merge_vertical_continuations(&mut colon_cells, 3);
 
         assert_eq!(colon_cells.len(), 2);
+
+        let mut interleaved_cells = vec![
+            CellDto {
+                schema_version: 1,
+                text: "项目".to_string(),
+                row: 0,
+                col: 0,
+                rect: source("项目", 0, 10.0, 1).rect.clone(),
+                rowspan: 1,
+                colspan: 1,
+                source: Some(source("项目", 0, 10.0, 1)),
+            },
+            CellDto {
+                schema_version: 1,
+                text: "金额".to_string(),
+                row: 0,
+                col: 1,
+                rect: source("金额", 0, 10.0, 2).rect.clone(),
+                rowspan: 1,
+                colspan: 1,
+                source: Some(source("金额", 0, 10.0, 2)),
+            },
+            CellDto {
+                schema_version: 1,
+                text: "续行".to_string(),
+                row: 1,
+                col: 0,
+                rect: source("续行", 1, 22.0, 3).rect.clone(),
+                rowspan: 1,
+                colspan: 1,
+                source: Some(source("续行", 1, 22.0, 3)),
+            },
+        ];
+        merge_vertical_continuations(&mut interleaved_cells, 3);
+        assert_eq!(interleaved_cells.len(), 3);
     }
 
     #[test]
@@ -5917,6 +5985,153 @@ mod tests {
     }
 
     #[test]
+    fn test_wrapped_leaf_rejects_tall_single_row_wrapped_text() {
+        let mut first = make_cell("子\n表头一", 1, 1, 1, 1);
+        first.rect.y1 = 30.0;
+        let mut second = make_cell("子\n表头二", 1, 2, 1, 1);
+        second.rect.y1 = 30.0;
+        let cells = vec![
+            make_cell("前", 0, 0, 1, 1),
+            first,
+            second,
+            make_cell("正文", 2, 0, 1, 1),
+        ];
+
+        assert_eq!(wrapped_leaf_header_span(&cells, 1, 2), None);
+        let groups = logical_row_components(3, &cells, 2);
+
+        assert_eq!(groups, vec![vec![0], vec![1], vec![2]]);
+    }
+
+    #[test]
+    fn test_build_grid_uses_column_hints_to_keep_overlapping_fields_separate() {
+        let mut left = make_atom("左字段", 45.0, 10.0, 75.0, 20.0, 0);
+        left.row_hint = Some(0);
+        left.col_hint = Some(0);
+        left.col_end_hint = Some(1);
+        let mut right = make_atom("右字段", 45.0, 11.0, 75.0, 21.0, 1);
+        right.row_hint = Some(0);
+        right.col_hint = Some(1);
+        right.col_end_hint = Some(2);
+        let bands = vec![
+            ColumnBandDto {
+                schema_version: 1,
+                x0: 0.0,
+                x1: 50.0,
+                source_atoms: Vec::new(),
+                order: 0,
+            },
+            ColumnBandDto {
+                schema_version: 1,
+                x0: 50.0,
+                x1: 100.0,
+                source_atoms: Vec::new(),
+                order: 1,
+            },
+            ColumnBandDto {
+                schema_version: 1,
+                x0: 100.0,
+                x1: 150.0,
+                source_atoms: Vec::new(),
+                order: 2,
+            },
+        ];
+
+        let (rows, _, _, diagnostics) = build_grid(vec![left, right], bands);
+
+        assert_eq!(rows.len(), 2);
+        assert!(diagnostics.is_empty());
+    }
+
+    #[test]
+    fn test_cell_from_physical_preserves_explicit_single_column_assignment() {
+        let bands = vec![
+            ColumnBandDto {
+                schema_version: 1,
+                x0: 0.0,
+                x1: 50.0,
+                source_atoms: Vec::new(),
+                order: 0,
+            },
+            ColumnBandDto {
+                schema_version: 1,
+                x0: 50.0,
+                x1: 100.0,
+                source_atoms: Vec::new(),
+                order: 1,
+            },
+            ColumnBandDto {
+                schema_version: 1,
+                x0: 100.0,
+                x1: 150.0,
+                source_atoms: Vec::new(),
+                order: 2,
+            },
+        ];
+        let cell = PhysicalCell {
+            schema_version: 1,
+            text: "-".to_string(),
+            rect: Rect4 {
+                schema_version: 1,
+                x0: 75.0,
+                y0: 10.0,
+                x1: 125.0,
+                y1: 20.0,
+            },
+            row: 0,
+            col: 1,
+            colspan: 1,
+            source_refs: vec![0],
+        };
+
+        let output = cell_from_physical(cell, &bands);
+
+        assert_eq!((output.col, output.colspan), (1, 1));
+    }
+
+    #[test]
+    fn test_merge_physical_inline_fragments_merges_far_contiguous_dash_markers() {
+        let mut cells = vec![
+            PhysicalCell {
+                schema_version: 1,
+                text: "-".to_string(),
+                rect: Rect4 {
+                    schema_version: 1,
+                    x0: 10.0,
+                    y0: 10.0,
+                    x1: 15.0,
+                    y1: 20.0,
+                },
+                row: 0,
+                col: 0,
+                colspan: 1,
+                source_refs: vec![0],
+            },
+            PhysicalCell {
+                schema_version: 1,
+                text: "-".to_string(),
+                rect: Rect4 {
+                    schema_version: 1,
+                    x0: 60.0,
+                    y0: 10.0,
+                    x1: 65.0,
+                    y1: 20.0,
+                },
+                row: 0,
+                col: 0,
+                colspan: 1,
+                source_refs: vec![1],
+            },
+        ];
+
+        merge_physical_inline_fragments(&mut cells);
+
+        assert_eq!(cells.len(), 1);
+        assert_eq!(cells[0].text, "--");
+        assert_eq!(cells[0].source_refs, vec![0, 1]);
+    }
+
+    #[test]
     fn test_merge_source_contiguous_vertical_cells_rejects_numbered_items() {
         let mut cells = vec![
             CellDto {
@@ -5975,12 +6190,58 @@ mod tests {
             },
         ];
 
-        merge_source_contiguous_vertical_cells(&mut cells);
+        merge_source_contiguous_vertical_cells(&mut cells, None);
 
         assert_eq!(cells.len(), 3, "Numbered items must NOT be vertically merged");
         assert_eq!(cells[0].rowspan, 1);
         assert_eq!(cells[1].rowspan, 1);
         assert_eq!(cells[2].rowspan, 1);
+    }
+
+    #[test]
+    fn test_merge_source_contiguous_vertical_cells_keeps_separate_source_lines() {
+        let source_cell = |text: &str, row: i64, source_ref: i64| -> CellDto {
+            let mut cell = make_cell(text, row, 0, 1, 1);
+            cell.source = Some(PhysicalCell {
+                schema_version: 1,
+                text: text.to_string(),
+                rect: cell.rect.clone(),
+                row,
+                col: 0,
+                colspan: 1,
+                source_refs: vec![source_ref],
+            });
+            cell
+        };
+        let mut cells = vec![
+            source_cell("前期差错更正", 0, 0),
+            source_cell("其他", 1, 1),
+        ];
+        let evidence = vec![
+            AtomEvidenceDto {
+                flow_start: 1,
+                flow_end: 1,
+                source_blocks: vec![1],
+                source_line_start: 0,
+                source_line_end: 0,
+                source_position_known: true,
+                column_id: Some(0),
+            },
+            AtomEvidenceDto {
+                flow_start: 2,
+                flow_end: 2,
+                source_blocks: vec![2],
+                source_line_start: 1,
+                source_line_end: 1,
+                source_position_known: true,
+                column_id: Some(0),
+            },
+        ];
+
+        merge_source_contiguous_vertical_cells(&mut cells, Some(&evidence));
+
+        assert_eq!(cells.len(), 2);
+        assert!(cells.iter().all(|cell| cell.rowspan == 1));
     }
 
     #[test]

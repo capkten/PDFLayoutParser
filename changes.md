@@ -23,6 +23,8 @@
       - 输出路径：`D:\codes\PDFLayoutParser-Fast\output\pdf\zh_all_table_pages_rust_missing_fix_20260925_72dpi_final`；
       - 验收指标：`pages_json = 1023`, `table_png = 1023`, `occupancy_conflicts = 0`, `table_count = 2195`。
 
+- **Parity follow-up（隔离分支验证）**：按 Python `atoms -> bands -> physical cells -> logical cells` 逐阶段对照，继续修复 `wrapped_leaf_header_span` 单行高度误判、`row_hint` 绕过列跨度判定、显式单列物理 Cell 被 bbox 扩展、同槽位 inline marker 合并和 interleaved source 垂直合并。18 个目标漏检页均恢复；Rust 全量复跑输出 `output/pdf/zh_all_table_pages_rust_parity_followup_20260925_72dpi` 为 1023 页、933 个有表页、2201 张表、最终 Cell 槽位冲突 0。与 Python baseline 仍有 69 页结构差异，Page 191 和 982 各多出 1 张候选表；Python 默认路由保持不变。
+
 ## 2026-09-24
 
 - **表格候选逻辑下沉至 Rust 优化 (Rawdict 快速路径)**：

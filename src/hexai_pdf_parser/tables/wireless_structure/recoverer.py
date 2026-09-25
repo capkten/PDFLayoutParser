@@ -510,6 +510,22 @@ def _prepare_native_region_from_snapshot(
         },
         "atoms": normalized_atoms,
         "bands": normalized_bands,
+        "atom_evidence": [
+            {
+                key: atom[key]
+                for key in (
+                    "flow_start",
+                    "flow_end",
+                    "source_blocks",
+                    "source_line_start",
+                    "source_line_end",
+                    "source_position_known",
+                    "column_id",
+                )
+                if key in atom
+            }
+            for atom in normalized_atoms
+        ],
         "config": {
             "schema_version": 1,
             "line_tolerance": 2.0,

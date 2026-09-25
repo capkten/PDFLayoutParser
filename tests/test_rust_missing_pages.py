@@ -3,6 +3,8 @@ import fitz
 import pytest
 
 from hexai_pdf_parser.table_extractor import TableExtractor
+from hexai_pdf_parser.core.models import BBox
+from hexai_pdf_parser.tables.wireless_structure.recoverer import recover_cells_from_region
 
 pdf_path = Path(r"D:\codes\PDFLayoutParser\fix\zh_all_table_pages.pdf")
 
@@ -50,4 +52,31 @@ def test_rust_page_936_and_960_wrapped_fragments_recovered(monkeypatch):
         t_960 = TableExtractor().extract(doc[959])
     assert len(t_936) == 3, f"Expected 3 tables on page 936, got {len(t_936)}"
     assert len(t_960) == 2, f"Expected 2 tables on page 960, got {len(t_960)}"
+
+
+@pytest.mark.parametrize(
+    "page_index, bbox, expected",
+    [
+        (454, BBox(61.5, 183.1, 561.7, 327.8), (9, 9, 72)),
+        (462, BBox(83.9, 367.8, 539.9, 767.9), (11, 7, 77)),
+        (932, BBox(85.0, 142.1, 505.9, 247.9), (7, 5, 32)),
+        (590, BBox(54.5, 119.6, 785.9, 507.6), (29, 11, 309)),
+        (591, BBox(56.2, 119.8, 787.3, 507.6), (29, 11, 309)),
+    ],
+)
+def test_rust_region_recovery_matches_python_reference_pages(
+    monkeypatch, page_index, bbox, expected
+):
+    """Rust region recovery must match the Python stage oracle on remaining pages."""
+    if not pdf_path.exists():
+        pytest.skip("Local test PDF not found")
+    with fitz.open(str(pdf_path)) as doc:
+        page = doc[page_index]
+        monkeypatch.setenv("PDF_RUST_MODE", "python")
+        python_result = recover_cells_from_region(page, bbox)
+        monkeypatch.setenv("PDF_RUST_MODE", "rust")
+        rust_result = recover_cells_from_region(page, bbox)
+
+    assert (python_result[0], python_result[1], len(python_result[2])) == expected
+    assert (rust_result[0], rust_result[1], len(rust_result[2])) == expected
 
