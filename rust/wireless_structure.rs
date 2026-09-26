@@ -1482,16 +1482,30 @@ fn merge_cell_source(current: &mut CellDto, candidate: CellDto, joiner: &str) {
 fn source_evidence_for_refs(
     refs: &[i64],
     evidence: &[AtomEvidenceDto],
+    atom_sources: Option<&[AtomDto]>,
 ) -> Option<(std::collections::BTreeSet<i64>, i64, i64)> {
-    let matched: Vec<&AtomEvidenceDto> = evidence
-        .iter()
-        .filter(|item| {
-            refs.iter().any(|reference| {
-                *reference >= item.flow_start.saturating_sub(1)
-                    && *reference <= item.flow_end.saturating_sub(1)
+    let matched: Vec<&AtomEvidenceDto> = if let Some(atoms) = atom_sources {
+        atoms
+            .iter()
+            .zip(evidence.iter())
+            .filter_map(|(atom, item)| {
+                atom.run_refs
+                    .iter()
+                    .any(|reference| refs.contains(reference))
+                    .then_some(item)
             })
-        })
-        .collect();
+            .collect()
+    } else {
+        evidence
+            .iter()
+            .filter(|item| {
+                refs.iter().any(|reference| {
+                    *reference >= item.flow_start.saturating_sub(1)
+                        && *reference <= item.flow_end.saturating_sub(1)
+                })
+            })
+            .collect()
+    };
     if matched.is_empty() {
         return None;
     }
@@ -1508,6 +1522,7 @@ fn merge_source_contiguous_vertical_cells(
     cells: &mut Vec<CellDto>,
     atom_evidence: Option<&[AtomEvidenceDto]>,
     output_mode: &str,
+    atom_sources: Option<&[AtomDto]>,
 ) {
     cells.sort_by(|left, right| {
         left.row
@@ -1547,11 +1562,11 @@ fn merge_source_contiguous_vertical_cells(
                     let current_evidence = current
                         .source
                         .as_ref()
-                        .and_then(|source| source_evidence_for_refs(&source.source_refs, evidence));
+                        .and_then(|source| source_evidence_for_refs(&source.source_refs, evidence, atom_sources));
                     let candidate_evidence = candidate
                         .source
                         .as_ref()
-                        .and_then(|source| source_evidence_for_refs(&source.source_refs, evidence));
+                        .and_then(|source| source_evidence_for_refs(&source.source_refs, evidence, atom_sources));
                     let Some((current_blocks, _, current_line_end)) = current_evidence else {
                         continue;
                     };
@@ -1590,7 +1605,8 @@ fn merge_source_contiguous_vertical_cells(
                 .max(1.0);
             let overlap = horizontal_overlap(&current.rect, &candidate.rect);
             let vertical_gap = candidate.rect.y0 - current.rect.y1;
-            if overlap < minimum_width * 0.45 || vertical_gap > 10.0 {
+            let max_vertical_gap = if atom_evidence.is_some() { 6.0 } else { 10.0 };
+            if overlap < minimum_width * 0.45 || vertical_gap > max_vertical_gap {
                 continue;
             }
             candidate_index = Some(other_index);
@@ -2344,7 +2360,13 @@ fn cell_from_physical(cell: PhysicalCell, _bands: &[ColumnBandDto]) -> CellDto {
     }
 }
 
-fn merge_vertical_continuations(cells: &mut Vec<CellDto>, header_rows: usize) {
+fn merge_vertical_continuations(
+    cells: &mut Vec<CellDto>,
+    header_rows: usize,
+    atom_evidence: Option<&[AtomEvidenceDto]>,
+    atom_sources: Option<&[AtomDto]>,
+    output_mode: &str,
+) {
     cells.sort_by(|left, right| {
         left.row
             .cmp(&right.row)
@@ -2378,6 +2400,32 @@ fn merge_vertical_continuations(cells: &mut Vec<CellDto>, header_rows: usize) {
                 || candidate.row != current.row + current.rowspan
             {
                 continue;
+            }
+            if let Some(evidence) = atom_evidence {
+                let current_evidence = current
+                    .source
+                    .as_ref()
+                    .and_then(|source| {
+                        source_evidence_for_refs(&source.source_refs, evidence, atom_sources)
+                    });
+                let candidate_evidence = candidate
+                    .source
+                    .as_ref()
+                    .and_then(|source| {
+                        source_evidence_for_refs(&source.source_refs, evidence, atom_sources)
+                    });
+                let (Some((current_blocks, _, current_line_end)),
+                    Some((candidate_blocks, candidate_line_start, _))) =
+                    (current_evidence, candidate_evidence)
+                else {
+                    continue;
+                };
+                if current_blocks != candidate_blocks
+                    || (output_mode == "columnar"
+                        && candidate_line_start != current_line_end + 1)
+                {
+                    continue;
+                }
             }
             if is_numeric_body_text(&current.text) && is_numeric_body_text(&candidate.text) {
                 continue;
@@ -4027,12 +4075,19 @@ pub fn recover_native_region(input: NativeRegionInput) -> NativeRegionOutput {
         &mut cells,
         input.atom_evidence.as_deref(),
         &input.output_mode,
+        Some(&input.atoms),
     );
 
     let physical_rows = rows.len();
     let physical_cols = bands.len();
     let body_start = header_body_start(&cells, physical_rows, physical_cols);
-    merge_vertical_continuations(&mut cells, body_start);
+    merge_vertical_continuations(
+        &mut cells,
+        body_start,
+        input.atom_evidence.as_deref(),
+        Some(&input.atoms),
+        &input.output_mode,
+    );
     let row_tracks = physical_row_tracks(&rows, &input.atoms);
     let row_edges = normalize_header_layout(
         &mut cells,
@@ -4381,7 +4436,7 @@ pub fn recover_wireless_tables(input: WirelessRecoveryInput) -> WirelessRecovery
             continue;
         }
 
-        merge_source_contiguous_vertical_cells(&mut cells, None, "columnar");
+        merge_source_contiguous_vertical_cells(&mut cells, None, "columnar", None);
         let (rebuilt_occupancy, conflicts) = rebuild_occupancy_indices(&cells, num_rows, num_cols);
         if !conflicts.is_empty() {
             for (row, col) in conflicts {
@@ -4975,7 +5030,7 @@ mod tests {
             },
         ];
 
-        merge_vertical_continuations(&mut cells, 3);
+        merge_vertical_continuations(&mut cells, 3, None, None, "row_interleaved");
 
         assert_eq!(cells.len(), 1);
         assert_eq!(cells[0].text, "上半部\n下半部");
@@ -5004,7 +5059,7 @@ mod tests {
             },
         ];
 
-        merge_vertical_continuations(&mut colon_cells, 3);
+        merge_vertical_continuations(&mut colon_cells, 3, None, None, "row_interleaved");
 
         assert_eq!(colon_cells.len(), 2);
 
@@ -5040,7 +5095,7 @@ mod tests {
                 source: Some(source("续行", 1, 22.0, 3)),
             },
         ];
-        merge_vertical_continuations(&mut interleaved_cells, 3);
+        merge_vertical_continuations(&mut interleaved_cells, 3, None, None, "row_interleaved");
         assert_eq!(interleaved_cells.len(), 3);
     }
 
@@ -6209,7 +6264,7 @@ mod tests {
             },
         ];
 
-        merge_source_contiguous_vertical_cells(&mut cells, None, "columnar");
+        merge_source_contiguous_vertical_cells(&mut cells, None, "columnar", None);
 
         assert_eq!(cells.len(), 3, "Numbered items must NOT be vertically merged");
         assert_eq!(cells[0].rowspan, 1);
@@ -6257,7 +6312,130 @@ mod tests {
             },
         ];
 
-        merge_source_contiguous_vertical_cells(&mut cells, Some(&evidence), "columnar");
+        merge_source_contiguous_vertical_cells(&mut cells, Some(&evidence), "columnar", None);
+
+        assert_eq!(cells.len(), 2);
+        assert!(cells.iter().all(|cell| cell.rowspan == 1));
+    }
+
+    #[test]
+    fn test_merge_source_contiguous_vertical_cells_rejects_financial_row_gap() {
+        let mut first = make_cell("资产", 0, 0, 1, 1);
+        first.source = Some(PhysicalCell {
+            schema_version: 1,
+            text: first.text.clone(),
+            rect: first.rect.clone(),
+            row: 0,
+            col: 0,
+            colspan: 1,
+            source_refs: vec![11],
+        });
+        let mut second = make_cell("负债", 1, 0, 1, 1);
+        second.rect.y0 = 29.8;
+        second.rect.y1 = 39.8;
+        second.source = Some(PhysicalCell {
+            schema_version: 1,
+            text: second.text.clone(),
+            rect: second.rect.clone(),
+            row: 1,
+            col: 0,
+            colspan: 1,
+            source_refs: vec![12],
+        });
+        let mut cells = vec![first, second];
+        let evidence = [
+            AtomEvidenceDto {
+                flow_start: 11,
+                flow_end: 11,
+                source_blocks: vec![0],
+                source_line_start: 0,
+                source_line_end: 0,
+                source_position_known: true,
+                column_id: Some(0),
+            },
+            AtomEvidenceDto {
+                flow_start: 12,
+                flow_end: 12,
+                source_blocks: vec![0],
+                source_line_start: 1,
+                source_line_end: 1,
+                source_position_known: true,
+                column_id: Some(0),
+            },
+        ];
+        merge_source_contiguous_vertical_cells(
+            &mut cells,
+            Some(&evidence),
+            "row_interleaved",
+            None,
+        );
+        assert_eq!(cells.len(), 2);
+        assert!(cells.iter().all(|cell| cell.rowspan == 1));
+    }
+
+    #[test]
+    fn test_merge_source_evidence_uses_native_run_refs_not_filtered_flow() {
+        let cell = |text: &str, row: i64, source_ref: i64| {
+            let mut cell = make_cell(text, row, 0, 1, 1);
+            cell.source = Some(PhysicalCell {
+                schema_version: 1,
+                text: text.to_string(),
+                rect: cell.rect.clone(),
+                row,
+                col: 0,
+                colspan: 1,
+                source_refs: vec![source_ref],
+            });
+            cell
+        };
+        let atom = |text: &str, source_ref: i64, order: i64| AtomDto {
+            schema_version: 1,
+            text: text.to_string(),
+            rect: Rect4 {
+                schema_version: 1,
+                x0: order as f64 * 10.0,
+                y0: 10.0,
+                x1: order as f64 * 10.0 + 8.0,
+                y1: 18.0,
+            },
+            run_refs: vec![source_ref],
+            row_hint: None,
+            col_hint: None,
+            col_end_hint: None,
+            order,
+        };
+        let evidence = |flow_start: i64, block: i64, line: i64| AtomEvidenceDto {
+            flow_start,
+            flow_end: flow_start,
+            source_blocks: vec![block],
+            source_line_start: line,
+            source_line_end: line,
+            source_position_known: true,
+            column_id: Some(0),
+        };
+
+        let mut cells = vec![cell("应付票据", 0, 11), cell("应付账款", 1, 12)];
+        let atoms = vec![
+            atom("应付票据", 11, 0),
+            atom("应付账款", 12, 1),
+            atom("注释", 14, 2),
+            atom("12", 15, 3),
+        ];
+        // Native refs 11/12 must map to their own atoms, rather than filtered
+        // flow entries 12/13, which both belong to block 9.
+        let evidence = vec![
+            evidence(9, 8, 0),
+            evidence(10, 9, 0),
+            evidence(12, 9, 0),
+            evidence(13, 9, 1),
+        ];
+
+        merge_source_contiguous_vertical_cells(
+            &mut cells,
+            Some(&evidence),
+            "columnar",
+            Some(&atoms),
+        );
 
         assert_eq!(cells.len(), 2);
         assert!(cells.iter().all(|cell| cell.rowspan == 1));

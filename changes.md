@@ -2,6 +2,12 @@
 
 ## 2026-09-27
 
+- **Page 585/586/588 Rust 财务表格行合并 parity 修复**：
+  - Rust 垂直合并使用 native `run_refs` 与 aligned atom evidence 对齐，修正 filtered flow 索引错配；region transition 的 `row_interleaved` 财务行合并间距收紧为 Python 合同的 `6pt`，无 evidence 的 legacy full-page candidate 保持原 `10pt`。
+  - Rust 后置 continuation 合并复用 source block 约束，避免跨来源块的财务项目误并。
+  - Page 585、586、588 的 Rust/Python 表格 JSON 形状和非空 Cell 数完全一致：`36x5/180`、`45x5/225`、`39x5/195`，occupancy diagnostics 为 0。
+  - Page 589 保留为 Python 错误记录：Python `_NUMBERED_ITEM_START` 未识别全角点号 `U+FF0E`（如 `1．`），把编号清单错误合并成一个大 Cell；Rust 保留 25 行结构更符合原始页面，未修改 Python。
+
 - **Rust `row_interleaved` 表头换行模式对齐 Python（Page 941 组）**：
   - **根因**：Python 在 `row_interleaved` 模式下只要求 native flow 连续；Rust native-region DTO 未传递 `output_mode`，`merge_source_contiguous_vertical_cells()` 无条件使用 `source_block/source_line` 连续约束。Page 941 等页面的表头片段 flow `7/8/9` 跨 block `8/8/9`，Rust 拒绝第三段并物化为额外逻辑行。
   - **修复**：`NativeRegionInput` 增加并校验 `output_mode`，Python 构造 Rust DTO 时传递 `row_interleaved/columnar`；Rust 仅在 `columnar` 模式启用 source block/line gate，旧 DTO 缺省保持 `columnar`。
