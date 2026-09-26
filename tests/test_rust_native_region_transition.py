@@ -199,6 +199,7 @@ def test_native_region_bridge_page_spy_success_uses_snapshot_without_page_text(
     assert len(received) == 1
     assert len(received[0]["atoms"]) >= 4
     assert len(received[0]["bands"]) == 2
+    assert received[0]["output_mode"] == "row_interleaved"
 
 
 def test_native_region_bridge_atoms_and_bands_are_owned_and_keep_python_evidence(
@@ -421,6 +422,15 @@ def test_native_region_roundtrip_preserves_python_evidence():
         assert result["atoms"][0][field] == payload["atoms"][0][field]
     for field in ("id", "kind", "support", "y_support"):
         assert result["bands"][0][field] == payload["bands"][0][field]
+
+
+def test_native_region_roundtrip_preserves_output_order_mode():
+    payload = _native_region_payload_with_evidence()
+    payload["output_mode"] = "row_interleaved"
+
+    result = recoverer.rust_adapter.roundtrip_dto("native_region_input", payload)
+
+    assert result["output_mode"] == "row_interleaved"
 
 
 @pytest.mark.parametrize(

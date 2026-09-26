@@ -1507,6 +1507,7 @@ fn source_evidence_for_refs(
 fn merge_source_contiguous_vertical_cells(
     cells: &mut Vec<CellDto>,
     atom_evidence: Option<&[AtomEvidenceDto]>,
+    output_mode: &str,
 ) {
     cells.sort_by(|left, right| {
         left.row
@@ -1541,25 +1542,27 @@ fn merge_source_contiguous_vertical_cells(
             if is_numeric_body_text(&current.text) && is_numeric_body_text(&candidate.text) {
                 continue;
             }
-            if let Some(evidence) = atom_evidence {
-                let current_evidence = current
-                    .source
-                    .as_ref()
-                    .and_then(|source| source_evidence_for_refs(&source.source_refs, evidence));
-                let candidate_evidence = candidate
-                    .source
-                    .as_ref()
-                    .and_then(|source| source_evidence_for_refs(&source.source_refs, evidence));
-                let Some((current_blocks, _, current_line_end)) = current_evidence else {
-                    continue;
-                };
-                let Some((candidate_blocks, candidate_line_start, _)) = candidate_evidence else {
-                    continue;
-                };
-                if current_blocks != candidate_blocks
-                    || candidate_line_start != current_line_end + 1
-                {
-                    continue;
+            if output_mode == "columnar" {
+                if let Some(evidence) = atom_evidence {
+                    let current_evidence = current
+                        .source
+                        .as_ref()
+                        .and_then(|source| source_evidence_for_refs(&source.source_refs, evidence));
+                    let candidate_evidence = candidate
+                        .source
+                        .as_ref()
+                        .and_then(|source| source_evidence_for_refs(&source.source_refs, evidence));
+                    let Some((current_blocks, _, current_line_end)) = current_evidence else {
+                        continue;
+                    };
+                    let Some((candidate_blocks, candidate_line_start, _)) = candidate_evidence else {
+                        continue;
+                    };
+                    if current_blocks != candidate_blocks
+                        || candidate_line_start != current_line_end + 1
+                    {
+                        continue;
+                    }
                 }
             }
             if current.text.trim_end().ends_with(':') || current.text.trim_end().ends_with('：') {
@@ -4020,7 +4023,11 @@ pub fn recover_native_region(input: NativeRegionInput) -> NativeRegionOutput {
         cells.push(cell_from_physical(pc, &bands));
     }
 
-    merge_source_contiguous_vertical_cells(&mut cells, input.atom_evidence.as_deref());
+    merge_source_contiguous_vertical_cells(
+        &mut cells,
+        input.atom_evidence.as_deref(),
+        &input.output_mode,
+    );
 
     let physical_rows = rows.len();
     let physical_cols = bands.len();
@@ -4374,7 +4381,7 @@ pub fn recover_wireless_tables(input: WirelessRecoveryInput) -> WirelessRecovery
             continue;
         }
 
-        merge_source_contiguous_vertical_cells(&mut cells, None);
+        merge_source_contiguous_vertical_cells(&mut cells, None, "columnar");
         let (rebuilt_occupancy, conflicts) = rebuild_occupancy_indices(&cells, num_rows, num_cols);
         if !conflicts.is_empty() {
             for (row, col) in conflicts {
@@ -4890,6 +4897,7 @@ mod tests {
             bands,
             atom_evidence: None,
             band_evidence: None,
+            output_mode: "columnar".to_string(),
             config: StructureConfig {
                 schema_version: 1,
                 line_tolerance: 2.0,
@@ -5104,6 +5112,7 @@ mod tests {
             ],
             atom_evidence: None,
             band_evidence: None,
+            output_mode: "columnar".to_string(),
             config: StructureConfig {
                 schema_version: 1,
                 line_tolerance: 2.0,
@@ -5172,6 +5181,7 @@ mod tests {
             bands,
             atom_evidence: None,
             band_evidence: None,
+            output_mode: "columnar".to_string(),
             config: StructureConfig {
                 schema_version: 1,
                 line_tolerance: 2.0,
@@ -5230,6 +5240,7 @@ mod tests {
             ],
             atom_evidence: None,
             band_evidence: None,
+            output_mode: "columnar".to_string(),
             config: StructureConfig {
                 schema_version: 1,
                 line_tolerance: 2.0,
@@ -5303,6 +5314,7 @@ mod tests {
             ],
             atom_evidence: None,
             band_evidence: None,
+            output_mode: "columnar".to_string(),
             config: StructureConfig {
                 schema_version: 1,
                 line_tolerance: 2.0,
@@ -5369,6 +5381,7 @@ mod tests {
             ],
             atom_evidence: None,
             band_evidence: None,
+            output_mode: "columnar".to_string(),
             config: StructureConfig {
                 schema_version: 1,
                 line_tolerance: 2.0,
@@ -5436,6 +5449,7 @@ mod tests {
             ],
             atom_evidence: None,
             band_evidence: None,
+            output_mode: "columnar".to_string(),
             config: StructureConfig {
                 schema_version: 1,
                 line_tolerance: 2.0,
@@ -5485,6 +5499,7 @@ mod tests {
             bands: Vec::new(),
             atom_evidence: None,
             band_evidence: None,
+            output_mode: "columnar".to_string(),
             config: StructureConfig {
                 schema_version: 1,
                 line_tolerance: 2.0,
@@ -5563,6 +5578,7 @@ mod tests {
             bands,
             atom_evidence: None,
             band_evidence: None,
+            output_mode: "columnar".to_string(),
             config: StructureConfig {
                 schema_version: 1,
                 line_tolerance: 2.0,
@@ -5635,6 +5651,7 @@ mod tests {
             bands,
             atom_evidence: None,
             band_evidence: None,
+            output_mode: "columnar".to_string(),
             config: StructureConfig {
                 schema_version: 1,
                 line_tolerance: 2.0,
@@ -5704,6 +5721,7 @@ mod tests {
             ],
             atom_evidence: None,
             band_evidence: None,
+            output_mode: "columnar".to_string(),
             config: StructureConfig {
                 schema_version: 1,
                 line_tolerance: 2.0,
@@ -5770,6 +5788,7 @@ mod tests {
             ],
             atom_evidence: None,
             band_evidence: None,
+            output_mode: "columnar".to_string(),
             config: StructureConfig {
                 schema_version: 1,
                 line_tolerance: 2.0,
@@ -6190,7 +6209,7 @@ mod tests {
             },
         ];
 
-        merge_source_contiguous_vertical_cells(&mut cells, None);
+        merge_source_contiguous_vertical_cells(&mut cells, None, "columnar");
 
         assert_eq!(cells.len(), 3, "Numbered items must NOT be vertically merged");
         assert_eq!(cells[0].rowspan, 1);
@@ -6238,7 +6257,7 @@ mod tests {
             },
         ];
 
-        merge_source_contiguous_vertical_cells(&mut cells, Some(&evidence));
+        merge_source_contiguous_vertical_cells(&mut cells, Some(&evidence), "columnar");
 
         assert_eq!(cells.len(), 2);
         assert!(cells.iter().all(|cell| cell.rowspan == 1));

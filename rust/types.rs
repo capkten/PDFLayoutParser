@@ -2246,6 +2246,7 @@ pub struct NativeRegionInput {
     pub bands: Vec<ColumnBandDto>,
     pub atom_evidence: Option<Vec<AtomEvidenceDto>>,
     pub band_evidence: Option<Vec<BandEvidenceDto>>,
+    pub output_mode: String,
     pub config: StructureConfig,
 }
 
@@ -2389,6 +2390,15 @@ impl NativeRegionInput {
                 }
             }
         }
+        let output_mode = match get_opt(dict, "output_mode")? {
+            Some(value) => value.extract::<String>()?,
+            None => "columnar".to_string(),
+        };
+        if output_mode != "row_interleaved" && output_mode != "columnar" {
+            return Err(PyValueError::new_err(
+                "output_mode must be 'row_interleaved' or 'columnar'",
+            ));
+        }
         let config = StructureConfig::from_py(&required_dict(dict, "config")?)?;
         Ok(Self {
             schema_version: sv,
@@ -2397,6 +2407,7 @@ impl NativeRegionInput {
             bands,
             atom_evidence: aligned_evidence(atom_evidence, "atoms")?,
             band_evidence: aligned_evidence(band_evidence, "bands")?,
+            output_mode,
             config,
         })
     }
@@ -2431,6 +2442,7 @@ impl NativeRegionInput {
             }
         }
         d.set_item("bands", bl)?;
+        d.set_item("output_mode", &self.output_mode)?;
         d.set_item("config", self.config.to_py(py)?)?;
         Ok(d)
     }

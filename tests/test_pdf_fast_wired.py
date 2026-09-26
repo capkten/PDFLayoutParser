@@ -333,6 +333,60 @@ def test_assign_text_to_line_cells_split_word_crossing_boundary():
     assert [c["text"] for c in assigned] == ["减：", "专项"]
 
 
+def test_assign_text_to_line_cells_matches_python_row_boundary_tolerance():
+    cells = [
+        {
+            "text": "",
+            "row": 0,
+            "col": 0,
+            "rect": {
+                "schema_version": 1,
+                "x0": 70.6,
+                "y0": 450.2,
+                "x1": 260.3,
+                "y1": 464.0,
+            },
+            "rowspan": 1,
+            "colspan": 1,
+        },
+        {
+            "text": "",
+            "row": 1,
+            "col": 0,
+            "rect": {
+                "schema_version": 1,
+                "x0": 70.6,
+                "y0": 464.0,
+                "x1": 260.3,
+                "y1": 477.8,
+            },
+            "rowspan": 1,
+            "colspan": 1,
+        },
+    ]
+    word = {
+        "schema_version": 1,
+        "text": "boundary-word",
+        "rect": {
+            "schema_version": 1,
+            "x0": 76.93,
+            "y0": 461.54,
+            "x1": 252.37,
+            "y1": 470.54,
+        },
+        "order": 0,
+        "block": 0,
+        "line": 0,
+    }
+
+    assigned = assign_text_to_line_cells(cells, [word], chars=[], tolerance=2.3)
+
+    # Python's wired text path uses a fixed 2.0pt text-row tolerance even
+    # though the geometric line tolerance is 2.3pt. The word center is just
+    # outside the upper row under that contract.
+    assert [c["text"] for c in assigned] == ["", "boundary-word"]
+
+
 def test_wired_extractor_words_called_only_once_page_spy():
     class PageSpy:
         def __init__(self):

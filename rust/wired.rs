@@ -928,18 +928,23 @@ pub fn assign_text_to_line_cells(
     mut cells: Vec<CellDto>,
     words: &[WordDto],
     chars: &[CharacterDto],
-    tolerance: f64,
+    _tolerance: f64,
 ) -> Vec<CellDto> {
     if cells.is_empty() || words.is_empty() {
         return cells;
     }
 
+    // Keep text-row assignment aligned with Python's
+    // _assign_text_to_line_cells_python, which uses a fixed 2.0pt text
+    // tolerance independently of the 2.3pt geometric line tolerance.
+    let text_tolerance = 2.0_f64;
+
     let overlapping_cells = |w: &WordDto, cells_ref: &[CellDto]| -> Vec<usize> {
         let wyc = (w.rect.y0 + w.rect.y1) / 2.0;
         let mut res = Vec::new();
         for (idx, cell) in cells_ref.iter().enumerate() {
-            if cell.rect.y0 - tolerance <= wyc
-                && wyc <= cell.rect.y1 + tolerance
+            if cell.rect.y0 - text_tolerance <= wyc
+                && wyc <= cell.rect.y1 + text_tolerance
                 && cell.rect.x1.min(w.rect.x1) > cell.rect.x0.max(w.rect.x0)
             {
                 res.push(idx);
@@ -996,10 +1001,10 @@ pub fn assign_text_to_line_cells(
             let mut matched_idx = None;
             for &idx in candidates {
                 let cell = &cells_ref[idx];
-                if cell.rect.x0 - tolerance <= xc
-                    && xc <= cell.rect.x1 + tolerance
-                    && cell.rect.y0 - tolerance <= yc
-                    && yc <= cell.rect.y1 + tolerance
+                if cell.rect.x0 - text_tolerance <= xc
+                    && xc <= cell.rect.x1 + text_tolerance
+                    && cell.rect.y0 - text_tolerance <= yc
+                    && yc <= cell.rect.y1 + text_tolerance
                 {
                     matched_idx = Some(idx);
                     break;
@@ -1057,10 +1062,10 @@ pub fn assign_text_to_line_cells(
         let wxc = (w.rect.x0 + w.rect.x1) / 2.0;
         let mut matched_idx = None;
         for (idx, c) in cells.iter().enumerate() {
-            if c.rect.x0 - tolerance <= wxc
-                && wxc <= c.rect.x1 + tolerance
-                && c.rect.y0 - tolerance <= wyc
-                && wyc <= c.rect.y1 + tolerance
+            if c.rect.x0 - text_tolerance <= wxc
+                && wxc <= c.rect.x1 + text_tolerance
+                && c.rect.y0 - text_tolerance <= wyc
+                && wyc <= c.rect.y1 + text_tolerance
             {
                 matched_idx = Some(idx);
                 break;

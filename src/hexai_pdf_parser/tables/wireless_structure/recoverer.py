@@ -526,6 +526,7 @@ def _prepare_native_region_from_snapshot(
             }
             for atom in normalized_atoms
         ],
+        "output_mode": output_mode,
         "config": {
             "schema_version": 1,
             "line_tolerance": 2.0,

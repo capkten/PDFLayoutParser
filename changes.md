@@ -1,5 +1,21 @@
 # Changes
 
+## 2026-09-27
+
+- **Rust `row_interleaved` 表头换行模式对齐 Python（Page 941 组）**：
+  - **根因**：Python 在 `row_interleaved` 模式下只要求 native flow 连续；Rust native-region DTO 未传递 `output_mode`，`merge_source_contiguous_vertical_cells()` 无条件使用 `source_block/source_line` 连续约束。Page 941 等页面的表头片段 flow `7/8/9` 跨 block `8/8/9`，Rust 拒绝第三段并物化为额外逻辑行。
+  - **修复**：`NativeRegionInput` 增加并校验 `output_mode`，Python 构造 Rust DTO 时传递 `row_interleaved/columnar`；Rust 仅在 `columnar` 模式启用 source block/line gate，旧 DTO 缺省保持 `columnar`。
+  - **页面验收**：`941、942、943、944、1018、1019、1020` 共 7 页的结构化表格 JSON 全部与 Python 一致，标注 PNG SHA-256 逐页一致；对应输出见 `tmp/page941_group_compare_after.json`。
+  - **测试**：Rust `cargo test --locked --lib` 为 `72 passed`；相关 Python native-region/wireless merge/grid 测试为 `84 passed`，差分测试排除两个既有 fixture 分类失败后为 `8 passed`；新增 DTO `output_mode` roundtrip 回归通过。
+
+## 2026-09-26
+
+- **Page 36/37 Rust wired-table 文本归属对齐 Python**：
+  - **根因**：`rust/wired.rs::assign_text_to_line_cells()` 使用传入的几何 `line_tolerance=2.3` 处理文本行归属；Python `_assign_text_to_line_cells_python()` 固定使用 `2.0pt`。两页各有一个 word 的中心点距离上方 Cell 下边约 `2.04pt`，Rust 因 `2.3pt` 错分到上一行，造成 4 个 Cell 文本差异。
+  - **修复**：Rust 文本归属的上下/左右匹配统一使用固定 `2.0pt` 文本容差，几何网格仍使用原有 `2.3pt` 容差。
+  - **验证**：新增边界回归 `tests/test_pdf_fast_wired.py::test_assign_text_to_line_cells_matches_python_row_boundary_tolerance`；修复前 RED，修复后 `tests/test_pdf_fast_wired.py tests/test_wired_table_extractor.py` 为 `91 passed`，`cargo test --locked --lib` 为 `72 passed`。Page 36/37 独立 Python/Rust 重跑后，整张 `tables` JSON 完全一致。
+  - **输出**：`tmp/page36_37_python_after/`、`tmp/page36_37_rust_after/`。
+
 ## 2026-09-25
 
 - **Rust 中文无线表格漏检修复与占位冲突根治（18 个漏检页清零与 1023 页全量验收通过）**：
