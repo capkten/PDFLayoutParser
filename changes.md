@@ -2,6 +2,12 @@
 
 ## 2026-09-27
 
+- **Page 978 Rust 表头拓扑 parity 修复**：
+  - Rust `header_body_start()` 原先在未找到 numeric body 行时，直接把首个“非空 Cell 数达到 3/4 列”的物理行当作 body 起点；Page 978 的第二层表头正好满足该条件，导致 `header_rows=1`，表头 `rowspan/colspan` 无法恢复并物化大量空槽。
+  - 修复前置拓扑下界：存在跨列父表头且后续有完整连续叶子列时，body 起点不得早于叶子表头行之后。
+  - Page 978 四张表 Rust/Python JSON 逐表一致：`(5,4,19)`、`(7,5,27)`、`(4,8,27)`、`(7,7,32)`；Rust 单元测试 `44 passed`。
+  - Page 482 尚未修改，继续单独调查。
+
 - **Page 585/586/588 Rust 财务表格行合并 parity 修复**：
   - Rust 垂直合并使用 native `run_refs` 与 aligned atom evidence 对齐，修正 filtered flow 索引错配；region transition 的 `row_interleaved` 财务行合并间距收紧为 Python 合同的 `6pt`，无 evidence 的 legacy full-page candidate 保持原 `10pt`。
   - Rust 后置 continuation 合并复用 source block 约束，避免跨来源块的财务项目误并。

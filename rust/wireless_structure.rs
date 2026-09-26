@@ -2530,9 +2530,37 @@ fn header_body_start(cells: &[CellDto], physical_rows: usize, columns: usize) ->
     }) {
         return row;
     }
+    let mut topology_floor = 0;
+    for parent in cells.iter().filter(|cell| {
+        cell.row >= 0
+            && (cell.row as usize) < physical_rows
+            && cell_is_nonempty(cell)
+            && cell.colspan.max(1) > 1
+    }) {
+        let parent_start = parent.col.max(0) as usize;
+        let parent_end = cell_col_end(parent);
+        let Some(leaf_row) = ((parent.row as usize + 1)..physical_rows).find(|row| {
+            let child_columns: std::collections::BTreeSet<usize> = cells
+                .iter()
+                .filter(|cell| {
+                    cell.row == *row as i64
+                        && cell_is_nonempty(cell)
+                        && cell.colspan.max(1) == 1
+                        && cell.col.max(0) as usize >= parent_start
+                        && cell.col.max(0) as usize <= parent_end
+                })
+                .map(|cell| cell.col.max(0) as usize)
+                .collect();
+            child_columns == (parent_start..=parent_end).collect()
+        }) else {
+            continue;
+        };
+        topology_floor = topology_floor.max(leaf_row + 1);
+    }
     (1..physical_rows)
         .find(|row| {
-            cells
+            *row >= topology_floor
+                && cells
                 .iter()
                 .filter(|cell| cell.row as usize == *row && !cell.text.trim().is_empty())
                 .count()
@@ -5994,6 +6022,28 @@ mod tests {
         let groups = logical_row_components(4, &cells, 3);
 
         assert_eq!(groups, vec![vec![0], vec![1, 2], vec![3]]);
+    }
+
+    #[test]
+    fn test_header_body_start_keeps_dense_second_header_row_before_leaf_row() {
+        let cells = vec![
+            make_cell("parent", 0, 4, 1, 2),
+            make_cell("stub0", 1, 0, 1, 1),
+            make_cell("stub1", 1, 1, 1, 1),
+            make_cell("stub2", 1, 2, 1, 1),
+            make_cell("stub3", 1, 3, 1, 1),
+            make_cell("stub6", 1, 6, 1, 1),
+            make_cell("wrapped", 2, 1, 1, 1),
+            make_cell("leaf4", 3, 4, 1, 1),
+            make_cell("leaf5", 3, 5, 1, 1),
+            make_cell("body0", 4, 0, 1, 1),
+            make_cell("body1", 4, 1, 1, 1),
+            make_cell("body2", 4, 2, 1, 1),
+            make_cell("body3", 4, 3, 1, 1),
+            make_cell("72.99", 4, 4, 1, 1),
+        ];
+
+        assert_eq!(header_body_start(&cells, 7, 7), 4);
     }
 
     #[test]
