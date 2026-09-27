@@ -1011,7 +1011,14 @@ pub fn build_english_cells(input: &EnglishGridInput) -> Vec<CellDto> {
             let joins = phrases
                 .last()
                 .and_then(|phrase| phrase.last())
-                .map(|previous| word.rect.x0 - previous.rect.x1 <= 6.0)
+                .map(|previous| {
+                    let crosses_column_boundary = columns.iter().any(|column| {
+                        column.x0 > previous.rect.x1 + 0.5
+                            && column.x0 < word.rect.x0 - 0.5
+                            && word.rect.x0 - previous.rect.x1 >= 5.5
+                    });
+                    word.rect.x0 - previous.rect.x1 <= 6.0 && !crosses_column_boundary
+                })
                 .unwrap_or(false);
             if joins {
                 phrases.last_mut().unwrap().push(word);
@@ -1054,7 +1061,19 @@ pub fn build_english_cells(input: &EnglishGridInput) -> Vec<CellDto> {
                     .unwrap_or(num_cols - 1);
                 (assigned, assigned)
             };
-            let text = phrase
+            let mut ordered_phrase = phrase.clone();
+            ordered_phrase.sort_by(|a, b| {
+                center_y(&a.rect)
+                    .partial_cmp(&center_y(&b.rect))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then_with(|| {
+                        a.rect
+                            .x0
+                            .partial_cmp(&b.rect.x0)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    })
+            });
+            let text = ordered_phrase
                 .iter()
                 .map(|word| word.text.trim())
                 .filter(|text| !text.is_empty())
@@ -1946,6 +1965,70 @@ mod tests {
             })
             .collect::<std::collections::HashSet<_>>();
         assert_eq!(occupied.len(), 9);
+    }
+
+    #[test]
+    fn test_build_english_cells_keeps_words_on_adjacent_columns_separate() {
+        let input = EnglishGridInput {
+            schema_version: 1,
+            region: crate::types::RegionDto {
+                schema_version: 1,
+                rect: Rect4 {
+                    schema_version: 1,
+                    x0: 0.0,
+                    y0: 0.0,
+                    x1: 50.0,
+                    y1: 20.0,
+                },
+                source_order: 0,
+                allowed: true,
+            },
+            words: vec![
+                make_word("Mar", 1.0, 5.0, 9.0, 15.0),
+                make_word("2011", 10.0, 5.0, 18.0, 15.0),
+                make_word("Dec", 27.0, 5.0, 35.0, 15.0),
+                make_word("2010", 36.0, 5.0, 44.0, 15.0),
+            ],
+            backgrounds: Vec::new(),
+            horizontal_lines: Vec::new(),
+            horizontal_line_lengths: Vec::new(),
+            columns: vec![
+                ColumnBandDto {
+                    schema_version: 1,
+                    x0: 0.0,
+                    x1: 20.0,
+                    source_atoms: Vec::new(),
+                    order: 0,
+                },
+                ColumnBandDto {
+                    schema_version: 1,
+                    x0: 20.0,
+                    x1: 50.0,
+                    source_atoms: Vec::new(),
+                    order: 1,
+                },
+            ],
+            config: StructureConfig {
+                schema_version: 1,
+                line_tolerance: 2.0,
+                row_tolerance: 2.0,
+                column_tolerance: 2.0,
+                span_tolerance: 2.0,
+                numeric_tolerance: 2.0,
+            },
+        };
+
+        let cells = build_english_cells(&input);
+
+        assert!(cells
+            .iter()
+            .any(|cell| cell.col == 0 && cell.text == "Mar 2011"));
+        assert!(cells
+            .iter()
+            .any(|cell| cell.col == 1 && cell.text == "Dec 2010"));
+        assert!(!cells
+            .iter()
+            .any(|cell| cell.text == "Mar 2011 Dec 2010"));
     }
 
     #[test]
