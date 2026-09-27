@@ -1033,3 +1033,9 @@
 - 最小修复：允许跨入正文边界且从非首行开始的首列 rowspan 参与 body prefix 合并；允许从物理首行开始、跨 `body_start` 的 wrapped header 使用其已证实 rowspan 范围，保留既有 tall wrapped header 和 occupancy 防护。新增两个 Rust 最小失败测试，覆盖表头边界和正文首列跨边界；修复后 `cargo test --locked logical_row_components` 为 `3 passed`。
 - 独立页面输出：`D:\codes\PDFLayoutParser-Fast\output\pdf\page437_439_logical_rows_fix_20260927\`。Rust 结果与 Python 逐表逐 Cell 对比完全一致：page 437 第三表 `3x6/18`、page 438 第四表 `2x3/6`、page 439 第一表 `2x3/6`；文本、row/col、span 和 BBox 均为 0 差异。对应页面 JSON 与可视化 PNG 均已生成并复核。
 - 验证：Rust `cargo test --locked` 为 `81 passed`；相关 Python 无线结构/Parity 测试为 `65 passed`。更宽的 recoverer 测试集合有 1 条既有 fallback 期望失败（`test_recover_cells_from_region_falls_back_when_rust_returns_empty_grid`，与本次逻辑行修改无关），未修改该既有行为。
+
+- **Rust 无线逻辑行与英文相邻列词序 parity 修复**：
+  - **根因**：`wrapped_leaf_header_span` 对“单个多行父表头 + 下一行叶子列”要求额外存在上层 parent 或多个 started cell，导致 Page 463、941-944、1007-1008 多出逻辑行；英文 Rust phrase 聚类在相邻列边界合并日期词，Page 410 少 1 个 Cell。
+  - **修复**：按 sibling leaf 拓扑放宽 Rust wrapped header 合并条件；英文 phrase 聚类遇到明确列边界时不跨列合并，并按视觉 Y 顺序拼接同一 Cell 内词。
+  - **测试**：新增 2 个 wrapped header RED/回归用例和 1 个英文相邻列词序用例；`cargo test --locked --lib` 98 项通过；Python 英文测试 23 项通过。
+  - **页面验证**：同一 PDF、顺序后端、单页目标批次 `[410,463,941,942,943,944,1007,1008]`，Rust/Python 逐 Cell signature 一致（Page 410 两表 `7x13/85`、`6x7/39`；Page 463 `21x7/147`；Page 941-944 分别 `11x13/131`、`11x13/131`、`10x13/118`、`9x13/105`；Page 1007 四表、Page 1008 四表一致）。

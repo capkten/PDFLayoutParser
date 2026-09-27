@@ -3120,6 +3120,10 @@ fn wrapped_leaf_header_span(
     });
     (has_parent_support
         || (started.len() >= 2 && sibling_support)
+        // A multiline parent with sibling leaves is the wrapped-header
+        // topology accepted by Python's row merger, even without a parent
+        // cell above the candidate.
+        || (candidate.rowspan > 1 && sibling_support)
         || (candidate.rowspan > 1 && start == 0 && body_start <= 1))
     .then_some((span_start, end))
 }
@@ -6495,6 +6499,41 @@ mod tests {
         ];
 
         assert_eq!(wrapped_leaf_header_span(&cells, 0, 3), None);
+    }
+
+    #[test]
+    fn test_wrapped_header_parent_with_next_row_siblings_collapses_header_rows() {
+        let cells = vec![
+            make_cell("应收账款\n期末余额", 0, 5, 2, 1),
+            make_cell("项目", 1, 0, 1, 1),
+            make_cell("期初余额", 1, 1, 1, 1),
+            make_cell("变动", 1, 2, 1, 1),
+            make_cell("正文", 3, 0, 1, 1),
+        ];
+
+        assert_eq!(wrapped_leaf_header_span(&cells, 0, 3), Some((0, 1)));
+        assert_eq!(
+            logical_row_components(4, &cells, 3),
+            vec![vec![0, 1, 2], vec![3]]
+        );
+    }
+
+    #[test]
+    fn test_wrapped_header_parent_after_first_row_collapses_with_leaf_siblings() {
+        let cells = vec![
+            make_cell("前置标题", 0, 3, 1, 1),
+            make_cell("应收账款\n期末余额", 1, 5, 3, 1),
+            make_cell("项目", 2, 0, 1, 1),
+            make_cell("期初余额", 2, 1, 1, 1),
+            make_cell("变动", 2, 2, 1, 1),
+            make_cell("正文", 4, 0, 1, 1),
+        ];
+
+        assert_eq!(wrapped_leaf_header_span(&cells, 1, 4), Some((1, 3)));
+        assert_eq!(
+            logical_row_components(5, &cells, 4),
+            vec![vec![0], vec![1, 2, 3], vec![4]]
+        );
     }
 
     #[test]
