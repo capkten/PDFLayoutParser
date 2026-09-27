@@ -980,6 +980,12 @@
 
 ## 2026-09-27
 
+- 修复中文无线表格 Page 442、446 的 Rust 漏检与行错位。根因一：Rust `median_positive()` 对偶数样本取上中位数，和 Python `statistics.median()` 的中间均值不同；Page 446 表2 的行容差因此过大，把项目行与多行叶表头合并，`4x7` 变为 `3x7`。根因二：`vertical_header_chain` 特判仅按首行 CJK 文本与 `rowspan>=3` 判断，把普通多字符表头“项目”“受限情况”等扩成整层表头，触发 occupancy conflict，导致 Page 442 表4 和 Page 446 表3 丢失。
+- 最小修复：偶数样本采用 Python 兼容的中间均值；垂直表头链只接受至少三行、每行一个 CJK 字符且以换行连接的真实链，普通多字符表头不再进入该路径。新增两个 Rust 单元测试，分别锁定偶数中位数和垂直链判定。
+- 独立页面输出：`D:\codes\PDFLayoutParser-Fast\output\pdf\page442_443_446_logical_rows_fix_20260927\`。Page 442 恢复 6 张表，Page 446 恢复 6 张表，Page 443 保持 2 张表；三页 Rust 与 Python 逐表逐 Cell 的文本、row/col、span、BBox 均为 0 差异。页面 JSON 和可视化 PNG 均已生成。
+
+## 2026-09-27
+
 - 修复中文无线表格页面索引 `437`、`438`、`439` 的 Rust 逻辑行拆分。根因位于 `rust/wireless_structure.rs::logical_row_components()`：`merge_source_contiguous_vertical_cells()` 已将 native 连续文本合并为一个 Cell，但逻辑行组件仍把 Cell 起始行位于 `body_start` 之前的覆盖范围截断；随后空槽物化将长首列/长表头的续行输出为额外行。该条件同时影响 page 437 第三表首列英文长文本，以及 page 438 第四表、page 439 第一表的多行表头。
 - 最小修复：允许跨入正文边界且从非首行开始的首列 rowspan 参与 body prefix 合并；允许从物理首行开始、跨 `body_start` 的 wrapped header 使用其已证实 rowspan 范围，保留既有 tall wrapped header 和 occupancy 防护。新增两个 Rust 最小失败测试，覆盖表头边界和正文首列跨边界；修复后 `cargo test --locked logical_row_components` 为 `3 passed`。
 - 独立页面输出：`D:\codes\PDFLayoutParser-Fast\output\pdf\page437_439_logical_rows_fix_20260927\`。Rust 结果与 Python 逐表逐 Cell 对比完全一致：page 437 第三表 `3x6/18`、page 438 第四表 `2x3/6`、page 439 第一表 `2x3/6`；文本、row/col、span 和 BBox 均为 0 差异。对应页面 JSON 与可视化 PNG 均已生成并复核。
