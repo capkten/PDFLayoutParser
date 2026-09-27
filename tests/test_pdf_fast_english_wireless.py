@@ -86,9 +86,17 @@ def test_roundtrip_all_english_dtos():
         "region": reg,
         "words": [],
         "backgrounds": [],
+        "columns": [
+            {"schema_version": 1, "x0": 0.0, "x1": 40.0, "source_atoms": [], "order": 0},
+            {"schema_version": 1, "x0": 40.0, "x1": 100.0, "source_atoms": [], "order": 1},
+        ],
         "config": cfg,
     })
     assert eg_in["schema_version"] == 1
+    assert [(column["x0"], column["x1"]) for column in eg_in["columns"]] == [
+        (0.0, 40.0),
+        (40.0, 100.0),
+    ]
 
     gw_in = rust_adapter.roundtrip_dto("general_wireless_input", {
         "schema_version": 1,
@@ -184,6 +192,25 @@ def test_infer_english_columns_does_not_anchor_combined_dollars_without_data_row
         (0.0, 75.0),
         (75.0, 200.0),
     ]
+
+
+def test_english_grid_input_serializes_detected_columns():
+    from hexai_pdf_parser.core.models import BBox
+    from hexai_pdf_parser.tables.extractors.english_table_extractor import EnglishTableExtractor
+
+    dto = EnglishTableExtractor._english_grid_input(
+        [_english_word(10.0, 10.0, 25.0, 20.0, "Value")],
+        BBox(0.0, 0.0, 50.0, 30.0),
+        rows=None,
+        columns=[(0.0, 30.0), (30.0, 50.0)],
+    )
+
+    assert [(band["x0"], band["x1"], band["order"]) for band in dto["columns"]] == [
+        (0.0, 30.0, 0),
+        (30.0, 50.0, 1),
+    ]
+
+
 def test_infer_english_columns(sample_fixture_page):
     """Test inferring column bands with currency boundary alignment."""
     input_dto = {
@@ -362,6 +389,11 @@ def test_build_wireless_table_consumes_rust_cells_for_headers_rowspan_and_empty_
     assert len(seen["input"]["words"]) == 6
     assert len(seen["input"]["backgrounds"]) == 3
     assert seen["input"]["horizontal_lines"] == []
+    assert [(band["x0"], band["x1"]) for band in seen["input"]["columns"]] == [
+        (0.0, 80.0),
+        (80.0, 160.0),
+        (160.0, 300.0),
+    ]
 
 
 def test_group_into_tables_routes_adjacent_backgrounds_through_unified_rust_path(monkeypatch):
@@ -572,6 +604,33 @@ def test_build_english_cells_preserves_products_header_and_first_data_row():
     assert products["rowspan"] == 2
     assert any(cell["text"] == "Mini HSI Futures" and cell["row"] == 2 for cell in cells)
     assert not any("Products Mini HSI Futures" in cell["text"] for cell in cells)
+
+
+def test_build_english_cells_uses_supplied_columns_for_cell_assignment():
+    """The caller's detected bands are authoritative for English wireless cells."""
+    input_dto = _english_grid_fixture(
+        [
+            _english_fixture_word("Left", 10.0, 5.0, 30.0, 12.0, 0),
+            _english_fixture_word("Right", 150.0, 5.0, 180.0, 12.0, 1),
+        ],
+        [],
+        x1=200.0,
+        y1=20.0,
+    )
+    input_dto["columns"] = [
+        {"schema_version": 1, "x0": 0.0, "x1": 50.0, "source_atoms": [], "order": 0},
+        {"schema_version": 1, "x0": 50.0, "x1": 100.0, "source_atoms": [], "order": 1},
+        {"schema_version": 1, "x0": 100.0, "x1": 200.0, "source_atoms": [], "order": 2},
+    ]
+
+    cells = rust_adapter.build_english_cells(input_dto)
+
+    right = next(cell for cell in cells if cell["text"] == "Right")
+    assert right["col"] == 2
+    assert right["rect"]["x0"] == 100.0
+    assert right["rect"]["x1"] == 200.0
+
+
 def test_build_legacy_text_alignment():
     """Test legacy text alignment reconstruction with group header."""
     words = [

@@ -939,7 +939,11 @@ pub fn build_english_cells(input: &EnglishGridInput) -> Vec<CellDto> {
     if input.words.is_empty() {
         return Vec::new();
     }
-    let columns = infer_english_columns(input);
+    let columns = if input.columns.is_empty() {
+        infer_english_columns(input)
+    } else {
+        input.columns.clone()
+    };
     if columns.is_empty() {
         return Vec::new();
     }
@@ -1654,6 +1658,7 @@ mod tests {
             words,
             backgrounds: Vec::new(),
             horizontal_lines: Vec::new(),
+            columns: Vec::new(),
             config: StructureConfig {
                 schema_version: 1,
                 line_tolerance: 2.0,
@@ -1698,6 +1703,7 @@ mod tests {
             words,
             backgrounds: Vec::new(),
             horizontal_lines: Vec::new(),
+            columns: Vec::new(),
             config: StructureConfig {
                 schema_version: 1,
                 line_tolerance: 2.0,
@@ -1750,6 +1756,7 @@ mod tests {
                 make_bg(35.0, 50.0, Some(0.5), 2),
             ],
             horizontal_lines: Vec::new(),
+            columns: Vec::new(),
             config: StructureConfig {
                 schema_version: 1,
                 line_tolerance: 2.0,
@@ -1831,6 +1838,7 @@ mod tests {
                 make_bg(47.0, 65.0, Some(0.5), 1),
             ],
             horizontal_lines: Vec::new(),
+            columns: Vec::new(),
             config: StructureConfig {
                 schema_version: 1,
                 line_tolerance: 2.0,
@@ -2000,6 +2008,7 @@ mod tests {
             ],
             backgrounds: Vec::new(),
             horizontal_lines: vec![17.0],
+            columns: Vec::new(),
             config: StructureConfig {
                 schema_version: 1,
                 line_tolerance: 2.0,

@@ -2,6 +2,15 @@
 
 ## 2026-09-27
 
+- **Page 410 第二张英文无线表列带对齐**：
+  - **根因**：Python `_build_wireless_table()` 已有检测列带，但 `_english_grid_input()` 未序列化这些列带；Rust `build_english_cells()` 因而重新用 words 几何推断列数。Page 410 第二张表被推为 9 列，Python 则为 7 列。
+  - **修复**：`EnglishGridInput` 新增可选 `columns` DTO；英文 cell builder 在列带非空时直接使用传入列带，旧调用方缺省时仍执行原推断。Python 无线表路径现把检测列带传给 Rust。
+  - **测试**：新增显式列带赋值 RED fixture、DTO roundtrip 和 Python 调用链序列化断言；Rust focused 单测及 Python 英文无线测试验证中。
+  - **页面验证**：`D:\codes\PDFLayoutParser\fix\zh_all_table_pages.pdf` 页索引 409、410，独立 Python/Rust 输出位于 worktree `output/page409_410_python_columns_fix` 与 `output/page409_410_rust_columns_fix`。Page 409 的 `7x9/59` Cell JSON 和 PNG SHA-256 完全一致；Page 410 两表数量、来源一致，第一表为 `7x13/85` 且 Cell JSON 完全相同；第二表从 Rust 旧 `7x9/56` 对齐为 `6x7/39`，非空内容、行列位置及跨度一致，列边界为 `58.9, 215, 263, 318.5, 380, 440, 505.3, 549.5`。两种模式 PNG 已目视检查；第二表剩余差异是部分纵向 Cell bbox 切分点。
+  - **验证命令**：`cargo test --locked --lib english_wireless`（9 passed）、`pytest tests/test_pdf_fast_english_wireless.py -q`（19 passed）、`git diff --check` 通过。
+
+## 2026-09-27
+
 - **Page 337 英文无线表格 Rust 行契约对齐**：
   - **根因**：Python `EnglishTableExtractor._build_wireless_table()` 已将同一数据行内的垂直折行文字封装在同一个 `_RowData`/背景带中；Rust `rust/english_wireless.rs::build_english_cells()` 原先直接以 `cluster_word_rows(..., 4.0)` 按词中心聚类，忽略传入的数据背景带，Page 337 的 10 个逻辑行被拆成 16 行。
   - **修复**：新增 `cluster_english_rows()`，仅对 `color.is_some()` 的数据背景带按其几何范围归属文字并形成逻辑行；无色表头仍走原有 4pt 聚类和表头压缩，避免改变既有多级表头语义。未落入背景带的词保留旧聚类兜底。

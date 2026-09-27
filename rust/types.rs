@@ -2663,6 +2663,7 @@ pub struct EnglishGridInput {
     pub words: Vec<WordDto>,
     pub backgrounds: Vec<BackgroundDto>,
     pub horizontal_lines: Vec<f64>,
+    pub columns: Vec<ColumnBandDto>,
     pub config: StructureConfig,
 }
 
@@ -2685,6 +2686,19 @@ impl EnglishGridInput {
             Some(value) => value.extract()?,
             None => Vec::new(),
         };
+        let columns = match get_opt(dict, "columns")? {
+            Some(value) => {
+                let list: Bound<'_, PyList> = value.extract()?;
+                let mut columns = Vec::with_capacity(list.len());
+                for column in list.iter() {
+                    columns.push(ColumnBandDto::from_py(
+                        &column.downcast::<PyDict>()?.clone(),
+                    )?);
+                }
+                columns
+            }
+            None => Vec::new(),
+        };
         let config =
             StructureConfig::from_py(&get_req(dict, "config")?.downcast::<PyDict>()?.clone())?;
         Ok(Self {
@@ -2693,6 +2707,7 @@ impl EnglishGridInput {
             words,
             backgrounds,
             horizontal_lines,
+            columns,
             config,
         })
     }
@@ -2712,6 +2727,11 @@ impl EnglishGridInput {
         }
         d.set_item("backgrounds", bl)?;
         d.set_item("horizontal_lines", &self.horizontal_lines)?;
+        let cl = PyList::empty_bound(py);
+        for column in &self.columns {
+            cl.append(column.to_py(py)?)?;
+        }
+        d.set_item("columns", cl)?;
         d.set_item("config", self.config.to_py(py)?)?;
         Ok(d)
     }

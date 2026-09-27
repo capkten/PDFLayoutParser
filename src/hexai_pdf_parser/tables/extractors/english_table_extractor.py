@@ -66,6 +66,7 @@ class EnglishTableExtractor(BaseTableExtractor):
         table_bbox: Optional[BBox] = None,
         rows: Optional[Sequence[_RowData]] = None,
         horizontal_lines: Optional[Sequence[float]] = None,
+        columns: Optional[Sequence[Tuple[float, float]]] = None,
     ) -> Dict[str, Any]:
         if table_bbox is not None:
             region_bbox = table_bbox
@@ -112,6 +113,16 @@ class EnglishTableExtractor(BaseTableExtractor):
             "words": cls._english_word_dtos(words),
             "backgrounds": backgrounds,
             "horizontal_lines": [float(value) for value in (horizontal_lines or [])],
+            "columns": [
+                {
+                    "schema_version": 1,
+                    "x0": float(x0),
+                    "x1": float(x1),
+                    "source_atoms": [],
+                    "order": order,
+                }
+                for order, (x0, x1) in enumerate(columns or [])
+            ],
             "config": {
                 "schema_version": 1,
                 "line_tolerance": 2.0,
@@ -3613,6 +3624,7 @@ class EnglishTableExtractor(BaseTableExtractor):
                 table_bbox,
                 all_rows,
                 horizontal_lines=self._english_horizontal_lines(page),
+                columns=columns,
             )
 
         def rust_table(dto):
