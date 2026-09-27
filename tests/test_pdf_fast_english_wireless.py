@@ -161,6 +161,29 @@ def test_assign_words_to_zebra_rows(sample_fixture_page):
     assert any(w["text"] == "2,050" for w in total_row["words"])
 
 
+def test_infer_english_columns_does_not_anchor_combined_dollars_without_data_rows():
+    from hexai_pdf_parser.core.models import BBox
+    from hexai_pdf_parser.tables.extractors.english_table_extractor import EnglishTableExtractor
+    words = [
+        _english_word(10, 10, 50, 20, "Item"),
+        _english_word(100, 10, 125, 20, "$m"),
+        _english_word(10, 30, 50, 40, "Revenue"),
+        _english_word(100, 30, 130, 40, "$1.15"),
+        _english_word(10, 50, 50, 60, "Cost"),
+        _english_word(100, 50, 130, 60, "$1.05"),
+    ]
+    input_dto = EnglishTableExtractor._english_grid_input(
+        words,
+        BBox(0.0, 0.0, 200.0, 70.0),
+        rows=None,
+    )
+
+    columns = rust_adapter.infer_english_columns(input_dto)
+
+    assert [(column["x0"], column["x1"]) for column in columns] == [
+        (0.0, 75.0),
+        (75.0, 200.0),
+    ]
 def test_infer_english_columns(sample_fixture_page):
     """Test inferring column bands with currency boundary alignment."""
     input_dto = {

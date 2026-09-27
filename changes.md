@@ -12,6 +12,10 @@
   - **根因**：Rust `merge_wrapped_header_rows()` 只按列位置跨行合并，未区分相邻无色表头背景带；Page 340 的单行正文 `All paragraphs...` 被错误并入第一层表头，Page 408 的重复 `Products` 标签在清空子 Cell 后又被占用检查阻止正确 `rowspan`。
   - **修复**：为表头压缩传入背景行组，仅在同一逻辑背景组内合并；相同上下文标签不重复拼接；占用检查忽略已清空的子 Cell，保留有效文本对跨度的阻断。
   - **验证**：新增 Page 340/408 最小 RED fixtures；修复后 Python English focused `16 passed`、Rust `cargo test --locked --lib english_wireless` `9 passed`。独立 Rust 输出 `D:\codes\PDFLayoutParser\output\english_340_408_rust_fix_final3_20260927` 与 Python baseline 逐表 Cell signature 一致：Page 340 `16x5/79`、Page 408 `8x5/37`；bbox 分别 `[44.2,123.0,549.9,400.4]`、`[59.1,543.7,553.0,651.6]`。
+- **Page 407 英文无线列边界对齐**：
+  - **根因**：Rust 列推断在没有显式数据行背景证据时，仍遍历全部 `input.words` 使用含数字的 `$1.15` 等词吸附列边界；Python `data_rows=None` 路径不执行该金额锚点。Page 407 第一列因此从 Python 的 `299.77` 被推到 `354.78`。
+  - **修复**：Rust 金额边界吸附仅消费独立 `$` token，保留显式货币列测试，同时跳过 `$1.15` 等已组合金额词，基础列检测和 Python 路径不变。
+  - **验证**：新增无数据行背景的组合金额 RED fixture，修复后 GREEN；Python English focused `17 passed`、Rust English unit `9 passed`。Page 337/340/407/408 Rust 与 Python Cell signature 全部一致；Page 407 为 `english_general_wireless`、`23x4`、`92 cells`、bbox `[60.9,312.0,550.3,745.9]`。输出目录：`D:\codes\PDFLayoutParser\output\english_337_340_407_408_rust_final_20260927`。
 - **Page 482 Rust 中文无线表格竖排单字链 parity 修复**：
   - 根因：第 13 列 `减值准备期末余额` 的 8 个 native atom 同属 block=9、source line=0..7 且 flow 连续；Rust 单字 CJK 续行保护使其停留为 8 个物理行，Python 则合并为一个表头 Cell，最终 Rust 产出 10x13 而 Python 为 5x13。
   - 修复：仅对 row=0 起始、同列同几何、同 source block 且连续 source line/flow 的证据完整 CJK 竖排链一次性合并；逻辑 row-start 与表头拓扑随后保留叶子行和正文边界，避免中间两两合并造成 occupancy conflict。其他路径不回读 words、不改 Python。

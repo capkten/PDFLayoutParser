@@ -656,7 +656,12 @@ fn merge_wrapped_header_rows(row_cells: &mut [Vec<CellDto>], header_rows: usize,
                     continue;
                 };
 
-                if next_row > row_index + 1 && header_rows < 4 {
+                let top_has_stub = row_cells[row_index]
+                    .iter()
+                    .any(|cell| cell.col == 0 && !cell.text.trim().is_empty());
+                if next_row > row_index + 1
+                    && header_rows < 4
+                    && (row_groups.get(row_index) != row_groups.get(next_row) || top_has_stub) {
                     break;
                 }
 
@@ -891,7 +896,7 @@ pub fn infer_english_columns(input: &EnglishGridInput) -> Vec<ColumnBandDto> {
 
     columns = prune_english_columns(columns, &input.words, table_x0, table_x1);
 
-    for dollar in input.words.iter().filter(|word| word.text.contains('$')) {
+    for dollar in input.words.iter().filter(|word| word.text.trim() == "$") {
         let row_words = cluster_word_rows(&input.words, 3.5)
             .into_iter()
             .find(|(_, words)| words.iter().any(|word| std::ptr::eq(*word, dollar)))
