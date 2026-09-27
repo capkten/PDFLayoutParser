@@ -1134,8 +1134,9 @@ pub fn build_english_cells(input: &EnglishGridInput) -> Vec<CellDto> {
                 .collect();
             topology == first_header_topology
         });
-    if background_header_rows <= 2
-        && repeated_header_topology
+    let collapse_single_background_header = background_header_rows == 1
+        || (background_header_rows == 2 && repeated_header_topology);
+    if collapse_single_background_header
         && !row_cells[0].iter().any(|cell| cell.col == 0 && !cell.text.trim().is_empty())
     {
         (row_cells, row_bounds, header_rows) =
@@ -2143,5 +2144,53 @@ mod tests {
             .expect("first data row");
         assert_eq!(data.row, 2);
         assert_eq!(data.rect.y0, 22.0);
+    }
+
+    #[test]
+    fn test_build_english_cells_collapses_single_background_header_with_mixed_spans() {
+        let input = EnglishGridInput {
+            schema_version: 1,
+            region: crate::types::RegionDto {
+                schema_version: 1,
+                rect: Rect4 {
+                    schema_version: 1,
+                    x0: 0.0,
+                    y0: 0.0,
+                    x1: 300.0,
+                    y1: 50.0,
+                },
+                source_order: 0,
+                allowed: true,
+            },
+            words: vec![
+                make_word("Top", 100.0, 5.0, 240.0, 12.0),
+                make_word("Child A", 100.0, 15.0, 150.0, 22.0),
+                make_word("Child B", 180.0, 15.0, 230.0, 22.0),
+                make_word("Value", 10.0, 35.0, 60.0, 42.0),
+                make_word("100", 110.0, 35.0, 140.0, 42.0),
+            ],
+            backgrounds: vec![
+                make_bg(0.0, 30.0, None, 0),
+                make_bg(30.0, 50.0, Some(0.5), 1),
+            ],
+            horizontal_lines: Vec::new(),
+            columns: vec![
+                ColumnBandDto { schema_version: 1, x0: 0.0, x1: 80.0, source_atoms: Vec::new(), order: 0 },
+                ColumnBandDto { schema_version: 1, x0: 80.0, x1: 160.0, source_atoms: Vec::new(), order: 1 },
+                ColumnBandDto { schema_version: 1, x0: 160.0, x1: 240.0, source_atoms: Vec::new(), order: 2 },
+                ColumnBandDto { schema_version: 1, x0: 240.0, x1: 300.0, source_atoms: Vec::new(), order: 3 },
+            ],
+            config: StructureConfig {
+                schema_version: 1,
+                line_tolerance: 2.0,
+                row_tolerance: 2.0,
+                column_tolerance: 2.0,
+                span_tolerance: 2.0,
+                numeric_tolerance: 2.0,
+            },
+        };
+
+        let cells = build_english_cells(&input);
+        assert_eq!(cells.iter().map(|cell| cell.row).max(), Some(1));
     }
 }
