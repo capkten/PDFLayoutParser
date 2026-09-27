@@ -1038,4 +1038,4 @@
   - **根因**：`wrapped_leaf_header_span` 对“单个多行父表头 + 下一行叶子列”要求额外存在上层 parent 或多个 started cell，导致 Page 463、941-944、1007-1008 多出逻辑行；英文 Rust phrase 聚类在相邻列边界合并日期词，Page 410 少 1 个 Cell。
   - **修复**：按 sibling leaf 拓扑放宽 Rust wrapped header 合并条件；英文 phrase 聚类遇到明确列边界时不跨列合并，并按视觉 Y 顺序拼接同一 Cell 内词。
   - **测试**：新增 2 个 wrapped header RED/回归用例和 1 个英文相邻列词序用例；`cargo test --locked --lib` 98 项通过；Python 英文测试 23 项通过。
-  - **页面验证**：同一 PDF、顺序后端、单页目标批次 `[410,463,941,942,943,944,1007,1008]`，Rust/Python 逐 Cell signature 一致（Page 410 两表 `7x13/85`、`6x7/39`；Page 463 `21x7/147`；Page 941-944 分别 `11x13/131`、`11x13/131`、`10x13/118`、`9x13/105`；Page 1007 四表、Page 1008 四表一致）。
+  - **页面验证**：同一 PDF、顺序后端、单页目标批次 `[410,463,941,942,943,944,1007,1008]`。Rust/Python 的行列、文本、跨度和 Cell 数一致；Page 463、941-944、1007、1008 逐 Cell signature（含 BBox）完全一致。Page 410 两表为 `7x13/85`、`6x7/39`，结构和文本一致，20 个表头 Cell 的垂直 BBox 分界仍有约 `0.2pt` 既有舍入差异。
