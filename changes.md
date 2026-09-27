@@ -980,6 +980,12 @@
 
 ## 2026-09-27
 
+- 修复中文无线表格 Page 463/473 的 Rust 逻辑行差异。Page 463 根因是 `merge_source_contiguous_vertical_cells()` 仅依赖连续 source refs、列和几何重叠，缺少 Python 同等的 ASCII/非 ASCII 脚本边界判断，因而把独立的 Latin/CJK 多行项目文本压进同一 Cell，`21x7` 过度压缩为 `17x7`。Page 473 根因是 `wrapped_leaf_header_span()` 在没有同层兄弟列证据时仍因 `rowspan>1` 强行折叠物理行，导致首个空槽和表头行错位，`6x2` 变为 `5x2`。
+- 最小修复：垂直 Cell 合并拒绝 ASCII 字母与非 ASCII 字段之间的跨行连接；wrapped header 只有在至少两个同层兄弟列提供结构证据时才允许压缩。新增 Latin/CJK 混合链拒绝测试及无兄弟证据的表头压缩拒绝测试。
+- 独立页面输出：`D:\codes\PDFLayoutParser-Fast\output\pdf\page463_473_logical_rows_fix_20260927\`。Page 463 恢复 `21x7/147`，Page 473 第二表恢复 `6x2/11`；两页目标表 Rust 与 Python 逐 Cell 文本、row/col、span、BBox 均为 0 差异，JSON/PNG 均已生成。
+
+## 2026-09-27
+
 - 修复中文无线表格 Page 442、446 的 Rust 漏检与行错位。根因一：Rust `median_positive()` 对偶数样本取上中位数，和 Python `statistics.median()` 的中间均值不同；Page 446 表2 的行容差因此过大，把项目行与多行叶表头合并，`4x7` 变为 `3x7`。根因二：`vertical_header_chain` 特判仅按首行 CJK 文本与 `rowspan>=3` 判断，把普通多字符表头“项目”“受限情况”等扩成整层表头，触发 occupancy conflict，导致 Page 442 表4 和 Page 446 表3 丢失。
 - 最小修复：偶数样本采用 Python 兼容的中间均值；垂直表头链只接受至少三行、每行一个 CJK 字符且以换行连接的真实链，普通多字符表头不再进入该路径。新增两个 Rust 单元测试，分别锁定偶数中位数和垂直链判定。
 - 独立页面输出：`D:\codes\PDFLayoutParser-Fast\output\pdf\page442_443_446_logical_rows_fix_20260927\`。Page 442 恢复 6 张表，Page 446 恢复 6 张表，Page 443 保持 2 张表；三页 Rust 与 Python 逐表逐 Cell 的文本、row/col、span、BBox 均为 0 差异。页面 JSON 和可视化 PNG 均已生成。
