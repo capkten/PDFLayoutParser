@@ -2918,14 +2918,24 @@ fn wrapped_leaf_header_span(
         start.saturating_sub(1)
     };
     let end = if candidate.rowspan > 1 {
-        start
+        let candidate_end = start
             .saturating_add(candidate.rowspan.max(2) as usize)
-            .saturating_sub(1)
-            .min(body_start.saturating_sub(1))
+            .saturating_sub(1);
+        // A wrapped header may start on the first physical row while the
+        // inferred body boundary is already at row 1.  Keep its owned
+        // continuation rows together; the following empty row is then
+        // absorbed by the normal row-start grouping.
+        if start == 0 && candidate_end >= body_start {
+            candidate_end
+        } else {
+            candidate_end.min(body_start.saturating_sub(1))
+        }
     } else {
         start
     };
-    if end <= span_start || (span_start == start && end >= body_start) {
+    if end <= span_start
+        || (span_start == start && end >= body_start && start != 0)
+    {
         return None;
     }
 
@@ -3135,7 +3145,8 @@ fn logical_row_components(
             cell_is_nonempty(cell)
                 && cell.col.max(0) as usize == first_column
                 && cell.rowspan > 1
-                && cell.row.max(0) as usize >= body_start
+                && cell.row.max(0) as usize > 0
+                && cell_row_end(cell) >= body_start
         }) {
             spans.push((
                 cell.row.max(0) as usize,
@@ -6248,6 +6259,36 @@ mod tests {
         let groups = logical_row_components(4, &cells, 3);
 
         assert_eq!(groups, vec![vec![0], vec![1, 2], vec![3]]);
+    }
+
+    #[test]
+    fn test_logical_row_components_keeps_wrapped_header_rows_before_body_start_together() {
+        let cells = vec![
+            make_cell("wrapped header\nsecond line", 0, 2, 2, 1),
+            make_cell("项目", 1, 0, 1, 1),
+            make_cell("依据", 1, 1, 1, 1),
+            make_cell("正文", 3, 0, 1, 1),
+        ];
+
+        let groups = logical_row_components(4, &cells, 1);
+
+        assert_eq!(groups, vec![vec![0, 1, 2], vec![3]]);
+    }
+
+    #[test]
+    fn test_logical_row_components_merges_body_prefix_span_that_starts_before_numeric_body() {
+        let cells = vec![
+            make_cell("表头", 0, 0, 1, 1),
+            make_cell("表头续", 1, 1, 1, 1),
+            make_cell("长正文\n续行\n续行", 2, 0, 3, 1),
+            make_cell("100", 3, 1, 1, 1),
+            make_cell("200", 3, 2, 1, 1),
+            make_cell("下一行", 5, 0, 1, 1),
+        ];
+
+        let groups = logical_row_components(6, &cells, 3);
+
+        assert_eq!(groups, vec![vec![0], vec![1], vec![2, 3, 4], vec![5]]);
     }
 
     #[test]

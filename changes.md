@@ -977,3 +977,10 @@
 - Task 5/6 最终验证：normalizer/runner `8 passed`，组合迁移矩阵 `140 passed`，`cargo test --lib` `60 passed`，`cargo check` 与 `git diff --check` 通过。结论为验收和审计交付完成，但 Rust primary gate 仍不通过；后续修复必须逐项处理 defect ledger，并在新的独立输出目录重跑 JSON/PNG。
 - Rust 页面无线表格候选对齐 Python 的 track-first 列分配；纯 separator span 不再被 packed-number 拆分器按空格切开。新增分隔符 span 与宽字段连接 overlap band 的差分回归。五页 r12 acceptance 结构差异为 0、路由诊断仍为 12，真实候选 occupancy 冲突继续触发 fallback；Python primary 未变，未运行性能门禁。
 - NativeRegion 非空列带现在沿用 Python 完成 rescue 后的最终结果，避免 Rust 二次剪枝删除稀疏表头列；页 188 两个真实 region 直出与 Python 逐字段一致。Rust 页面 track-first 补齐 Python 对“三空白分隔、字段数与轨迹数相同、全为冒号字段”的宽 span 切分。新增正反例。五页 r14 输出结构差异为 0、route diagnostic 降至 10（仅 page route fallback），region route 不再 fallback；Python 默认行为保持，Rust primary 仍关闭。验证：pytest 190 passed、cargo lib 64 passed、release binding 构建成功；未测性能。
+
+## 2026-09-27
+
+- 修复中文无线表格页面索引 `437`、`438`、`439` 的 Rust 逻辑行拆分。根因位于 `rust/wireless_structure.rs::logical_row_components()`：`merge_source_contiguous_vertical_cells()` 已将 native 连续文本合并为一个 Cell，但逻辑行组件仍把 Cell 起始行位于 `body_start` 之前的覆盖范围截断；随后空槽物化将长首列/长表头的续行输出为额外行。该条件同时影响 page 437 第三表首列英文长文本，以及 page 438 第四表、page 439 第一表的多行表头。
+- 最小修复：允许跨入正文边界且从非首行开始的首列 rowspan 参与 body prefix 合并；允许从物理首行开始、跨 `body_start` 的 wrapped header 使用其已证实 rowspan 范围，保留既有 tall wrapped header 和 occupancy 防护。新增两个 Rust 最小失败测试，覆盖表头边界和正文首列跨边界；修复后 `cargo test --locked logical_row_components` 为 `3 passed`。
+- 独立页面输出：`D:\codes\PDFLayoutParser-Fast\output\pdf\page437_439_logical_rows_fix_20260927\`。Rust 结果与 Python 逐表逐 Cell 对比完全一致：page 437 第三表 `3x6/18`、page 438 第四表 `2x3/6`、page 439 第一表 `2x3/6`；文本、row/col、span 和 BBox 均为 0 差异。对应页面 JSON 与可视化 PNG 均已生成并复核。
+- 验证：Rust `cargo test --locked` 为 `81 passed`；相关 Python 无线结构/Parity 测试为 `65 passed`。更宽的 recoverer 测试集合有 1 条既有 fallback 期望失败（`test_recover_cells_from_region_falls_back_when_rust_returns_empty_grid`，与本次逻辑行修改无关），未修改该既有行为。
