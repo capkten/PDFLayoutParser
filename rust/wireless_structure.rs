@@ -107,7 +107,12 @@ fn median_positive(values: impl IntoIterator<Item = f64>, fallback: f64) -> f64 
         return fallback;
     }
     values.sort_by(|left, right| left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal));
-    values[values.len() / 2]
+    let middle = values.len() / 2;
+    if values.len() % 2 == 0 {
+        (values[middle - 1] + values[middle]) / 2.0
+    } else {
+        values[middle]
+    }
 }
 
 fn can_join_visual_row(
@@ -2833,6 +2838,24 @@ fn cell_is_nonempty(cell: &CellDto) -> bool {
     !cell.text.trim().is_empty()
 }
 
+fn is_vertical_header_chain_cell(cell: &CellDto) -> bool {
+    if cell.row != 0 || cell.rowspan < 3 || cell.colspan != 1 {
+        return false;
+    }
+    let lines: Vec<&str> = cell
+        .text
+        .trim()
+        .split('\n')
+        .filter(|line| !line.trim().is_empty())
+        .collect();
+    lines.len() >= 3
+        && lines.iter().all(|line| {
+            let trimmed = line.trim();
+            trimmed.chars().count() == 1
+                && trimmed.chars().all(is_cjk_char)
+        })
+}
+
 fn merge_row_component_ranges(groups: &mut Vec<Vec<usize>>, spans: &[(usize, usize)]) {
     for &(start, end) in spans {
         let matching: Vec<usize> = groups
@@ -3088,16 +3111,7 @@ fn logical_row_components(
         .collect();
     let chain_columns: std::collections::BTreeSet<usize> = cells
         .iter()
-        .filter(|cell| {
-            cell.row == 0
-                && cell.rowspan >= 3
-                && cell.colspan == 1
-                && cell
-                    .text
-                    .trim()
-                    .chars()
-                    .all(|character| is_cjk_char(character) || character == '\n')
-        })
+        .filter(|cell| is_vertical_header_chain_cell(cell))
         .map(|cell| cell.col.max(0) as usize)
         .collect();
     if let Some(chain_end) = cells
@@ -4305,29 +4319,12 @@ pub fn recover_native_region(input: NativeRegionInput) -> NativeRegionOutput {
     } else {
         1
     };
-    let vertical_header_chain = cells.iter().any(|cell| {
-        cell.row == 0
-            && cell.rowspan >= 3
-            && cell.colspan == 1
-            && cell
-                .text
-                .trim()
-                .chars()
-                .all(|character| is_cjk_char(character) || character == '\n')
-    });
+    let vertical_header_chain = cells.iter().any(is_vertical_header_chain_cell);
     if vertical_header_chain && num_rows > 1 {
         let header_rows = num_rows.saturating_sub(1) as i64;
         let chain_columns: std::collections::BTreeSet<i64> = cells
             .iter()
-            .filter(|cell| {
-                cell.row == 0
-                    && cell.colspan == 1
-                    && cell
-                        .text
-                        .trim()
-                        .chars()
-                        .all(|character| is_cjk_char(character) || character == '\n')
-            })
+            .filter(|cell| is_vertical_header_chain_cell(cell))
             .map(|cell| cell.col)
             .collect();
         let leaf_row = (1..header_rows)
@@ -4344,14 +4341,7 @@ pub fn recover_native_region(input: NativeRegionInput) -> NativeRegionOutput {
             })
             .unwrap_or(header_rows.saturating_sub(1));
         for cell in &mut cells {
-            if cell.row == 0
-                && cell.colspan == 1
-                && cell
-                    .text
-                    .trim()
-                    .chars()
-                    .all(|character| is_cjk_char(character) || character == '\n')
-            {
+            if is_vertical_header_chain_cell(cell) {
                 cell.rowspan = header_rows;
             } else if cell.row == leaf_row && leaf_row < header_rows.saturating_sub(1) {
                 cell.row += 1;
@@ -6289,6 +6279,22 @@ mod tests {
         let groups = logical_row_components(6, &cells, 3);
 
         assert_eq!(groups, vec![vec![0], vec![1], vec![2, 3, 4], vec![5]]);
+    }
+
+    #[test]
+    fn test_median_positive_matches_python_even_sample_median() {
+        let median = median_positive([10.56, 12.10], 10.0);
+
+        assert!((median - 11.33).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_vertical_header_chain_requires_single_cjk_lines() {
+        let ordinary = make_cell("项目", 0, 0, 3, 1);
+        let chain = make_cell("减\n值\n准\n备", 0, 0, 3, 1);
+
+        assert!(!is_vertical_header_chain_cell(&ordinary));
+        assert!(is_vertical_header_chain_cell(&chain));
     }
 
     #[test]
