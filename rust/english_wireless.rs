@@ -1087,7 +1087,11 @@ pub fn build_english_cells(input: &EnglishGridInput) -> Vec<CellDto> {
         .map(|end| {
             row_bounds
                 .iter()
-                .take_while(|(y0, _)| *y0 <= end + 2.0)
+                .enumerate()
+                .take_while(|(_, (y0, _))| {
+                    let gap = *y0 - end;
+                    !(gap > 0.0 && gap < 1.0) && *y0 <= end + 2.0
+                })
                 .count()
         })
         .unwrap_or(0)
@@ -2213,6 +2217,59 @@ mod tests {
 
         let cells = build_english_cells(&input);
         assert_eq!(cells.iter().map(|cell| cell.row).max(), Some(1));
+    }
+
+    #[test]
+    fn test_build_english_cells_keeps_year_row_after_header_band_boundary() {
+        let input = EnglishGridInput {
+            schema_version: 1,
+            region: crate::types::RegionDto {
+                schema_version: 1,
+                rect: Rect4 {
+                    schema_version: 1,
+                    x0: 0.0,
+                    y0: 0.0,
+                    x1: 300.0,
+                    y1: 50.0,
+                },
+                source_order: 0,
+                allowed: true,
+            },
+            words: vec![
+                make_word("Fund Size", 100.0, 1.0, 170.0, 8.0),
+                make_word("Mar 2011", 100.0, 10.5, 140.0, 17.5),
+                make_word("Item", 10.0, 35.0, 45.0, 42.0),
+                make_word("100", 100.0, 35.0, 130.0, 42.0),
+            ],
+            backgrounds: vec![
+                make_bg(0.0, 10.0, None, 0),
+                make_bg(30.0, 50.0, Some(0.5), 1),
+            ],
+            horizontal_lines: Vec::new(),
+            horizontal_line_lengths: Vec::new(),
+            columns: vec![
+                ColumnBandDto { schema_version: 1, x0: 0.0, x1: 80.0, source_atoms: Vec::new(), order: 0 },
+                ColumnBandDto { schema_version: 1, x0: 80.0, x1: 160.0, source_atoms: Vec::new(), order: 1 },
+                ColumnBandDto { schema_version: 1, x0: 160.0, x1: 300.0, source_atoms: Vec::new(), order: 2 },
+            ],
+            config: StructureConfig {
+                schema_version: 1,
+                line_tolerance: 2.0,
+                row_tolerance: 2.0,
+                column_tolerance: 2.0,
+                span_tolerance: 2.0,
+                numeric_tolerance: 2.0,
+            },
+        };
+
+        let cells = build_english_cells(&input);
+        assert_eq!(cells.iter().map(|cell| cell.row).max(), Some(2));
+        let parent = cells
+            .iter()
+            .find(|cell| cell.text.starts_with("Fund Size"))
+            .expect("parent header");
+        assert!(!parent.text.contains("Mar"));
+        assert!(cells.iter().any(|cell| cell.text == "Mar 2011" && cell.row == 1));
     }
 
     #[test]

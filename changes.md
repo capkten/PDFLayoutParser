@@ -2,6 +2,14 @@
 
 ## 2026-09-27
 
+- **Page 409 英文无线表头边界回归修复**：
+  - **根因**：英文表头无色背景带结束位置为 `611.82`，年份层起点为 `612.49`。Rust 用 `row.y0 <= header_end + 2pt` 把年份层计入表头并在单背景压缩中吞掉，输出 `6x9/50`，Python 为 `7x9/59`。
+  - **修复**：表头行计数保留原有 2pt 容差，同时当候选行仅以小于 1pt 的间隙越过背景末端时停止计入，避免吸收紧邻的年份层；保留普通单背景折行表头压缩行为。
+  - **测试**：新增年份层最小 RED fixture；Rust English `13 passed`，Python 英文/中文 focused `28 passed`，`git diff --check` 通过。
+  - **页面验证**：输入 `D:\codes\PDFLayoutParser\fix\zh_all_table_pages.pdf`，Page 409 Rust/Python 均 `7x9/59`。页面 PNG 与表格 PNG SHA-256 相同；剩余 8 个 Cell 仅为日期文本词序（Python `Mar 2011`，Rust `2011 Mar`），BBox、行列、跨度完全一致。
+
+## 2026-09-27
+
 - **Page 482 Rust 中文无线表格回归修复**：
   - **根因**：长首列正文 Cell 跨越推断的 numeric body 起点时，逻辑行合并把正文行与表头后续行压成同一逻辑行，Page 482 的 5 行表被压成 4 行并触发 `(row=2,col=3..10)` occupancy conflict；同时多级表头中未被严格单字竖链识别的首部 CJK Cell 没有覆盖完整表头行，生成多余空 Cell。70f2510 引入的 header gate 保留后，必须在证据连续和空槽位条件下恢复这些结构。
   - **修复**：首列跨 body 边界的逻辑行 Span 仅在其起点紧邻 body 起点时合并；增加 source evidence 驱动的 row=0 竖排链扩展；当 row=0 单列 CJK 表头下方槽位均为空时，将其安全扩展到已证明的表头行数。没有页码特判，不回读 words。
