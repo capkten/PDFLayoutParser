@@ -589,6 +589,59 @@ def test_build_english_cells_collapses_single_background_wrapped_header():
     assert max(cell["row"] for cell in cells) == 1
     assert not any(cell["rowspan"] > 1 for cell in cells if cell["row"] == 0 and cell["text"] != "888")
     assert any(cell["text"] == "Income from external customers" and cell["row"] == 1 for cell in cells)
+
+
+def test_build_english_cells_collapses_header_split_across_two_logical_background_rows():
+    """A header split into several physical lines can span two Python header rows."""
+    cells = rust_adapter.build_english_cells(_english_grid_fixture(
+        [
+            _english_fixture_word("Three months", 100.0, 5.0, 170.0, 12.0, 0),
+            _english_fixture_word("ended", 100.0, 15.0, 145.0, 22.0, 1),
+            _english_fixture_word("31 Mar 2011", 100.0, 25.0, 160.0, 32.0, 2),
+            _english_fixture_word("$m", 100.0, 35.0, 120.0, 42.0, 3),
+            _english_fixture_word("Provision", 10.0, 52.0, 80.0, 59.0, 4),
+            _english_fixture_word("217", 200.0, 52.0, 220.0, 59.0, 5),
+        ],
+        [
+            _english_fixture_background(0.0, 12.0, None, 0),
+            _english_fixture_background(12.0, 45.0, None, 1),
+            _english_fixture_background(45.0, 65.0, 0.5, 2),
+        ],
+        x1=300.0,
+        y1=65.0,
+    ))
+
+    assert max(cell["row"] for cell in cells) == 1
+    assert any(cell["text"] == "Three months ended 31 Mar 2011 $m" and cell["row"] == 0 for cell in cells)
+    assert any(cell["text"] == "Provision" and cell["row"] == 1 for cell in cells)
+
+
+def test_build_english_cells_keeps_two_level_header_without_stub_row_separate():
+    """Two logical header tiers must remain separate when the upper tier spans children."""
+    cells = rust_adapter.build_english_cells(_english_grid_fixture(
+        [
+            _english_fixture_word("Portfolio", 100.0, 5.0, 240.0, 12.0, 0),
+            _english_fixture_word("Amount", 100.0, 15.0, 150.0, 22.0, 1),
+            _english_fixture_word("Rate", 190.0, 15.0, 230.0, 22.0, 2),
+            _english_fixture_word("Alpha", 10.0, 35.0, 60.0, 42.0, 3),
+            _english_fixture_word("100", 100.0, 35.0, 130.0, 42.0, 4),
+            _english_fixture_word("5%", 190.0, 35.0, 210.0, 42.0, 5),
+        ],
+        [
+            _english_fixture_background(0.0, 12.0, None, 0),
+            _english_fixture_background(12.0, 30.0, None, 1),
+            _english_fixture_background(30.0, 50.0, 0.5, 2),
+        ],
+        x1=300.0,
+        y1=50.0,
+    ))
+
+    assert max(cell["row"] for cell in cells) == 2
+    assert any(cell["text"] == "Portfolio" and cell["row"] == 0 and cell["colspan"] == 2 for cell in cells)
+    assert any(cell["text"] == "Amount" and cell["row"] == 1 for cell in cells)
+    assert any(cell["text"] == "Rate" and cell["row"] == 1 for cell in cells)
+
+
 def test_build_english_cells_does_not_merge_single_body_row_into_header():
     cells = rust_adapter.build_english_cells(_english_grid_fixture(
         [
