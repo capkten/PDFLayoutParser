@@ -1778,6 +1778,7 @@ pub struct TableCandidateDto {
     pub rows: i64,
     pub cols: i64,
     pub cells: Vec<CellDto>,
+    pub has_wired_lines: bool,
 }
 
 impl TableCandidateDto {
@@ -1797,6 +1798,10 @@ impl TableCandidateDto {
         for c in cells_list.iter() {
             cells.push(CellDto::from_py(&c.downcast::<PyDict>()?.clone())?);
         }
+        let has_wired_lines = get_opt(dict, "has_wired_lines")?
+            .map(|value| value.extract())
+            .transpose()?
+            .unwrap_or(false);
         Ok(Self {
             schema_version: sv,
             rect,
@@ -1805,6 +1810,7 @@ impl TableCandidateDto {
             rows,
             cols,
             cells,
+            has_wired_lines,
         })
     }
 
@@ -2112,6 +2118,88 @@ impl RowBandDto {
         }
         d.set_item("cells", cl)?;
         Ok(d)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PersonalCreditInput {
+    pub schema_version: i64,
+    pub snapshot: PageSnapshotDto,
+    pub wired_line_tolerance: f64,
+    pub candidate_tables: Option<Vec<TableCandidateDto>>,
+    pub supplement_rust_candidates: bool,
+}
+
+impl PersonalCreditInput {
+    pub fn from_py(dict: &Bound<'_, PyDict>) -> PyResult<Self> {
+        let schema_version = required_i64(dict, "schema_version")?;
+        check_schema_version(schema_version)?;
+        let snapshot = PageSnapshotDto::from_py(&required_dict(dict, "snapshot")?)?;
+        let wired_line_tolerance =
+            extract_finite_f64(&get_req(dict, "wired_line_tolerance")?, "wired_line_tolerance")?;
+        if wired_line_tolerance < 0.0 {
+            return Err(PyValueError::new_err(
+                "Field 'wired_line_tolerance' must be non-negative",
+            ));
+        }
+        let candidate_tables = match get_opt(dict, "candidate_tables")? {
+            Some(value) => {
+                let list = value.downcast::<PyList>().map_err(|_| {
+                    PyValueError::new_err("Field 'candidate_tables' must be a list")
+                })?;
+                let mut tables = Vec::with_capacity(list.len());
+                for (index, item) in list.iter().enumerate() {
+                    let item = item.downcast::<PyDict>().map_err(|_| {
+                        PyValueError::new_err(format!(
+                            "Field 'candidate_tables[{}]' must be an object",
+                            index
+                        ))
+                    })?;
+                    tables.push(TableCandidateDto::from_py(&item)?);
+                }
+                Some(tables)
+            }
+            None => None,
+        };
+        let supplement_rust_candidates = match get_opt(dict, "supplement_rust_candidates")? {
+            Some(value) => value.extract::<bool>()?,
+            None => false,
+        };
+
+        Ok(Self {
+            schema_version,
+            snapshot,
+            wired_line_tolerance,
+            candidate_tables,
+            supplement_rust_candidates,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PersonalCreditOutput {
+    pub schema_version: i64,
+    pub tables: Vec<TableCandidateDto>,
+    pub diagnostics: Vec<DiagnosticDto>,
+}
+
+impl PersonalCreditOutput {
+    pub fn to_py<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let dict = PyDict::new_bound(py);
+        dict.set_item("schema_version", self.schema_version)?;
+
+        let tables = PyList::empty_bound(py);
+        for table in &self.tables {
+            tables.append(table.to_py(py)?)?;
+        }
+        dict.set_item("tables", tables)?;
+
+        let diagnostics = PyList::empty_bound(py);
+        for diagnostic in &self.diagnostics {
+            diagnostics.append(diagnostic.to_py(py)?)?;
+        }
+        dict.set_item("diagnostics", diagnostics)?;
+        Ok(dict)
     }
 }
 

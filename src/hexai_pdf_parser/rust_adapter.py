@@ -34,7 +34,8 @@ def get_rust_mode(path: str = "") -> str:
         env_key = f"PDF_RUST_MODE_{path.upper().replace('/', '_').replace('-', '_')}"
         mode = os.environ.get(env_key)
     if not mode:
-        mode = os.environ.get("PDF_RUST_MODE", "python")
+        default_mode = "rust" if path == "personal-credit" else "python"
+        mode = os.environ.get("PDF_RUST_MODE", default_mode)
     mode = mode.strip().lower()
     if mode not in VALID_MODES:
         raise ValueError(
@@ -930,6 +931,173 @@ def extract_wired_region(input_data: Dict[str, Any]) -> Dict[str, Any]:
     if "schema_version" not in input_data:
         input_data = {"schema_version": 1, **input_data}
     return _pdf_fast.extract_wired_region(input_data)
+
+
+def recover_personal_credit_tables(input_dto: Mapping[str, Any]) -> Dict[str, Any]:
+    """Run the Rust personal-credit table kernel on an owned page snapshot."""
+    output = _pdf_fast.recover_personal_credit_tables(dict(input_dto))
+    if not isinstance(output, Mapping):
+        raise TypeError("Rust personal-credit output must be a mapping")
+    if output.get("schema_version") != 1:
+        raise ValueError("Rust personal-credit output has invalid schema_version")
+    if not isinstance(output.get("tables"), (list, tuple)):
+        raise TypeError("Rust personal-credit tables must be a sequence")
+    if not isinstance(output.get("diagnostics"), (list, tuple)):
+        raise TypeError("Rust personal-credit diagnostics must be a sequence")
+    if output["diagnostics"]:
+        raise ValueError("Rust personal-credit output contains blocking diagnostics")
+    return dict(output)
+
+
+def _personal_credit_candidate_input(table: Any) -> Dict[str, Any]:
+    def bbox_input(bbox: Any) -> Dict[str, Any]:
+        return {
+            "schema_version": 1,
+            "x0": _finite_float(bbox.x0, "candidate.bbox.x0"),
+            "y0": _finite_float(bbox.y0, "candidate.bbox.y0"),
+            "x1": _finite_float(bbox.x1, "candidate.bbox.x1"),
+            "y1": _finite_float(bbox.y1, "candidate.bbox.y1"),
+        }
+
+    candidate = {
+        "schema_version": 1,
+        "rect": bbox_input(table.bbox),
+        "source": str(table.source or ""),
+        "confidence": table.confidence,
+        "rows": int(table.rows),
+        "cols": int(table.cols),
+        "cells": [
+            {
+                "schema_version": 1,
+                "text": str(cell.text),
+                "row": int(cell.row_index),
+                "col": int(cell.col_index),
+                "rect": bbox_input(cell.bbox),
+                "rowspan": int(cell.rowspan),
+                "colspan": int(cell.colspan),
+                "source": None,
+            }
+            for cell in table.cells
+        ],
+    }
+    if bool(table.h_lines) and bool(table.v_lines):
+        candidate["has_wired_lines"] = True
+    return candidate
+
+
+def personal_credit_snapshot_to_rust_input(
+    snapshot: Any,
+    wired_line_tolerance: float,
+    candidate_tables: Sequence[Any],
+    *,
+    supplement_rust_candidates: bool = False,
+) -> Dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "snapshot": page_snapshot_to_rust_input(snapshot),
+        "wired_line_tolerance": _finite_float(
+            wired_line_tolerance, "wired_line_tolerance"
+        ),
+        "candidate_tables": [
+            _personal_credit_candidate_input(table) for table in candidate_tables
+        ],
+        "supplement_rust_candidates": bool(supplement_rust_candidates),
+    }
+
+
+def personal_credit_tables_to_project(
+    raw_output: Mapping[str, Any],
+) -> List[Any]:
+    from hexai_pdf_parser.core.models import BBox, Cell, Table
+
+    if not isinstance(raw_output, Mapping) or raw_output.get("schema_version") != 1:
+        raise ValueError("Rust personal-credit output has invalid schema_version")
+    diagnostics = _require_sequence(
+        raw_output.get("diagnostics"), "personal_credit.diagnostics"
+    )
+    if diagnostics:
+        raise ValueError("Rust personal-credit output contains blocking diagnostics")
+    table_values = _require_sequence(raw_output.get("tables"), "personal_credit.tables")
+
+    def bbox_from_dto(value: Any, path: str) -> BBox:
+        record = _require_mapping(value, path)
+        return BBox(
+            _finite_float(_required_field(record, "x0", path), f"{path}.x0"),
+            _finite_float(_required_field(record, "y0", path), f"{path}.y0"),
+            _finite_float(_required_field(record, "x1", path), f"{path}.x1"),
+            _finite_float(_required_field(record, "y1", path), f"{path}.y1"),
+        )
+
+    tables = []
+    for table_index, value in enumerate(table_values):
+        path = f"personal_credit.tables[{table_index}]"
+        record = _require_mapping(value, path)
+        if _required_int(_required_field(record, "schema_version", path), f"{path}.schema_version") != 1:
+            raise ValueError(f"{path}.schema_version must equal 1")
+        rows = _required_int(_required_field(record, "rows", path), f"{path}.rows")
+        cols = _required_int(_required_field(record, "cols", path), f"{path}.cols")
+        if rows < 1 or cols < 1:
+            raise ValueError(f"{path} must have positive rows and cols")
+        source = _required_string(_required_field(record, "source", path), f"{path}.source")
+        confidence_value = record.get("confidence")
+        confidence = (
+            None
+            if confidence_value is None
+            else _finite_float(confidence_value, f"{path}.confidence")
+        )
+        cell_values = _require_sequence(
+            _required_field(record, "cells", path), f"{path}.cells"
+        )
+        cells = []
+        occupied = set()
+        for cell_index, cell_value in enumerate(cell_values):
+            cell_path = f"{path}.cells[{cell_index}]"
+            cell_record = _require_mapping(cell_value, cell_path)
+            row = _required_int(_required_field(cell_record, "row", cell_path), f"{cell_path}.row")
+            col = _required_int(_required_field(cell_record, "col", cell_path), f"{cell_path}.col")
+            rowspan = _required_int(
+                _required_field(cell_record, "rowspan", cell_path), f"{cell_path}.rowspan"
+            )
+            colspan = _required_int(
+                _required_field(cell_record, "colspan", cell_path), f"{cell_path}.colspan"
+            )
+            if row < 0 or col < 0 or rowspan < 1 or colspan < 1:
+                raise ValueError(f"{cell_path} has invalid grid coordinates or span")
+            if row + rowspan > rows or col + colspan > cols:
+                raise ValueError(f"{cell_path} span exceeds the table grid")
+            for occupied_row in range(row, row + rowspan):
+                for occupied_col in range(col, col + colspan):
+                    slot = (occupied_row, occupied_col)
+                    if slot in occupied:
+                        raise ValueError(f"{cell_path} conflicts at grid slot {slot}")
+                    occupied.add(slot)
+            cells.append(
+                Cell(
+                    text=_required_string(
+                        _required_field(cell_record, "text", cell_path),
+                        f"{cell_path}.text",
+                    ),
+                    row_index=row,
+                    col_index=col,
+                    bbox=bbox_from_dto(
+                        _required_field(cell_record, "rect", cell_path),
+                        f"{cell_path}.rect",
+                    ),
+                    rowspan=rowspan,
+                    colspan=colspan,
+                )
+            )
+        tables.append(
+            Table(
+                bbox=bbox_from_dto(_required_field(record, "rect", path), f"{path}.rect"),
+                rows=rows,
+                cols=cols,
+                cells=cells,
+                confidence=confidence,
+                source=source,
+            )
+        )
+    return tables
 
 
 def roundtrip_dto(dto_type: str, data: Dict[str, Any]) -> Dict[str, Any]:

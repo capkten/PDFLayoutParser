@@ -1,5 +1,13 @@
 # Changes
 
+## 2026-09-28
+
+- 新增个人征信专用 Rust 算法入口：`recover_personal_credit_tables` 以版本化页面快照和候选表 DTO 接收输入，Rust 只替换个人征信的查询表恢复、候选过滤、重复记录拆分及无线单元格几何处理；通用表格阶段仍保持 Python 默认路径。
+- 个人征信路径默认启用 Rust，支持 `PDF_RUST_MODE_PERSONAL_CREDIT=python|shadow|rust` 覆盖；全局 `PDF_RUST_MODE` 仍可显式覆盖，通用路径默认仍为 Python。
+- Rust 候选 DTO 保留横竖线元数据判定，避免带有线表格证据的自定义 source 被个人征信元数据过滤误删；诊断非空时阻止静默输出并回退到 Python。
+- 端到端验证：以 `feature-dev@771e6e43819c5788c074b770d3adfd7208527125` 为 Python 基线，运行 `个人信用报告` 下 12 份 PDF、32 页、77 张表；表字段、紧凑 JSON 和 32 对统一渲染叠加图差异均为 0，Rust fallback 和 occupancy conflict 均为 0。输出目录：`D:\codes\PDFLayoutParser\output\personal_credit_custom_rust_e2e_default_20260928\`。
+- 测试结果：个人征信 Rust/Python 相关 pytest `56 passed`；Rust `cargo test --locked --lib` `99 passed`；`cargo check --locked` 和 `git diff --check` 通过。已知无关基线失败 `tests/test_table_extractor.py::test_hybrid_wired_table_replaces_full_rowspan_body_before_shifting_footer` 未纳入本次修改。
+
 ## 2026-09-24
 
 - 修复个人信用报告查询记录明细中日期等字段包围盒估算偏小、未完整框住“2025年”等前导文字的问题：

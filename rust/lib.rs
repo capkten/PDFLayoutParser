@@ -4,6 +4,7 @@ use pyo3::types::{PyBytes, PyDict, PyList, PyModule, PyTuple};
 pub mod english_wireless;
 pub mod geometry;
 pub mod native_span;
+pub mod personal_credit;
 pub mod snapshot;
 pub mod table_normalization;
 pub mod types;
@@ -240,6 +241,16 @@ fn extract_wired_region_binding<'py>(
 ) -> PyResult<Bound<'py, PyDict>> {
     let input_dto = types::WiredRegionInput::from_py(input)?;
     let output_dto = py.allow_threads(move || wired::extract_wired_region(input_dto));
+    output_dto.to_py(py)
+}
+
+#[pyfunction(name = "recover_personal_credit_tables")]
+fn recover_personal_credit_tables_binding<'py>(
+    py: Python<'py>,
+    input: &Bound<'py, PyDict>,
+) -> PyResult<Bound<'py, PyDict>> {
+    let input_dto = types::PersonalCreditInput::from_py(input)?;
+    let output_dto = py.allow_threads(move || personal_credit::recover(input_dto));
     output_dto.to_py(py)
 }
 
@@ -1221,6 +1232,10 @@ fn _pdf_fast(module: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     module.add_function(wrap_pyfunction!(assign_text_to_line_cells_binding, module)?)?;
     module.add_function(wrap_pyfunction!(extract_wired_region_binding, module)?)?;
+    module.add_function(wrap_pyfunction!(
+        recover_personal_credit_tables_binding,
+        module
+    )?)?;
     module.add_function(wrap_pyfunction!(roundtrip_dto_binding, module)?)?;
     module.add_function(wrap_pyfunction!(
         collect_native_spans_from_snapshot_binding,
