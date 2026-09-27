@@ -2,6 +2,12 @@
 
 ## 2026-09-27
 
+- **Page 482 Rust 中文无线表格回归修复**：
+  - **根因**：长首列正文 Cell 跨越推断的 numeric body 起点时，逻辑行合并把正文行与表头后续行压成同一逻辑行，Page 482 的 5 行表被压成 4 行并触发 `(row=2,col=3..10)` occupancy conflict；同时多级表头中未被严格单字竖链识别的首部 CJK Cell 没有覆盖完整表头行，生成多余空 Cell。70f2510 引入的 header gate 保留后，必须在证据连续和空槽位条件下恢复这些结构。
+  - **修复**：首列跨 body 边界的逻辑行 Span 仅在其起点紧邻 body 起点时合并；增加 source evidence 驱动的 row=0 竖排链扩展；当 row=0 单列 CJK 表头下方槽位均为空时，将其安全扩展到已证明的表头行数。没有页码特判，不回读 words。
+  - **测试**：新增长正文 Span 拒绝跨 numeric body、空槽位首部 CJK stub 扩展及 row=0 连续 evidence 竖链用例；Rust `cargo test --locked --lib` 为 `92 passed`，相关 Python 无线/路由测试 `91 passed`，页面级 Page 987 回归测试因真实 PDF fixture 缺失而 skip。
+  - **页面验证**：使用 `D:\codes\PDFLayoutParser\fix\zh_all_table_pages.pdf` 独立重跑。Page 482 输出 `output/page482_fixed3_rust` 与 Python `output/page482_current_python` 逐 Cell signature 完全一致：`wireless_span_recovery`、`5x13`、`27 cells`、bbox `[83.2,124.8,540.5,416.3]`；Page 987 Rust/Python 输出 `output/page987_fixed3_rust`、`output/page987_fixed3_python` 完全一致：`6x7`、`36 cells`、bbox `[84.6,90.2,506.5,365.3]`。
+
 - **Page 410/419/420 英文表头横线判定收紧**：
   - **根因**：仅按背景带数决定单背景表头压缩仍会把 Page 410 的多级表头吞掉；Page 410 的内部横线由多个绘制片段组成，旧 DTO 只传 Y 坐标，Rust 无法判断其是否为跨表头的完整横线。
   - **修复**：英文网格 DTO 增加水平线长度；Rust 将同一 Y 层的线段合并后，单背景表头只有在表头区域没有跨越 70% 表格宽度的内部横线时才压缩。保留 Page 419/420 的局部线表头压缩，并阻断 Page 410 的完整多级表头误合并。

@@ -1564,6 +1564,54 @@ fn is_evidence_chain_contiguous_vertical_cjk(
     current_blocks == candidate_blocks && candidate_line_start == current_line_end + 1
 }
 
+fn has_evidence_contiguous_vertical_header_chain(
+    cells: &[CellDto],
+    atom_evidence: Option<&[AtomEvidenceDto]>,
+    atom_sources: Option<&[AtomDto]>,
+) -> bool {
+    let Some(evidence) = atom_evidence else {
+        return false;
+    };
+    for start in cells.iter().filter(|cell| {
+        cell.row == 0 && cell.rowspan == 1 && cell.colspan == 1 && is_single_cjk(&cell.text)
+    }) {
+        let mut current = start.clone();
+        let mut length = 1;
+        while let Some(candidate) = cells.iter().find(|candidate| {
+            candidate.row == current.row + current.rowspan
+                && candidate.col == current.col
+                && candidate.rowspan == 1
+                && candidate.colspan == 1
+                && is_single_cjk(&candidate.text)
+                && source_refs_contiguous(
+                    current
+                        .source
+                        .as_ref()
+                        .map(|source| source.source_refs.as_slice())
+                        .unwrap_or(&[]),
+                    candidate
+                        .source
+                        .as_ref()
+                        .map(|source| source.source_refs.as_slice())
+                        .unwrap_or(&[]),
+                )
+                && is_evidence_chain_contiguous_vertical_cjk(
+                    &current,
+                    candidate,
+                    Some(evidence),
+                    atom_sources,
+                )
+        }) {
+            current = candidate.clone();
+            length += 1;
+        }
+        if length >= 3 {
+            return true;
+        }
+    }
+    false
+}
+
 fn merge_source_contiguous_vertical_cells(
     cells: &mut Vec<CellDto>,
     atom_evidence: Option<&[AtomEvidenceDto]>,
@@ -1682,6 +1730,7 @@ fn merge_evidence_contiguous_vertical_header_chain(
     atom_evidence: Option<&[AtomEvidenceDto]>,
     atom_sources: Option<&[AtomDto]>,
     header_rows: usize,
+    allow_row_zero_chain_extension: bool,
 ) {
     let Some(evidence) = atom_evidence else {
         return;
@@ -1696,7 +1745,8 @@ fn merge_evidence_contiguous_vertical_header_chain(
     let mut index = 0;
     while index < cells.len() {
         if cells[index].row < 0
-            || cells[index].row as usize >= header_rows
+            || (cells[index].row as usize >= header_rows
+                && !(allow_row_zero_chain_extension && cells[index].row == 0))
             || cells[index].rowspan != 1
             || cells[index].colspan != 1
             || !is_single_cjk(&cells[index].text)
@@ -1713,7 +1763,8 @@ fn merge_evidence_contiguous_vertical_header_chain(
                 .find(|(_, candidate)| {
                     candidate.row == current.row + current.rowspan
                         && candidate.row >= 0
-                        && (candidate.row as usize) < header_rows
+                        && ((candidate.row as usize) < header_rows
+                            || (allow_row_zero_chain_extension && current.row == 0))
                         && candidate.col == current.col
                         && candidate.rowspan == 1
                         && candidate.colspan == 1
@@ -2872,6 +2923,41 @@ fn is_vertical_header_chain_cell(cell: &CellDto) -> bool {
         })
 }
 
+fn is_cjk_header_stub_cell(cell: &CellDto) -> bool {
+    cell.row == 0
+        && cell.colspan == 1
+        && cell
+            .text
+            .trim()
+            .chars()
+            .all(|character| is_cjk_char(character) || character == '\n')
+}
+
+fn can_extend_vertical_header_stub(
+    cells: &[CellDto],
+    candidate: &CellDto,
+    header_rows: i64,
+) -> bool {
+    if !is_cjk_header_stub_cell(candidate)
+        || candidate.rowspan >= header_rows
+        || candidate.rowspan < 1
+    {
+        return false;
+    }
+    let col_start = candidate.col.max(0);
+    let col_end = col_start + candidate.colspan.max(1);
+    let row_start = candidate.row + candidate.rowspan;
+    (row_start..header_rows).all(|row| {
+        !cells.iter().any(|other| {
+            other.row <= row
+                && other.row + other.rowspan.max(1) > row
+                && other.col < col_end
+                && other.col + other.colspan.max(1) > col_start
+                && cell_is_nonempty(other)
+        })
+    })
+}
+
 fn merge_row_component_ranges(groups: &mut Vec<Vec<usize>>, spans: &[(usize, usize)]) {
     for &(start, end) in spans {
         let matching: Vec<usize> = groups
@@ -3184,11 +3270,11 @@ fn logical_row_components(
     let mut spans = Vec::new();
     if let Some(first_column) = first_column {
         for cell in cells.iter().filter(|cell| {
-            cell_is_nonempty(cell)
-                && cell.col.max(0) as usize == first_column
-                && cell.rowspan > 1
-                && cell.row.max(0) as usize > 0
-                && cell_row_end(cell) >= body_start
+                cell_is_nonempty(cell)
+                    && cell.col.max(0) as usize == first_column
+                    && cell.rowspan > 1
+                    && cell.row.max(0) as usize + 1 >= body_start
+                    && cell_row_end(cell) >= body_start
         }) {
             spans.push((
                 cell.row.max(0) as usize,
@@ -4319,11 +4405,17 @@ pub fn recover_native_region(input: NativeRegionInput) -> NativeRegionOutput {
         Some(&input.atoms),
     );
     let header_rows = header_body_start(&cells, rows.len(), bands.len());
+    let allow_row_zero_chain_extension = has_evidence_contiguous_vertical_header_chain(
+        &cells,
+        input.atom_evidence.as_deref(),
+        Some(&input.atoms),
+    );
     merge_evidence_contiguous_vertical_header_chain(
         &mut cells,
         input.atom_evidence.as_deref(),
         Some(&input.atoms),
         header_rows,
+        allow_row_zero_chain_extension,
     );
 
     let physical_rows = rows.len();
@@ -4370,8 +4462,15 @@ pub fn recover_native_region(input: NativeRegionInput) -> NativeRegionOutput {
                     >= 2
             })
             .unwrap_or(header_rows.saturating_sub(1));
+        let extend_stub_columns: std::collections::BTreeSet<i64> = cells
+            .iter()
+            .filter(|cell| can_extend_vertical_header_stub(&cells, cell, header_rows))
+            .map(|cell| cell.col)
+            .collect();
         for cell in &mut cells {
             if is_vertical_header_chain_cell(cell) {
+                cell.rowspan = header_rows;
+            } else if extend_stub_columns.contains(&cell.col) {
                 cell.rowspan = header_rows;
             } else if cell.row == leaf_row && leaf_row < header_rows.saturating_sub(1) {
                 cell.row += 1;
@@ -6312,6 +6411,25 @@ mod tests {
     }
 
     #[test]
+    fn test_logical_row_components_keeps_long_prefix_span_separate_from_numeric_body() {
+        let cells = vec![
+            make_cell("长正文\n续行", 8, 0, 13, 1),
+            make_cell("100", 15, 1, 1, 1),
+        ];
+
+        let groups = logical_row_components(21, &cells, 15);
+
+        assert_eq!(
+            groups,
+            vec![
+                (0..8).collect::<Vec<_>>(),
+                (8..15).collect::<Vec<_>>(),
+                (15..21).collect::<Vec<_>>(),
+            ]
+        );
+    }
+
+    #[test]
     fn test_median_positive_matches_python_even_sample_median() {
         let median = median_positive([10.56, 12.10], 10.0);
 
@@ -6325,6 +6443,15 @@ mod tests {
 
         assert!(!is_vertical_header_chain_cell(&ordinary));
         assert!(is_vertical_header_chain_cell(&chain));
+    }
+
+    #[test]
+    fn test_vertical_header_stub_extends_only_when_lower_slots_are_empty() {
+        let stub = make_cell("被投\n资单\n位", 0, 0, 3, 1);
+        assert!(can_extend_vertical_header_stub(&[stub.clone()], &stub, 4));
+
+        let blocked = make_cell("正文", 3, 0, 1, 1);
+        assert!(!can_extend_vertical_header_stub(&[stub.clone(), blocked], &stub, 4));
     }
 
     #[test]
@@ -7015,10 +7142,69 @@ mod tests {
             });
         }
 
-        merge_evidence_contiguous_vertical_header_chain(&mut cells, Some(&evidence), Some(&atoms), 8);
+        merge_evidence_contiguous_vertical_header_chain(
+            &mut cells,
+            Some(&evidence),
+            Some(&atoms),
+            8,
+            false,
+        );
 
         assert_eq!(cells.len(), 1);
         assert_eq!(cells[0].rowspan, 8);
+        assert_eq!(cells[0].text, glyphs.join("\n"));
+    }
+
+    #[test]
+    fn test_merge_evidence_vertical_chain_can_extend_from_first_header_row() {
+        let glyphs = ["被", "投", "资", "单", "位"];
+        let mut cells = Vec::new();
+        let mut atoms = Vec::new();
+        let mut evidence = Vec::new();
+        for (row, text) in glyphs.into_iter().enumerate() {
+            let y0 = 10.0 + row as f64 * 13.0;
+            let mut cell = make_cell(text, row as i64, 0, 1, 1);
+            cell.rect = Rect4 {
+                schema_version: 1,
+                x0: 100.0,
+                y0,
+                x1: 110.0,
+                y1: y0 + 10.0,
+            };
+            cell.source = Some(PhysicalCell {
+                schema_version: 1,
+                text: text.to_string(),
+                rect: cell.rect.clone(),
+                row: row as i64,
+                col: 0,
+                colspan: 1,
+                source_refs: vec![row as i64],
+            });
+            cells.push(cell);
+            atoms.push(make_atom(text, 100.0, y0, 110.0, y0 + 10.0, row as i64));
+            evidence.push(AtomEvidenceDto {
+                flow_start: row as i64 + 1,
+                flow_end: row as i64 + 1,
+                source_blocks: vec![9],
+                source_line_start: row as i64,
+                source_line_end: row as i64,
+                source_position_known: true,
+                column_id: Some(0),
+            });
+        }
+
+        // `header_body_start` may conservatively report the body after row 0;
+        // source-contiguous CJK evidence still proves this is one header chain.
+        merge_evidence_contiguous_vertical_header_chain(
+            &mut cells,
+            Some(&evidence),
+            Some(&atoms),
+            1,
+            true,
+        );
+
+        assert_eq!(cells.len(), 1);
+        assert_eq!(cells[0].rowspan, glyphs.len() as i64);
         assert_eq!(cells[0].text, glyphs.join("\n"));
     }
 
@@ -7084,7 +7270,13 @@ mod tests {
             },
         ];
 
-        merge_evidence_contiguous_vertical_header_chain(&mut cells, Some(&evidence), Some(&atoms), 3);
+        merge_evidence_contiguous_vertical_header_chain(
+            &mut cells,
+            Some(&evidence),
+            Some(&atoms),
+            3,
+            false,
+        );
 
         assert_eq!(cells.len(), 1);
         assert_eq!((cells[0].row, cells[0].rowspan, cells[0].col), (1, 2, 5));
