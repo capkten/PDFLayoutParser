@@ -1601,6 +1601,8 @@ fn merge_source_contiguous_vertical_cells(
                 continue;
             }
             if has_ascii_alpha(&current.text) != has_ascii_alpha(&candidate.text)
+                && !is_single_cjk(&current.text)
+                && !is_single_cjk(&candidate.text)
                 && !is_numeric_body_text(&current.text)
                 && !is_numeric_body_text(&candidate.text)
             {
@@ -6775,6 +6777,45 @@ mod tests {
         merge_source_contiguous_vertical_cells(&mut cells, None, "row_interleaved", None);
 
         assert_eq!(cells.len(), 2);
+    }
+
+    #[test]
+    fn test_merge_source_contiguous_vertical_cells_accepts_single_cjk_tail_after_mixed_text() {
+        let source_cell = |text: &str, row: i64, source_ref: i64| -> CellDto {
+            let mut cell = make_cell(text, row, 0, 1, 1);
+            cell.source = Some(PhysicalCell {
+                schema_version: 1,
+                text: text.to_string(),
+                rect: cell.rect.clone(),
+                row,
+                col: 0,
+                colspan: 1,
+                source_refs: vec![source_ref],
+            });
+            cell
+        };
+        let mut cells = vec![
+            source_cell("A区、B区部分商", 0, 0),
+            source_cell("铺", 1, 1),
+        ];
+        cells[0].rect.x0 = 10.0;
+        cells[0].rect.x1 = 80.0;
+        cells[0].rect.y0 = 0.0;
+        cells[0].rect.y1 = 10.0;
+        cells[1].rect.x0 = 10.0;
+        cells[1].rect.x1 = 20.0;
+        cells[1].rect.y0 = 7.0;
+        cells[1].rect.y1 = 17.0;
+        for cell in &mut cells {
+            if let Some(source) = cell.source.as_mut() {
+                source.rect = cell.rect.clone();
+            }
+        }
+
+        merge_source_contiguous_vertical_cells(&mut cells, None, "row_interleaved", None);
+
+        assert_eq!(cells.len(), 1);
+        assert_eq!(cells[0].text, "A区、B区部分商\n铺");
     }
 
     #[test]
