@@ -554,6 +554,27 @@ def _english_fixture_background(y0, y1, color, order):
     }
 
 
+def test_build_english_cells_collapses_single_background_wrapped_header():
+    cells = rust_adapter.build_english_cells(_english_grid_fixture(
+        [
+            _english_fixture_word("Cash Market $m", 100.0, 5.0, 170.0, 12.0, 0),
+            _english_fixture_word("Three months ended", 100.0, 5.0, 190.0, 12.0, 1),
+            _english_fixture_word("31 Mar 2011", 100.0, 15.0, 150.0, 22.0, 2),
+            _english_fixture_word("Derivatives Market $m", 100.0, 25.0, 190.0, 32.0, 3),
+            _english_fixture_word("Income from external customers", 10.0, 42.0, 140.0, 49.0, 4),
+            _english_fixture_word("888", 200.0, 42.0, 220.0, 49.0, 5),
+        ],
+        [
+            _english_fixture_background(0.0, 40.0, None, 0),
+            _english_fixture_background(40.0, 50.0, 0.5, 1),
+        ],
+        x1=300.0,
+        y1=50.0,
+    ))
+
+    assert max(cell["row"] for cell in cells) == 1
+    assert not any(cell["rowspan"] > 1 for cell in cells if cell["row"] == 0 and cell["text"] != "888")
+    assert any(cell["text"] == "Income from external customers" and cell["row"] == 1 for cell in cells)
 def test_build_english_cells_does_not_merge_single_body_row_into_header():
     cells = rust_adapter.build_english_cells(_english_grid_fixture(
         [
