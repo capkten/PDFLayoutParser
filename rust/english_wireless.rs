@@ -620,7 +620,7 @@ fn make_english_cell(
     }
 }
 
-fn merge_wrapped_header_rows(row_cells: &mut [Vec<CellDto>], header_rows: usize) {
+fn merge_wrapped_header_rows(row_cells: &mut [Vec<CellDto>], header_rows: usize, row_groups: &[usize]) {
     for row_index in 0..header_rows.saturating_sub(1) {
         let mut cell_index = 0;
         while cell_index < row_cells[row_index].len() {
@@ -631,6 +631,12 @@ fn merge_wrapped_header_rows(row_cells: &mut [Vec<CellDto>], header_rows: usize)
             let mut next_row = row_index + 1;
             while next_row < header_rows {
                 let top = row_cells[row_index][cell_index].clone();
+                let repeats_header_text = row_cells[next_row]
+                    .iter()
+                    .any(|candidate| candidate.text.trim() == top.text.trim());
+                if row_groups.get(row_index) != row_groups.get(next_row) && !repeats_header_text {
+                    break;
+                }
                 let target = row_cells[next_row].iter().position(|candidate| {
                     !candidate.text.trim().is_empty()
                         && candidate.col == top.col
@@ -655,8 +661,10 @@ fn merge_wrapped_header_rows(row_cells: &mut [Vec<CellDto>], header_rows: usize)
                 }
 
                 let bottom = row_cells[next_row][target_index].clone();
-                row_cells[row_index][cell_index].text =
-                    format!("{} {}", top.text.trim(), bottom.text.trim());
+                if top.text.trim() != bottom.text.trim() {
+                    row_cells[row_index][cell_index].text =
+                        format!("{} {}", top.text.trim(), bottom.text.trim());
+                }
                 row_cells[row_index][cell_index].rect = Rect4 {
                     schema_version: 1,
                     x0: top.rect.x0.min(bottom.rect.x0),
@@ -672,12 +680,8 @@ fn merge_wrapped_header_rows(row_cells: &mut [Vec<CellDto>], header_rows: usize)
     }
 }
 
-fn compress_english_header_rows(
-    mut row_cells: Vec<Vec<CellDto>>,
-    row_bounds: Vec<(f64, f64)>,
-    header_rows: usize,
-) -> (Vec<Vec<CellDto>>, Vec<(f64, f64)>, usize) {
-    merge_wrapped_header_rows(&mut row_cells, header_rows);
+fn compress_english_header_rows(mut row_cells: Vec<Vec<CellDto>>, row_bounds: Vec<(f64, f64)>, header_rows: usize, row_groups: &[usize]) -> (Vec<Vec<CellDto>>, Vec<(f64, f64)>, usize) {
+    merge_wrapped_header_rows(&mut row_cells, header_rows, row_groups);
 
     if header_rows >= 4 && !row_cells.is_empty() {
         let mut promote = Vec::new();
@@ -1056,8 +1060,25 @@ pub fn build_english_cells(input: &EnglishGridInput) -> Vec<CellDto> {
         .iter()
         .take_while(|background| background.color.is_none())
         .count();
+    let header_row_groups: Vec<usize> = row_bounds
+        .iter()
+        .enumerate()
+        .map(|(row, (y0, y1))| {
+            let center = (y0 + y1) / 2.0;
+            input
+                .backgrounds
+                .iter()
+                .enumerate()
+                .take_while(|(_, background)| background.color.is_none())
+                .find(|(_, background)| {
+                    center >= background.rect.y0 - 0.01 && center <= background.rect.y1 + 0.01
+                })
+                .map(|(index, _)| index)
+                .unwrap_or(input.backgrounds.len() + row)
+        })
+        .collect();
     let (mut row_cells, row_bounds, header_rows) =
-        compress_english_header_rows(row_cells, row_bounds, header_rows);
+        compress_english_header_rows(row_cells, row_bounds, header_rows, &header_row_groups);
 
     for row_index in 0..header_rows {
         for cell_index in 0..row_cells[row_index].len() {
@@ -1068,7 +1089,7 @@ pub fn build_english_cells(input: &EnglishGridInput) -> Vec<CellDto> {
                 let occupied_by_child = row_cells[row_index + rowspan].iter().any(|child| {
                     let child_start = child.col as usize;
                     let child_end = child_start + child.colspan as usize;
-                    child_start < col_end && child_end > col_start
+                    !child.text.trim().is_empty() && child_start < col_end && child_end > col_start
                 });
                 if occupied_by_child {
                     break;
@@ -1887,7 +1908,7 @@ mod tests {
             )],
         ];
 
-        merge_wrapped_header_rows(&mut rows, 4);
+        merge_wrapped_header_rows(&mut rows, 4, &[]);
 
         assert_eq!(rows[0][0].text, "Three months ended 31 Mar 2011 $m");
         assert!(rows[1][0].text.is_empty());
@@ -1940,6 +1961,7 @@ mod tests {
             rows,
             vec![(0.0, 10.0), (10.0, 20.0), (20.0, 30.0), (30.0, 40.0)],
             4,
+            &[],
         );
 
         assert_eq!(compacted_header_rows, 1);

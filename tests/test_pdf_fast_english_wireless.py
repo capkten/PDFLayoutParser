@@ -454,6 +454,101 @@ def test_build_english_cells_uses_supplied_logical_background_rows_for_wrapped_t
         "When seeking a mandate",
         "Disclosure return",
     }
+
+def _english_grid_fixture(words, backgrounds, x1=300.0, y1=50.0):
+    return {
+        "schema_version": 1,
+        "region": {
+            "schema_version": 1,
+            "rect": {"schema_version": 1, "x0": 0.0, "y0": 0.0, "x1": x1, "y1": y1},
+            "source_order": 0,
+            "allowed": True,
+        },
+        "words": words,
+        "backgrounds": backgrounds,
+        "horizontal_lines": [],
+        "config": {
+            "schema_version": 1,
+            "line_tolerance": 2.0,
+            "row_tolerance": 2.0,
+            "column_tolerance": 2.0,
+            "span_tolerance": 2.0,
+            "numeric_tolerance": 2.0,
+        },
+    }
+
+
+def _english_fixture_word(text, x0, y0, x1, y1, order):
+    return {
+        "schema_version": 1,
+        "text": text,
+        "rect": {"schema_version": 1, "x0": x0, "y0": y0, "x1": x1, "y1": y1},
+        "order": order,
+        "block": None,
+        "line": None,
+    }
+
+
+def _english_fixture_background(y0, y1, color, order):
+    return {
+        "schema_version": 1,
+        "rect": {"schema_version": 1, "x0": 0.0, "y0": y0, "x1": 300.0, "y1": y1},
+        "color": color,
+        "opacity": None,
+        "source_order": order,
+    }
+
+
+def test_build_english_cells_does_not_merge_single_body_row_into_header():
+    cells = rust_adapter.build_english_cells(_english_grid_fixture(
+        [
+            _english_fixture_word("Header", 10.0, 5.0, 60.0, 12.0, 0),
+            _english_fixture_word("Group", 100.0, 5.0, 145.0, 12.0, 1),
+            _english_fixture_word("First body", 10.0, 20.0, 80.0, 27.0, 2),
+            _english_fixture_word("Value", 10.0, 35.0, 55.0, 42.0, 3),
+            _english_fixture_word("1", 100.0, 35.0, 110.0, 42.0, 4),
+        ],
+        [
+            _english_fixture_background(0.0, 15.0, None, 0),
+            _english_fixture_background(15.0, 30.0, None, 1),
+            _english_fixture_background(30.0, 50.0, 0.5, 2),
+        ],
+    ))
+
+    header = next(cell for cell in cells if cell["text"] == "Header")
+    assert header["rowspan"] == 1
+    assert any(cell["text"] == "First body" and cell["row"] == 1 for cell in cells)
+    assert not any("Header First body" in cell["text"] for cell in cells)
+
+
+def test_build_english_cells_preserves_products_header_and_first_data_row():
+    cells = rust_adapter.build_english_cells(_english_grid_fixture(
+        [
+            _english_fixture_word("Products", 10.0, 5.0, 60.0, 12.0, 0),
+            _english_fixture_word("Group A", 100.0, 5.0, 155.0, 12.0, 1),
+            _english_fixture_word("Group B", 180.0, 5.0, 235.0, 12.0, 2),
+            _english_fixture_word("Products", 10.0, 20.0, 60.0, 27.0, 3),
+            _english_fixture_word("Date", 100.0, 20.0, 125.0, 27.0, 4),
+            _english_fixture_word("Amount", 135.0, 20.0, 180.0, 27.0, 5),
+            _english_fixture_word("Date", 180.0, 20.0, 205.0, 27.0, 6),
+            _english_fixture_word("Amount", 215.0, 20.0, 260.0, 27.0, 7),
+            _english_fixture_word("Mini HSI Futures", 10.0, 35.0, 90.0, 42.0, 8),
+            _english_fixture_word("1", 100.0, 35.0, 110.0, 42.0, 9),
+            _english_fixture_word("2", 135.0, 35.0, 145.0, 42.0, 10),
+            _english_fixture_word("3", 180.0, 35.0, 190.0, 42.0, 11),
+            _english_fixture_word("4", 215.0, 35.0, 225.0, 42.0, 12),
+        ],
+        [
+            _english_fixture_background(0.0, 15.0, None, 0),
+            _english_fixture_background(15.0, 30.0, None, 1),
+            _english_fixture_background(30.0, 50.0, 0.5, 2),
+        ],
+    ))
+
+    products = next(cell for cell in cells if cell["text"] == "Products")
+    assert products["rowspan"] == 2
+    assert any(cell["text"] == "Mini HSI Futures" and cell["row"] == 2 for cell in cells)
+    assert not any("Products Mini HSI Futures" in cell["text"] for cell in cells)
 def test_build_legacy_text_alignment():
     """Test legacy text alignment reconstruction with group header."""
     words = [
