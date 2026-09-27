@@ -2,6 +2,14 @@
 
 ## 2026-09-27
 
+- **Page 410 第二张英文无线表 Cell BBox 对齐**：
+  - **根因**：表头物理行数（2）多于无色背景行数（1）时，Rust 正文背景索引从 `background_header_rows` 直接起算，重复消费第一个有色背景带，产生 `520.3` 的错误中间边界并让最后一行延伸到表格底部。
+  - **修复**：正文背景源行改为按压缩后的逻辑行号加上 `max(background_header_rows - header_rows, 0)` 映射，避免表头行数多于背景行数时重复消费背景带；无背景和普通表头路径保持原规则。
+  - **测试**：新增 Rust 行区间回归用例，修复前 `A` 行起点为 `17.0`、修复后为 `22.0`；`cargo test --locked english_wireless` 共 `10 passed`。
+  - **页面验证**：输入 `D:\codes\PDFLayoutParser\fix\zh_all_table_pages.pdf`，Page 410 独立输出位于 `C:\Users\23662\.codex\worktrees\english-page410-bbox\output\page410_bbox_fix_20260927`；两张表逐表 Cell JSON 完全一致，形状为 `7x13/85`、`6x7/39`，整页 PNG SHA-256 相同。
+
+## 2026-09-27
+
 - **Page 421 英文无线多段表头压缩对齐**：
   - **根因**：Python 会按上下单元格列跨度完全相同且无横线阻断的规则合并纵向折行表头；Rust 仅允许单一无色背景组触发该压缩，导致 Page 421 第一张表的 `Three months / ended / 31 Mar 2011 / $m` 被拆成两行，Rust 为 `5x3`，Python 为 `4x3`。
   - **修复**：将无色表头背景组上限从 1 放宽到 2，并保留左侧第 0 列存在标题时的多级表头保护；其他表头拓扑规则不变。
