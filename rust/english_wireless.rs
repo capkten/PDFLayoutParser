@@ -935,6 +935,37 @@ pub fn infer_english_columns(input: &EnglishGridInput) -> Vec<ColumnBandDto> {
         .collect()
 }
 
+fn collapse_single_background_header_rows(mut rows: Vec<Vec<CellDto>>, bounds: Vec<(f64, f64)>, header_rows: usize) -> (Vec<Vec<CellDto>>, Vec<(f64, f64)>, usize) {
+    if header_rows <= 1 || rows.is_empty() { return (rows, bounds, header_rows); }
+    let end = header_rows.min(rows.len());
+    let y0 = bounds.first().map(|b| b.0).unwrap_or(0.0);
+    let y1 = bounds.get(end.saturating_sub(1)).map(|b| b.1).unwrap_or(y0);
+    let mut header = rows[0].clone();
+    for row in 1..end {
+        for mut child in rows[row].drain(..) {
+            if child.text.trim().is_empty() { continue; }
+            if let Some(parent) = header.iter_mut().find(|parent| {
+                parent.col < child.col + child.colspan && child.col < parent.col + parent.colspan
+            }) {
+                if !parent.text.trim().is_empty() { parent.text.push(' '); }
+                parent.text.push_str(child.text.trim());
+                parent.rect.y1 = y1;
+            } else {
+                child.row = 0; child.rect.y0 = y0; child.rect.y1 = y1; header.push(child);
+            }
+        }
+    }
+    for cell in &mut header { cell.row = 0; cell.rect.y0 = y0; cell.rect.y1 = y1; cell.rowspan = 1; }
+    let removed = end.saturating_sub(1);
+    let mut compacted = vec![header];
+    for mut row in rows.into_iter().skip(end) {
+        for cell in &mut row { cell.row = cell.row.saturating_sub(removed as i64); }
+        compacted.push(row);
+    }
+    let mut new_bounds = vec![(y0, y1)];
+    new_bounds.extend(bounds.into_iter().skip(end));
+    (compacted, new_bounds, 1)
+}
 pub fn build_english_cells(input: &EnglishGridInput) -> Vec<CellDto> {
     if input.words.is_empty() {
         return Vec::new();
@@ -1082,8 +1113,12 @@ pub fn build_english_cells(input: &EnglishGridInput) -> Vec<CellDto> {
                 .unwrap_or(input.backgrounds.len() + row)
         })
         .collect();
-    let (mut row_cells, row_bounds, header_rows) =
+    let (mut row_cells, mut row_bounds, mut header_rows) =
         compress_english_header_rows(row_cells, row_bounds, header_rows, &header_row_groups);
+    if background_header_rows == 1 && header_rows >= 2 && !row_cells[0].iter().any(|cell| cell.col == 0 && !cell.text.trim().is_empty()) {
+        (row_cells, row_bounds, header_rows) =
+            collapse_single_background_header_rows(row_cells, row_bounds, header_rows);
+    }
 
     for row_index in 0..header_rows {
         for cell_index in 0..row_cells[row_index].len() {
