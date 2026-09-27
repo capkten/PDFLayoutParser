@@ -2663,6 +2663,7 @@ pub struct EnglishGridInput {
     pub words: Vec<WordDto>,
     pub backgrounds: Vec<BackgroundDto>,
     pub horizontal_lines: Vec<f64>,
+    pub horizontal_line_lengths: Vec<f64>,
     pub columns: Vec<ColumnBandDto>,
     pub config: StructureConfig,
 }
@@ -2683,6 +2684,10 @@ impl EnglishGridInput {
             backgrounds.push(BackgroundDto::from_py(&b.downcast::<PyDict>()?.clone())?);
         }
         let horizontal_lines = match get_opt(dict, "horizontal_lines")? {
+            Some(value) => value.extract()?,
+            None => Vec::new(),
+        };
+        let horizontal_line_lengths = match get_opt(dict, "horizontal_line_lengths")? {
             Some(value) => value.extract()?,
             None => Vec::new(),
         };
@@ -2707,6 +2712,7 @@ impl EnglishGridInput {
             words,
             backgrounds,
             horizontal_lines,
+            horizontal_line_lengths,
             columns,
             config,
         })
@@ -2727,6 +2733,7 @@ impl EnglishGridInput {
         }
         d.set_item("backgrounds", bl)?;
         d.set_item("horizontal_lines", &self.horizontal_lines)?;
+        d.set_item("horizontal_line_lengths", &self.horizontal_line_lengths)?;
         let cl = PyList::empty_bound(py);
         for column in &self.columns {
             cl.append(column.to_py(py)?)?;

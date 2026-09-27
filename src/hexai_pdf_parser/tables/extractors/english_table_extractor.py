@@ -66,6 +66,7 @@ class EnglishTableExtractor(BaseTableExtractor):
         table_bbox: Optional[BBox] = None,
         rows: Optional[Sequence[_RowData]] = None,
         horizontal_lines: Optional[Sequence[float]] = None,
+        horizontal_line_lengths: Optional[Sequence[float]] = None,
         columns: Optional[Sequence[Tuple[float, float]]] = None,
     ) -> Dict[str, Any]:
         if table_bbox is not None:
@@ -113,6 +114,7 @@ class EnglishTableExtractor(BaseTableExtractor):
             "words": cls._english_word_dtos(words),
             "backgrounds": backgrounds,
             "horizontal_lines": [float(value) for value in (horizontal_lines or [])],
+            "horizontal_line_lengths": [float(value) for value in (horizontal_line_lengths or [])],
             "columns": [
                 {
                     "schema_version": 1,
@@ -134,8 +136,8 @@ class EnglishTableExtractor(BaseTableExtractor):
         }
 
     @staticmethod
-    def _english_horizontal_lines(page: Optional[Any]) -> List[float]:
-        """把可见的长水平 drawing 转成 Rust 行边界吸附坐标。"""
+    def _english_horizontal_line_spans(page: Optional[Any]) -> List[Tuple[float, float]]:
+        """返回可见长水平 drawing 的 (y, width)，供行边界和表头拓扑使用。"""
         if page is None:
             return []
         drawings = []
@@ -149,7 +151,7 @@ class EnglishTableExtractor(BaseTableExtractor):
         else:
             return []
 
-        lines: List[float] = []
+        lines: List[Tuple[float, float, float]] = []
         for drawing in drawings:
             if EnglishTableExtractor._is_invisible_drawing(drawing):
                 continue
@@ -159,25 +161,42 @@ class EnglishTableExtractor(BaseTableExtractor):
                     pt1 = item[1]
                     pt2 = item[2]
                     y = float(pt1[1]) if isinstance(pt1, (tuple, list)) else float(pt1.y)
-                    x1 = float(pt1[0]) if isinstance(pt1, (tuple, list)) else float(pt1.x)
-                    x2 = float(pt2[0]) if isinstance(pt2, (tuple, list)) else float(pt2.x)
-                    width = abs(x2 - x1)
+                    x0 = float(pt1[0]) if isinstance(pt1, (tuple, list)) else float(pt1.x)
+                    x1 = float(pt2[0]) if isinstance(pt2, (tuple, list)) else float(pt2.x)
+                    width = abs(x1 - x0)
                     height = 0.0
                 elif kind == "re":
                     rect = item[1]
                     if isinstance(rect, (tuple, list)):
                         y = (float(rect[1]) + float(rect[3])) / 2.0
-                        width = abs(float(rect[2]) - float(rect[0]))
+                        x0 = float(rect[0])
+                        x1 = float(rect[2])
+                        width = abs(x1 - x0)
                         height = abs(float(rect[3]) - float(rect[1]))
                     else:
                         y = (float(rect.y0) + float(rect.y1)) / 2.0
+                        x0 = float(rect.x0)
+                        x1 = float(rect.x1)
                         width = float(rect.width)
                         height = float(rect.height)
                 else:
                     continue
                 if height <= 2.5 and width >= 15.0:
-                    lines.append(round(y, 2))
-        return sorted(set(lines))
+                    lines.append((round(y, 2), min(x0, x1), max(x0, x1)))
+
+        grouped: List[Tuple[float, float, float]] = []
+        for y, x0, x1 in sorted(lines):
+            if grouped and abs(grouped[-1][0] - y) <= 0.3:
+                gy, gx0, gx1 = grouped[-1]
+                grouped[-1] = (gy, min(gx0, x0), max(gx1, x1))
+            else:
+                grouped.append((y, x0, x1))
+        return [(y, x1 - x0) for y, x0, x1 in grouped]
+
+    @staticmethod
+    def _english_horizontal_lines(page: Optional[Any]) -> List[float]:
+        """把可见的长水平 drawing 转成 Rust 行边界吸附坐标。"""
+        return [y for y, _ in EnglishTableExtractor._english_horizontal_line_spans(page)]
 
     @staticmethod
     def _columns_from_rust(column_dtos: Sequence[Dict[str, Any]]) -> List[Tuple[float, float]]:
@@ -3619,11 +3638,13 @@ class EnglishTableExtractor(BaseTableExtractor):
         all_words = [word for row in all_rows for word in row.words]
         input_dto = None
         if mode != "python":
+            horizontal_line_spans = self._english_horizontal_line_spans(page)
             input_dto = self._english_grid_input(
                 all_words,
                 table_bbox,
                 all_rows,
-                horizontal_lines=self._english_horizontal_lines(page),
+                horizontal_lines=[y for y, _ in horizontal_line_spans],
+                horizontal_line_lengths=[width for _, width in horizontal_line_spans],
                 columns=columns,
             )
 
