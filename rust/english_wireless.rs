@@ -1063,15 +1063,23 @@ pub fn build_english_cells(input: &EnglishGridInput) -> Vec<CellDto> {
             };
             let mut ordered_phrase = phrase.clone();
             ordered_phrase.sort_by(|a, b| {
-                center_y(&a.rect)
-                    .partial_cmp(&center_y(&b.rect))
-                    .unwrap_or(std::cmp::Ordering::Equal)
-                    .then_with(|| {
+                let dy = (center_y(&a.rect) - center_y(&b.rect)).abs();
+                if dy <= 1.0 {
+                    a.rect
+                        .x0
+                        .partial_cmp(&b.rect.x0)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                } else {
+                    center_y(&a.rect)
+                        .partial_cmp(&center_y(&b.rect))
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                        .then_with(|| {
                         a.rect
                             .x0
                             .partial_cmp(&b.rect.x0)
                             .unwrap_or(std::cmp::Ordering::Equal)
-                    })
+                        })
+                }
             });
             let text = ordered_phrase
                 .iter()
@@ -2029,6 +2037,41 @@ mod tests {
         assert!(!cells
             .iter()
             .any(|cell| cell.text == "Mar 2011 Dec 2010"));
+    }
+
+    #[test]
+    fn test_build_english_cells_preserves_native_phrase_order() {
+        let input = EnglishGridInput {
+            schema_version: 1,
+            region: crate::types::RegionDto {
+                schema_version: 1,
+                rect: Rect4 { schema_version: 1, x0: 0.0, y0: 0.0, x1: 300.0, y1: 40.0 },
+                source_order: 0,
+                allowed: true,
+            },
+            words: vec![
+                make_word("Income", 10.0, 10.0, 40.0, 18.0),
+                make_word("affected", 42.0, 10.0, 80.0, 18.0),
+                make_word("by", 82.0, 10.0, 95.0, 18.0),
+                make_word("market", 97.0, 10.0, 135.0, 18.0),
+                make_word("turnover", 137.0, 9.5, 180.0, 17.5),
+            ],
+            backgrounds: vec![make_bg(0.0, 40.0, Some(0.5), 0)],
+            horizontal_lines: Vec::new(),
+            horizontal_line_lengths: Vec::new(),
+            columns: vec![ColumnBandDto { schema_version: 1, x0: 0.0, x1: 240.0, source_atoms: Vec::new(), order: 0 }],
+            config: StructureConfig {
+                schema_version: 1,
+                line_tolerance: 2.0,
+                row_tolerance: 2.0,
+                column_tolerance: 2.0,
+                span_tolerance: 2.0,
+                numeric_tolerance: 2.0,
+            },
+        };
+
+        let cells = build_english_cells(&input);
+        assert!(cells.iter().any(|cell| cell.text == "Income affected by market turnover"));
     }
 
     #[test]
