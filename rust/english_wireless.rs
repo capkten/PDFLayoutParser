@@ -1056,8 +1056,7 @@ pub fn build_english_cells(input: &EnglishGridInput) -> Vec<CellDto> {
                 .filter(|text| !text.is_empty())
                 .collect::<Vec<_>>()
                 .join(" ")
-                .replace("$ ", "$")
-                .replace("% ", "%");
+                .replace("$ ", "$");
             cells.push(make_english_cell(
                 text,
                 row_index,
