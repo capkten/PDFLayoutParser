@@ -1518,6 +1518,43 @@ fn source_evidence_for_refs(
     Some((blocks, line_start, line_end))
 }
 
+fn is_evidence_chain_contiguous_vertical_cjk(
+    current: &CellDto,
+    candidate: &CellDto,
+    atom_evidence: Option<&[AtomEvidenceDto]>,
+    atom_sources: Option<&[AtomDto]>,
+) -> bool {
+    if !candidate.text.trim().chars().all(is_cjk_char)
+        || !current.text.trim().chars().all(|character| is_cjk_char(character) || character == '\n')
+    {
+        return false;
+    }
+    let Some(evidence) = atom_evidence else {
+        return false;
+    };
+    let current_refs = current
+        .source
+        .as_ref()
+        .map(|source| source.source_refs.as_slice())
+        .unwrap_or(&[]);
+    let candidate_refs = candidate
+        .source
+        .as_ref()
+        .map(|source| source.source_refs.as_slice())
+        .unwrap_or(&[]);
+    let Some((current_blocks, _, current_line_end)) =
+        source_evidence_for_refs(current_refs, evidence, atom_sources)
+    else {
+        return false;
+    };
+    let Some((candidate_blocks, candidate_line_start, _)) =
+        source_evidence_for_refs(candidate_refs, evidence, atom_sources)
+    else {
+        return false;
+    };
+    current_blocks == candidate_blocks && candidate_line_start == current_line_end + 1
+}
+
 fn merge_source_contiguous_vertical_cells(
     cells: &mut Vec<CellDto>,
     atom_evidence: Option<&[AtomEvidenceDto]>,
@@ -1620,6 +1657,78 @@ fn merge_source_contiguous_vertical_cells(
         let candidate = cells.remove(other_index);
         let current = &mut cells[index];
         merge_cell_source(current, candidate, "\n");
+    }
+}
+
+fn merge_evidence_contiguous_vertical_header_chain(
+    cells: &mut Vec<CellDto>,
+    atom_evidence: Option<&[AtomEvidenceDto]>,
+    atom_sources: Option<&[AtomDto]>,
+) {
+    let Some(evidence) = atom_evidence else {
+        return;
+    };
+    cells.sort_by(|left, right| {
+        left.row
+            .cmp(&right.row)
+            .then_with(|| left.col.cmp(&right.col))
+            .then_with(|| left.rect.y0.partial_cmp(&right.rect.y0).unwrap_or(std::cmp::Ordering::Equal))
+    });
+
+    let mut index = 0;
+    while index < cells.len() {
+        if cells[index].row != 0
+            || cells[index].rowspan != 1
+            || cells[index].colspan != 1
+            || !is_single_cjk(&cells[index].text)
+        {
+            index += 1;
+            continue;
+        }
+        loop {
+            let current = cells[index].clone();
+            let candidate_index = cells
+                .iter()
+                .enumerate()
+                .skip(index + 1)
+                .find(|(_, candidate)| {
+                    candidate.row == current.row + current.rowspan
+                        && candidate.col == current.col
+                        && candidate.rowspan == 1
+                        && candidate.colspan == 1
+                        && is_single_cjk(&candidate.text)
+                        && source_refs_contiguous(
+                            current
+                                .source
+                                .as_ref()
+                                .map(|source| source.source_refs.as_slice())
+                                .unwrap_or(&[]),
+                            candidate
+                                .source
+                                .as_ref()
+                                .map(|source| source.source_refs.as_slice())
+                                .unwrap_or(&[]),
+                        )
+                        && is_evidence_chain_contiguous_vertical_cjk(
+                            &current,
+                            candidate,
+                            Some(evidence),
+                            atom_sources,
+                        )
+                        && horizontal_overlap(&current.rect, &candidate.rect)
+                            >= (current.rect.x1 - current.rect.x0)
+                                .min(candidate.rect.x1 - candidate.rect.x0)
+                                * 0.45
+                        && candidate.rect.y0 - current.rect.y1 <= 6.0
+                })
+                .map(|(candidate_index, _)| candidate_index);
+            let Some(candidate_index) = candidate_index else {
+                break;
+            };
+            let candidate = cells.remove(candidate_index);
+            merge_cell_source(&mut cells[index], candidate, "\n");
+        }
+        index += 1;
     }
 }
 
@@ -2531,6 +2640,18 @@ fn header_body_start(cells: &[CellDto], physical_rows: usize, columns: usize) ->
         return row;
     }
     let mut topology_floor = 0;
+    for cell in cells.iter().filter(|cell| {
+        cell.row == 0
+            && cell.rowspan >= 3
+            && cell.colspan == 1
+            && cell
+                .text
+                .trim()
+                .chars()
+                .all(|character| is_cjk_char(character) || character == '\n')
+    }) {
+        topology_floor = topology_floor.max(cell_row_end(cell) + 1);
+    }
     for parent in cells.iter().filter(|cell| {
         cell.row >= 0
             && (cell.row as usize) < physical_rows
@@ -2948,13 +3069,52 @@ fn logical_row_components(
     if row_count == 0 {
         return Vec::new();
     }
-    let row_starts: std::collections::BTreeSet<usize> = cells
+    let mut row_starts: std::collections::BTreeSet<usize> = cells
         .iter()
         .filter_map(|cell| {
             let row = usize::try_from(cell.row).ok()?;
             (row < row_count).then_some(row)
         })
         .collect();
+    let chain_columns: std::collections::BTreeSet<usize> = cells
+        .iter()
+        .filter(|cell| {
+            cell.row == 0
+                && cell.rowspan >= 3
+                && cell.colspan == 1
+                && cell
+                    .text
+                    .trim()
+                    .chars()
+                    .all(|character| is_cjk_char(character) || character == '\n')
+        })
+        .map(|cell| cell.col.max(0) as usize)
+        .collect();
+    if let Some(chain_end) = cells
+        .iter()
+        .filter(|cell| chain_columns.contains(&(cell.col.max(0) as usize)))
+        .map(cell_row_end)
+        .max()
+    {
+        let leaf_row = (1..=chain_end.min(row_count.saturating_sub(1)))
+            .find(|row| {
+                cells
+                    .iter()
+                    .filter(|cell| {
+                        cell.row == *row as i64
+                            && cell_is_nonempty(cell)
+                            && !chain_columns.contains(&(cell.col.max(0) as usize))
+                    })
+                    .count()
+                    >= 2
+            })
+            .unwrap_or(chain_end.min(row_count.saturating_sub(1)))
+            .saturating_add(1)
+            .min(chain_end.min(row_count.saturating_sub(1)));
+        for row in 1..=leaf_row {
+            row_starts.insert(row);
+        }
+    }
     let mut groups: Vec<Vec<usize>> = Vec::new();
     for row in 0..row_count {
         if row > 0 && !row_starts.contains(&row) && !groups.is_empty() {
@@ -4105,6 +4265,11 @@ pub fn recover_native_region(input: NativeRegionInput) -> NativeRegionOutput {
         &input.output_mode,
         Some(&input.atoms),
     );
+    merge_evidence_contiguous_vertical_header_chain(
+        &mut cells,
+        input.atom_evidence.as_deref(),
+        Some(&input.atoms),
+    );
 
     let physical_rows = rows.len();
     let physical_cols = bands.len();
@@ -4129,6 +4294,67 @@ pub fn recover_native_region(input: NativeRegionInput) -> NativeRegionOutput {
     } else {
         1
     };
+    let vertical_header_chain = cells.iter().any(|cell| {
+        cell.row == 0
+            && cell.rowspan >= 3
+            && cell.colspan == 1
+            && cell
+                .text
+                .trim()
+                .chars()
+                .all(|character| is_cjk_char(character) || character == '\n')
+    });
+    if vertical_header_chain && num_rows > 1 {
+        let header_rows = num_rows.saturating_sub(1) as i64;
+        let chain_columns: std::collections::BTreeSet<i64> = cells
+            .iter()
+            .filter(|cell| {
+                cell.row == 0
+                    && cell.colspan == 1
+                    && cell
+                        .text
+                        .trim()
+                        .chars()
+                        .all(|character| is_cjk_char(character) || character == '\n')
+            })
+            .map(|cell| cell.col)
+            .collect();
+        let leaf_row = (1..header_rows)
+            .find(|row| {
+                cells
+                    .iter()
+                    .filter(|cell| {
+                        cell.row == *row
+                            && cell_is_nonempty(cell)
+                            && !chain_columns.contains(&cell.col)
+                    })
+                    .count()
+                    >= 2
+            })
+            .unwrap_or(header_rows.saturating_sub(1));
+        for cell in &mut cells {
+            if cell.row == 0
+                && cell.colspan == 1
+                && cell
+                    .text
+                    .trim()
+                    .chars()
+                    .all(|character| is_cjk_char(character) || character == '\n')
+            {
+                cell.rowspan = header_rows;
+            } else if cell.row == leaf_row && leaf_row < header_rows.saturating_sub(1) {
+                cell.row += 1;
+            } else if cell.row == 0 && cell.colspan > 1 {
+                cell.rowspan = leaf_row + 1;
+            } else if cell.row == header_rows - 1
+                && cell.col == 0
+                && cell.rowspan > 1
+            {
+                cell.row = header_rows;
+                cell.rowspan = 1;
+            }
+        }
+    }
     let num_cols = bands.len().max(1);
     let col_edges = logical_column_edges(&bands, &input.region.rect);
 
@@ -6519,5 +6745,50 @@ mod tests {
         assert_eq!(cells.len(), 1, "Wrapped fragments in same physical slot must merge");
         assert_eq!(cells[0].text, "长春海吉星二期用\n地");
         assert_eq!(cells[0].source_refs, vec![10, 11]);
+    }
+
+    #[test]
+    fn test_merge_evidence_contiguous_vertical_header_chain_merges_eight_glyphs() {
+        let glyphs = ["减", "值", "准", "备", "期", "末", "余", "额"];
+        let mut cells = Vec::new();
+        let mut atoms = Vec::new();
+        let mut evidence = Vec::new();
+        for (row, text) in glyphs.into_iter().enumerate() {
+            let y0 = 10.0 + row as f64 * 13.0;
+            let mut cell = make_cell(text, row as i64, 0, 1, 1);
+            cell.rect = Rect4 {
+                schema_version: 1,
+                x0: 100.0,
+                y0,
+                x1: 110.0,
+                y1: y0 + 10.0,
+            };
+            cell.source = Some(PhysicalCell {
+                schema_version: 1,
+                text: text.to_string(),
+                rect: cell.rect.clone(),
+                row: row as i64,
+                col: 0,
+                colspan: 1,
+                source_refs: vec![row as i64],
+            });
+            cells.push(cell);
+            atoms.push(make_atom(text, 100.0, y0, 110.0, y0 + 10.0, row as i64));
+            evidence.push(AtomEvidenceDto {
+                flow_start: row as i64 + 1,
+                flow_end: row as i64 + 1,
+                source_blocks: vec![9],
+                source_line_start: row as i64,
+                source_line_end: row as i64,
+                source_position_known: true,
+                column_id: Some(0),
+            });
+        }
+
+        merge_evidence_contiguous_vertical_header_chain(&mut cells, Some(&evidence), Some(&atoms));
+
+        assert_eq!(cells.len(), 1);
+        assert_eq!(cells[0].rowspan, 8);
+        assert_eq!(cells[0].text, glyphs.join("\n"));
     }
 }

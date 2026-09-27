@@ -2,6 +2,11 @@
 
 ## 2026-09-27
 
+- **Page 482 Rust 中文无线表格竖排单字链 parity 修复**：
+  - 根因：第 13 列 `减值准备期末余额` 的 8 个 native atom 同属 block=9、source line=0..7 且 flow 连续；Rust 单字 CJK 续行保护使其停留为 8 个物理行，Python 则合并为一个表头 Cell，最终 Rust 产出 10x13 而 Python 为 5x13。
+  - 修复：仅对 row=0 起始、同列同几何、同 source block 且连续 source line/flow 的证据完整 CJK 竖排链一次性合并；逻辑 row-start 与表头拓扑随后保留叶子行和正文边界，避免中间两两合并造成 occupancy conflict。其他路径不回读 words、不改 Python。
+  - 验证：Rust chain fixture 与 wireless_structure 45 项测试通过；Page 482 Rust/Python cell signature 完全一致（5x13、27 cells、bbox `[83.2,124.8,540.5,416.3]`、0 diagnostics）。独立输出目录：`D:\codes\PDFLayoutParser\output\page_482_rust_chain_fix_20260927`，JSON `pages/page-482.json`，可视化 `zh_all_table_pages_page_482_visualized.png`。
+
 - **Page 978 Rust 表头拓扑 parity 修复**：
   - Rust `header_body_start()` 原先在未找到 numeric body 行时，直接把首个“非空 Cell 数达到 3/4 列”的物理行当作 body 起点；Page 978 的第二层表头正好满足该条件，导致 `header_rows=1`，表头 `rowspan/colspan` 无法恢复并物化大量空槽。
   - 修复前置拓扑下界：存在跨列父表头且后续有完整连续叶子列时，body 起点不得早于叶子表头行之后。
