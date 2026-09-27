@@ -980,6 +980,12 @@
 
 ## 2026-09-27
 
+- 修复中文无线表格 Page 987 二级表头“间接”被 Rust 拆成两行的问题。根因是 `merge_evidence_contiguous_vertical_header_chain()` 只允许从物理 row 0 开始合并单字中文链；Page 987 的“间”“接”分别位于 header row 1/2，但 native evidence 显示同一 block、source line 连续、列相同、垂直几何紧密。Rust 保留两行，导致全表由 Python 的 `6x7/36` 变为 `7x7/43`。
+- 最小修复：将该 native evidence 合并器限制在调用方根据表结构推断的 header rows 范围内，并允许从任一 header row 开始合并连续 CJK 单字。新增 row1→row2 续字合并 RED/GREEN 用例，同时保留 row0 八字纵向链既有正例。
+- 独立输出：`D:\codes\PDFLayoutParser-Fast\output\pdf\page987_header_continuation_fix_20260927\`。Page 987 恢复 `6x7/36`，与 Python 逐 Cell 文本、row/col、跨度、BBox 0 差异；最终 PNG 已复核。验证：`cargo test --locked` 89 passed；Page987 parity/无线结构相关 pytest 61 passed，另 1 项现有 skip。
+
+## 2026-09-27
+
 - 修复 Page 946 无线表格一行被 Rust 多拆成一行的问题。原因是此前为防止 Page 463 把独立 Latin/CJK 多行项目误并而加入的 ASCII/非 ASCII 脚本边界判断过宽，拒绝了同一 native block、连续 source line、几何重叠的单字中文续字“铺”。现在仅对一侧为单字 CJK 的连续续字放行；完整拉丁项目行/中文行和混合 Latin/CJK 多字符字段仍保持分离。
 - TDD 新增单字中文续字合并正例，修复前 `cells.len()` 为 2、期望 1；保留 Page 463 类型的完整 Latin/CJK 独立字段拒绝反例，以及多字符混合 Latin/CJK 链拒绝反例。`cargo test --locked` 为 `88 passed`；Python 无线结构 parity/merges/grid 相关测试 `61 passed`。
 - 使用当前主线代码独立复核 Page 929–931：三页表数、行列、Cell 数以及逐 Cell 文本/位置/跨度/BBox 均与 Python 0 差异，无需改动。Page 946 独立输出位于 `D:\codes\PDFLayoutParser-Fast\output\pdf\page929_931_946_recheck_and946_fix_20260927\`：Page 946 表格恢复 `29x3/87`，与 Python 逐 Cell 0 差异；页面 JSON/PNG 已生成。既有 SVG 脏改动未纳入本次提交。

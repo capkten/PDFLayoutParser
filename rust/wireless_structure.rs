@@ -1681,6 +1681,7 @@ fn merge_evidence_contiguous_vertical_header_chain(
     cells: &mut Vec<CellDto>,
     atom_evidence: Option<&[AtomEvidenceDto]>,
     atom_sources: Option<&[AtomDto]>,
+    header_rows: usize,
 ) {
     let Some(evidence) = atom_evidence else {
         return;
@@ -1694,7 +1695,8 @@ fn merge_evidence_contiguous_vertical_header_chain(
 
     let mut index = 0;
     while index < cells.len() {
-        if cells[index].row != 0
+        if cells[index].row < 0
+            || cells[index].row as usize >= header_rows
             || cells[index].rowspan != 1
             || cells[index].colspan != 1
             || !is_single_cjk(&cells[index].text)
@@ -1710,6 +1712,8 @@ fn merge_evidence_contiguous_vertical_header_chain(
                 .skip(index + 1)
                 .find(|(_, candidate)| {
                     candidate.row == current.row + current.rowspan
+                        && candidate.row >= 0
+                        && (candidate.row as usize) < header_rows
                         && candidate.col == current.col
                         && candidate.rowspan == 1
                         && candidate.colspan == 1
@@ -4314,10 +4318,12 @@ pub fn recover_native_region(input: NativeRegionInput) -> NativeRegionOutput {
         &input.output_mode,
         Some(&input.atoms),
     );
+    let header_rows = header_body_start(&cells, rows.len(), bands.len());
     merge_evidence_contiguous_vertical_header_chain(
         &mut cells,
         input.atom_evidence.as_deref(),
         Some(&input.atoms),
+        header_rows,
     );
 
     let physical_rows = rows.len();
@@ -7009,10 +7015,79 @@ mod tests {
             });
         }
 
-        merge_evidence_contiguous_vertical_header_chain(&mut cells, Some(&evidence), Some(&atoms));
+        merge_evidence_contiguous_vertical_header_chain(&mut cells, Some(&evidence), Some(&atoms), 8);
 
         assert_eq!(cells.len(), 1);
         assert_eq!(cells[0].rowspan, 8);
         assert_eq!(cells[0].text, glyphs.join("\n"));
+    }
+
+    #[test]
+    fn test_merge_evidence_contiguous_vertical_header_chain_merges_header_tier_after_first_row() {
+        let mut first = make_cell("间", 1, 5, 1, 1);
+        first.rect = Rect4 {
+            schema_version: 1,
+            x0: 435.0,
+            y0: 20.0,
+            x1: 445.0,
+            y1: 30.0,
+        };
+        first.source = Some(PhysicalCell {
+            schema_version: 1,
+            text: first.text.clone(),
+            rect: first.rect.clone(),
+            row: 1,
+            col: 5,
+            colspan: 1,
+            source_refs: vec![15],
+        });
+        let mut second = make_cell("接", 2, 5, 1, 1);
+        second.rect = Rect4 {
+            schema_version: 1,
+            x0: 435.0,
+            y0: 33.0,
+            x1: 445.0,
+            y1: 43.0,
+        };
+        second.source = Some(PhysicalCell {
+            schema_version: 1,
+            text: second.text.clone(),
+            rect: second.rect.clone(),
+            row: 2,
+            col: 5,
+            colspan: 1,
+            source_refs: vec![16],
+        });
+        let mut cells = vec![first, second];
+        let atoms = vec![
+            make_atom("间", 435.0, 20.0, 445.0, 30.0, 15),
+            make_atom("接", 435.0, 33.0, 445.0, 43.0, 16),
+        ];
+        let evidence = vec![
+            AtomEvidenceDto {
+                flow_start: 15,
+                flow_end: 15,
+                source_blocks: vec![6],
+                source_line_start: 1,
+                source_line_end: 1,
+                source_position_known: true,
+                column_id: Some(5),
+            },
+            AtomEvidenceDto {
+                flow_start: 16,
+                flow_end: 16,
+                source_blocks: vec![6],
+                source_line_start: 2,
+                source_line_end: 2,
+                source_position_known: true,
+                column_id: Some(5),
+            },
+        ];
+
+        merge_evidence_contiguous_vertical_header_chain(&mut cells, Some(&evidence), Some(&atoms), 3);
+
+        assert_eq!(cells.len(), 1);
+        assert_eq!((cells[0].row, cells[0].rowspan, cells[0].col), (1, 2, 5));
+        assert_eq!(cells[0].text, "间\n接");
     }
 }
