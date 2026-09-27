@@ -1209,7 +1209,7 @@ pub fn build_english_cells(input: &EnglishGridInput) -> Vec<CellDto> {
         let source_row = if input.backgrounds.is_empty() {
             source_header_rows.saturating_add(row - header_rows)
         } else {
-            background_header_rows.saturating_add(row - header_rows)
+            row + background_header_rows.saturating_sub(header_rows)
         };
         if let Some(background) = input.backgrounds.get(source_row) {
             row_intervals.push((background.rect.y0, background.rect.y1));
@@ -2078,5 +2078,70 @@ mod tests {
             .find(|cell| cell.text == "B")
             .expect("second-row label cell");
         assert_eq!(second_row.rect.y0, 17.0);
+    }
+
+    #[test]
+    fn test_build_english_cells_offsets_data_backgrounds_after_extra_header_row() {
+        let input = EnglishGridInput {
+            schema_version: 1,
+            region: crate::types::RegionDto {
+                schema_version: 1,
+                rect: Rect4 {
+                    schema_version: 1,
+                    x0: 0.0,
+                    y0: 0.0,
+                    x1: 100.0,
+                    y1: 40.0,
+                },
+                source_order: 0,
+                allowed: true,
+            },
+            words: vec![
+                make_word("Top", 10.0, 1.0, 30.0, 3.0),
+                make_word("Sub", 10.0, 13.0, 30.0, 14.0),
+                make_word("A", 10.0, 24.0, 30.0, 26.0),
+                make_word("B", 10.0, 33.0, 30.0, 35.0),
+                make_word("C", 10.0, 37.0, 30.0, 39.0),
+            ],
+            backgrounds: vec![
+                make_bg(0.0, 12.0, None, 0),
+                make_bg(12.0, 22.0, Some(0.5), 1),
+                make_bg(22.0, 31.0, Some(1.0), 2),
+                make_bg(31.0, 40.0, Some(0.5), 3),
+            ],
+            horizontal_lines: Vec::new(),
+            columns: vec![
+                ColumnBandDto {
+                    schema_version: 1,
+                    x0: 0.0,
+                    x1: 50.0,
+                    source_atoms: Vec::new(),
+                    order: 0,
+                },
+                ColumnBandDto {
+                    schema_version: 1,
+                    x0: 50.0,
+                    x1: 100.0,
+                    source_atoms: Vec::new(),
+                    order: 1,
+                },
+            ],
+            config: StructureConfig {
+                schema_version: 1,
+                line_tolerance: 2.0,
+                row_tolerance: 2.0,
+                column_tolerance: 2.0,
+                span_tolerance: 2.0,
+                numeric_tolerance: 2.0,
+            },
+        };
+
+        let cells = build_english_cells(&input);
+        let data = cells
+            .iter()
+            .find(|cell| cell.text == "A")
+            .expect("first data row");
+        assert_eq!(data.row, 2);
+        assert_eq!(data.rect.y0, 22.0);
     }
 }
