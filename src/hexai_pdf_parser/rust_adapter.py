@@ -932,6 +932,20 @@ def extract_wired_region(input_data: Dict[str, Any]) -> Dict[str, Any]:
     return _pdf_fast.extract_wired_region(input_data)
 
 
+def recover_personal_credit_tables(input_dto: Mapping[str, Any]) -> Dict[str, Any]:
+    """Run the Rust personal-credit table kernel on an owned page snapshot."""
+    output = _pdf_fast.recover_personal_credit_tables(dict(input_dto))
+    if not isinstance(output, Mapping):
+        raise TypeError("Rust personal-credit output must be a mapping")
+    if output.get("schema_version") != 1:
+        raise ValueError("Rust personal-credit output has invalid schema_version")
+    if not isinstance(output.get("tables"), (list, tuple)):
+        raise TypeError("Rust personal-credit tables must be a sequence")
+    if not isinstance(output.get("diagnostics"), (list, tuple)):
+        raise TypeError("Rust personal-credit diagnostics must be a sequence")
+    return dict(output)
+
+
 def roundtrip_dto(dto_type: str, data: Dict[str, Any]) -> Dict[str, Any]:
     return _pdf_fast.roundtrip_dto(str(dto_type), data)
 

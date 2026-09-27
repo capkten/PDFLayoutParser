@@ -2116,6 +2116,61 @@ impl RowBandDto {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct PersonalCreditInput {
+    pub schema_version: i64,
+    pub snapshot: PageSnapshotDto,
+    pub wired_line_tolerance: f64,
+}
+
+impl PersonalCreditInput {
+    pub fn from_py(dict: &Bound<'_, PyDict>) -> PyResult<Self> {
+        let schema_version = required_i64(dict, "schema_version")?;
+        check_schema_version(schema_version)?;
+        let snapshot = PageSnapshotDto::from_py(&required_dict(dict, "snapshot")?)?;
+        let wired_line_tolerance =
+            extract_finite_f64(&get_req(dict, "wired_line_tolerance")?, "wired_line_tolerance")?;
+        if wired_line_tolerance < 0.0 {
+            return Err(PyValueError::new_err(
+                "Field 'wired_line_tolerance' must be non-negative",
+            ));
+        }
+
+        Ok(Self {
+            schema_version,
+            snapshot,
+            wired_line_tolerance,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PersonalCreditOutput {
+    pub schema_version: i64,
+    pub tables: Vec<TableCandidateDto>,
+    pub diagnostics: Vec<DiagnosticDto>,
+}
+
+impl PersonalCreditOutput {
+    pub fn to_py<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let dict = PyDict::new_bound(py);
+        dict.set_item("schema_version", self.schema_version)?;
+
+        let tables = PyList::empty_bound(py);
+        for table in &self.tables {
+            tables.append(table.to_py(py)?)?;
+        }
+        dict.set_item("tables", tables)?;
+
+        let diagnostics = PyList::empty_bound(py);
+        for diagnostic in &self.diagnostics {
+            diagnostics.append(diagnostic.to_py(py)?)?;
+        }
+        dict.set_item("diagnostics", diagnostics)?;
+        Ok(dict)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct NativeRecoveryInput {
     pub schema_version: i64,
     pub page: PageDto,
