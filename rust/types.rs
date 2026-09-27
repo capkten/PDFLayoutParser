@@ -1778,6 +1778,7 @@ pub struct TableCandidateDto {
     pub rows: i64,
     pub cols: i64,
     pub cells: Vec<CellDto>,
+    pub has_wired_lines: bool,
 }
 
 impl TableCandidateDto {
@@ -1797,6 +1798,10 @@ impl TableCandidateDto {
         for c in cells_list.iter() {
             cells.push(CellDto::from_py(&c.downcast::<PyDict>()?.clone())?);
         }
+        let has_wired_lines = get_opt(dict, "has_wired_lines")?
+            .map(|value| value.extract())
+            .transpose()?
+            .unwrap_or(false);
         Ok(Self {
             schema_version: sv,
             rect,
@@ -1805,6 +1810,7 @@ impl TableCandidateDto {
             rows,
             cols,
             cells,
+            has_wired_lines,
         })
     }
 
@@ -2121,6 +2127,7 @@ pub struct PersonalCreditInput {
     pub snapshot: PageSnapshotDto,
     pub wired_line_tolerance: f64,
     pub candidate_tables: Option<Vec<TableCandidateDto>>,
+    pub supplement_rust_candidates: bool,
 }
 
 impl PersonalCreditInput {
@@ -2154,12 +2161,17 @@ impl PersonalCreditInput {
             }
             None => None,
         };
+        let supplement_rust_candidates = match get_opt(dict, "supplement_rust_candidates")? {
+            Some(value) => value.extract::<bool>()?,
+            None => false,
+        };
 
         Ok(Self {
             schema_version,
             snapshot,
             wired_line_tolerance,
             candidate_tables,
+            supplement_rust_candidates,
         })
     }
 }

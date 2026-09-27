@@ -1,6 +1,6 @@
 use crate::types::{
     CellDto, CharacterDto, DrawingDto, LineDto, NativeSpanDto, OwnedValue, PageDto,
-    PersonalCreditInput, PersonalCreditOutput, Rect4, RegionDto, StructureConfig,
+    PageSnapshotDto, PersonalCreditInput, PersonalCreditOutput, Rect4, RegionDto, StructureConfig,
     TableCandidateDto, WiredRegionInput, WirelessRecoveryInput,
 };
 
@@ -230,6 +230,7 @@ fn candidate_from_cells(cells: Vec<CellDto>, rows: i64, source: &str) -> Option<
         rows,
         cols: 4,
         cells,
+        has_wired_lines: false,
     })
 }
 
@@ -566,6 +567,7 @@ fn wired_candidates(input: &PersonalCreditInput) -> Vec<TableCandidateDto> {
                 rows: cells.iter().map(|cell| cell.row).max().unwrap_or(-1) + 1,
                 cols: cells.iter().map(|cell| cell.col).max().unwrap_or(-1) + 1,
                 cells,
+                has_wired_lines: false,
             })
         })
         .collect()
@@ -575,12 +577,17 @@ fn wireless_candidates(input: &PersonalCreditInput, wired: &[TableCandidateDto])
     let mut regions = input.snapshot.allowed_regions.clone();
     regions.extend(input.snapshot.excluded_regions.clone());
     let first_added_order = regions.len() as i64;
-    regions.extend(wired.iter().map(|table| RegionDto {
-        schema_version: 1,
-        rect: table.rect.clone(),
-        source_order: first_added_order,
-        allowed: false,
-    }));
+    regions.extend(
+        wired
+            .iter()
+            .filter(|table| table_is_wired(table))
+            .map(|table| RegionDto {
+                schema_version: 1,
+                rect: table.rect.clone(),
+                source_order: first_added_order,
+                allowed: false,
+            }),
+    );
     let spans: Vec<NativeSpanDto> = crate::snapshot::collect_native_spans_from_snapshot(
         &input.snapshot,
         None,
@@ -766,28 +773,213 @@ fn split_repeated_records(table: TableCandidateDto) -> Vec<TableCandidateDto> {
                 rows: end - start,
                 cols: table.cols,
                 cells,
+                has_wired_lines: table.has_wired_lines,
             })
         })
         .collect()
 }
 
-fn apply_personal_credit_rules(tables: Vec<TableCandidateDto>) -> Vec<TableCandidateDto> {
+fn without_whitespace(text: &str) -> String {
+    text.chars().filter(|character| !character.is_whitespace()).collect()
+}
+
+fn native_character_bounds(
+    cell: &CellDto,
+    snapshot: &PageSnapshotDto,
+) -> Option<Rect4> {
+    if cell.text.trim().is_empty() {
+        return None;
+    }
+    let mut characters: Vec<&CharacterDto> = snapshot
+        .spans
+        .iter()
+        .flat_map(|span| span.span.characters.iter())
+        .filter(|character| {
+            let x = center_x(&character.rect);
+            let y = center_y(&character.rect);
+            cell.rect.x0 - 0.5 <= x
+                && x <= cell.rect.x1 + 0.5
+                && cell.rect.y0 - 0.5 <= y
+                && y <= cell.rect.y1 + 0.5
+                && !character.text.chars().all(char::is_whitespace)
+        })
+        .collect();
+    characters.sort_by_key(|character| character.order);
+    let text: String = characters
+        .iter()
+        .map(|character| character.text.as_str())
+        .collect();
+    if without_whitespace(&text) != without_whitespace(&cell.text) {
+        return None;
+    }
+    union_rect(characters.iter().map(|character| &character.rect))
+}
+
+fn rounded_rect(mut bounds: Rect4) -> Rect4 {
+    bounds.x0 = crate::geometry::round_one_decimal(bounds.x0);
+    bounds.y0 = crate::geometry::round_one_decimal(bounds.y0);
+    bounds.x1 = crate::geometry::round_one_decimal(bounds.x1);
+    bounds.y1 = crate::geometry::round_one_decimal(bounds.y1);
+    bounds
+}
+
+fn round_grid_boundary(value: f64) -> f64 {
+    (value * 10.0).round() / 10.0
+}
+
+fn normalize_wireless_cell_geometry(
+    mut table: TableCandidateDto,
+    snapshot: &PageSnapshotDto,
+) -> TableCandidateDto {
+    if table.source != "wireless_span_recovery" || table.rows <= 0 || table.cols <= 0 {
+        return table;
+    }
+    let precise_bounds: Vec<Option<Rect4>> = table
+        .cells
+        .iter()
+        .map(|cell| native_character_bounds(cell, snapshot))
+        .collect();
+    for (cell, bounds) in table.cells.iter_mut().zip(&precise_bounds) {
+        if cell.colspan > 1 {
+            if let Some(bounds) = bounds {
+                let close = (cell.rect.x0 - bounds.x0).abs() <= 1.0
+                    && (cell.rect.y0 - bounds.y0).abs() <= 1.0
+                    && (cell.rect.x1 - bounds.x1).abs() <= 1.0
+                    && (cell.rect.y1 - bounds.y1).abs() <= 1.0;
+                if close {
+                    cell.rect = rounded_rect(bounds.clone());
+                }
+            }
+        }
+    }
+
+    let nonempty: Vec<CellDto> = table
+        .cells
+        .iter()
+        .filter(|cell| !cell.text.trim().is_empty())
+        .cloned()
+        .collect();
+    let Some(content_bounds) = union_rect(nonempty.iter().map(|cell| &cell.rect)) else {
+        return table;
+    };
+    let edge_cells = nonempty.clone();
+
+    let columns = table.cols as usize;
+    let rows = table.rows as usize;
+    let mut column_edges = vec![None; columns + 1];
+    column_edges[0] = Some(content_bounds.x0);
+    column_edges[columns] = Some(content_bounds.x1);
+    for boundary in 1..columns {
+        let left = edge_cells
+            .iter()
+            .filter(|cell| cell.colspan == 1 && cell.col + cell.colspan <= boundary as i64)
+            .map(|cell| cell.rect.x1)
+            .reduce(f64::max);
+        let right = edge_cells
+            .iter()
+            .filter(|cell| cell.colspan == 1 && cell.col >= boundary as i64)
+            .map(|cell| cell.rect.x0)
+            .reduce(f64::min);
+        if let (Some(left), Some(right)) = (left, right) {
+            column_edges[boundary] = Some(round_grid_boundary((left + right) / 2.0));
+        }
+    }
+
+    let mut row_centers = vec![None; rows];
+    for row in 0..rows {
+        let centers: Vec<f64> = edge_cells
+            .iter()
+            .filter(|cell| cell.row == row as i64 && cell.rowspan == 1)
+            .map(|cell| center_y(&cell.rect))
+            .collect();
+        if !centers.is_empty() {
+            row_centers[row] = Some(centers.iter().sum::<f64>() / centers.len() as f64);
+        }
+    }
+    let mut row_edges = vec![None; rows + 1];
+    row_edges[0] = Some(content_bounds.y0);
+    row_edges[rows] = Some(content_bounds.y1);
+    for boundary in 1..rows {
+        if let (Some(above), Some(below)) = (row_centers[boundary - 1], row_centers[boundary]) {
+            row_edges[boundary] = Some(crate::geometry::round_one_decimal((above + below) / 2.0));
+        }
+    }
+
+    for cell in &mut table.cells {
+        if !cell.text.trim().is_empty() || cell.row < 0 || cell.col < 0 {
+            continue;
+        }
+        let col = cell.col as usize;
+        let row = cell.row as usize;
+        let col_end = col.saturating_add(cell.colspan.max(1) as usize).min(columns);
+        let row_end = row.saturating_add(cell.rowspan.max(1) as usize).min(rows);
+        if col_end <= columns {
+            if let (Some(x0), Some(x1)) = (column_edges[col], column_edges[col_end]) {
+                cell.rect.x0 = if col == 0 || (cell.rect.x0 - x0).abs() > 0.5 {
+                    x0
+                } else {
+                    cell.rect.x0
+                };
+                cell.rect.x1 = if col_end == columns || (cell.rect.x1 - x1).abs() > 0.5 {
+                    x1
+                } else {
+                    cell.rect.x1
+                };
+            }
+        }
+        if row_end <= rows {
+            if let (Some(y0), Some(y1)) = (row_edges[row], row_edges[row_end]) {
+                cell.rect.y0 = if row == 0 || (cell.rect.y0 - y0).abs() > 0.5 {
+                    y0
+                } else {
+                    cell.rect.y0
+                };
+                cell.rect.y1 = if row_end == rows || (cell.rect.y1 - y1).abs() > 0.5 {
+                    y1
+                } else {
+                    cell.rect.y1
+                };
+            }
+        }
+    }
+    if let Some(bounds) = union_rect(table.cells.iter().map(|cell| &cell.rect)) {
+        table.rect = bounds;
+    }
+    table
+}
+
+fn apply_personal_credit_rules(
+    tables: Vec<TableCandidateDto>,
+    snapshot: &PageSnapshotDto,
+) -> Vec<TableCandidateDto> {
     let mut filtered = Vec::new();
     for table in tables {
         let table = trim_query_table(table);
         if is_numbered_prose_candidate(&table) {
             continue;
         }
-        let is_wired = matches!(
-            table.source.as_str(),
-            "line_projection" | "hybrid_line_span_recovery" | "PyMuPDF.find_tables"
-        );
+        let is_wired = table_is_wired(&table);
         if !is_wired && is_report_metadata_candidate(&table) {
             continue;
         }
-        filtered.extend(split_repeated_records(table));
+        filtered.extend(
+            split_repeated_records(table)
+                .into_iter()
+                .map(|table| normalize_wireless_cell_geometry(table, snapshot)),
+        );
     }
     filtered
+}
+
+fn is_wired_source(source: &str) -> bool {
+    matches!(
+        source,
+        "line_projection" | "hybrid_line_span_recovery" | "PyMuPDF.find_tables"
+    )
+}
+
+fn table_is_wired(table: &TableCandidateDto) -> bool {
+    table.has_wired_lines || is_wired_source(&table.source)
 }
 
 fn recover_query_table(
@@ -1123,6 +1315,7 @@ fn row_text_without_ascii_spaces(row: &[QueryItem]) -> String {
 }
 
 pub fn recover(input: PersonalCreditInput) -> PersonalCreditOutput {
+    let has_upstream_candidates = input.candidate_tables.is_some();
     let items = query_items(&input);
     let rows = query_rows(&items);
     let header_indices: Vec<usize> = rows
@@ -1137,13 +1330,41 @@ pub fn recover(input: PersonalCreditInput) -> PersonalCreditOutput {
         .collect();
 
     let mut tables = if let Some(candidates) = input.candidate_tables.clone() {
-        candidates
+        let mut tables = candidates;
+        if input.supplement_rust_candidates {
+            let supplemental = wireless_candidates(&input, &tables);
+            for candidate in supplemental {
+                if !tables
+                    .iter()
+                    .any(|existing| tables_overlap(existing, &candidate))
+                {
+                    tables.push(candidate);
+                }
+            }
+        }
+        tables
     } else {
         let mut wired = wired_candidates(&input);
         let wireless = wireless_candidates(&input, &wired);
         wired.extend(wireless);
         wired
     };
+    if let Some(first_header) = header_indices.first().copied() {
+        let first_bound = section_indices
+            .iter()
+            .copied()
+            .filter(|index| *index < first_header)
+            .min()
+            .unwrap_or(first_header);
+        if first_bound > 0 {
+            if let Some(table) = recover_headerless_query_table(
+                &rows[..first_bound],
+                input.snapshot.page.width,
+            ) {
+                tables.push(table);
+            }
+        }
+    }
     if header_indices.is_empty() {
         if let Some(table) = recover_headerless_query_table(&rows, input.snapshot.page.width) {
             tables.push(table);
@@ -1186,14 +1407,16 @@ pub fn recover(input: PersonalCreditInput) -> PersonalCreditOutput {
         table.source == "personal_query_recovery"
             || !query_tables.iter().any(|query| tables_overlap(table, query))
     });
-    let mut tables = apply_personal_credit_rules(tables);
+    let mut tables = apply_personal_credit_rules(tables, &input.snapshot);
 
-    tables.sort_by(|left, right| {
-        left.rect
-            .y0
-            .partial_cmp(&right.rect.y0)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    if !has_upstream_candidates {
+        tables.sort_by(|left, right| {
+            left.rect
+                .y0
+                .partial_cmp(&right.rect.y0)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+    }
     PersonalCreditOutput {
         schema_version: 1,
         tables,

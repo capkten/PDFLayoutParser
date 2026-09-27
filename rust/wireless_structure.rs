@@ -1253,6 +1253,7 @@ fn build_candidate_from_tracks(
         rows: row_count as i64,
         cols: active_columns.len() as i64,
         cells,
+        has_wired_lines: false,
     })
 }
 
@@ -4885,6 +4886,7 @@ pub fn recover_wireless_tables(input: WirelessRecoveryInput) -> WirelessRecovery
             rows: num_rows as i64,
             cols: num_cols as i64,
             cells,
+            has_wired_lines: false,
         };
         candidates.push(candidate);
     }

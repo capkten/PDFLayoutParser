@@ -31,10 +31,16 @@ def _query_fixture(
     include_header: bool = True,
     include_record: bool = True,
     include_title: bool = True,
+    include_lead_record: bool = False,
     record_count: int | None = None,
 ):
     document = fitz.open()
     page = document.new_page(width=595, height=842)
+    if include_lead_record:
+        page.insert_text((50, 45), "44", fontsize=10, fontname="china-s")
+        page.insert_text((150, 45), "2024年09月02日", fontsize=10, fontname="china-s")
+        page.insert_text((260, 45), "江南农村商业银行", fontsize=10, fontname="china-s")
+        page.insert_text((420, 45), "贷后管理", fontsize=10, fontname="china-s")
     if include_title:
         page.insert_text((260, 80), "本人查询记录明细", fontsize=10, fontname="china-s")
     if include_header:
@@ -168,6 +174,64 @@ def test_rust_personal_credit_recovers_wired_table_like_python():
     assert result["tables"] == expected
 
 
+def test_rust_personal_credit_supplements_missing_wireless_candidates():
+    from hexai_pdf_parser.extractors.personal_credit_report import (
+        PersonalCreditReportTableExtractor,
+    )
+
+    document = fitz.open()
+    page = document.new_page(width=420, height=180)
+    page.insert_text((40, 45), "项目", fontsize=10, fontname="china-s")
+    page.insert_text((260, 45), "金额", fontsize=10, fontname="china-s")
+    for y, label, value in [(72, "收入", "1200"), (99, "支出", "800"), (126, "结余", "400")]:
+        page.insert_text((40, y), label, fontsize=10, fontname="china-s")
+        page.insert_text((260, y), value, fontsize=10, fontname="china-s")
+    snapshot = capture_page_snapshot(page, page_index=0)
+    expected = [
+        _table_to_candidate(table)
+        for table in PersonalCreditReportTableExtractor(
+            use_ml_table_detector=False
+        ).extract(page)
+    ]
+    input_dto = {
+        "schema_version": 1,
+        "snapshot": page_snapshot_to_rust_input(snapshot),
+        "wired_line_tolerance": 2.2,
+        "candidate_tables": [],
+        "supplement_rust_candidates": True,
+    }
+    try:
+        result = rust_adapter.recover_personal_credit_tables(input_dto)
+    finally:
+        document.close()
+
+    assert len(expected) == 1
+    assert result["tables"] == expected
+
+
+def test_personal_credit_skips_rust_fullpage_supplement_when_disabled():
+    document = fitz.open()
+    page = document.new_page(width=420, height=180)
+    page.insert_text((40, 45), "项目", fontsize=10, fontname="china-s")
+    page.insert_text((260, 45), "金额", fontsize=10, fontname="china-s")
+    for y, label, value in [(72, "收入", "1200"), (99, "支出", "800"), (126, "结余", "400")]:
+        page.insert_text((40, y), label, fontsize=10, fontname="china-s")
+        page.insert_text((260, y), value, fontsize=10, fontname="china-s")
+    snapshot = capture_page_snapshot(page, page_index=0)
+    input_dto = {
+        "schema_version": 1,
+        "snapshot": page_snapshot_to_rust_input(snapshot),
+        "wired_line_tolerance": 2.2,
+        "candidate_tables": [],
+        "supplement_rust_candidates": False,
+    }
+    document.close()
+
+    result = rust_adapter.recover_personal_credit_tables(input_dto)
+
+    assert result["tables"] == []
+
+
 def test_personal_credit_rust_entry_accepts_upstream_table_candidates():
     from hexai_pdf_parser.core.models import BBox, Cell, Table
 
@@ -191,6 +255,50 @@ def test_personal_credit_rust_entry_accepts_upstream_table_candidates():
     result = rust_adapter.recover_personal_credit_tables(input_dto)
 
     assert result["tables"] == [expected]
+
+
+def test_personal_credit_adapter_roundtrips_table_candidates():
+    from hexai_pdf_parser.core.models import BBox, Cell, Table
+
+    table = Table(
+        bbox=BBox(20.0, 20.0, 180.0, 60.0),
+        rows=2,
+        cols=2,
+        cells=[Cell("A", 0, 0, BBox(20.0, 20.0, 80.0, 40.0))],
+        confidence=0.9,
+        source="line_projection",
+    )
+    expected = _table_to_candidate(table)
+
+    restored = rust_adapter.personal_credit_tables_to_project(
+        {"schema_version": 1, "tables": [expected], "diagnostics": []}
+    )
+
+    assert [_table_to_candidate(item) for item in restored] == [expected]
+
+
+def test_personal_credit_snapshot_adapter_includes_candidate_tables():
+    from hexai_pdf_parser.core.models import BBox, Cell, Table
+
+    document = fitz.open()
+    try:
+        page = document.new_page(width=300, height=160)
+        snapshot = capture_page_snapshot(page, page_index=0)
+    finally:
+        document.close()
+    table = Table(
+        bbox=BBox(20.0, 20.0, 180.0, 60.0),
+        rows=1,
+        cols=1,
+        cells=[Cell("A", 0, 0, BBox(20.0, 20.0, 180.0, 60.0))],
+        source="wireless_span_recovery",
+    )
+
+    result = rust_adapter.personal_credit_snapshot_to_rust_input(
+        snapshot, 2.2, [table]
+    )
+
+    assert result["candidate_tables"] == [_table_to_candidate(table)]
 
 
 def test_rust_personal_credit_filters_numbered_prose_candidate():
@@ -284,6 +392,37 @@ def test_rust_personal_credit_matches_query_continuation_like_python(fixture_opt
         document.close()
 
     assert result["tables"] == expected
+
+
+def test_rust_personal_credit_recovers_lead_continuation_before_query_header():
+    document, input_dto, expected = _query_fixture(include_lead_record=True)
+    try:
+        result = rust_adapter.recover_personal_credit_tables(input_dto)
+    finally:
+        document.close()
+
+    assert len(expected) == 2
+    assert result["tables"] == expected
+
+
+def test_rust_personal_credit_keeps_upstream_order_before_query_tables():
+    from hexai_pdf_parser.core.models import BBox, Cell, Table
+
+    document, input_dto, query_tables = _query_fixture()
+    candidate = Table(
+        bbox=BBox(20.0, 300.0, 180.0, 340.0),
+        rows=1,
+        cols=1,
+        cells=[Cell("Earlier candidate", 0, 0, BBox(20.0, 300.0, 180.0, 340.0))],
+        source="wireless_span_recovery",
+    )
+    input_dto["candidate_tables"] = [_table_to_candidate(candidate)]
+    try:
+        result = rust_adapter.recover_personal_credit_tables(input_dto)
+    finally:
+        document.close()
+
+    assert result["tables"] == [_table_to_candidate(candidate), *query_tables]
 
 
 @pytest.mark.parametrize("tolerance", [math.nan, math.inf, -1.0])

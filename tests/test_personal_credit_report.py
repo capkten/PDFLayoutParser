@@ -569,6 +569,8 @@ def test_report_metadata_filter_does_not_remove_wired_tables(
     )
     from hexai_pdf_parser.tables.table_extractor import TableExtractor
 
+    monkeypatch.setenv("PDF_RUST_MODE_PERSONAL_CREDIT", "python")
+
     bbox = BBox(40, 30, 500, 90)
     line_metadata = (
         {
@@ -681,4 +683,229 @@ def test_extract_page_char_words_exact_bbox():
     # 严格检验起始坐标是真实字符的 154.36，而不是被大量空格估算推移的坐标
     assert words[1][0] == 154.36
     assert words[1][2] == 186.0
+
+
+def test_personal_credit_rust_mode_routes_candidates_through_rust_adapter(monkeypatch):
+    from hexai_pdf_parser.core.models import BBox, Cell, Table
+    from hexai_pdf_parser.extractors.personal_credit_report import (
+        PersonalCreditReportTableExtractor,
+    )
+    from hexai_pdf_parser.tables.table_extractor import TableExtractor
+
+    from hexai_pdf_parser import rust_adapter
+
+    candidate = Table(
+        bbox=BBox(20.0, 20.0, 180.0, 60.0),
+        rows=2,
+        cols=2,
+        cells=[
+            Cell("Field", 0, 0, BBox(20.0, 20.0, 80.0, 40.0)),
+            Cell("Value", 0, 1, BBox(80.0, 20.0, 180.0, 40.0)),
+            Cell("Name", 1, 0, BBox(20.0, 40.0, 80.0, 60.0)),
+            Cell("Alice", 1, 1, BBox(80.0, 40.0, 180.0, 60.0)),
+        ],
+        confidence=0.9,
+        source="line_projection",
+    )
+    monkeypatch.setenv("PDF_RUST_MODE_PERSONAL_CREDIT", "rust")
+    monkeypatch.setenv("PDF_RUST_MODE", "python")
+    monkeypatch.setattr(
+        TableExtractor,
+        "extract",
+        lambda self, page, *args, **kwargs: [candidate],
+    )
+    captured = {}
+
+    def fake_rust(input_dto):
+        captured.update(input_dto)
+        return {
+            "schema_version": 1,
+            "tables": input_dto["candidate_tables"],
+            "diagnostics": [],
+        }
+
+    monkeypatch.setattr(
+        rust_adapter,
+        "recover_personal_credit_tables",
+        fake_rust,
+    )
+    document = fitz.open()
+    page = document.new_page(width=300, height=160)
+    try:
+        result = PersonalCreditReportTableExtractor(
+            use_ml_table_detector=False
+        ).extract(page)
+    finally:
+        document.close()
+
+    assert captured["candidate_tables"][0]["source"] == "line_projection"
+    assert captured["supplement_rust_candidates"] is True
+    assert result == [candidate]
+
+
+def test_personal_credit_default_route_uses_rust_without_changing_generic_default(monkeypatch):
+    from hexai_pdf_parser.core.models import BBox, Cell, Table
+    from hexai_pdf_parser.extractors.personal_credit_report import (
+        PersonalCreditReportTableExtractor,
+    )
+    from hexai_pdf_parser.tables.table_extractor import TableExtractor
+    from hexai_pdf_parser import rust_adapter
+
+    monkeypatch.delenv("PDF_RUST_MODE_PERSONAL_CREDIT", raising=False)
+    monkeypatch.delenv("PDF_RUST_MODE", raising=False)
+    assert rust_adapter.get_rust_mode() == "python"
+    assert rust_adapter.get_rust_mode("personal-credit") == "rust"
+
+    candidate = Table(
+        bbox=BBox(20.0, 20.0, 180.0, 60.0),
+        rows=1,
+        cols=1,
+        cells=[Cell("A", 0, 0, BBox(20.0, 20.0, 180.0, 60.0))],
+        source="wireless_span_recovery",
+    )
+    monkeypatch.setattr(
+        TableExtractor,
+        "extract",
+        lambda self, page, *args, **kwargs: [candidate],
+    )
+    captured = {}
+
+    def fake_rust(input_dto):
+        captured.update(input_dto)
+        return {
+            "schema_version": 1,
+            "tables": input_dto["candidate_tables"],
+            "diagnostics": [],
+        }
+
+    monkeypatch.setattr(rust_adapter, "recover_personal_credit_tables", fake_rust)
+    document = fitz.open()
+    page = document.new_page(width=300, height=160)
+    try:
+        result = PersonalCreditReportTableExtractor(
+            use_ml_table_detector=False
+        ).extract(page)
+    finally:
+        document.close()
+
+    assert captured["supplement_rust_candidates"] is True
+    assert result == [candidate]
+
+
+def test_personal_credit_rust_mode_uses_native_kernel(monkeypatch):
+    from hexai_pdf_parser.core.models import BBox, Cell, Table
+    from hexai_pdf_parser import rust_adapter
+    from hexai_pdf_parser.extractors.personal_credit_report import (
+        PersonalCreditReportTableExtractor,
+    )
+    from hexai_pdf_parser.tables.table_extractor import TableExtractor
+
+    candidate = Table(
+        bbox=BBox(20.0, 20.0, 180.0, 60.0),
+        rows=1,
+        cols=1,
+        cells=[Cell("A", 0, 0, BBox(20.0, 20.0, 180.0, 60.0))],
+        source="wireless_span_recovery",
+    )
+    monkeypatch.setenv("PDF_RUST_MODE_PERSONAL_CREDIT", "rust")
+    monkeypatch.setenv("PDF_RUST_MODE", "python")
+    monkeypatch.setattr(
+        TableExtractor,
+        "extract",
+        lambda self, page, *args, **kwargs: [candidate],
+    )
+    rust_adapter.clear_diagnostics()
+    document = fitz.open()
+    page = document.new_page(width=300, height=160)
+    try:
+        result = PersonalCreditReportTableExtractor(
+            use_ml_table_detector=False
+        ).extract(page)
+    finally:
+        document.close()
+
+    assert result == [candidate]
+    assert rust_adapter.get_diagnostics() == []
+
+
+def test_personal_credit_rust_normalizes_sparse_wireless_cell_geometry(monkeypatch):
+    from pathlib import Path
+    from hexai_pdf_parser import rust_adapter
+    from hexai_pdf_parser.extractors.personal_credit_report import (
+        PersonalCreditReportTableExtractor,
+    )
+    from hexai_pdf_parser.pdf_snapshot import capture_page_snapshot
+    from hexai_pdf_parser.tables.table_extractor import TableExtractor
+
+    pdf_path = Path(r"D:\codes\PDFLayoutParser\个人信用报告\个人信用报告(本人简版).pdf")
+    assert pdf_path.is_file()
+    monkeypatch.setenv("PDF_RUST_MODE", "python")
+    monkeypatch.setenv("PDF_RUST_MODE_PERSONAL_CREDIT", "rust")
+    document = fitz.open(pdf_path)
+    try:
+        page = document[3]
+        snapshot = capture_page_snapshot(page, page_index=3)
+        extractor = PersonalCreditReportTableExtractor(
+            use_ml_table_detector=False
+        )
+        candidate = next(
+            table
+            for table in TableExtractor.extract(
+                extractor,
+                page,
+                page_already_normalized=True,
+            )
+            if table.source == "wireless_span_recovery"
+            and table.rows == 9
+            and table.cols == 2
+            and abs(table.bbox.y0 - 325.1) < 0.01
+        )
+        input_dto = rust_adapter.personal_credit_snapshot_to_rust_input(
+            snapshot,
+            2.2,
+            [candidate],
+            supplement_rust_candidates=False,
+        )
+        raw_output = rust_adapter.recover_personal_credit_tables(input_dto)
+    finally:
+        document.close()
+
+    result = next(
+        table
+        for table in raw_output["tables"]
+        if table["source"] == "wireless_span_recovery"
+        and abs(table["rect"]["y0"] - 325.1) < 0.01
+    )
+    assert result["rect"]["x1"] == 546.3
+    assert result["rect"]["y1"] == 398.6
+    empty_top = next(cell for cell in result["cells"] if cell["row"] == 0 and cell["col"] == 1)
+    empty_bottom = next(cell for cell in result["cells"] if cell["row"] == 4 and cell["col"] == 0)
+    assert empty_top["rect"] == {
+        "schema_version": 1,
+        "x0": 230.2,
+        "y0": 325.1,
+        "x1": 546.3,
+        "y1": 338.9,
+    }
+    assert empty_bottom["rect"] == {
+        "schema_version": 1,
+        "x0": 51.0,
+        "y0": 390.2,
+        "x1": 230.2,
+        "y1": 398.6,
+    }
+    second_table = next(
+        table
+        for table in raw_output["tables"]
+        if table["source"] == "wireless_span_recovery"
+        and abs(table["rect"]["y0"] - 421.3) < 0.01
+    )
+    empty_right = next(
+        cell for cell in second_table["cells"] if cell["row"] == 2 and cell["col"] == 1
+    )
+    empty_left = next(
+        cell for cell in second_table["cells"] if cell["row"] == 3 and cell["col"] == 0
+    )
+    assert empty_right["rect"]["x0"] == 287.7
+    assert empty_left["rect"]["x1"] == 287.7
 

@@ -717,6 +717,13 @@ class PersonalCreditReportTableExtractor(TableExtractor):
         page: fitz.Page,
         excluded_regions: Optional[List[BBox]] = None,
     ) -> List[Table]:
+        from hexai_pdf_parser import rust_adapter
+
+        if rust_adapter.get_rust_mode("personal-credit") != "python":
+            return super()._extract_via_text_alignment(
+                page,
+                excluded_regions=excluded_regions,
+            )
         tables = super()._extract_via_text_alignment(
             page,
             excluded_regions=excluded_regions,
@@ -744,9 +751,11 @@ class PersonalCreditReportTableExtractor(TableExtractor):
             for split in self._split_repeated_record_table(table)
         ]
 
-    def extract(self, page: fitz.Page, *args, **kwargs) -> List[Table]:
-        """Ensure query tables retain section-title rows and replace rough candidates."""
-        tables = super().extract(page, *args, **kwargs)
+    def _apply_personal_credit_rules(
+        self,
+        tables: List[Table],
+        page: fitz.Page,
+    ) -> List[Table]:
         query_tables = _make_query_tables(page)
         if query_tables:
             tables = [
@@ -769,6 +778,49 @@ class PersonalCreditReportTableExtractor(TableExtractor):
             for table in filtered
             for split in self._split_repeated_record_table(table)
         ]
+
+    def extract(self, page: fitz.Page, *args, **kwargs) -> List[Table]:
+        """Ensure query tables retain section-title rows and replace rough candidates."""
+        from hexai_pdf_parser import rust_adapter
+
+        mode = rust_adapter.get_rust_mode("personal-credit")
+        if mode == "python":
+            tables = super().extract(page, *args, **kwargs)
+            return self._apply_personal_credit_rules(tables, page)
+
+        from hexai_pdf_parser.page_normalizer import normalize_page_rotation
+        from hexai_pdf_parser.pdf_snapshot import capture_page_snapshot
+
+        if not kwargs.get("page_already_normalized", False):
+            normalize_page_rotation(page)
+        kwargs["page_already_normalized"] = True
+        snapshot = getattr(page, "_cached_snapshot", None)
+        if snapshot is None:
+            snapshot = capture_page_snapshot(
+                page,
+                page_index=int(getattr(page, "number", 0)),
+            )
+            try:
+                page._cached_snapshot = snapshot
+            except (AttributeError, TypeError):
+                pass
+
+        candidates = super().extract(page, *args, **kwargs)
+        input_dto = rust_adapter.personal_credit_snapshot_to_rust_input(
+            snapshot,
+            self._wired_extractor.line_tolerance,
+            candidates,
+            supplement_rust_candidates=mode in {"shadow", "rust"},
+        )
+        return rust_adapter.run_python_or_rust(
+            mode=mode,
+            python_fn=lambda: self._apply_personal_credit_rules(candidates, page),
+            rust_fn=lambda dto: rust_adapter.personal_credit_tables_to_project(
+                rust_adapter.recover_personal_credit_tables(dto)
+            ),
+            input_dto=input_dto,
+            path="personal-credit.extract_tables",
+        )
 
 
 

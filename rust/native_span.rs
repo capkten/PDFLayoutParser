@@ -1377,6 +1377,7 @@ pub fn recover_native_candidates(input: NativeRecoveryInput) -> NativeRecoveryOu
             rows: rows as i64,
             cols: cols as i64,
             cells: Vec::new(),
+            has_wired_lines: false,
         });
     }
 
