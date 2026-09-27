@@ -231,6 +231,10 @@ fn is_latin_body_text(text: &str) -> bool {
     has_latin && !has_cjk
 }
 
+fn has_ascii_alpha(text: &str) -> bool {
+    text.chars().any(|character| character.is_ascii_alphabetic())
+}
+
 fn is_numeric_body_atom_text(text: &str) -> bool {
     has_numeric_character(text)
         && !is_structural_header_text(text)
@@ -1593,6 +1597,12 @@ fn merge_source_contiguous_vertical_cells(
                 || candidate.colspan != current.colspan
                 || candidate.rowspan != 1
                 || candidate.text.trim().is_empty()
+            {
+                continue;
+            }
+            if has_ascii_alpha(&current.text) != has_ascii_alpha(&candidate.text)
+                && !is_numeric_body_text(&current.text)
+                && !is_numeric_body_text(&candidate.text)
             {
                 continue;
             }
@@ -3003,7 +3013,7 @@ fn wrapped_leaf_header_span(
             .insert(column);
     }
     let sibling_support = sibling_columns_by_row.values().any(|columns| columns.len() >= 2);
-    (sibling_support || candidate.rowspan > 1).then_some((span_start, end))
+    sibling_support.then_some((span_start, end))
 }
 
 fn grouped_mixed_leaf_header_span(
@@ -6298,6 +6308,17 @@ mod tests {
     }
 
     #[test]
+    fn test_wrapped_leaf_header_requires_sibling_support_before_collapsing_rows() {
+        let cells = vec![
+            make_cell("最近\n十二\n个月", 0, 1, 3, 1),
+            make_cell("方法", 1, 0, 1, 1),
+            make_cell("正文", 3, 0, 1, 1),
+        ];
+
+        assert_eq!(wrapped_leaf_header_span(&cells, 0, 3), None);
+    }
+
+    #[test]
     fn test_header_body_start_keeps_dense_second_header_row_before_leaf_row() {
         let cells = vec![
             make_cell("parent", 0, 4, 1, 2),
@@ -6639,6 +6660,66 @@ mod tests {
 
         assert_eq!(cells.len(), 2);
         assert!(cells.iter().all(|cell| cell.rowspan == 1));
+    }
+
+    #[test]
+    fn test_merge_source_contiguous_vertical_cells_rejects_latin_cjk_row_join() {
+        let source_cell = |text: &str, row: i64, source_ref: i64| -> CellDto {
+            let mut cell = make_cell(text, row, 0, 1, 1);
+            cell.source = Some(PhysicalCell {
+                schema_version: 1,
+                text: text.to_string(),
+                rect: cell.rect.clone(),
+                row,
+                col: 0,
+                colspan: 1,
+                source_refs: vec![source_ref],
+            });
+            cell
+        };
+        let mut cells = vec![source_cell("PLC", 0, 0), source_cell("集成电路关键", 1, 1)];
+        cells[1].rect.y0 = 5.0;
+        cells[1].rect.y1 = 15.0;
+        let second_rect = cells[1].rect.clone();
+        if let Some(source) = cells[1].source.as_mut() {
+            source.rect = second_rect;
+        }
+
+        merge_source_contiguous_vertical_cells(&mut cells, None, "row_interleaved", None);
+
+        assert_eq!(cells.len(), 2);
+        assert!(cells.iter().all(|cell| cell.rowspan == 1));
+    }
+
+    #[test]
+    fn test_merge_source_contiguous_vertical_cells_rejects_mixed_latin_cjk_chain() {
+        let source_cell = |text: &str, row: i64, source_ref: i64| -> CellDto {
+            let mut cell = make_cell(text, row, 0, 1, 1);
+            cell.source = Some(PhysicalCell {
+                schema_version: 1,
+                text: text.to_string(),
+                rect: cell.rect.clone(),
+                row,
+                col: 0,
+                colspan: 1,
+                source_refs: vec![source_ref],
+            });
+            cell
+        };
+        let mut cells = vec![
+            source_cell("项目芯片项目", 0, 0),
+            source_cell("SOA\nEML", 1, 1),
+        ];
+        cells[1].rect.y0 = 5.0;
+        cells[1].rect.y1 = 15.0;
+        let second_rect = cells[1].rect.clone();
+        if let Some(source) = cells[1].source.as_mut() {
+            source.rect = second_rect;
+        }
+
+        merge_source_contiguous_vertical_cells(&mut cells, None, "row_interleaved", None);
+
+        assert_eq!(cells.len(), 2);
     }
 
     #[test]
