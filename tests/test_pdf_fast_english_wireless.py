@@ -416,6 +416,44 @@ def test_build_general_wireless_cells():
     assert "1000" in texts
 
 
+
+def test_build_english_cells_uses_supplied_logical_background_rows_for_wrapped_text():
+    """One Python logical row may contain vertically wrapped words."""
+    input_dto = {
+        "schema_version": 1,
+        "region": {
+            "schema_version": 1,
+            "rect": {"schema_version": 1, "x0": 0.0, "y0": 0.0, "x1": 200.0, "y1": 40.0},
+            "source_order": 0,
+            "allowed": True,
+        },
+        "words": [
+            {"schema_version": 1, "text": "When seeking", "rect": {"schema_version": 1, "x0": 10.0, "y0": 5.0, "x1": 80.0, "y1": 12.0}, "order": 0, "block": None, "line": None},
+            {"schema_version": 1, "text": "a mandate", "rect": {"schema_version": 1, "x0": 10.0, "y0": 20.0, "x1": 70.0, "y1": 27.0}, "order": 1, "block": None, "line": None},
+            {"schema_version": 1, "text": "Disclosure", "rect": {"schema_version": 1, "x0": 110.0, "y0": 5.0, "x1": 175.0, "y1": 12.0}, "order": 2, "block": None, "line": None},
+            {"schema_version": 1, "text": "return", "rect": {"schema_version": 1, "x0": 110.0, "y0": 20.0, "x1": 150.0, "y1": 27.0}, "order": 3, "block": None, "line": None},
+        ],
+        "backgrounds": [
+            {"schema_version": 1, "rect": {"schema_version": 1, "x0": 0.0, "y0": 0.0, "x1": 200.0, "y1": 30.0}, "color": 0.5, "opacity": None, "source_order": 0},
+        ],
+        "horizontal_lines": [],
+        "config": {
+            "schema_version": 1,
+            "line_tolerance": 2.0,
+            "row_tolerance": 2.0,
+            "column_tolerance": 2.0,
+            "span_tolerance": 2.0,
+            "numeric_tolerance": 2.0,
+        },
+    }
+
+    cells = rust_adapter.build_english_cells(input_dto)
+
+    assert max(cell["row"] for cell in cells) == 0
+    assert {cell["text"] for cell in cells if cell["text"]} == {
+        "When seeking a mandate",
+        "Disclosure return",
+    }
 def test_build_legacy_text_alignment():
     """Test legacy text alignment reconstruction with group header."""
     words = [

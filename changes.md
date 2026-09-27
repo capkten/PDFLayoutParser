@@ -2,6 +2,12 @@
 
 ## 2026-09-27
 
+- **Page 337 英文无线表格 Rust 行契约对齐**：
+  - **根因**：Python `EnglishTableExtractor._build_wireless_table()` 已将同一数据行内的垂直折行文字封装在同一个 `_RowData`/背景带中；Rust `rust/english_wireless.rs::build_english_cells()` 原先直接以 `cluster_word_rows(..., 4.0)` 按词中心聚类，忽略传入的数据背景带，Page 337 的 10 个逻辑行被拆成 16 行。
+  - **修复**：新增 `cluster_english_rows()`，仅对 `color.is_some()` 的数据背景带按其几何范围归属文字并形成逻辑行；无色表头仍走原有 4pt 聚类和表头压缩，避免改变既有多级表头语义。未落入背景带的词保留旧聚类兜底。
+  - **约束**：仅修改 Rust 英文无线行聚类和对应最小回归测试，不回读 `page.get_text("words")`，不修改 Python 路径。
+  - **验证**：新增 `test_build_english_cells_uses_supplied_logical_background_rows_for_wrapped_text`，修复前 RED、修复后 GREEN；Rust 表头压缩 focused unit GREEN。Page 337 独立 Python/Rust 重跑后 tables JSON 结构与 Cell signature 完全一致：`english_general_wireless`、`10x4`、`36 cells`、bbox `[44.3,206.0,549.7,458.4]`；Rust 输出目录 `D:\codes\PDFLayoutParser\output\english_337_340_rust_fix_20260927`，JSON `pages/page-337.json`、可视化 `tables/page-337.png`。
+
 - **Page 482 Rust 中文无线表格竖排单字链 parity 修复**：
   - 根因：第 13 列 `减值准备期末余额` 的 8 个 native atom 同属 block=9、source line=0..7 且 flow 连续；Rust 单字 CJK 续行保护使其停留为 8 个物理行，Python 则合并为一个表头 Cell，最终 Rust 产出 10x13 而 Python 为 5x13。
   - 修复：仅对 row=0 起始、同列同几何、同 source block 且连续 source line/flow 的证据完整 CJK 竖排链一次性合并；逻辑 row-start 与表头拓扑随后保留叶子行和正文边界，避免中间两两合并造成 occupancy conflict。其他路径不回读 words、不改 Python。

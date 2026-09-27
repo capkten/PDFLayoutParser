@@ -395,6 +395,77 @@ fn cluster_word_rows<'a>(words: &'a [WordDto], tolerance: f64) -> Vec<(f64, Vec<
     rows
 }
 
+fn cluster_english_rows<'a>(input: &'a EnglishGridInput) -> Vec<(f64, Vec<&'a WordDto>)> {
+    let colored_backgrounds: Vec<(usize, &BackgroundDto)> = input
+        .backgrounds
+        .iter()
+        .enumerate()
+        .filter(|(_, background)| background.color.is_some())
+        .collect();
+    if colored_backgrounds.is_empty() {
+        return cluster_word_rows(&input.words, 4.0);
+    }
+
+    let mut rows: Vec<(f64, Vec<&'a WordDto>)> = colored_backgrounds
+        .iter()
+        .map(|(_, background)| {
+            (
+                (background.rect.y0 + background.rect.y1) / 2.0,
+                Vec::new(),
+            )
+        })
+        .collect();
+    let mut assigned = vec![false; input.words.len()];
+
+    for (word_index, word) in input.words.iter().enumerate() {
+        let center = center_y(&word.rect);
+        let target = colored_backgrounds
+            .iter()
+            .enumerate()
+            .filter(|(_, (_, background))| {
+                center >= background.rect.y0 - 0.01 && center <= background.rect.y1 + 0.01
+            })
+            .min_by(|(_, (_, left)), (_, (_, right))| {
+                let left_distance = (center - (left.rect.y0 + left.rect.y1) / 2.0).abs();
+                let right_distance = (center - (right.rect.y0 + right.rect.y1) / 2.0).abs();
+                left_distance
+                    .partial_cmp(&right_distance)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .map(|(index, _)| index);
+        if let Some(row_index) = target {
+            rows[row_index].1.push(word);
+            assigned[word_index] = true;
+        }
+    }
+
+    let unassigned: Vec<&'a WordDto> = input
+        .words
+        .iter()
+        .enumerate()
+        .filter_map(|(index, word)| (!assigned[index]).then_some(word))
+        .collect();
+    let mut fallback: Vec<(f64, Vec<&'a WordDto>)> = Vec::new();
+    for word in unassigned {
+        let center = center_y(&word.rect);
+        if let Some((_row_y, row_words)) = fallback
+            .iter_mut()
+            .find(|(row_y, _)| (center - *row_y).abs() <= 4.0)
+        {
+            row_words.push(word);
+        } else {
+            fallback.push((center, vec![word]));
+        }
+    }
+    rows.extend(fallback);
+    rows.retain(|(_, words)| !words.is_empty());
+    rows.sort_by(|left, right| {
+        left.0
+            .partial_cmp(&right.0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    rows
+}
 fn phrase_bounds(words: &[WordDto]) -> Vec<(f64, f64)> {
     let mut phrases = Vec::new();
     for (_, mut row_words) in cluster_word_rows(words, 3.5) {
@@ -864,7 +935,7 @@ pub fn build_english_cells(input: &EnglishGridInput) -> Vec<CellDto> {
         return Vec::new();
     }
 
-    let row_clusters = cluster_word_rows(&input.words, 4.0);
+    let row_clusters = cluster_english_rows(input);
     let num_cols = columns.len();
     let row_bounds: Vec<(f64, f64)> = row_clusters
         .iter()
