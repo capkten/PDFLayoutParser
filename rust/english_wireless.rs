@@ -1118,7 +1118,26 @@ pub fn build_english_cells(input: &EnglishGridInput) -> Vec<CellDto> {
         .collect();
     let (mut row_cells, mut row_bounds, mut header_rows) =
         compress_english_header_rows(row_cells, row_bounds, header_rows, &header_row_groups);
-    if background_header_rows == 1 && header_rows >= 2 && !row_cells[0].iter().any(|cell| cell.col == 0 && !cell.text.trim().is_empty()) {
+    let first_header_topology: Vec<(i64, i64)> = row_cells
+        .first()
+        .into_iter()
+        .flat_map(|cells| cells.iter())
+        .filter(|cell| !cell.text.trim().is_empty())
+        .map(|cell| (cell.col, cell.colspan))
+        .collect();
+    let repeated_header_topology = header_rows >= 2
+        && (1..header_rows).all(|row| {
+            let topology: Vec<(i64, i64)> = row_cells[row]
+                .iter()
+                .filter(|cell| !cell.text.trim().is_empty())
+                .map(|cell| (cell.col, cell.colspan))
+                .collect();
+            topology == first_header_topology
+        });
+    if background_header_rows <= 2
+        && repeated_header_topology
+        && !row_cells[0].iter().any(|cell| cell.col == 0 && !cell.text.trim().is_empty())
+    {
         (row_cells, row_bounds, header_rows) =
             collapse_single_background_header_rows(row_cells, row_bounds, header_rows);
     }

@@ -2,6 +2,14 @@
 
 ## 2026-09-27
 
+- **Page 421 英文无线多段表头压缩对齐**：
+  - **根因**：Python 会按上下单元格列跨度完全相同且无横线阻断的规则合并纵向折行表头；Rust 仅允许单一无色背景组触发该压缩，导致 Page 421 第一张表的 `Three months / ended / 31 Mar 2011 / $m` 被拆成两行，Rust 为 `5x3`，Python 为 `4x3`。
+  - **修复**：将无色表头背景组上限从 1 放宽到 2，并保留左侧第 0 列存在标题时的多级表头保护；其他表头拓扑规则不变。
+  - **测试**：新增两段逻辑表头背景跨物理折行的 RED fixture；Rust focused `9 passed`，Python 英文无线测试 `22 passed`，`git diff --check` 通过。
+  - **页面验证**：输入 `D:\codes\PDFLayoutParser\fix\zh_all_table_pages.pdf`，Page 421 独立 Python/Rust 输出位于 `C:\Users\23662\.codex\worktrees\english-page421-fix\output\page421_parity_20260927`；三张表逐表 Cell JSON signature 完全一致，形状分别为 `4x3/12`、`5x3/15`、`9x3/27`，整页 PNG SHA-256 相同。
+
+## 2026-09-27
+
 - **Page 410 第二张英文无线表列带对齐**：
   - **根因**：Python `_build_wireless_table()` 已有检测列带，但 `_english_grid_input()` 未序列化这些列带；Rust `build_english_cells()` 因而重新用 words 几何推断列数。Page 410 第二张表被推为 9 列，Python 则为 7 列。
   - **修复**：`EnglishGridInput` 新增可选 `columns` DTO；英文 cell builder 在列带非空时直接使用传入列带，旧调用方缺省时仍执行原推断。Python 无线表路径现把检测列带传给 Rust。
