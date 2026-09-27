@@ -554,6 +554,20 @@ def _english_fixture_background(y0, y1, color, order):
     }
 
 
+def test_build_english_cells_preserves_space_after_percent_token():
+    cells = rust_adapter.build_english_cells(_english_grid_fixture(
+        [
+            _english_fixture_word("Provision", 10.0, 10.0, 70.0, 18.0, 0),
+            _english_fixture_word("16.5%", 100.0, 10.0, 135.0, 18.0, 1),
+            _english_fixture_word("(2010:", 140.0, 10.0, 180.0, 18.0, 2),
+            _english_fixture_word("16.5%)", 185.0, 10.0, 230.0, 18.0, 3),
+        ],
+        [],
+        x1=260.0,
+        y1=30.0,
+    ))
+
+    assert any("16.5% (2010: 16.5%)" in cell["text"] for cell in cells)
 def test_build_english_cells_collapses_single_background_wrapped_header():
     cells = rust_adapter.build_english_cells(_english_grid_fixture(
         [

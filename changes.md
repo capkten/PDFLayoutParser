@@ -29,6 +29,10 @@
   - **根因**：两页候选输入均只有一个无色表头背景带（H=1、D=8）；Rust 依据词中心拆出多个内部 header rows，`Cash/Group` 被错误扩成 `rowspan=2`，中间业务表头留在下一行，首个正文行整体下移。
   - **修复**：当仅有一个表头背景带且无左侧 stub 时，将内部表头行按列合并为一个逻辑 header row，随后重映射 body row/bounds；多表头背景页（如 Page418）保持原流程。
   - **验证**：新增最小 H=1 多行表头 RED fixture；Python English focused `18 passed`，Rust English unit `9 passed`。Page419/420 table1 Rust/Python Cell signature 一致：`9x6/52`；Page418 `38x8/298`，Page420 其他两表 `7x3/21`、`8x3/24` 未回归。输出：`D:\codes\PDFLayoutParser\output\english_419_420_rust_fix4_20260927`。
+- **Page 421 英文无线百分号间距对齐**：
+  - **根因**：Rust Cell phrase 组装无条件执行 `.replace("% ", "%")`，删除 `16.5%` 与后续 `(2010:` 之间的合法空格。
+  - **修复**：移除百分号后的无条件空格清理；保留美元符号清理和其余拼接规则。Page411 文本归并差异仅记录，不在本次修改。
+  - **验证**：新增百分号间距 RED fixture，修复后 Python English focused `19 passed`、Rust English unit `9 passed`；Page421 三表 Cell signature 与 Python 完全一致。
 - **Page 482 Rust 中文无线表格竖排单字链 parity 修复**：
   - 根因：第 13 列 `减值准备期末余额` 的 8 个 native atom 同属 block=9、source line=0..7 且 flow 连续；Rust 单字 CJK 续行保护使其停留为 8 个物理行，Python 则合并为一个表头 Cell，最终 Rust 产出 10x13 而 Python 为 5x13。
   - 修复：仅对 row=0 起始、同列同几何、同 source block 且连续 source line/flow 的证据完整 CJK 竖排链一次性合并；逻辑 row-start 与表头拓扑随后保留叶子行和正文边界，避免中间两两合并造成 occupancy conflict。其他路径不回读 words、不改 Python。
