@@ -980,6 +980,12 @@
 
 ## 2026-09-27
 
+- 修复 Page 483 第四张中文无线表 Rust 少一逻辑表头行的问题。根因是 `wrapped_leaf_header_span()` 将单个、位于表体前最后一行的高文本 Cell 当作换行叶表头；它借用前一物理行的多列叶子支持，把正文“主营业务/其中：在某一时点确认”与表头合并，造成整表由 `8x7/51` 压为 `7x7/46`。Python 逻辑网格只在当前候选行存在多列 wrapped leaf 同级项（或存在上层 colspan parent 拓扑）时才折叠此类行。
+- 最小修复：单物理行 wrapped leaf 必须有同一候选行的多个 wrapped sibling，或被上层多列父表头支撑；仅由前一行叶标题产生的 sibling 支持不足以折叠。新增正文长标签不得借用前一表头层支持的 Rust 失败测试，保留既有多级 wrapped leaf 正例。
+- 独立页面输出：`D:\codes\PDFLayoutParser-Fast\output\pdf\page483_wrapped_header_boundary_fix_20260927\`。Page 483 第四表恢复 `8x7/51`，Rust/Python 逐 Cell 文本、row/col、span、BBox 0 差异；前 3 表保持一致。页面 JSON 和可视化 PNG 已生成。
+
+## 2026-09-27
+
 - 修复中文无线表格 Page 463/473 的 Rust 逻辑行差异。Page 463 根因是 `merge_source_contiguous_vertical_cells()` 仅依赖连续 source refs、列和几何重叠，缺少 Python 同等的 ASCII/非 ASCII 脚本边界判断，因而把独立的 Latin/CJK 多行项目文本压进同一 Cell，`21x7` 过度压缩为 `17x7`。Page 473 根因是 `wrapped_leaf_header_span()` 在没有同层兄弟列证据时仍因 `rowspan>1` 强行折叠物理行，导致首个空槽和表头行错位，`6x2` 变为 `5x2`。
 - 最小修复：垂直 Cell 合并拒绝 ASCII 字母与非 ASCII 字段之间的跨行连接；wrapped header 只有在至少两个同层兄弟列提供结构证据时才允许压缩。新增 Latin/CJK 混合链拒绝测试及无兄弟证据的表头压缩拒绝测试。
 - 独立页面输出：`D:\codes\PDFLayoutParser-Fast\output\pdf\page463_473_logical_rows_fix_20260927\`。Page 463 恢复 `21x7/147`，Page 473 第二表恢复 `6x2/11`；两页目标表 Rust 与 Python 逐 Cell 文本、row/col、span、BBox 均为 0 差异，JSON/PNG 均已生成。

@@ -3013,7 +3013,19 @@ fn wrapped_leaf_header_span(
             .insert(column);
     }
     let sibling_support = sibling_columns_by_row.values().any(|columns| columns.len() >= 2);
-    sibling_support.then_some((span_start, end))
+    let has_parent_support = cells.iter().any(|cell| {
+        cell_is_nonempty(cell)
+            && cell.colspan.max(1) > 1
+            && cell.row.max(0) as usize + cell.rowspan.max(1) as usize <= start
+            && cells_overlap_columns(
+                cell,
+                candidate.col.max(0) as usize,
+                candidate.col.max(0) as usize,
+            )
+    });
+    (candidate.rowspan > 1
+        || (started.len() >= 2 && (sibling_support || has_parent_support)))
+    .then_some((span_start, end))
 }
 
 fn grouped_mixed_leaf_header_span(
@@ -6308,14 +6320,57 @@ mod tests {
     }
 
     #[test]
-    fn test_wrapped_leaf_header_requires_sibling_support_before_collapsing_rows() {
+    fn test_wrapped_leaf_header_does_not_attach_body_label_to_prior_leaf_row() {
+        let mut body_label = make_cell("主营业务\n其中：时点确认", 3, 0, 1, 1);
+        body_label.rect = Rect4 {
+            schema_version: 1,
+            x0: 80.0,
+            y0: 40.0,
+            x1: 180.0,
+            y1: 66.0,
+        };
         let cells = vec![
-            make_cell("最近\n十二\n个月", 0, 1, 3, 1),
-            make_cell("方法", 1, 0, 1, 1),
-            make_cell("正文", 3, 0, 1, 1),
+            make_cell("本期发生额", 0, 3, 1, 2),
+            make_cell("项目", 1, 0, 1, 1),
+            make_cell("父标题", 1, 1, 1, 2),
+            make_cell("其他标题", 1, 5, 1, 2),
+            make_cell("收入", 2, 1, 1, 1),
+            make_cell("成本", 2, 2, 1, 1),
+            make_cell("收入", 2, 3, 1, 1),
+            make_cell("成本", 2, 4, 1, 1),
+            make_cell("收入", 2, 5, 1, 1),
+            make_cell("成本", 2, 6, 1, 1),
+            body_label,
+            make_cell("100", 4, 1, 1, 1),
+            make_cell("200", 4, 2, 1, 1),
         ];
 
-        assert_eq!(wrapped_leaf_header_span(&cells, 0, 3), None);
+        assert_eq!(wrapped_leaf_header_span(&cells, 10, 4), None);
+    }
+
+    #[test]
+    fn test_infer_header_spans_promotes_leading_stub_across_proven_header_rows() {
+        let cells = vec![
+            make_cell("本期发生额", 0, 3, 1, 2),
+            make_cell("项目", 1, 0, 1, 1),
+            make_cell("光芯片及器件", 1, 1, 1, 2),
+            make_cell("室内光缆", 1, 3, 1, 1),
+            make_cell("销售材料", 1, 5, 1, 2),
+            make_cell("收入", 2, 1, 1, 1),
+            make_cell("成本", 2, 2, 1, 1),
+            make_cell("收入", 2, 3, 1, 1),
+            make_cell("成本", 2, 4, 1, 1),
+            make_cell("收入", 2, 5, 1, 1),
+            make_cell("成本", 2, 6, 1, 1),
+        ];
+
+        let proposed = infer_header_spans(&cells, 3);
+        let project = proposed
+            .iter()
+            .find(|cell| cell.text == "项目")
+            .expect("leading stub");
+
+        assert_eq!((project.row, project.rowspan), (0, 3));
     }
 
     #[test]
