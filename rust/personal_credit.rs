@@ -1,5 +1,7 @@
 use crate::types::{
-    CellDto, PersonalCreditInput, PersonalCreditOutput, Rect4, TableCandidateDto,
+    CellDto, CharacterDto, DrawingDto, LineDto, NativeSpanDto, OwnedValue, PageDto,
+    PersonalCreditInput, PersonalCreditOutput, Rect4, RegionDto, StructureConfig,
+    TableCandidateDto, WiredRegionInput, WirelessRecoveryInput,
 };
 
 const QUERY_HEADERS: [&str; 4] = ["编号", "查询日期", "查询机构", "查询原因"];
@@ -229,6 +231,563 @@ fn candidate_from_cells(cells: Vec<CellDto>, rows: i64, source: &str) -> Option<
         cols: 4,
         cells,
     })
+}
+
+fn finite_number(value: &OwnedValue) -> Option<f64> {
+    match value {
+        OwnedValue::Integer(value) => Some(*value as f64),
+        OwnedValue::Float(value) => Some(*value),
+        _ => None,
+    }
+}
+
+fn item_values(value: &OwnedValue) -> Option<&[OwnedValue]> {
+    match value {
+        OwnedValue::Array(values) => Some(values),
+        _ => None,
+    }
+}
+
+fn item_name(value: &OwnedValue) -> Option<&str> {
+    match value {
+        OwnedValue::String(value) => Some(value),
+        _ => None,
+    }
+}
+
+fn item_rect(value: &OwnedValue) -> Option<Rect4> {
+    let values = item_values(value)?;
+    if values.len() < 4 {
+        return None;
+    }
+    Some(rect(
+        finite_number(&values[0])?,
+        finite_number(&values[1])?,
+        finite_number(&values[2])?,
+        finite_number(&values[3])?,
+    ))
+}
+
+fn clipped_axis_line(
+    mut line: Rect4,
+    horizontal: bool,
+    clip: Option<&Rect4>,
+    width: Option<f64>,
+    source_order: i64,
+    h_lines: &mut Vec<LineDto>,
+    v_lines: &mut Vec<LineDto>,
+) {
+    if let Some(clip) = clip {
+        if horizontal {
+            if line.y0 < clip.y0 || line.y0 > clip.y1 {
+                return;
+            }
+            line.x0 = line.x0.max(clip.x0);
+            line.x1 = line.x1.min(clip.x1);
+        } else {
+            if line.x0 < clip.x0 || line.x0 > clip.x1 {
+                return;
+            }
+            line.y0 = line.y0.max(clip.y0);
+            line.y1 = line.y1.min(clip.y1);
+        }
+    }
+    if (horizontal && line.x1 - line.x0 < 3.0) || (!horizontal && line.y1 - line.y0 < 3.0) {
+        return;
+    }
+    let dto = LineDto {
+        schema_version: 1,
+        rect: line,
+        width,
+        color: None,
+        source_order,
+    };
+    if horizontal {
+        h_lines.push(dto);
+    } else {
+        v_lines.push(dto);
+    }
+}
+
+fn append_rectangle_lines(
+    bounds: Rect4,
+    clip: Option<&Rect4>,
+    width: Option<f64>,
+    source_order: i64,
+    line_tolerance: f64,
+    emit_border: bool,
+    h_lines: &mut Vec<LineDto>,
+    v_lines: &mut Vec<LineDto>,
+) {
+    let mut bounds = bounds;
+    if let Some(clip) = clip {
+        bounds.x0 = bounds.x0.max(clip.x0);
+        bounds.y0 = bounds.y0.max(clip.y0);
+        bounds.x1 = bounds.x1.min(clip.x1);
+        bounds.y1 = bounds.y1.min(clip.y1);
+        if bounds.x1 <= bounds.x0 || bounds.y1 <= bounds.y0 {
+            return;
+        }
+    }
+    let rect_width = bounds.x1 - bounds.x0;
+    let rect_height = bounds.y1 - bounds.y0;
+    if rect_height <= line_tolerance && rect_width >= 3.0 {
+        let center = (bounds.y0 + bounds.y1) / 2.0;
+        clipped_axis_line(
+            rect(bounds.x0, center, bounds.x1, center),
+            true,
+            clip,
+            width,
+            source_order,
+            h_lines,
+            v_lines,
+        );
+    } else if rect_width <= line_tolerance && rect_height >= 3.0 {
+        let center = (bounds.x0 + bounds.x1) / 2.0;
+        clipped_axis_line(
+            rect(center, bounds.y0, center, bounds.y1),
+            false,
+            clip,
+            width,
+            source_order,
+            h_lines,
+            v_lines,
+        );
+    } else if emit_border && rect_width >= 3.0 && rect_height >= 3.0 {
+        for y in [bounds.y0, bounds.y1] {
+            clipped_axis_line(
+                rect(bounds.x0, y, bounds.x1, y),
+                true,
+                clip,
+                width,
+                source_order,
+                h_lines,
+                v_lines,
+            );
+        }
+        for x in [bounds.x0, bounds.x1] {
+            clipped_axis_line(
+                rect(x, bounds.y0, x, bounds.y1),
+                false,
+                clip,
+                width,
+                source_order,
+                h_lines,
+                v_lines,
+            );
+        }
+    }
+}
+
+fn drawing_lines(
+    drawings: &[DrawingDto],
+    page: &PageDto,
+    line_tolerance: f64,
+) -> (Vec<LineDto>, Vec<LineDto>) {
+    let page_area = page.width * page.height;
+    let mut h_lines = Vec::new();
+    let mut v_lines = Vec::new();
+    let mut next_source = 0_i64;
+    for drawing in drawings {
+        if drawing.opacity.is_some_and(|opacity| opacity <= 0.0) {
+            continue;
+        }
+        let clip = drawing.clip.as_ref();
+        if drawing.kind == "f" {
+            append_rectangle_lines(
+                drawing.rect.clone(),
+                clip,
+                drawing.width,
+                next_source,
+                line_tolerance,
+                false,
+                &mut h_lines,
+                &mut v_lines,
+            );
+            next_source += 1;
+        }
+
+        if let Some(items) = &drawing.items {
+            for item in items {
+                let Some(values) = item_values(item) else {
+                    continue;
+                };
+                let Some(kind) = values.first().and_then(item_name) else {
+                    continue;
+                };
+                if kind == "l" && drawing.kind != "f" && values.len() == 3 {
+                    let (Some(start), Some(end)) = (item_values(&values[1]), item_values(&values[2])) else {
+                        continue;
+                    };
+                    if start.len() != 2 || end.len() != 2 {
+                        continue;
+                    }
+                    let (Some(x0), Some(y0), Some(x1), Some(y1)) = (
+                        finite_number(&start[0]),
+                        finite_number(&start[1]),
+                        finite_number(&end[0]),
+                        finite_number(&end[1]),
+                    ) else {
+                        continue;
+                    };
+                    if (y1 - y0).abs() <= line_tolerance && (x1 - x0).abs() >= 3.0 {
+                        let y = (y0 + y1) / 2.0;
+                        clipped_axis_line(
+                            rect(x0.min(x1), y, x0.max(x1), y),
+                            true,
+                            clip,
+                            drawing.width,
+                            next_source,
+                            &mut h_lines,
+                            &mut v_lines,
+                        );
+                    } else if (x1 - x0).abs() <= line_tolerance && (y1 - y0).abs() >= 3.0 {
+                        let x = (x0 + x1) / 2.0;
+                        clipped_axis_line(
+                            rect(x, y0.min(y1), x, y0.max(y1)),
+                            false,
+                            clip,
+                            drawing.width,
+                            next_source,
+                            &mut h_lines,
+                            &mut v_lines,
+                        );
+                    }
+                } else if kind == "re" && values.len() >= 2 {
+                    let Some(bounds) = item_rect(&values[1]) else {
+                        continue;
+                    };
+                    let stroked = drawing.kind == "s"
+                        || drawing.kind == "fs"
+                        || drawing.color.as_ref().is_some_and(|color| !matches!(color, OwnedValue::Null));
+                    let border_area = (bounds.x1 - bounds.x0) * (bounds.y1 - bounds.y0);
+                    append_rectangle_lines(
+                        bounds,
+                        clip,
+                        drawing.width,
+                        next_source,
+                        line_tolerance,
+                        stroked && border_area < page_area * 0.5,
+                        &mut h_lines,
+                        &mut v_lines,
+                    );
+                }
+                next_source += 1;
+            }
+        } else {
+            for line in &drawing.lines {
+                if (line.rect.y1 - line.rect.y0).abs() <= line_tolerance {
+                    clipped_axis_line(
+                        rect(line.rect.x0, line.rect.y0, line.rect.x1, line.rect.y0),
+                        true,
+                        clip,
+                        line.width,
+                        next_source,
+                        &mut h_lines,
+                        &mut v_lines,
+                    );
+                } else if (line.rect.x1 - line.rect.x0).abs() <= line_tolerance {
+                    clipped_axis_line(
+                        rect(line.rect.x0, line.rect.y0, line.rect.x0, line.rect.y1),
+                        false,
+                        clip,
+                        line.width,
+                        next_source,
+                        &mut h_lines,
+                        &mut v_lines,
+                    );
+                }
+                next_source += 1;
+            }
+        }
+    }
+    (h_lines, v_lines)
+}
+
+fn wired_candidates(input: &PersonalCreditInput) -> Vec<TableCandidateDto> {
+    let (h_lines, v_lines) = drawing_lines(
+        &input.snapshot.drawings,
+        &input.snapshot.page,
+        input.wired_line_tolerance,
+    );
+    let output = crate::wired::extract_wired_region(WiredRegionInput {
+        schema_version: 1,
+        page: input.snapshot.page.clone(),
+        h_lines,
+        v_lines,
+        words: input.snapshot.words.clone(),
+        tolerance: input.wired_line_tolerance,
+    });
+    let characters: Vec<CharacterDto> = input
+        .snapshot
+        .spans
+        .iter()
+        .flat_map(|span| span.span.characters.iter().cloned())
+        .collect();
+    let cells = crate::wired::assign_text_to_line_cells(
+        output.cells,
+        &input.snapshot.words,
+        &characters,
+        input.wired_line_tolerance,
+    );
+
+    output
+        .regions
+        .iter()
+        .filter_map(|region| {
+            let cells: Vec<CellDto> = cells
+                .iter()
+                .filter(|cell| {
+                    let x = center_x(&cell.rect);
+                    let y = center_y(&cell.rect);
+                    region.rect.x0 <= x
+                        && x <= region.rect.x1
+                        && region.rect.y0 <= y
+                        && y <= region.rect.y1
+                })
+                .cloned()
+                .collect();
+            if cells.is_empty() {
+                return None;
+            }
+            let y0 = cells
+                .iter()
+                .map(|cell| cell.rect.y0)
+                .fold(f64::INFINITY, f64::min);
+            let y1 = cells
+                .iter()
+                .map(|cell| cell.rect.y1)
+                .fold(f64::NEG_INFINITY, f64::max);
+            Some(TableCandidateDto {
+                schema_version: 1,
+                rect: rect(region.rect.x0, y0, region.rect.x1, y1),
+                source: "line_projection".to_string(),
+                confidence: Some(0.9),
+                rows: cells.iter().map(|cell| cell.row).max().unwrap_or(-1) + 1,
+                cols: cells.iter().map(|cell| cell.col).max().unwrap_or(-1) + 1,
+                cells,
+            })
+        })
+        .collect()
+}
+
+fn wireless_candidates(input: &PersonalCreditInput, wired: &[TableCandidateDto]) -> Vec<TableCandidateDto> {
+    let mut regions = input.snapshot.allowed_regions.clone();
+    regions.extend(input.snapshot.excluded_regions.clone());
+    let first_added_order = regions.len() as i64;
+    regions.extend(wired.iter().map(|table| RegionDto {
+        schema_version: 1,
+        rect: table.rect.clone(),
+        source_order: first_added_order,
+        allowed: false,
+    }));
+    let spans: Vec<NativeSpanDto> = crate::snapshot::collect_native_spans_from_snapshot(
+        &input.snapshot,
+        None,
+        None,
+    )
+    .into_iter()
+    .map(|span| span.span)
+    .collect();
+    let mut config = StructureConfig::default();
+    config.line_tolerance = 2.3;
+    crate::wireless_structure::recover_wireless_tables(WirelessRecoveryInput {
+        schema_version: 1,
+        page: input.snapshot.page.clone(),
+        spans,
+        regions,
+        config,
+    })
+    .candidates
+}
+
+fn tables_overlap(left: &TableCandidateDto, right: &TableCandidateDto) -> bool {
+    !(left.rect.x1 < right.rect.x0
+        || right.rect.x1 < left.rect.x0
+        || left.rect.y1 < right.rect.y0
+        || right.rect.y1 < left.rect.y0)
+}
+
+fn numbered_row(text: &str) -> bool {
+    let characters: Vec<char> = text.chars().collect();
+    let digit_count = characters
+        .iter()
+        .take_while(|character| character.is_ascii_digit())
+        .count();
+    digit_count > 0
+        && characters
+            .get(digit_count)
+            .is_some_and(|character| *character == '.' || *character == '、')
+}
+
+fn is_numbered_prose_candidate(table: &TableCandidateDto) -> bool {
+    if table.cols > 2 {
+        return false;
+    }
+    let all_text = table
+        .cells
+        .iter()
+        .map(|cell| cell.text.as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
+    if ["查询原因", "查询机构", "查询日期"]
+        .iter()
+        .any(|marker| all_text.contains(marker))
+    {
+        return false;
+    }
+
+    let mut rows: std::collections::BTreeMap<i64, Vec<&str>> =
+        std::collections::BTreeMap::new();
+    for cell in &table.cells {
+        let text = cell.text.trim();
+        if !text.is_empty() {
+            rows.entry(cell.row).or_default().push(text);
+        }
+    }
+    let long_numbered_rows = rows
+        .values()
+        .filter(|parts| {
+            let text = parts.concat();
+            numbered_row(&text) && text.chars().count() >= 40
+        })
+        .count();
+    let has_prose_lead = all_text.contains("明细如下");
+    (has_prose_lead && long_numbered_rows >= 1) || long_numbered_rows >= 2
+}
+
+fn is_report_metadata_candidate(table: &TableCandidateDto) -> bool {
+    let text = table
+        .cells
+        .iter()
+        .map(|cell| cell.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    ["报告编号", "报告时间", "证件号码", "其他证件信息"]
+        .iter()
+        .filter(|marker| text.contains(**marker))
+        .count()
+        >= 2
+}
+
+fn trim_query_table(mut table: TableCandidateDto) -> TableCandidateDto {
+    let header_row = (0..table.rows).find(|row| {
+        let row_text = table
+            .cells
+            .iter()
+            .filter(|cell| cell.row == *row)
+            .map(|cell| cell.text.replace(' ', ""))
+            .collect::<String>();
+        has_all_headers(&row_text)
+    });
+    let Some(header_row) = header_row else {
+        return table;
+    };
+    if header_row == 0 {
+        return table;
+    }
+
+    let keep_from_row = if header_row == 1 {
+        let first_row = table
+            .cells
+            .iter()
+            .filter(|cell| cell.row == 0)
+            .map(|cell| cell.text.replace(' ', ""))
+            .collect::<String>();
+        if is_query_title(&first_row) {
+            0
+        } else {
+            header_row
+        }
+    } else {
+        header_row
+    };
+    if keep_from_row == 0 {
+        return table;
+    }
+
+    table.cells.retain_mut(|cell| {
+        if cell.row < keep_from_row {
+            return false;
+        }
+        cell.row -= keep_from_row;
+        true
+    });
+    table.rows -= keep_from_row;
+    if let Some(bounds) = union_rect(table.cells.iter().map(|cell| &cell.rect)) {
+        table.rect = bounds;
+    }
+    table
+}
+
+fn split_repeated_records(table: TableCandidateDto) -> Vec<TableCandidateDto> {
+    let starts: Vec<i64> = table
+        .cells
+        .iter()
+        .filter(|cell| cell.col == 0)
+        .filter(|cell| {
+            let text = cell.text.trim();
+            ["处罚机构", "立案法院", "执行法院"]
+                .iter()
+                .any(|prefix| text.starts_with(prefix))
+        })
+        .map(|cell| cell.row)
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    if starts.len() < 2 {
+        return vec![table];
+    }
+
+    let mut boundaries = vec![0_i64];
+    boundaries.extend(starts.iter().skip(1).copied());
+    boundaries.push(table.rows);
+    boundaries
+        .windows(2)
+        .filter_map(|range| {
+            let start = range[0];
+            let end = range[1];
+            let cells: Vec<CellDto> = table
+                .cells
+                .iter()
+                .filter(|cell| start <= cell.row && cell.row < end)
+                .cloned()
+                .map(|mut cell| {
+                    cell.row -= start;
+                    cell
+                })
+                .collect();
+            let bounds = union_rect(cells.iter().map(|cell| &cell.rect))?;
+            Some(TableCandidateDto {
+                schema_version: 1,
+                rect: bounds,
+                source: table.source.clone(),
+                confidence: table.confidence,
+                rows: end - start,
+                cols: table.cols,
+                cells,
+            })
+        })
+        .collect()
+}
+
+fn apply_personal_credit_rules(tables: Vec<TableCandidateDto>) -> Vec<TableCandidateDto> {
+    let mut filtered = Vec::new();
+    for table in tables {
+        let table = trim_query_table(table);
+        if is_numbered_prose_candidate(&table) {
+            continue;
+        }
+        let is_wired = matches!(
+            table.source.as_str(),
+            "line_projection" | "hybrid_line_span_recovery" | "PyMuPDF.find_tables"
+        );
+        if !is_wired && is_report_metadata_candidate(&table) {
+            continue;
+        }
+        filtered.extend(split_repeated_records(table));
+    }
+    filtered
 }
 
 fn recover_query_table(
@@ -577,7 +1136,14 @@ pub fn recover(input: PersonalCreditInput) -> PersonalCreditOutput {
         .filter_map(|(index, row)| is_query_title(&row_text(row)).then_some(index))
         .collect();
 
-    let mut tables = Vec::new();
+    let mut tables = if let Some(candidates) = input.candidate_tables.clone() {
+        candidates
+    } else {
+        let mut wired = wired_candidates(&input);
+        let wireless = wireless_candidates(&input, &wired);
+        wired.extend(wireless);
+        wired
+    };
     if header_indices.is_empty() {
         if let Some(table) = recover_headerless_query_table(&rows, input.snapshot.page.width) {
             tables.push(table);
@@ -610,6 +1176,17 @@ pub fn recover(input: PersonalCreditInput) -> PersonalCreditOutput {
             tables.push(table);
         }
     }
+
+    let query_tables: Vec<TableCandidateDto> = tables
+        .iter()
+        .filter(|table| table.source == "personal_query_recovery")
+        .cloned()
+        .collect();
+    tables.retain(|table| {
+        table.source == "personal_query_recovery"
+            || !query_tables.iter().any(|query| tables_overlap(table, query))
+    });
+    let mut tables = apply_personal_credit_rules(tables);
 
     tables.sort_by(|left, right| {
         left.rect

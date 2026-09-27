@@ -4,7 +4,7 @@
 
 **Goal:** 保持 Python 公开接口和输出严格不变，将个人征信表格检测、查询记录恢复和结构处理迁移到 Rust，并用 个人信用报告 目录下全部 PDF 端到端对照。
 
-**Architecture:** Python 继续读取 PDF、做页面采集和结果装配；Rust 新增个人征信专用 DTO、算法入口和 PyO3 binding。Python 通过独立 personal-credit 路由支持 python、shadow、rust 模式，适配 Rust 输出回现有 Table/Cell。全部样本严格匹配后才允许切换个人征信默认路由。
+**Architecture:** Python 继续读取 PDF 并生成拥有型 Snapshot；通用 table stages 由现有 Rust 子算法完成并由 Python facade 编排。个人征信 DTO 同时携带 Snapshot 和通用 candidate tables，新增 Rust 算法入口执行征信查询恢复、过滤、重叠替换和重复记录拆分。Python 适配回现有 Table/Cell，通过 personal-credit 路由支持 python、shadow、rust 模式；全部样本严格匹配后才允许切换默认路由。
 
 **Tech Stack:** Rust 2021、PyO3 0.22.6/abi3、maturin 1.8.7、Python 3.13 venv、PyMuPDF、pytest。
 
@@ -30,7 +30,7 @@
 
 **Interfaces:**
 - Consumes: PageSnapshotDto、TableCandidateDto、CellDto、DiagnosticDto。
-- Produces: recover_personal_credit_tables(input_dto: Mapping[str, Any]) -> Mapping[str, Any]，输出含 schema_version、tables、diagnostics。
+- Produces: recover_personal_credit_tables(input_dto: Mapping[str, Any]) -> Mapping[str, Any]，可接收 candidate_tables，输出含 schema_version、tables、diagnostics。
 
 - [ ] **Step 1: 写入口缺失和 DTO 校验失败测试**
 
@@ -64,7 +64,7 @@ Expected: FAIL because the Rust entry point is missing.
 
 - [ ] **Step 3: 定义 owned DTO**
 
-在 rust/types.rs 中定义 PersonalCreditInput（schema_version、snapshot、wired_line_tolerance）和 PersonalCreditOutput（schema_version、tables、diagnostics），实现 from_py/to_py。验证版本、有限且非负的容差、必需字段与项目中现有 DTO 的类型约束。
+在 rust/types.rs 中定义 PersonalCreditInput（schema_version、snapshot、wired_line_tolerance、可选 candidate_tables）和 PersonalCreditOutput（schema_version、tables、diagnostics），实现 from_py/to_py。验证版本、有限且非负的容差、必需字段与项目中现有 DTO 的类型约束。
 
 - [ ] **Step 4: 建立 Rust 模块与 PyO3 binding**
 
@@ -90,7 +90,7 @@ git commit -m "feat: add personal credit Rust DTO binding"
 
 ---
 
-### Task 2: 迁移个人征信 wired、wireless 和查询表算法
+### Task 2: 迁移个人征信查询表和定制结构算法
 
 **Files:**
 - Create: rust/personal_credit.rs
@@ -98,8 +98,8 @@ git commit -m "feat: add personal credit Rust DTO binding"
 - Test: tests/test_pdf_fast_personal_credit.py
 
 **Interfaces:**
-- Consumes: 页面几何、drawings、native spans、words 的采集快照和 wired 容差。
-- Produces: PersonalCreditOutput，表格结构复用 TableCandidateDto/CellDto，保留 Python 的 source。
+- Consumes: 页面 Snapshot、通用 wired/wireless Rust stages 输出的 candidate tables 和 wired 容差。
+- Produces: PersonalCreditOutput，对候选表应用个人征信查询恢复、过滤、重叠替换和重复记录拆分。
 
 - [ ] **Step 1: 为查询记录正例和编号正文反例写失败测试**
 
@@ -128,17 +128,17 @@ $env:PYTHONPATH="src"
 
 Expected: FAIL because the Rust output is empty.
 
-- [ ] **Step 3: 复用已有 Rust wired/native-span 核心**
+- [ ] **Step 3: 读取 candidate tables 并锁定个人过滤规则**
 
-检查 rust/wired.rs、rust/native_span.rs、rust/wireless_structure.rs 的真实导出函数后，在 personal_credit::recover 中组合已存在的纯算法。不得照计划里的假设函数名直接调用不存在的符号。只消费页面快照和 owned DTO，不新增 PyMuPDF/page words 访问。
+Rust Input DTO 解析 candidate_tables；先保留一个合法 wired/wireless 候选的完整字段，再为编号长正文、报告身份元数据各写一个拒绝用例。使用独立控制用例确保正常 wired 表不会因 metadata/text filter 被删。
 
 - [ ] **Step 4: 移植查询表恢复行为**
 
 按 Python _query_rows、_make_query_table、_make_query_tables 的判定顺序实现：按 source/native flow 聚合行；识别机构/个人/本人查询标题和四个 header；按 header 中心计算列边界，缺失 header 时使用 [105.0, 240.0, 440.0]；记录识别、无编号续行并入、空槽位物化、标题 colspan=4、source personal_query_recovery、confidence 0.95 和 bbox union。
 
-- [ ] **Step 5: 移植个人征信过滤与拆分**
+- [ ] **Step 5: 移植查询重叠替换、标题裁剪和重复记录拆分**
 
-覆盖 _is_numbered_prose_candidate、_is_report_metadata_candidate、_is_wired_table、_split_repeated_record_table；拆分起始字段为“处罚机构”“立案法院”“执行法院”。每次 rowspan/colspan 变化后运行 occupancy 检查；冲突必须诊断并拒绝输出。
+按 Python 语义实现 _table_overlaps、_trim_query_table 和 _split_repeated_record_table；wired source 白名单候选必须保留，重复记录起始字段为“处罚机构”“立案法院”“执行法院”。每次 rowspan/colspan 变化后运行 occupancy 检查；冲突必须诊断并拒绝输出。
 
 - [ ] **Step 6: 重建并运行 focused tests**
 

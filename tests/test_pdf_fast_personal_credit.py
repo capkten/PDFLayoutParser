@@ -62,6 +62,32 @@ def _query_fixture(
     return document, input_dto, expected
 
 
+def _wired_fixture():
+    from hexai_pdf_parser.extractors.personal_credit_report import (
+        PersonalCreditReportTableExtractor,
+    )
+
+    document = fitz.open()
+    page = document.new_page(width=300, height=160)
+    for y in (40, 62, 84):
+        page.draw_line((40, y), (240, y), color=(0, 0, 0), width=0.5)
+    for x in (40, 140, 240):
+        page.draw_line((x, 40), (x, 84), color=(0, 0, 0), width=0.5)
+    page.insert_text((50, 56), "Field", fontsize=10)
+    page.insert_text((150, 56), "Value", fontsize=10)
+    page.insert_text((50, 78), "Name", fontsize=10)
+    page.insert_text((150, 78), "Alice", fontsize=10)
+
+    snapshot = capture_page_snapshot(page, page_index=0)
+    input_dto = {
+        "schema_version": 1,
+        "snapshot": page_snapshot_to_rust_input(snapshot),
+        "wired_line_tolerance": 2.2,
+    }
+    tables = PersonalCreditReportTableExtractor(use_ml_table_detector=False).extract(page)
+    return document, input_dto, [_table_to_candidate(table) for table in tables]
+
+
 def _table_to_candidate(table) -> dict:
     def rect(box):
         return {
@@ -95,6 +121,12 @@ def _table_to_candidate(table) -> dict:
     }
 
 
+def _run_candidate_tables(candidates):
+    input_dto = _empty_personal_credit_input()
+    input_dto["candidate_tables"] = [_table_to_candidate(table) for table in candidates]
+    return rust_adapter.recover_personal_credit_tables(input_dto)
+
+
 def test_personal_credit_binding_is_registered():
     assert callable(getattr(_pdf_fast, "recover_personal_credit_tables", None))
 
@@ -121,6 +153,112 @@ def test_rust_personal_credit_recovers_query_table_like_python():
         result = rust_adapter.recover_personal_credit_tables(input_dto)
     finally:
         document.close()
+
+    assert result["tables"] == expected
+
+
+def test_rust_personal_credit_recovers_wired_table_like_python():
+    document, input_dto, expected = _wired_fixture()
+    try:
+        result = rust_adapter.recover_personal_credit_tables(input_dto)
+    finally:
+        document.close()
+
+    assert len(expected) == 1
+    assert result["tables"] == expected
+
+
+def test_personal_credit_rust_entry_accepts_upstream_table_candidates():
+    from hexai_pdf_parser.core.models import BBox, Cell, Table
+
+    candidate = Table(
+        bbox=BBox(20.0, 20.0, 180.0, 60.0),
+        rows=2,
+        cols=2,
+        cells=[
+            Cell("Field", 0, 0, BBox(20.0, 20.0, 80.0, 40.0)),
+            Cell("Value", 0, 1, BBox(80.0, 20.0, 180.0, 40.0)),
+            Cell("Name", 1, 0, BBox(20.0, 40.0, 80.0, 60.0)),
+            Cell("Alice", 1, 1, BBox(80.0, 40.0, 180.0, 60.0)),
+        ],
+        confidence=0.9,
+        source="wireless_span_recovery",
+    )
+    input_dto = _empty_personal_credit_input()
+    expected = _table_to_candidate(candidate)
+    input_dto["candidate_tables"] = [expected]
+
+    result = rust_adapter.recover_personal_credit_tables(input_dto)
+
+    assert result["tables"] == [expected]
+
+
+def test_rust_personal_credit_filters_numbered_prose_candidate():
+    from hexai_pdf_parser.core.models import BBox, Cell, Table
+
+    table = Table(
+        bbox=BBox(36.0, 400.0, 550.0, 500.0),
+        rows=2,
+        cols=2,
+        source="wireless_span_recovery",
+        cells=[
+            Cell("信用卡", 0, 0, BBox(36.0, 410.0, 80.0, 422.0)),
+            Cell("账户明细如下", 0, 1, BBox(80.0, 410.0, 220.0, 422.0)),
+            Cell("1. 2017年03月11日交通银行股份有限公司发放的贷记卡及透支账户", 1, 0, BBox(36.0, 430.0, 290.0, 442.0)),
+            Cell("卡片尾号2344，2026年07月到期，信用额度54,000元", 1, 1, BBox(290.0, 430.0, 550.0, 442.0)),
+        ],
+    )
+
+    result = _run_candidate_tables([table])
+
+    assert result["tables"] == []
+
+
+def test_rust_personal_credit_filters_report_metadata_candidate():
+    from hexai_pdf_parser.core.models import BBox, Cell, Table
+
+    table = Table(
+        bbox=BBox(30.0, 30.0, 260.0, 60.0),
+        rows=2,
+        cols=2,
+        source="wireless_span_recovery",
+        cells=[
+            Cell("报告编号", 0, 0, BBox(30.0, 30.0, 100.0, 45.0)),
+            Cell("12345", 0, 1, BBox(100.0, 30.0, 160.0, 45.0)),
+            Cell("证件号码", 1, 0, BBox(30.0, 45.0, 100.0, 60.0)),
+            Cell("4401", 1, 1, BBox(100.0, 45.0, 160.0, 60.0)),
+        ],
+    )
+
+    result = _run_candidate_tables([table])
+
+    assert result["tables"] == []
+
+
+def test_rust_personal_credit_splits_repeated_record_candidate_like_python():
+    from hexai_pdf_parser.core.models import BBox, Cell, Table
+    from hexai_pdf_parser.extractors.personal_credit_report import (
+        PersonalCreditReportTableExtractor,
+    )
+
+    table = Table(
+        bbox=BBox(30.0, 30.0, 260.0, 90.0),
+        rows=4,
+        cols=1,
+        source="wireless_span_recovery",
+        cells=[
+            Cell("处罚机构甲", 0, 0, BBox(30.0, 30.0, 200.0, 45.0)),
+            Cell("处罚内容", 1, 0, BBox(30.0, 45.0, 200.0, 60.0)),
+            Cell("立案法院乙", 2, 0, BBox(30.0, 60.0, 200.0, 75.0)),
+            Cell("执行情况", 3, 0, BBox(30.0, 75.0, 200.0, 90.0)),
+        ],
+    )
+    expected = [
+        _table_to_candidate(item)
+        for item in PersonalCreditReportTableExtractor._split_repeated_record_table(table)
+    ]
+
+    result = _run_candidate_tables([table])
 
     assert result["tables"] == expected
 

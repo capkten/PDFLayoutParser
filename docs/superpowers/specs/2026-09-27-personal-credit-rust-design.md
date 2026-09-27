@@ -19,8 +19,8 @@
 
 采用“个人征信专用 Rust 算法入口”方案，而不是只迁移查询表或重写整个 Pipeline：
 
-1. Python 在页面读取阶段准备个人征信输入 DTO，包含页面几何、drawings、native spans、字符/词、已识别的查询区域/标题锚点和 wired 容差。
-2. Rust 专用入口复用已有 wired、native-span、wireless、header 和 occupancy 算法，补充个人征信查询表恢复、正文误表过滤、报告元数据过滤、重复记录拆分和查询表跨度规则。
+1. Python 在页面读取阶段准备 owned Snapshot DTO，并编排通用表格候选检测；已有 wired、native-span、wireless 和 header 子算法按现有路由由 Rust kernel 执行。
+2. Python 将通用提取阶段产生的 candidate tables 和页面 Snapshot 一并交给个人征信 Rust 专用入口。Rust 负责个人查询表恢复、正文误表过滤、报告元数据过滤、重复记录拆分、候选重叠替换和 occupancy 校验。
 3. Python 适配 Rust 输出为现有 `Table`/`Cell`，继续执行公开结果装配；Rust 输出异常或校验失败时走 Python oracle。
 
 ## 架构和数据流
@@ -35,6 +35,7 @@
 - words 及其 block/line/order 信息，仅用于页面采集和个人征信查询锚点定位；
 - 机构查询/本人查询标题、查询表 header、候选区域和跨页 continuation 信息；
 - `wired_line_tolerance=2.2` 及当前个人征信开关配置。
+- 通用 table extraction 子算法产出的 candidate tables，包含原有 rows/cols/source/confidence/cells。
 
 Rust 输入结构必须是拥有型数据，拒绝未知必需字段、非有限坐标、越界 source 引用、字段长度不一致和非法 span。Rust 不反向调用 Python 回调。
 
@@ -49,15 +50,14 @@ Rust 输入结构必须是拥有型数据，拒绝未知必需字段、非有限
 
 Rust 内部按以下顺序执行：
 
-1. 有线表格：线段合并、区域检测、边界补全、物理 Cell、文字归属和 2.2 容差规则。
-2. native-span 无线表格：span → text run → atom → column band → physical grid → logical grid，保留 source continuity 和 evidence。
-3. 个人征信查询表：按 Python 当前标题/列边界/记录连续性规则恢复机构查询和本人查询表，保留标题行、四列结构、续行并入、空槽位和 `personal_query_recovery` source。
-4. 专用过滤与拆分：拒绝编号长正文候选、报告身份元数据候选，按现有记录起点拆分重复记录。
-5. 对每个跨度提案重新运行 occupancy conflict 检查；冲突、越界或不完整结果不进入 Rust 输出。
+1. 接收由通用 wired/native-span/wireless/table-structure Rust 子算法产生、由 Python facade 编排的 candidate tables。
+2. 从 owned native spans 和字符 bbox 恢复个人征信查询表，保留 Python 当前标题/列边界/记录连续性规则、标题行、四列结构、续行并入和 `personal_query_recovery` source。
+3. 对 wired 与 native-span candidates 应用个人征信过滤、查询候选重叠替换、标题裁剪和重复记录拆分。
+4. 对每个跨度提案重新运行 occupancy 检查；冲突、越界或不完整结果不进入 Rust 输出。
 
 ### Python 输出边界
 
-`rust_adapter.py` 将 `PersonalCreditOutput` 转为现有 `Table`/`Cell`。`PersonalCreditReportTableExtractor` 保留当前入口和 `_document_result()`；仅将表格算法调用替换为 `run_python_or_rust()` 的个人征信路径。公开 compact result、Markdown 和 JSON 的字段名及排序不变。
+`rust_adapter.py` 将 `PersonalCreditOutput` 转为现有 `Table`/`Cell`。`PersonalCreditReportTableExtractor` 保留当前入口和 `_document_result()`；将通用 candidate tables 与 Snapshot 交给 `run_python_or_rust()` 的个人征信路径。公开 compact result、Markdown 和 JSON 的字段名及排序不变。
 
 ## 路由和失败策略
 

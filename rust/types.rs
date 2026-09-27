@@ -2120,6 +2120,7 @@ pub struct PersonalCreditInput {
     pub schema_version: i64,
     pub snapshot: PageSnapshotDto,
     pub wired_line_tolerance: f64,
+    pub candidate_tables: Option<Vec<TableCandidateDto>>,
 }
 
 impl PersonalCreditInput {
@@ -2134,11 +2135,31 @@ impl PersonalCreditInput {
                 "Field 'wired_line_tolerance' must be non-negative",
             ));
         }
+        let candidate_tables = match get_opt(dict, "candidate_tables")? {
+            Some(value) => {
+                let list = value.downcast::<PyList>().map_err(|_| {
+                    PyValueError::new_err("Field 'candidate_tables' must be a list")
+                })?;
+                let mut tables = Vec::with_capacity(list.len());
+                for (index, item) in list.iter().enumerate() {
+                    let item = item.downcast::<PyDict>().map_err(|_| {
+                        PyValueError::new_err(format!(
+                            "Field 'candidate_tables[{}]' must be an object",
+                            index
+                        ))
+                    })?;
+                    tables.push(TableCandidateDto::from_py(&item)?);
+                }
+                Some(tables)
+            }
+            None => None,
+        };
 
         Ok(Self {
             schema_version,
             snapshot,
             wired_line_tolerance,
+            candidate_tables,
         })
     }
 }
