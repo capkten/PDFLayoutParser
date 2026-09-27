@@ -19,6 +19,7 @@
 - Python `>=3.7`。
 - 必需依赖：PyMuPDF（部分环境包名为 `PyMuPDF`，导入名为 `fitz`）。
 - 使用 ML 表格检测时，安装项目的 `ml` 可选依赖：`onnxruntime`、`numpy`、`opencv-python`。
+- Intel CPU 如需启用 OpenVINO，安装独立的 `ml-openvino` 可选依赖：`onnxruntime-openvino==1.24.1`、`openvino==2025.4.1`、`numpy` 和 `opencv-python`。`ml` 与 `ml-openvino` 不要同时安装，因为两者提供不同的 ONNX Runtime wheel。
 - 发布 wheel 应包含项目运行所需的代码和内置表格检测模型；只有需要替换模型时才需要通过 `--ml-model` 或 `ml_model_path` 指定自定义模型。
 
 ### 1.2 安装已构建 wheel
@@ -34,6 +35,21 @@ python -m pip install "dist/hexai_pdf_parser-<version>-py3-none-any.whl"
 ```powershell
 python -m pip install "dist/hexai_pdf_parser-<version>-py3-none-any.whl[ml]"
 ```
+
+如果目标机器是 Intel CPU，并希望自动尝试 OpenVINO：
+
+```powershell
+python -m pip install "dist/hexai_pdf_parser-<version>-py3-none-any.whl[ml-openvino]"
+```
+
+直接在已有环境中安装依赖时：
+
+```powershell
+python -m pip uninstall -y onnxruntime
+python -m pip install "onnxruntime-openvino==1.24.1" "openvino==2025.4.1"
+```
+
+安装后，默认 `MLTableDetector(backend="auto")` 会在 Intel CPU 上尝试 OpenVINO；缺少 OpenVINO 或初始化失败时回退到 CPU。也可以显式传入 `backend="cpu"` 或 `backend="openvino"`。
 
 如果 wheel 不在 `dist` 目录，直接填写实际路径；例如 wheel 已复制到当前目录时：
 

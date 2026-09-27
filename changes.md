@@ -122,7 +122,395 @@
   - **测试与验证**：在 `tests/test_reading_order.py` 中新增同一行右侧碎片微小 y0 上浮 0.3pt 正例、双栏排版同行 y 完全重叠严禁横向穿透反例，全量 6 项测试全部通过（`6 passed`），`git diff --check` 0 错误。
   - **页面级验证**：在独立输出目录 `D:\codes\PDFLayoutParser\output\fixed_reading_order_20260917\` 重跑青岛国信经审计财报附注第 63、64、65 页。原本第 63 页存在的 7 处乱序逆跳完全归零（0 处乱序告警，降幅 100%），第 64、65 页的乱序逆跳同样完全归零，输出流向图与 Markdown 文本行左右逻辑 100% 顺畅。
 
-## 2026-09-16
+
+## 2026-09-20
+
+- 修复个人信用报告中“机构查询记录明细”与“个人/本人查询记录明细”表格仅提取表头一行、明细记录全部丢失的问题。
+- 根因分析：
+  1. `_is_query_record_row` 中编号匹配 `re.fullmatch(r"\d+", item[4])` 未 strip，而合并后的 span 文本常带尾随空格（如 `"1 "`），导致全数字匹配失败；
+  2. 日期判定硬编码 `item[0] >= 120`，而真实 PDF 中四位年份日期的实际起点在 `100.7 ~ 115.8`，导致所有日期行被拒绝；
+  3. 列边界硬编码固定阈值，在不同版面下难以自适应。
+  上述判定失败导致所有数据行未被提取为表格行，误触发了“跨页续表仅有表头”的兜底分支，输出 `rows=1` 表格，所有明细行被退回为散落文本段落。
+- 判定条件与实现：
+  1. `_is_query_record_row` 增加文本 `.strip()`，将日期起点放宽至 `item[0] >= 90`（同时包含“年”），查询原因起点设为 `item[0] >= 340`；
+  2. 优先依据表头四列中心坐标动态计算列分界 `boundaries`，无表头时使用自适应默认值 `[95.0, 220.0, 355.0]`；
+  3. 机构/原因换行续行边界对齐到 `boundaries[1]`，续行累加前序单元格增加空值安全防护。
+- 保持不回读 words 约束：继续消费上层基于 span 合并的行块，不新增多余底层 words 重建。
+- 测试结果：`tests/test_personal_credit_report.py` 10 项测试全部通过（10 passed）。
+- 页面输出核对路径：`output/verified_demo/个人信用报告(本人简版)` 与 `output/verified_demo/个人征信报告（简版）(1)`，两份报告各 5 页已完成端到端解析，机构查询与本人查询明细表格行列及单元格恢复完整，散落文本段落已清除，可视化 PNG 标注完全贴合。
+
+- 增强个人信用报告定制逻辑：将“机构查询记录明细”和“本人查询记录明细”作为 Row 0（`colspan=4`）纳入表格内。
+- 设计与实现：
+  1. `_make_query_tables` 识别紧邻前置的 section title 行，将其文字及水平边界作为表格 Row 0；
+  2. 原表头行（编号、查询日期、查询机构、查询原因）统一作为 Row 1，明细数据行从 Row 2 开始递增；
+  3. `_trim_query_table` 增加放行逻辑：当表头位于 Row 1 且 Row 0 为机构/本人查询记录明细时保留标题行，避免被误裁；
+  4. `PersonalCreditReportTableExtractor.extract` 保证用精准恢复的 `query_tables` 替换粗糙的候选表格；
+  5. 保持不回读 words 约束，继续消费原生 span 组合数据。
+- 测试结果：`tests/test_personal_credit_report.py` 11 项测试全部通过（11 passed）。
+- 页面输出核对路径：`output/verified_title_demo/个人信用报告(本人简版)` 与 `output/verified_title_demo/个人征信报告（简版）(1)`，两份报告 Markdown 和 PNG 均已确认表格首行为 `colspan=4` 的明细标题。
+
+## 2026-09-27
+
+- **Page 411 英文无线行内词序修复**：
+  - **根因**：Rust 按字框中心 Y 优先排序同一短语词；`turnover` 的原生 Y 中心比 `Income` 早约 `0.0007pt`，导致视觉同一行被拼成 `turnover Income affected by market`。
+  - **修复**：同一短语内中心 Y 差不超过 `1pt` 时优先按 X 排序，只有明显跨行时才按 Y 再按 X 排序。
+  - **测试**：新增原生词序微小 Y 偏差 RED fixture；Rust English `15 passed`，Python focused `28 passed`，`git diff --check` 通过。
+  - **页面验证**：Page 411 两张表结构和 PNG 完全一致；`Income affected by market turnover` 已对齐。保留两处数字字段的 Python 无空格归并差异（`1,907442`/`1,907 442`、`1,714385`/`1,714 385`），BBox、行列和跨度一致。
+
+## 2026-09-27
+
+- **Page 409 英文无线表头边界回归修复**：
+  - **根因**：英文表头无色背景带结束位置为 `611.82`，年份层起点为 `612.49`。Rust 用 `row.y0 <= header_end + 2pt` 把年份层计入表头并在单背景压缩中吞掉，输出 `6x9/50`，Python 为 `7x9/59`。
+  - **修复**：表头行计数保留原有 2pt 容差，同时当候选行仅以小于 1pt 的间隙越过背景末端时停止计入，避免吸收紧邻的年份层；保留普通单背景折行表头压缩行为。
+  - **测试**：新增年份层最小 RED fixture；Rust English `13 passed`，Python 英文/中文 focused `28 passed`，`git diff --check` 通过。
+  - **页面验证**：输入 `D:\codes\PDFLayoutParser\fix\zh_all_table_pages.pdf`，Page 409 Rust/Python 均 `7x9/59`。页面 PNG 与表格 PNG SHA-256 相同；剩余 8 个 Cell 仅为日期文本词序（Python `Mar 2011`，Rust `2011 Mar`），BBox、行列、跨度完全一致。
+
+## 2026-09-27
+
+- **Page 482 Rust 中文无线表格回归修复**：
+  - **根因**：长首列正文 Cell 跨越推断的 numeric body 起点时，逻辑行合并把正文行与表头后续行压成同一逻辑行，Page 482 的 5 行表被压成 4 行并触发 `(row=2,col=3..10)` occupancy conflict；同时多级表头中未被严格单字竖链识别的首部 CJK Cell 没有覆盖完整表头行，生成多余空 Cell。70f2510 引入的 header gate 保留后，必须在证据连续和空槽位条件下恢复这些结构。
+  - **修复**：首列跨 body 边界的逻辑行 Span 仅在其起点紧邻 body 起点时合并；增加 source evidence 驱动的 row=0 竖排链扩展；当 row=0 单列 CJK 表头下方槽位均为空时，将其安全扩展到已证明的表头行数。没有页码特判，不回读 words。
+  - **测试**：新增长正文 Span 拒绝跨 numeric body、空槽位首部 CJK stub 扩展及 row=0 连续 evidence 竖链用例；Rust `cargo test --locked --lib` 为 `92 passed`，相关 Python 无线/路由测试 `91 passed`，页面级 Page 987 回归测试因真实 PDF fixture 缺失而 skip。
+  - **页面验证**：使用 `D:\codes\PDFLayoutParser\fix\zh_all_table_pages.pdf` 独立重跑。Page 482 输出 `output/page482_fixed3_rust` 与 Python `output/page482_current_python` 逐 Cell signature 完全一致：`wireless_span_recovery`、`5x13`、`27 cells`、bbox `[83.2,124.8,540.5,416.3]`；Page 987 Rust/Python 输出 `output/page987_fixed3_rust`、`output/page987_fixed3_python` 完全一致：`6x7`、`36 cells`、bbox `[84.6,90.2,506.5,365.3]`。
+
+- **Page 410/419/420 英文表头横线判定收紧**：
+  - **根因**：仅按背景带数决定单背景表头压缩仍会把 Page 410 的多级表头吞掉；Page 410 的内部横线由多个绘制片段组成，旧 DTO 只传 Y 坐标，Rust 无法判断其是否为跨表头的完整横线。
+  - **修复**：英文网格 DTO 增加水平线长度；Rust 将同一 Y 层的线段合并后，单背景表头只有在表头区域没有跨越 70% 表格宽度的内部横线时才压缩。保留 Page 419/420 的局部线表头压缩，并阻断 Page 410 的完整多级表头误合并。
+  - **测试**：新增单背景多级表头横线反例；Rust focused `12 passed`，Python 英文无线测试 `23 passed`。
+  - **页面验证**：独立输出 `C:\Users\23662\.codex\worktrees\english-page421-regression\output\check_line_span_fix2_20260927`；Page 410 两表、Page 419、Page 420 三表、Page 421 三表的行列与 Cell 数均恢复一致。Page 419/420 首表只保留此前记录的 Python 表头文本顺序差异。
+
+## 2026-09-27
+
+- **Page 419/420 单背景英文表头回归修复**：
+  - **根因**：Page 421 为两段背景表头增加的“列跨度拓扑必须重复”限制被错误应用到单背景表头；Page 419/420 的父表头与子表头列跨度不同，Rust 因而保留了额外的表头物理行，输出 `10x6`，Python 为 `9x6`。
+  - **修复**：恢复单无色背景带的既有压缩规则；仅当背景带数为 2 时才要求各表头层拓扑重复，保留两级表头反例保护。
+  - **测试**：新增混合列跨度单背景表头 RED fixture；Rust focused `11 passed`，Python 英文无线测试 `23 passed`。
+  - **页面验证**：Page 419/420 独立输出位于 `C:\Users\23662\.codex\worktrees\english-page421-regression\output\page419_420_regression_fix_20260927`；两页表格形状与 Cell 数均一致，PNG SHA-256 相同。两页首表剩余文本顺序差异保留为 Python 的源文本归并问题，Rust 按列拓扑生成自然顺序。
+
+## 2026-09-27
+
+- **Page 410 第二张英文无线表 Cell BBox 对齐**：
+  - **根因**：表头物理行数（2）多于无色背景行数（1）时，Rust 正文背景索引从 `background_header_rows` 直接起算，重复消费第一个有色背景带，产生 `520.3` 的错误中间边界并让最后一行延伸到表格底部。
+  - **修复**：正文背景源行改为按压缩后的逻辑行号加上 `max(background_header_rows - header_rows, 0)` 映射，避免表头行数多于背景行数时重复消费背景带；无背景和普通表头路径保持原规则。
+  - **测试**：新增 Rust 行区间回归用例，修复前 `A` 行起点为 `17.0`、修复后为 `22.0`；`cargo test --locked english_wireless` 共 `10 passed`。
+  - **页面验证**：输入 `D:\codes\PDFLayoutParser\fix\zh_all_table_pages.pdf`，Page 410 独立输出位于 `C:\Users\23662\.codex\worktrees\english-page410-bbox\output\page410_bbox_fix_20260927`；两张表逐表 Cell JSON 完全一致，形状为 `7x13/85`、`6x7/39`，整页 PNG SHA-256 相同。
+
+## 2026-09-27
+
+- **Page 421 英文无线多段表头压缩对齐**：
+  - **根因**：Python 会按上下单元格列跨度完全相同且无横线阻断的规则合并纵向折行表头；Rust 仅允许单一无色背景组触发该压缩，导致 Page 421 第一张表的 `Three months / ended / 31 Mar 2011 / $m` 被拆成两行，Rust 为 `5x3`，Python 为 `4x3`。
+  - **修复**：将无色表头背景组上限从 1 放宽到 2，并保留左侧第 0 列存在标题时的多级表头保护；其他表头拓扑规则不变。
+  - **测试**：新增两段逻辑表头背景跨物理折行的 RED fixture；Rust focused `9 passed`，Python 英文无线测试 `22 passed`，`git diff --check` 通过。
+  - **页面验证**：输入 `D:\codes\PDFLayoutParser\fix\zh_all_table_pages.pdf`，Page 421 独立 Python/Rust 输出位于 `C:\Users\23662\.codex\worktrees\english-page421-fix\output\page421_parity_20260927`；三张表逐表 Cell JSON signature 完全一致，形状分别为 `4x3/12`、`5x3/15`、`9x3/27`，整页 PNG SHA-256 相同。
+
+## 2026-09-27
+
+- **Page 410 第二张英文无线表列带对齐**：
+  - **根因**：Python `_build_wireless_table()` 已有检测列带，但 `_english_grid_input()` 未序列化这些列带；Rust `build_english_cells()` 因而重新用 words 几何推断列数。Page 410 第二张表被推为 9 列，Python 则为 7 列。
+  - **修复**：`EnglishGridInput` 新增可选 `columns` DTO；英文 cell builder 在列带非空时直接使用传入列带，旧调用方缺省时仍执行原推断。Python 无线表路径现把检测列带传给 Rust。
+  - **测试**：新增显式列带赋值 RED fixture、DTO roundtrip 和 Python 调用链序列化断言；Rust focused 单测及 Python 英文无线测试验证中。
+  - **页面验证**：`D:\codes\PDFLayoutParser\fix\zh_all_table_pages.pdf` 页索引 409、410，独立 Python/Rust 输出位于 worktree `output/page409_410_python_columns_fix` 与 `output/page409_410_rust_columns_fix`。Page 409 的 `7x9/59` Cell JSON 和 PNG SHA-256 完全一致；Page 410 两表数量、来源一致，第一表为 `7x13/85` 且 Cell JSON 完全相同；第二表从 Rust 旧 `7x9/56` 对齐为 `6x7/39`，非空内容、行列位置及跨度一致，列边界为 `58.9, 215, 263, 318.5, 380, 440, 505.3, 549.5`。两种模式 PNG 已目视检查；第二表剩余差异是部分纵向 Cell bbox 切分点。
+  - **验证命令**：`cargo test --locked --lib english_wireless`（9 passed）、`pytest tests/test_pdf_fast_english_wireless.py -q`（19 passed）、`git diff --check` 通过。
+
+## 2026-09-27
+
+- **Page 337 英文无线表格 Rust 行契约对齐**：
+  - **根因**：Python `EnglishTableExtractor._build_wireless_table()` 已将同一数据行内的垂直折行文字封装在同一个 `_RowData`/背景带中；Rust `rust/english_wireless.rs::build_english_cells()` 原先直接以 `cluster_word_rows(..., 4.0)` 按词中心聚类，忽略传入的数据背景带，Page 337 的 10 个逻辑行被拆成 16 行。
+  - **修复**：新增 `cluster_english_rows()`，仅对 `color.is_some()` 的数据背景带按其几何范围归属文字并形成逻辑行；无色表头仍走原有 4pt 聚类和表头压缩，避免改变既有多级表头语义。未落入背景带的词保留旧聚类兜底。
+  - **约束**：仅修改 Rust 英文无线行聚类和对应最小回归测试，不回读 `page.get_text("words")`，不修改 Python 路径。
+  - **验证**：新增 `test_build_english_cells_uses_supplied_logical_background_rows_for_wrapped_text`，修复前 RED、修复后 GREEN；Rust 表头压缩 focused unit GREEN。Page 337 独立 Python/Rust 重跑后 tables JSON 结构与 Cell signature 完全一致：`english_general_wireless`、`10x4`、`36 cells`、bbox `[44.3,206.0,549.7,458.4]`；Rust 输出目录 `D:\codes\PDFLayoutParser\output\english_337_340_rust_fix_20260927`，JSON `pages/page-337.json`、可视化 `tables/page-337.png`。
+
+- **Page 340/408 英文无线表头压缩对齐**：
+  - **根因**：Rust `merge_wrapped_header_rows()` 只按列位置跨行合并，未区分相邻无色表头背景带；Page 340 的单行正文 `All paragraphs...` 被错误并入第一层表头，Page 408 的重复 `Products` 标签在清空子 Cell 后又被占用检查阻止正确 `rowspan`。
+  - **修复**：为表头压缩传入背景行组，仅在同一逻辑背景组内合并；相同上下文标签不重复拼接；占用检查忽略已清空的子 Cell，保留有效文本对跨度的阻断。
+  - **验证**：新增 Page 340/408 最小 RED fixtures；修复后 Python English focused `16 passed`、Rust `cargo test --locked --lib english_wireless` `9 passed`。独立 Rust 输出 `D:\codes\PDFLayoutParser\output\english_340_408_rust_fix_final3_20260927` 与 Python baseline 逐表 Cell signature 一致：Page 340 `16x5/79`、Page 408 `8x5/37`；bbox 分别 `[44.2,123.0,549.9,400.4]`、`[59.1,543.7,553.0,651.6]`。
+- **Page 407 英文无线列边界对齐**：
+  - **根因**：Rust 列推断在没有显式数据行背景证据时，仍遍历全部 `input.words` 使用含数字的 `$1.15` 等词吸附列边界；Python `data_rows=None` 路径不执行该金额锚点。Page 407 第一列因此从 Python 的 `299.77` 被推到 `354.78`。
+  - **修复**：Rust 金额边界吸附仅消费独立 `$` token，保留显式货币列测试，同时跳过 `$1.15` 等已组合金额词，基础列检测和 Python 路径不变。
+  - **验证**：新增无数据行背景的组合金额 RED fixture，修复后 GREEN；Python English focused `17 passed`、Rust English unit `9 passed`。Page 337/340/407/408 Rust 与 Python Cell signature 全部一致；Page 407 为 `english_general_wireless`、`23x4`、`92 cells`、bbox `[60.9,312.0,550.3,745.9]`。输出目录：`D:\codes\PDFLayoutParser\output\english_337_340_407_408_rust_final_20260927`。
+- **Page 419/420 英文无线逻辑表头压缩对齐**：
+  - **根因**：两页候选输入均只有一个无色表头背景带（H=1、D=8）；Rust 依据词中心拆出多个内部 header rows，`Cash/Group` 被错误扩成 `rowspan=2`，中间业务表头留在下一行，首个正文行整体下移。
+  - **修复**：当仅有一个表头背景带且无左侧 stub 时，将内部表头行按列合并为一个逻辑 header row，随后重映射 body row/bounds；多表头背景页（如 Page418）保持原流程。
+  - **验证**：新增最小 H=1 多行表头 RED fixture；Python English focused `18 passed`，Rust English unit `9 passed`。Page419/420 table1 Rust/Python Cell signature 一致：`9x6/52`；Page418 `38x8/298`，Page420 其他两表 `7x3/21`、`8x3/24` 未回归。输出：`D:\codes\PDFLayoutParser\output\english_419_420_rust_fix4_20260927`。
+- **Page 421 英文无线百分号间距对齐**：
+  - **根因**：Rust Cell phrase 组装无条件执行 `.replace("% ", "%")`，删除 `16.5%` 与后续 `(2010:` 之间的合法空格。
+  - **修复**：移除百分号后的无条件空格清理；保留美元符号清理和其余拼接规则。Page411 文本归并差异仅记录，不在本次修改。
+  - **验证**：新增百分号间距 RED fixture，修复后 Python English focused `19 passed`、Rust English unit `9 passed`；Page421 三表 Cell signature 与 Python 完全一致。
+- **Page 482 Rust 中文无线表格竖排单字链 parity 修复**：
+  - 根因：第 13 列 `减值准备期末余额` 的 8 个 native atom 同属 block=9、source line=0..7 且 flow 连续；Rust 单字 CJK 续行保护使其停留为 8 个物理行，Python 则合并为一个表头 Cell，最终 Rust 产出 10x13 而 Python 为 5x13。
+  - 修复：仅对 row=0 起始、同列同几何、同 source block 且连续 source line/flow 的证据完整 CJK 竖排链一次性合并；逻辑 row-start 与表头拓扑随后保留叶子行和正文边界，避免中间两两合并造成 occupancy conflict。其他路径不回读 words、不改 Python。
+  - 验证：Rust chain fixture 与 wireless_structure 45 项测试通过；Page 482 Rust/Python cell signature 完全一致（5x13、27 cells、bbox `[83.2,124.8,540.5,416.3]`、0 diagnostics）。独立输出目录：`D:\codes\PDFLayoutParser\output\page_482_rust_chain_fix_20260927`，JSON `pages/page-482.json`，可视化 `zh_all_table_pages_page_482_visualized.png`。
+
+- **Page 978 Rust 表头拓扑 parity 修复**：
+  - Rust `header_body_start()` 原先在未找到 numeric body 行时，直接把首个“非空 Cell 数达到 3/4 列”的物理行当作 body 起点；Page 978 的第二层表头正好满足该条件，导致 `header_rows=1`，表头 `rowspan/colspan` 无法恢复并物化大量空槽。
+  - 修复前置拓扑下界：存在跨列父表头且后续有完整连续叶子列时，body 起点不得早于叶子表头行之后。
+  - Page 978 四张表 Rust/Python JSON 逐表一致：`(5,4,19)`、`(7,5,27)`、`(4,8,27)`、`(7,7,32)`；Rust 单元测试 `44 passed`。
+  - Page 482 尚未修改，继续单独调查。
+
+- **Page 585/586/588 Rust 财务表格行合并 parity 修复**：
+  - Rust 垂直合并使用 native `run_refs` 与 aligned atom evidence 对齐，修正 filtered flow 索引错配；region transition 的 `row_interleaved` 财务行合并间距收紧为 Python 合同的 `6pt`，无 evidence 的 legacy full-page candidate 保持原 `10pt`。
+  - Rust 后置 continuation 合并复用 source block 约束，避免跨来源块的财务项目误并。
+  - Page 585、586、588 的 Rust/Python 表格 JSON 形状和非空 Cell 数完全一致：`36x5/180`、`45x5/225`、`39x5/195`，occupancy diagnostics 为 0。
+  - Page 589 保留为 Python 错误记录：Python `_NUMBERED_ITEM_START` 未识别全角点号 `U+FF0E`（如 `1．`），把编号清单错误合并成一个大 Cell；Rust 保留 25 行结构更符合原始页面，未修改 Python。
+
+- **Rust `row_interleaved` 表头换行模式对齐 Python（Page 941 组）**：
+  - **根因**：Python 在 `row_interleaved` 模式下只要求 native flow 连续；Rust native-region DTO 未传递 `output_mode`，`merge_source_contiguous_vertical_cells()` 无条件使用 `source_block/source_line` 连续约束。Page 941 等页面的表头片段 flow `7/8/9` 跨 block `8/8/9`，Rust 拒绝第三段并物化为额外逻辑行。
+  - **修复**：`NativeRegionInput` 增加并校验 `output_mode`，Python 构造 Rust DTO 时传递 `row_interleaved/columnar`；Rust 仅在 `columnar` 模式启用 source block/line gate，旧 DTO 缺省保持 `columnar`。
+  - **页面验收**：`941、942、943、944、1018、1019、1020` 共 7 页的结构化表格 JSON 全部与 Python 一致，标注 PNG SHA-256 逐页一致；对应输出见 `tmp/page941_group_compare_after.json`。
+  - **测试**：Rust `cargo test --locked --lib` 为 `72 passed`；相关 Python native-region/wireless merge/grid 测试为 `84 passed`，差分测试排除两个既有 fixture 分类失败后为 `8 passed`；新增 DTO `output_mode` roundtrip 回归通过。
+
+## 2026-09-26
+
+- **Page 36/37 Rust wired-table 文本归属对齐 Python**：
+  - **根因**：`rust/wired.rs::assign_text_to_line_cells()` 使用传入的几何 `line_tolerance=2.3` 处理文本行归属；Python `_assign_text_to_line_cells_python()` 固定使用 `2.0pt`。两页各有一个 word 的中心点距离上方 Cell 下边约 `2.04pt`，Rust 因 `2.3pt` 错分到上一行，造成 4 个 Cell 文本差异。
+  - **修复**：Rust 文本归属的上下/左右匹配统一使用固定 `2.0pt` 文本容差，几何网格仍使用原有 `2.3pt` 容差。
+  - **验证**：新增边界回归 `tests/test_pdf_fast_wired.py::test_assign_text_to_line_cells_matches_python_row_boundary_tolerance`；修复前 RED，修复后 `tests/test_pdf_fast_wired.py tests/test_wired_table_extractor.py` 为 `91 passed`，`cargo test --locked --lib` 为 `72 passed`。Page 36/37 独立 Python/Rust 重跑后，整张 `tables` JSON 完全一致。
+  - **输出**：`tmp/page36_37_python_after/`、`tmp/page36_37_rust_after/`。
+
+## 2026-09-25
+
+- **Rust 中文无线表格漏检修复与占位冲突根治（18 个漏检页清零与 1023 页全量验收通过）**：
+  - **根因分析**：
+    1. **`grouped_mixed_leaf_header_span` 几何判定偏差（涉及 Page 467、468、469 等 16 页）**：Rust 端无线结构推断中原实现单行高误判以及 `start.saturating_sub(1)` 向上误并，与 Python `logical_grid.py` 要求叶子单元必须是多行（`rowspan > 1`）不一致，导致父标题与单行叶子标题错误合并并跨行，引发严重的网格占用冲突（OccupancyConflict），根据中文无线表格硬性约束整个表格被安全防护机制丢弃；
+    2. **候选前置门控阻断 ML 检测（涉及 Page 440、923）**：`src/hexai_pdf_parser/tables/table_extractor.py:741-760` 中，当无规则几何候选时直接提前返回 `[]`，即使开启了 ML 模型（`use_model=True`），YOLO 模型检测也无法触发，导致区域恢复没有机会执行；
+    3. **`merge_source_contiguous_vertical_cells` 贪婪垂直合并（涉及 Page 590、591 等财务报表）**：Rust 侧垂直合并缺少序号项及财务科目缩进识别，将带“一、”、“二、”、“（一）”、“1．”、“加：”、“减：”等编号与列表项连续向上贪婪合并，整列 27 行被合并为一个跨度高达 27 的巨无霸 Cell，引发整表格行塌缩并产生大量槽位重叠冲突而整表丢弃；
+    4. **同物理槽位换行折行碎片未合并（涉及 Page 932、935、936、959、960 等）**：中文文本换行/首行悬挂折行时落在同一个 `(row, col)` 槽位内，但第二行水平坐标靠左（换行顶格为负间距），原有 `merge_physical_inline_fragments` 仅合并水平同一视觉行的正向间隙碎片，导致槽位中遗留两个重复的 `PhysicalCell`，直接触发硬性 OccupancyConflict 丢弃整表。
+  - **核心设计与修复实现**：
+    1. **`rust/wireless_structure.rs`::`grouped_mixed_leaf_header_span`**：严格对齐约束 `candidate.rowspan > 1`，删除单行高误判及 `start.saturating_sub(1)` 向上误并逻辑；
+    2. **`src/hexai_pdf_parser/tables/table_extractor.py`**：当 `candidates` 为空时，若 `self.use_model and self.model_detector is not None`，继续调用 `_extract_model_tables`，解除规则候选为空对 ML 检测的硬阻断；
+    3. **`rust/wireless_structure.rs` 防贪婪跨行合并**：新增 `is_numbered_item_start` 和 `is_list_continuation`，在 `merge_source_contiguous_vertical_cells` 中拦截序号项、列表前缀及财务行（“一、”、“（一）”、“1.”、“加：”、“减：”等），杜绝财务报表科目被误并；
+    4. **`rust/wireless_structure.rs` 同物理槽位折行碎片合并**：在 `merge_physical_inline_fragments` 中，对同一 `(row, col)` 物理槽位内来源连续且非编号项的上下折行碎片，合并其 bbox 并用 `\n` 连接文本，消除物理网格内部重复同槽 Cell 引发的占用冲突。
+  - **不回读 words 约束与安全防护**：
+    - 严格遵循中文无线表格结构恢复规范，只消费 native span、atom、列带和物理/逻辑 Cell，**严禁回读 `page.get_text("words")`**；
+    - **绝不放宽 OccupancyConflict 冲突保护**：保留所有占用冲突检测与安全校验，所有槽位严格保持一槽一格或精确跨度覆盖。
+  - **测试与全量验收结果**：
+    - **Rust 与 Python 单元测试**：Rust 36 个测试全绿（`cargo test --lib wireless_structure`）；新增 `tests/test_rust_missing_pages.py`、`tests/test_rust_chinese_wireless_parity.py`、`tests/test_table_extractor.py`，全部测试 PASS；
+    - **18 个漏检页专项复核**：`440, 454, 462, 467, 468, 469, 590, 591, 923, 927, 932, 935, 936, 959, 960, 986, 1014, 1017` 全部 100% 成功出表，漏检数清零，0 占位冲突；
+    - **全量 1023 页端到端验收**：
+      - 输出路径：`D:\codes\PDFLayoutParser-Fast\output\pdf\zh_all_table_pages_rust_missing_fix_20260925_72dpi_final`；
+      - 验收指标：`pages_json = 1023`, `table_png = 1023`, `occupancy_conflicts = 0`, `table_count = 2195`。
+
+- **Parity follow-up（隔离分支验证）**：按 Python `atoms -> bands -> physical cells -> logical cells` 逐阶段对照，继续修复 `wrapped_leaf_header_span` 单行高度误判、`row_hint` 绕过列跨度判定、显式单列物理 Cell 被 bbox 扩展、同槽位 inline marker 合并和 interleaved source 垂直合并。18 个目标漏检页均恢复；Rust 全量复跑输出 `output/pdf/zh_all_table_pages_rust_parity_followup_20260925_72dpi` 为 1023 页、933 个有表页、2201 张表、最终 Cell 槽位冲突 0。与 Python baseline 仍有 69 页结构差异，Page 191 和 982 各多出 1 张候选表；Python 默认路由保持不变。
+
+## 2026-09-24
+
+- **表格候选逻辑下沉至 Rust 优化 (Rawdict 快速路径)**：
+  - **根因分析**：端到端单页表格提取总耗时约 1.5s，其中纯 YOLO ONNX 模型推理仅需约 0.28s，其余 >1.0s 的开销完全集中在 Python 侧 `capture_page_snapshot`（数十万次递归字典包装、`_freeze` 冻结与 SHA256 签名计算）。而 PyMuPDF C 层的 `page.get_text("rawdict")` 耗时仅约 4ms，Rust 端无线结构推断纯计算耗时仅约 5ms。
+  - **核心设计与实现**：
+    1. 在 `rust/snapshot.rs` 实现 `collect_native_spans_from_rawdict`，直接遍历 PyMuPDF 的 `rawdict` C-Python 底层字典结构，就地生成 `Vec<NativeSpanInputDto>`，保留原有的页脚页码检测（`is_footer_page_number`）与空间区域过滤，完全绕过 `PageSnapshot`；
+    2. 在 `rust/lib.rs` 暴露 `collect_native_spans_from_rawdict` 与 `recover_wireless_tables_from_rawdict` 两个 PyO3 绑定，直接在 Rust 内存中打通 `rawdict -> spans -> recover_wireless_tables` 直通链路；
+    3. 在 `src/hexai_pdf_parser/rust_adapter.py` 提供强类型适配接口；在 `src/hexai_pdf_parser/tables/wireless_table_recovery.py::recover_wireless_tables` 中接入极速通道：当 `PDF_RUST_MODE='rust'` 且传入原生 `fitz.Page` 时，直接走 Rust rawdict 快速路径恢复无线表格。若发生异常安全回退到原有 snapshot 路径，传入 snapshot 时保持原有行为不变。
+  - **不回读 words 约束**：严格遵循中文无线表格结构恢复规范，只消费 PyMuPDF 原生 `rawdict` 中的 spans 与字符，严禁回读 `page.get_text("words")`，严格保持 native-span、atom、列带和 Cell 的结构恢复不变量。
+  - **测试与性能对比**：
+    - 新增 `tests/test_rust_rawdict_candidate.py` 覆盖 4 项专属单元测试（span 提取 100% 一致性、恢复表格结构 100% 一致性、page 快速通道、异常安全回退）；
+    - 全套测试：64 项 Rust 单元测试全部通过，99 项核心 Python 测试全绿；
+    - 性能实测：在 `zh_all_table_pages.pdf` 第 0 页上，表格提取阶段（`table_extract`）耗时从 **1.488s 骤降至 0.332s**（包含 0.28s 模型推理），整页候选检测纯计算耗时从 1000+ ms 降至 20ms 以内，单页端到端总解析时间压缩至 **0.531s**。
+
+## 2026-09-23
+
+- Task 5 bounded Rust parity repair：修正 NativeRegion band ID 到零基列位置映射，保留 `column_id` 原证据；Rust native table recovery 使用保留 separator 的 text-run helper，避免把 Python 候选分隔行过滤掉。页面候选分组按 Python 规则拆开未标注单字段行，并补回相邻短标题；Rust vertical continuation 拒绝以冒号结尾的字段，匹配 Python 字段标签语义。页面候选 confidence 从固定 `0.90` 改为按 Python 的多列行支持数与活动列数计算。
+- Python/Rust bridge 对“没有稳定列带、无 native region 输入”的情况直接返回 Python oracle 同样的空网格，不再把 `None` 误报成 Rust 输出类型错误。添加 RED/GREEN 路由与候选 confidence 回归；迁移 focused pytest `186 passed`，最终源码 `cargo test --lib` `62 passed`，`git diff --check` 通过。
+- 五页验收输出：`D:\codes\PDFLayoutParser\output\rust_migration_task5_confidence_20260923_r10\`，输入 PDF SHA256 `376162411d0d5b75ad2a4dc2d5249b8531d20fa81e26af792c04b76d6fc85a89`。结构 mismatch `0`、routing diagnostics `12`；Python/Rust 表格数在 184/188/189/191/192 页分别为 `2/2/2/2/4`，五页 overlay PNG 哈希逐页相同。此结构相等依赖 occupancy fallback，不能记作 Rust 独立 page parity；Rust primary 仍关闭。页面基线 49 个 Python occupancy conflict 保留为明确未决合同。
+- 一次按同 row/column 无条件聚合的试验导致 `1475` 条结构 mismatch，已撤回，未留在最终代码；该结果说明还需先对齐 Python `_column_tracks()`、cell assignment、span 和 bbox 语义，不能只合并重复槽位。
+- 页面候选路径新增 Python `_column_tracks()` 锚点规则：数字按右沿、标签按左沿分配到重复列轨迹；只对带完整 `row_hint` 且轨迹数与推断列带数一致的候选重映射，避免改变区域入口或不匹配的网格。宽标签跨入数值列 bbox 的 synthetic differential 按 Rust fallback diagnostic 从 RED 到 GREEN；focused pytest `187 passed`，`cargo test --lib` `62 passed`，release 扩展构建成功。
+- 新五页输出为 `D:\codes\PDFLayoutParser\output\rust_migration_task5_left_anchor_20260923_r11\`，PDF SHA256 不变。summary 仍为结构 mismatch `0`、routing diagnostics `12`；table count 仍为 `2/2/2/2/4`，五页 Rust/Python PNG 哈希一致且与 r10 相同。Rust 页面及 188 页区域入口仍发生 occupancy fallback，因此该 slice 没有完成真实页 Rust 独立 parity，也没有证明提速；Python 默认路由保持不变。
+
+## 2026-09-22
+
+- Task 4D logical row/header-span transaction：以 native continuation 的拥有关系压缩物理行；只有同层父标题与下一层连续叶子列形成完整、无重叠 `1:2` 配对时恢复 `colspan=2`，不完整层整层回退为 `colspan=1`。`rowspan` 在逻辑网格生成后才推断，覆盖槽位出现非空标题时拒绝扩展；跨度 proposal 在 clone 上重建 occupancy，冲突或越界时回滚。
+- 所有未被既有 rowspan/colspan 覆盖的逻辑槽位现在各自物化为独立 `text=""`、`1x1` Cell，并执行最终 exact occupancy 检查；恢复入口保留 out-of-bounds diagnostic。实现只消费 native span、atom、列带和 Cell，不回读 `page.get_text("words")`，不调用 `extract_zebra()` 或 legacy `_rebuild_text_aligned_table()`。
+- Task 4D 回归：fresh binding 下 differential/grid/header/recoverer focused pytest `102 passed`，`cargo test --lib wireless_structure` `31 passed`；默认 Python route、shadow/fallback policy 和页面级 JSON/PNG 验收保持不变。仓库级 `cargo fmt -- --check` 仍受既有跨文件格式差异影响，未做全仓格式化。
+- Task 4C physical grid/occupancy bounded slice：修复 Rust 行聚类先于 continuation 判定拒绝左移 CJK 换行字段的问题；严格要求 source refs 连续、向下移动、CJK-only、左移、右边界接近前一字段左边界且前字段足够宽。修正 continuation predicate 的 veto 逻辑，避免拒绝条件被误当成允许条件。
+- 物理片段合并后从完整 Cell 集合重新计算 occupancy，避免合法的 source-contiguous same-slot inline fragment 保留过期 `occupancy_conflict`；独立字段冲突仍显式诊断。物理 Cell 负索引或超出推断网格时输出 `occupancy_out_of_bounds`，不再静默丢弃。有效 `col_hint` 优先于宽 bbox 的列推断。
+- 新增 Rust 物理网格正例和拒绝误合并/冲突/空槽覆盖回归；`cargo test --lib wireless_structure` 为 `27 passed`，无线结构 differential/grid/recoverer focused pytest 为 `49 passed`，`git diff --check` 通过。结构恢复仍只消费 owned atom、列带和 region，不回读 `page.get_text("words")`；默认 Python route 和页面级 JSON/PNG 验收保持不变。
+
+## 2026-09-21
+
+- Task 3B differential ledger minor fix：为每条 mismatch 增加显式 `reason`，并为 `empty_whitespace_and_separator` 的两条 `flow/order` 记录固定 `requires_adaptation` 分类和分层根因。`text_runs/S2` 是 Rust 未透传 separator survivor 的 flow metadata，`atoms/S2` 是 Rust 使用过滤后的 local flow/order `1` 而 Python 保留 source order `2`；两者 source bounds 均为 `2`，不再笼统记为一条差异。重新计算 ledger：total `111`，fixture/field/classification counts 不变，SHA256 为 `cb51b9e240ec69b88f9b00066c2293f076b31ffb3973bac7996eb663f0a71f81`。
+
+- Task 3B atom metadata review fixer：修复 `review-7fb8ea0..d7a195b.diff` 指出的两个 Important。根因一是 `rust/native_span.rs::build_atoms()` 仍把公开视觉 `TextRunDto.order` 复制为 atom order，现改为 `flow_start` 存在时优先使用，legacy run 无 flow 时回退 `run.order`；`run_refs` 继续直接来自 `run.span_refs`。二是 `rust/lib.rs::build_atoms_binding()` 原先独立输出 flow 和 source evidence，导致 legacy evidence-only run 产生 partial atom metadata；现仅当 `flow_start`、`flow_end` 和非空 `source_positions` 同时存在时一次性输出完整 flow/source bundle，否则保持 core legacy atom shape。`tests/test_rust_native_span_differential.py` 的 Rust atom normalizer 现在比较真实 atom order、flow 区间、run source bounds 和 source continuity metadata，不再将这些字段 broad ignore。
+  - **TDD 与回归**：先加 packed fragment、filtered-gap/wrapped atom order、evidence-only/no-flow shape 和 normalizer 字段断言；RED focused 为 `3 failed, 2 passed, 20 deselected`，normalizer 单测另为 `1 failed, 24 deselected`。`maturin develop --release` 成功后 focused GREEN 为 `6 passed, 19 deselected`，完整 differential 为 `25 passed`。
+  - **Differential ledger**：total `111`；fixture counts `alignment_corridor_veto=40`、`cjk_non_whitelist_spacing=10`、`cjk_whitelist_spacing=5`、`empty_whitespace_and_separator=6`、`independent_fields_counterexample=10`、`packed_numeric_split=10`、`single_field_control=5`、`source_block_line_noncontinuous=10`、`superscript_inline_gap=5`、`vertical_wrapped_witness=10`；field counts `flow/order=23`、`font/script=22`、`source continuity=22`、`span/run refs=44`；classification counts `defect=8`、`requires_adaptation=15`、`unsupported=88`；SHA256 `b2042666a63fa728b7199380708738cddffa21642995e36c93d65f5168f0b052`。旧 semantic fixture 断言保留；未读取 `fitz.Page`/`page.get_text("words")`，未修改用户 dirty 测试文件、`rust/wireless_structure.rs` 或 column/grid/header/route。
+  - **遗留语义**：legacy TextRunDto 无 flow 时仍以 `run.order` 作为 atom order；evidence-only/no-flow 不附加任何新 atom metadata；`source_start/source_end`、旧 evidence 和无 evidence DTO shape 保持不变。未执行页面级 PDF JSON/PNG 重跑，未发现本 bounded slice 的额外页面验收输入。
+
+- Task 3B atom metadata bounded slice：根因是 `build_atoms()` 将视觉 `TextRunDto.order` 错当作 `run_refs`，而 `WrappedRun` 内部已有的 native flow 区间在返回 `TextRunDto` 时丢失；owned text-run evidence 也没有到达 atom 边界。现在 `rust/native_span.rs::build_atoms()` 直接使用 `run.span_refs`，普通 run、packed numeric fragment 和 wrapped chain 透传可选 `flow_start/flow_end`；`rust/lib.rs::build_atoms_binding()` 从同一 run 的 evidence 附加 `source_blocks`、`source_line_start`、`source_line_end`、`source_position_known`。`TextRunDto.order/source_start/source_end` 语义不变，核心 `AtomDto` 不扩展，legacy 无 evidence DTO shape 不变；未读取 `fitz.Page`/`page.get_text("words")`，未修改 wireless structure、column/grid/header/route。RED focused 为 `3 failed, 1 passed, 20 deselected`；GREEN focused 为 `4 passed, 20 deselected`；完整 differential 为 `24 passed`，evidence 为 `9 passed`，text-runs 为 `45 passed`，`cargo test --lib native_span` 为 `4 passed`，`git diff --check` 通过。ledger total `154`；fixture counts `alignment_corridor_veto=56`、`cjk_non_whitelist_spacing=14`、`cjk_whitelist_spacing=7`、`empty_whitespace_and_separator=7`、`independent_fields_counterexample=14`、`packed_numeric_split=14`、`single_field_control=7`、`source_block_line_noncontinuous=14`、`superscript_inline_gap=7`、`vertical_wrapped_witness=14`；field counts `flow/order=44`、`font/script=22`、`source continuity=44`、`span/run refs=44`；classification counts `defect=16`、`requires_adaptation=28`、`unsupported=110`；新 SHA256 `b3fdf184452653d59047dacbc57150bef6bdb0e17498043dce35016e132e54e0`。限制：可选 atom metadata 在 standalone `build_atoms` binding 暴露；core `AtomDto` 及其他未要求的 recovery/structure contract 保持原样，未做页面级 PDF/PNG 重跑。
+
+- Task 3B alignment corridor veto bounded slice：根因是 Rust native span 行内分组只执行既有 `can_join`，未迁移 Python `text_runs.py` 的 alignment corridor veto，导致有三组以上稳定左右对齐列带且中间 corridor 足够宽时把相邻字段拼成一个 run。现在在 `rust/native_span.rs::build_text_runs()` 中仅对 `can_join` 为真的候选，使用 owned `PreparedSpan`/alignment DTO 复现 `_alignment_anchor`、`_alignment_tolerance`、`_alignment_modes`、`_opposite_edges_vary`、`_has_diverse_text_values` 和 `_has_alignment_corridor_veto` 的顺序与条件；跳过当前 group/candidate flow，未回读 `fitz.Page`/`page.get_text("words")`，未触及 wrapped merge、`build_atoms` 后逻辑或 route。新增 8 字段正例及两行 support 控制，alignment semantic defect 清零。RED 为 `1 failed, 19 deselected`；fresh binding 后 focused 为 `1 passed, 19 deselected`，differential 为 `20 passed`，组合回归为 `85 passed`，`cargo test --lib native_span` 为 `4 passed`，`git diff --check` 通过。ledger 真实结果为 total `154`，fixture counts `alignment_corridor_veto=56`、`cjk_non_whitelist_spacing=14`、`cjk_whitelist_spacing=7`、`empty_whitespace_and_separator=7`、`independent_fields_counterexample=14`、`packed_numeric_split=14`、`single_field_control=7`、`source_block_line_noncontinuous=14`、`superscript_inline_gap=7`、`vertical_wrapped_witness=14`；field counts `flow/order=44`、`font/script=22`、`source continuity=44`、`span/run refs=44`；classification counts `defect=16`、`requires_adaptation=28`、`unsupported=110`；SHA256 `e1b9c0a1196e7c8ad21b84f40f15ef2e61ee792e4023a447dfa2dbfb9bb19e9f`。
+
+- Task 3B wrapped merge review fix（第一轮历史）：当时曾将过滤后连续序列用于 wrapped helper，并记录 filtered-source-gap 回归、反例 Python/Rust 文本结构等价断言和 `84 passed`；其旧 ledger SHA256 `2d139ae83aba7551db0d29a34d19225cee689dfd950fa3456122d8a0056ace76` 已被第二轮 local flow ordinal 结果取代。公开 `TextRunDto.order` 不重编号的最终合同见下方第二轮记录。
+
+- Task 3B wrapped merge 第二轮 bounded fix：第一轮把视觉构造顺序的公开 `TextRunDto.order` 临时承担了 Python flow，导致右侧字段插入左侧多行链并使 `vertical_wrapped_witness` 失败。现在在 `build_text_runs()` 完成 region 过滤和 packed split 后，按原始 source order 与 fragment order 建立仅供 wrapped helper 使用的连续 local flow ordinal，并通过内部 `WrappedRun` 传递；wrapped 排序、相邻 pair 连续性、witness-after 与 chain membership 均只消费该 ordinal，公开 `order` 和 `source_start/source_end` 语义保持不变。未回读 `fitz.Page`/`page.get_text("words")`，未修改 Python route、alignment corridor 或后续 atom/column/grid/header/Cell 逻辑。新增断言锁定公开视觉 order；RED 为 `4 failed, 1 passed, 14 deselected`，当前 focused GREEN 为 `5 passed, 14 deselected`，`cargo check --lib` 通过。
+
+- Task 3B wrapped merge bounded slice：补齐 Rust `build_text_runs()` 的 wrapped field 合并语义。根因是 Rust 在完成同一视觉行 run 后直接返回，未执行 Python oracle 的 `_merge_wrapped_field_runs()`；现在仅在返回前按 native flow 连续、数字/占位符 veto、字体粗细与字号兼容、下方几何、横向重叠和右侧 multiline witness 判定，并保留 strong native vertical pair fallback。链式合并逐个相邻 pair 检查，合并文本、bbox、span refs、source bounds 和完整 evidence；不回读 `fitz.Page`/`page.get_text("words")`，不修改 Python 生产路径、route、alignment corridor、`build_atoms` 后逻辑或用户 dirty 文件。differential ledger 更新为 `364` 条，SHA256 为 `8358c75e03dc5e12086127a75cc9b4ed94e7d829ea63ccefc0f06ac09d701fcc`；最终 differential `18 passed`、wrapped focused `4 passed`、`cargo test --lib native_span` 为 `4 passed`、`git diff --check` 通过。
+
+- Task 3B wrapped merge 第二轮最终收尾：`maturin develop --release` 成功并安装 fresh `hexai_pdf_parser-1.1.1`；组合回归 `tests/test_rust_native_span_differential.py tests/test_wireless_structure_text_runs.py tests/test_rust_native_span_packed_numeric.py` 为 `84 passed in 1.96s`。ledger 真实结果为 total `364`，fixture counts `alignment_corridor_veto=266`、`cjk_non_whitelist_spacing=14`、`cjk_whitelist_spacing=7`、`empty_whitespace_and_separator=7`、`independent_fields_counterexample=14`、`packed_numeric_split=14`、`single_field_control=7`、`source_block_line_noncontinuous=14`、`superscript_inline_gap=7`、`vertical_wrapped_witness=14`；field counts `presence=26`、`bbox=24`、`errors=24`、`flow/order=52`、`font/script=38`、`grouping=24`、`ordering=24`、`source continuity=52`、`span/run refs=52`、`text=24`、`value=24`；classification counts `defect=218`、`unsupported=118`、`requires_adaptation=28`；SHA256 `8358c75e03dc5e12086127a75cc9b4ed94e7d829ea63ccefc0f06ac09d701fcc`。`cargo test --lib native_span` 为 `4 passed; 0 failed`，`git diff --check` 无输出、退出码 `0`。仅提交四个 slice 文件，两个用户 dirty 文件保留未提交。
+
+- Task 3B bounded slice：迁移 Rust native span 的 superscript inline gap 合并规则。
+  - **根因与调用位置**：`rust/native_span.rs` 的 `build_text_runs()` 仅按同一 native line 的普通字距、CJK 白名单字距和连续 source fragment 规则合并；小字号 superscript 即使位于前一 span 的右侧走廊内，也因 source line 不同而被拆成两个 run。
+  - **判定条件**：在现有 source-fragment、`$` 和垂直中心 veto 之后，严格使用 `candidate.size < previous.size * 0.82`，以及 `previous.x1 - previous.size * 0.9 <= candidate.x0 <= previous.x1 + previous.size * 0.45`；不放宽普通 gap、不增大 CJK gap、不添加业务文字特判。packed numeric fragment veto、span refs、source bounds、bbox 和 evidence 保持不变。
+  - **测试与验证**：新增真实 Python/Rust helper 的 `基2` 正例、字号阈值反例和 x 走廊反例；RED 为 `1 failed, 1 passed, 11 deselected`，GREEN focused 为 `2 passed, 11 deselected`。differential/text-runs 回归为 `58 passed`，packed numeric 专项、`cargo test --lib native_span` 和 `git diff --check` 均通过。
+  - **限制**：本 bounded slice 只覆盖 synthetic native-span/text-run 语义，未修改 Python 生产路由、column/grid/header、wrapped merge、alignment corridor、`build_atoms` 或 Rust wireless structure，也未进行页面级 PDF/PNG 重跑；默认 Python 路由保持不变。
+
+- Task 3B superscript review fix：补齐 superscript 分支绕过 placeholder/numeric veto 的边界。
+  - **根因与调用位置**：`rust/native_span.rs::build_text_runs()` 新增 superscript 分支后，较小的数字或 dash placeholder 可能在 Python `_can_join()` 的前置 veto 之前被合并；但 numeric-gap veto 不能无条件放入 Rust 普通 join 链，否则会破坏既有普通 numeric span 合并合同。
+  - **判定条件**：placeholder 使用 Python separator/placeholder 字符和 1-3 字符规则，并保留 gap 不超过 1.0 的 inline-punctuation 例外；numeric text 使用与 Python `\d` 对齐的 decimal digit 白名单和数字格式；numeric-gap veto 只在严格 `0.82`/x-corridor superscript 条件命中时阻断，普通同字号 numeric join 和 packed fragment veto 保持不变。
+  - **测试与验证**：新增 `1`+小号 `2`、`基`+小号 `-` 的真实 Python/Rust 反例；RED 为 `1 failed, 13 deselected`，fresh superscript focused GREEN 为 `3 passed, 11 deselected`，differential/text-runs 为 `59 passed`，packed numeric 为 `20 passed`，`cargo test --lib native_span` 为 `4 passed`，`git diff --check` 通过；Python binding 通过 `maturin develop --release` 重建后验证。
+  - **限制**：本修复仍只覆盖 synthetic native-span/text-run 语义，不进入 wrapped merge、alignment corridor、column/grid/header、页面级 JSON/PNG 或默认 Rust route 切换。
+
+- Repair Sprint 003：收紧 Rust 无线结构输出的 Cell 网格边界。
+  - **根因与调用位置**：`src/hexai_pdf_parser/tables/wireless_table_recovery.py` 的 `_rust_cells_to_project()` 在读取 `row`、`col`、`rowspan`、`colspan` 时先调用 `int()`，导致 `-0.5`、整数值浮点数或 `bool` 可能被截断或当作整数进入公开 `Cell`。这是 Rust 输出验证边界的问题，不是 Python 无线结构算法的行为调整。
+  - **判定条件**：四个 Cell 网格字段现在必须是严格的 Python `int`；`bool`、`float`、字符串及其他可截断类型直接拒绝。既有正跨度、越界、缺失 bbox、occupancy conflict 和未覆盖槽位校验继续执行，默认 Python 路由、shadow 返回 Python 及 Rust 异常 fallback 不变。
+  - **测试与验证**：新增 12 个非整数/`bool` RED 用例；Generator 报告修复前 `12 failed`，修复后 focused `12 passed`。独立 Luna Evaluator 复核为无 Critical/Important。新鲜运行 `tests/test_pdf_fast_shared_recovery.py` 为 `19 passed`，相关 Snapshot/无线结构/路由回归合计 `87 passed`；`cargo test --lib` 为 `44 passed`，`cargo check` 和 `git diff --check` 通过。
+  - **限制**：`cargo fmt --check` 仍报告既有 `rust/lib.rs`、`rust/types.rs`、`rust/wireless_structure.rs` 的基线格式差异，本修复未格式化这些无关代码。中文/混合无线结构的完整 Python/Rust 字段级 parity、真实页面 JSON/PNG 验收仍未完成，默认路由保持 Python。
+
+## 2026-09-18
+
+- **OpenVINO CPU 后端接入**：为表格检测模型增加 `backend="auto"`、`backend="cpu"` 和 `backend="openvino"` 选择。`auto` 仅在检测到 Intel CPU 且 OpenVINO provider 可用时尝试 OpenVINO；provider 初始化失败或未实际激活时自动回退到 CPU，避免部署环境因缺少可选依赖而中断。
+  - **根因与调用位置**：`src/hexai_pdf_parser/ml/ml_table_detector.py` 原先固定创建 `CPUExecutionProvider` session，无法利用 Intel CPU 上已安装的 OpenVINO Execution Provider；Windows pip 安装的 OpenVINO DLL 也不会自动被 provider bridge 找到，导致 provider 发现成功但 session 实际退回 CPU。
+  - **判定条件与实现**：使用 `platform.processor()`/`platform.uname().processor` 识别 Intel CPU；在 OpenVINO 路径先注册 `openvino/libs` DLL 目录并显式加载 `openvino.dll`，再创建 ORT session；OpenVINO session 使用 `ORT_DISABLE_ALL`，由 OpenVINO 执行图优化。session 缓存 key 包含模型路径、provider 和 provider options，避免不同后端或设备配置复用错误 session。
+  - **依赖安装**：`pyproject.toml` 和 `setup.py` 新增独立 `ml-openvino` extra，对应 `onnxruntime-openvino==1.24.1` 与 Windows 所需 `openvino==2025.4.1`；不与普通 `onnxruntime` extra 同时安装。
+  - **测试与验证**：新增自动选择、非 Intel 回退、OpenVINO 不可用回退、强制 OpenVINO 报错、缓存隔离和 session 初始化失败回退测试；当前环境为 Intel Core i5-10200H，OpenVINO 实际模型 session 返回 `OpenVINOExecutionProvider` 并完成 `1x3x640x640` 推理，输出形状为 `1x300x6`。
+
+## 2026-09-17
+
+- Sprint 012：完成端到端前后 Benchmark、页面视觉检验、全量 Rust 解析验证和发布物构建。
+  - **根因与调用位置**：在全套 PDF 表格纯算法（有线几何、有线单元格、共享几何、Native Span、中文无线结构、共享无线、英文无线、表头规范化）全部完成 Rust (PyO3) 迁移并建立统一差分路由后，需要对系统进行全量收官验收。确保全部 8 项函数级 benchmark、7 个代表页 page-level benchmark、1023 页全量 PDF benchmark 达成 100% 结构等价性；完成跨模式 JSON/PNG 视觉对齐；验证 Rust 模式下全书无阻断解析；并通过 wheel/sdist 构建及代码规范门禁。
+  - **设计与修复判定**：
+    - **函数级与页面级 Benchmark**：对 8 个函数级套件和 7 代表页运行 Baseline, Python, Shadow, Rust 四路测试，验证所有结构化数据完全等价（`equal: true, differences_count: 0`），有线几何（1.51x）、有线单元格（1.76x）、共享几何（1.54x）、表头规范化（1.48x）等算子纯计算取得显著加速。
+    - **端到端代表页视觉与结构导出**：通过 `scripts/export_rust_migration_e2e.py` 在 `output/pdf_rust_migration_final_*_20260916/` 导出三路结果，核验表格数量、来源、行列索引、跨度无误，0 槽位冲突（`occupancy_conflicts: 0`）。
+    - **全量 Rust 解析验证**：在 `PDF_RUST_MODE='rust'` 下对代表页执行端到端解析，耗时 22.432s，生成完整 JSON、Markdown、PNG 与 `timings.json`。
+    - **发布物与代码规范构建**：验证 wheel (`cp37-abi3-win_amd64.whl`) 和 sdist (`hexai_pdf_parser-1.1.1.tar.gz`)，通过 `cargo fmt --check`、`cargo test`、核心 `pytest` 及 `git diff --check`。
+  - **测试与基准测试结果**：
+    - 8 个函数级 final 报告已生成并归档至 `docs/superpowers/rust-migration/benchmarks/`。
+    - 代表页与全量 PDF 报告已归档至 `docs/superpowers/rust-migration/benchmarks/page-final.md` 与 `benchmark-2026-09-16.md`。
+    - `cargo test` 14 passed，`pytest` 20 passed，`cargo fmt --check` 0 警告，`git diff --check` 0 警告。
+
+
+- Sprint 011：构建统一差分路由、异常回退降级、路径特征门禁与端到端代表页验收。
+  - **根因与调用位置**：在全量算法完成 Rust 迁移后，需要建立严格的生产路由仲裁、灰度切换与高可用容灾机制，确保无环境变量时稳定保持 Python，支持通过环境变量（`PDF_RUST_MODE` 与路径级 `PDF_RUST_MODE_<PATH>`）进行灵活灰度与回退，且任何运行期 Rust 异常均能优雅降级回退至 Python 并输出诊断信息。
+  - **设计与修复判定**：
+    - **统一路由函数体系**：在 `src/hexai_pdf_parser/rust_adapter.py` 实现了 `get_rust_mode`、`run_python_or_rust`、`assert_equivalent`、`get_diagnostics`、`clear_diagnostics`。
+    - **模式合同严格遵守**：
+      - `python`：纯 Python 路径，不调用 Rust；
+      - `rust`：调用 Rust 算子，异常时自动捕获并记录 `rust_fallback` 诊断，安全回退 Python，保障服务不中断；
+      - `shadow`：双路并发运行，对比结果并在出现差异时记录 `rust_output_mismatch` 诊断，向外始终返回 Python 权威结果；
+      - 非法模式严格阻断并抛出 `ValueError`。
+    - **端到端代表页全量验收**：升级 `scripts/export_rust_migration_e2e.py`，完整调用 `PDFParser` 全流水线，对 `zh_all_table_pages.pdf` 的 7 个核心代表页（185, 196, 347, 415, 437, 1002, 1014）进行 Python、Shadow、Rust 三路独立导出与严格比对。
+  - **测试与基准测试结果**：
+    - 新增 `tests/test_rust_migration_routing.py`，9 个针对各模式、异常 fallback、mismatch 诊断记录及特征门禁的单元测试全部通过（`9 passed`）。
+    - 全链路核心回归测试套件（9 个文件）：95 passed, 0 failed。
+    - `git diff --check`: 0 警告。
+    - **端到端对比报告 (sprint-011-fix-e2e)**：在 7 个代表页上对比确认 `equal: true, differences_count: 0`；所有表格无槽位占用冲突（`occupancy_conflicts: 0`），结构化指标与单元格完全对齐。
+
+- Sprint 010：迁移可 DTO 化的表头与结构后处理纯算法至 Rust (PyO3) 并释放 GIL。
+  - **根因与调用位置**：`src/hexai_pdf_parser/tables/normalizers/table_header_normalizer.py` 中的 `_promote_grouped_header` 以及相关财务大表头文本规范化逻辑，原先在 Python 层面通过循环、正则和对象属性反复判定，需要与 Rust 表格结构生成流水线衔接，支持直接在 DTO 层面进行结构推断与清洗。
+  - **设计与修复判定**：
+    - **Rust 内核实现**：在 `rust/table_normalization.rs` 实现了 3 个纯计算算子：`infer_header_structure`（锚点向下合并与分组标题跨列合并）、`merge_header_spans`（表头坐标排序与跨度规范化）、`normalize_financial_header_tokens`（表头尾随数值/货币代码剥离清洗）。密集计算通过 `py.allow_threads` 释放 GIL。
+    - **DTO 与导出路由**：在 `rust/types.rs` 新增 `HeaderGridInput`、`HeaderGridOutput`、`HeaderTokenInput`、`HeaderTokenOutput` 结构并注册到 `roundtrip_dto`；在 `rust/lib.rs` 导出 3 个算子并在 `src/hexai_pdf_parser/rust_adapter.py` 暴露强类型 Python 签名；在 `table_header_normalizer.py` 接入 `PDF_RUST_MODE` 路由（生产默认 `python`，支持 `shadow` 和 `rust`）。
+  - **测试与基准测试结果**：
+    - 新增 `tests/test_pdf_fast_table_normalization.py`，5 个单元测试全部通过（`5 passed`）。
+    - 表头全量回归套件：20 passed, 3 skipped。
+    - `cargo test`: 2 passed, 0 failed.
+    - `cargo fmt --check`: 0 警告。
+    - `git diff --check`: 0 警告。
+    - **基准测试 (table-normalization)**：四路对比（baseline, python, shadow, rust）确认 `equal: true, differences_count: 0`；结构化结果完全一致，无冲突、无遗漏。
+
+- Sprint 009：迁移英文 Zebra、General Wireless 和 Legacy 纯算法至 Rust (PyO3) 并释放 GIL。
+  - **根因与调用位置**：`src/hexai_pdf_parser/tables/extractors/english_table_extractor.py` 中的 `_group_into_tables`、`_assign_words_to_zebra_rows`、英文列推断与单元格恢复，以及 `src/hexai_pdf_parser/tables/normalizers/table_header_normalizer.py` 中的 `_rebuild_text_aligned_table` 原先在 Python 层面通过反复的几何间距遍历、词列表排序、正则和拓扑跨列比较进行处理，在英文无线与斑马表格上带来解释执行开销。
+  - **设计与修复判定**：
+    - **Rust 内核实现**：在 `rust/english_wireless.rs` 完整实现了 7 个核心算子：`group_backgrounds`、`detect_zebra_rows`、`assign_words_to_zebra_rows`、`infer_english_columns`、`build_english_cells`、`build_general_wireless_cells`、`build_legacy_text_alignment`。密集计算全部通过 `py.allow_threads` 释放 GIL。
+    - **无线表格不变量严格遵守**：
+      - 纯消费规范 DTO（`ZebraInput`, `EnglishGridInput`, `GeneralWirelessInput`, `LegacyAlignmentInput`），隔离中英文处理管线；中文/混合页面绝对禁止调用或回退到 zebra/legacy 路径。
+      - 独立字段保留为独立叶子列，无占位冲突。
+    - **DTO 与导出路由**：在 `rust/types.rs` 新增对应 DTO 并注册到 `roundtrip_dto`；在 `rust/lib.rs` 导出 7 个算子并在 `src/hexai_pdf_parser/rust_adapter.py` 暴露强类型 Python 签名；在 `english_table_extractor.py` 与 `table_header_normalizer.py` 接入 `PDF_RUST_MODE` 路由（生产默认 `python`，支持 `shadow` 和 `rust`）。
+  - **测试与基准测试结果**：
+    - 新增 `tests/test_pdf_fast_english_wireless.py`，8 个单元测试全部通过（`8 passed`）。
+    - `cargo test`: 12 passed, 0 failed.
+    - `cargo fmt --check`: 0 警告。
+    - `git diff --check`: 0 警告。
+    - **基准测试 (english-wireless)**：四路对比（baseline, python, shadow, rust）确认 `equal: true, differences_count: 0`；结构化结果完全一致，无冲突、无遗漏。
+
+- Sprint 008：迁移共享无线表格 Native Recovery 与候选选择算子至 Rust (PyO3) 并释放 GIL。
+  - **根因与调用位置**：`src/hexai_pdf_parser/tables/wireless_table_recovery.py` 中的 `table_quality` 评分、候选区域过滤与 0.20 重叠仲裁 `select_candidates()`，以及跨区域批量恢复 `recover_wireless_tables()` 原先在 Python 层面通过反复的几何重叠检测、字典序比较和列表剔除处理，存在循环解释开销；需要与 Rust 结构恢复内核紧密结合，实现一次性端到端批量消费 DTO。
+  - **设计与修复判定**：
+    - **Rust 内核实现**：在 `rust/wireless_structure.rs` 实现了 `table_quality`、`select_candidates` 与 `recover_wireless_tables`，在 Rust 内部完成基于质量评分（confidence, populated cell 计数, size 行列乘积）的确定性排序与重叠解决，密集计算通过 `py.allow_threads` 释放 GIL。
+    - **中文无线表格不变量严格遵守**：
+      - 恢复阶段纯消费 `NativeSpanDto`、`RegionDto`、`StructureConfig` 和 `TableCandidateDto`，严格禁止调用 `page.get_text("words")`，自动化 PageSpy 拦截测试验证通过。
+      - 候选过滤严格遵从 excluded 与 allowed 几何区域约束，重叠率阈值 `>= 0.20` 时依质量评分择优淘汰，杜绝误并与冲突。
+    - **DTO 与导出路由**：在 `rust/types.rs` 新增 `WirelessRecoveryInput` 与 `WirelessRecoveryOutput` DTO 结构，登记到 `roundtrip_dto`；在 `rust/lib.rs` 导出 3 个算子并在 `src/hexai_pdf_parser/rust_adapter.py` 暴露强类型 Python 签名；在 `wireless_table_recovery.py` 接入 `PDF_RUST_MODE` 路由（生产默认 `python`，支持 `shadow` 和 `rust`），并完整保留原始诊断数据结构。
+  - **测试与基准测试结果**：
+    - 新增 `tests/test_pdf_fast_shared_recovery.py`，6 个针对质量评分、候选选择过滤与冲突排除、DTO roundtrip、端到端 recover_wireless_tables 以及 PageSpy（确保无 words 回读）的单元测试 100% 通过（`6 passed`）。
+    - `cargo test`: 全部通过。
+    - 无线全量测试套件：244 passed, 0 failed。
+    - `cargo fmt --check`: 格式检查通过，0 警告。
+    - `git diff --check`: 检查通过，0 警告。
+    - **基准测试 (shared-wireless)**：四路对比（baseline, python, shadow, rust）确认 `equal: true, differences_count: 0`；结构化结果完全一致，无冲突、无缺失。
+
+- Sprint 007：迁移中文/混合无线结构恢复（列带划分、叶子精化、物理网格与逻辑网格物化）至 Rust (PyO3) 并释放 GIL。
+  - **根因与调用位置**：`src/hexai_pdf_parser/tables/wireless_structure/{columns,grid,logical_grid,recoverer}.py` 中的 `infer_column_bands()`、`refine_leaf_bands()`、`build_grid()`、`build_logical_grid()` 与 `recover_cells_from_region()` 原先在 Python 层面通过大量的候选循环、集合操作、物理行聚类与空槽位切分进行处理，在包含密集单元格的中文无线大表格上造成显著的解释执行耗时。
+  - **设计与修复判定**：
+    - **Rust 内核实现**：在 `rust/wireless_structure.rs` 实现了 `infer_column_bands`、`refine_leaf_bands`、`build_grid`、`build_logical_grid` 与 `recover_native_region`，在 Rust 内部完成基于 x 重叠组件的列带推断、纵向容差物理行聚类、叶子列槽位匹配与逻辑网格空槽独立物化，密集计算通过 `py.allow_threads` 释放 GIL。
+    - **中文无线表格不变量严格遵守**：
+      - 结构恢复阶段只消费 `NativeSpanDto`、`AtomDto`、`ColumnBandDto`、`PhysicalCell`、`LogicalGridDto` 和 `CellDto`，严格禁止再次调用 `page.get_text("words")`，自动化 PageSpy 拦截测试验证通过。
+      - 独立字段默认保留为独立叶子列，不得仅因两个 atom 位于同一候选槽位就合并它们；
+      - 表格中的空槽位也是结构的一部分，所有未被现有跨度覆盖的槽位均严格物化为独立 `text=""`、`1x1` Cell，按推断网格边界切分，不合并相邻空单元格；
+      - 严格保证每个逻辑槽位恰好被一个 Cell 占用，无重复、无遗漏。
+    - **DTO 与导出路由**：在 `rust/types.rs` 新增 `NativeRegionInput` 与 `NativeRegionOutput` DTO 结构，登记到 `roundtrip_dto`；在 `rust/lib.rs` 导出 5 个算子并在 `src/hexai_pdf_parser/rust_adapter.py` 暴露强类型 Python 签名；在 `recoverer.py` 接入 `PDF_RUST_MODE` 路由（生产默认 `python`，支持 `shadow` 和 `rust`）。
+  - **测试与基准测试结果**：
+    - 新增 `tests/test_pdf_fast_wireless_structure.py`，8 个针对列带推断、叶子精化、物理网格、空槽单元格独立物化、端到端区域恢复、独立字段不误并、槽位唯一占用及 PageSpy（确保无 words 回读）的单元测试 100% 通过（`8 passed`）。
+    - `cargo test`: 9 passed, 0 failed.
+    - 无线全量测试套件：230 passed, 0 failed in 2.16s。
+    - **基准测试 (chinese-wireless)**：四路对比（baseline, python, shadow, rust）确认 `equal: true, differences_count: 0`；结构化结果完全一致，无冲突、无空槽位遗漏。
+
+
+- Sprint 006：迁移无线表格 Native Span、Atom 和 Text Run 数据流至 Rust (PyO3) 并释放 GIL。
+  - **根因与调用位置**：`src/hexai_pdf_parser/tables/wireless_structure/text_runs.py` 中的 `build_text_runs()`、`infer_output_order_mode()`、以及原子聚合与换行续写合并等算法，原先在 Python 解释器中通过 Python 循环、正则匹配与字典拆装处理，在无线大表格上产生显著的解释执行与内存开销。
+  - **设计与修复判定**：
+    - **Rust 内核实现**：在 `rust/native_span.rs` 实现了 `build_text_runs`、`build_atoms`、`merge_wrapped_rows`、`infer_output_order_mode` 与 `recover_native_candidates`，在 Rust 内部完成基于 20 组 CJK 大字距白名单词对（最大放宽至 2.5 倍字距）与普通单字 CJK（严格 1.25 倍字距，杜绝误并）的高效文本聚类，密集计算通过 `py.allow_threads` 释放 GIL。
+    - **中文无线表格不变量**：纯消费 `NativeSpanDto`，进入 atom、列带和网格拓扑计算后严格不回读 `page.get_text("words")`，新增 `test_page_spy_no_get_text_words` 进行拦截验证。
+    - **DTO 与导出路由**：在 `rust/types.rs` 新增 `NativeRecoveryInput` 与 `NativeRecoveryOutput` DTO 结构，登记到 `roundtrip_dto`；在 `rust/lib.rs` 导出 5 个算子并在 `src/hexai_pdf_parser/rust_adapter.py` 暴露强类型 Python 签名。
+  - **测试与基准测试结果**：
+    - 新增 `tests/test_pdf_fast_wireless.py`，8 个针对白名单合并、反例不合并、混合成词、换行合并、阅读顺序推断及 PageSpy 的单元测试 100% 通过（`8 passed`）。
+    - `cargo test`: 8 passed, 0 failed.
+    - 核心 fast 单元测试集：69 passed in 0.60s.
+    - **基准测试 (native-span)**：四路对比（baseline, python, shadow, rust）确认 `equal: true, differences_count: 0`；Rust 相比 Python baseline 算法 P95 加速比达到 **1.32x**，端到端 P95 加速比达到 **1.46x**。
+
+- Sprint 005：抽取共享基础几何、区域过滤、行列聚类与稳定排序算法至 Rust (PyO3) 并释放 GIL。
+  - **根因与调用位置**：`src/hexai_pdf_parser/tables/table_extractor.py` 中的 `_bbox_overlaps()`、`wireless_table_recovery.py` 中的 `_row_cluster()`、以及多处候选区域过滤和表格候选稳定排序，原先在 Python 解释器中通过 Python list、dict、lambda 进行循环与排序计算，随着跨页和复杂表格候选增多，带来额外的调度和解释执行耗时。
+  - **设计与修复**：
+    - **Rust 内核实现**：在 `rust/geometry.rs` 实现 `rect_overlap`（支持严格正面积与接触重叠）、`filter_regions`（支持排除区域与允许区域双重过滤）、`cluster_rows`（纵向中心线容差聚类、行内横向+次序稳定排序）、`cluster_columns`（横向中心线容差聚类、列内纵向+次序稳定排序）及 `stable_output_order`（基于 `(y0, x0, y1, x1, source)` 的确定性稳定排序），并在密集计算处使用 `py.allow_threads` 释放 GIL。
+    - **DTO 与导出路由**：在 `rust/types.rs` 补充 `OutputOrderMode` DTO 并注册至 `roundtrip_dto`；在 `rust/lib.rs` 导出 5 个算子；在 `src/hexai_pdf_parser/rust_adapter.py` 暴露强类型接口；在 `TableExtractor._bbox_overlaps` 与 `wireless_table_recovery.py::_row_cluster` 接入 `PDF_RUST_MODE`。
+  - **测试与基准测试结果**：
+    - 新增 `tests/test_pdf_fast_shared_geometry.py`，17 个单元测试 100% 通过（`17 passed`）。
+    - 全量回归测试：在 `python`、`shadow`、`rust` 三种模式下均 154 passed 100% 通过。
+    - **基准测试 (shared-geometry)**：四路对比（baseline, python, shadow, rust）确认 `equal: true, differences_count: 0`；Rust 相比 Python baseline 算法 P95 加速比达到 **2.74x**，端到端 P95 加速比达到 **2.50x**。
+
+- 优化 PDF 加载器按需分类机制，彻底消除多页 PDF 局部提取时的全量扫描开销（端到端提速超 20 倍）：
+  - **根因与调用位置**：`src/hexai_pdf_parser/core/loader.py::Loader.load()` 原先无条件遍历 PDF 的所有页面，并在循环体内对每一页无差别调用 `classify_page_type(page)` 进行字符失真、字体和文本扫描。当处理 1000+ 页的超大 PDF（如 `zh_all_table_pages.pdf`）并指定仅提取少量页面（如 `pages=[196, 415]`）时，上层 `PDFParser` 与 `Pipeline` 虽然跳过了非目标页的处理，但 `Loader.load()` 仍盲目耗费约 19.6 秒扫描整本 1023 页，使原本只需 1 秒的局部提取严重劣化至 21 秒。
+  - **设计与修复**：
+    - `Loader.load(page_indices=...)` 新增可选参数 `page_indices`；仅对用户指定的请求页调用 `classify_page_type` 进行扫描，未请求页面保留默认值 `"vector"`，完全避免无谓的解析开销；
+    - 在 `PDFParser.extract_tables`、`extract_text`、`extract_images`、`render_pages` 及 `Pipeline.run()` 中全链路透传 `page_indices` 至 `Loader.load()`。
+  - **测试与验证**：
+    - 新增 `tests/test_loader_lazy_page_classification.py`，测试覆盖按需跳过未请求页扫描、`PDFParser.extract_tables` 参数透传及既有全量加载兼容（全部 pass）；
+    - 既有 `tests/test_loader.py` 回归通过（`3 passed`）；
+    - **实测端到端耗时**：在 `fix/zh_all_table_pages.pdf`（1023 页）上运行 `PDFParser.extract_tables(page_indices=[196, 415])`，稳定平均耗时从 **21.37 秒** 直降至 **1.05 秒**，端到端实际提速达 **20.4 倍**。
+
+- Sprint 004：迁移有线表格 Cell 划分、幽灵行修剪、超切列合并与文字归属至 Rust (PyO3) 并释放 GIL。
+  - **根因与调用位置**：`src/hexai_pdf_parser/tables/extractors/wired_table_extractor.py` 中 `_build_cells_for_region()`、`_trim_ghost_edge_rows()`、`_merge_oversegmented_line_columns()` 与 `_assign_text_to_line_cells()` 原先在 Python 层面频繁进行网格连通分量遍历、泛洪填充、边界拓扑判定和跨行跨列字符拆分归属，存在大量解释执行开销与 GIL 竞争；且原提取器在多个子方法中多次调用 `page.get_text("words")` 与 `page.get_text("rawdict")`，违背结构恢复不回读 words 约束。
+  - **设计与修复判定**：
+    - **页面级统一缓存**：在 `WiredTableExtractor.extract()` 页面处理入口处一次性提取并缓存 `words` 与 `raw_chars`，全流程禁止再次调用 `page.get_text()`。
+    - **Rust 内核实现**：在 `rust/wired.rs` 中完整实现纯几何线网外框补齐、泛洪连通分量矩形切分、occupancy 槽位无冲突验证、物理横线支撑幽灵行修剪、超切空列合并与基于银行家舍入的字词中心点/字符级边界拆分归属，所有密集计算在 `rust/lib.rs` 中通过 `py.allow_threads` 释放 GIL。
+    - **DTO 边界与解耦路由**：在 `rust/types.rs` 实现 `WiredRegionInput` 与 `WiredRegionOutput`；通过 `src/hexai_pdf_parser/rust_adapter.py` 暴露强类型接口；并在 `wired_table_extractor.py` 接入 `PDF_RUST_MODE`（支持 `python` 生产默认、`shadow` 双路对比与 `rust` 加速）。
+  - **不回读 words 约束验证**：在 `tests/test_pdf_fast_wired.py` 中通过 `PageSpy` 拦截 `get_text` 调用，验证提取过程中对 `"words"` 和 `"rawdict"` 的调用计数严格不超过 1 次，Rust 只消费解析后的 WordDto 与 CharacterDto。
+  - **测试与基准测试结果**：
+    - `cargo test`: 6 passed, 0 failed.
+    - `pytest tests/test_pdf_fast_wired.py tests/test_wired_table_extractor.py tests/test_wireless_extractor_split.py`: 在 `python`、`rust` 和 `shadow` 三种模式下均 90 passed 100% 通过。
+    - **基准测试 (wired-cells)**：四路对比（baseline, python, shadow, rust）确认 `equal: true, differences_count: 0`；Rust 相比 Python baseline 算法 P95 加速比达到 **7.30x**，端到端 P95 加速比达到 **2.01x**。
+  - **端到端页面验证**：通过 `scripts/export_rust_migration_e2e.py` 重跑真实 PDF `fix/zh_all_table_pages.pdf` 页面索引 196 与 415 至独立输出目录：
+    - Python 输出目录: `output/pdf_rust_migration_wired_python_20260916/`
+    - Rust 输出目录: `output/pdf_rust_migration_wired_rust_20260916/`
+    - 比对报告: `docs/superpowers/rust-migration/evaluations/sprint-004-pages.md` 确认两页表格数量（P196: 1 表 72 单元格；P415: 1 表 72 单元格）、边界及文本 100% 一致（`differences_count: 0`），图表过滤和复杂外框未受影响。
+
 
 - 修复中文无线表格中排版大字距常见单字词组（如“合 计”、“小 计”等）成词被拆分并引发伪列带的问题：
   - **根因与调用链**：在 `src/hexai_pdf_parser/tables/wireless_structure/text_runs.py::_can_join()` 中，`spaced_single_cjk` 间隙上限原固定为 `1.25 * font_size`。当 PDF 排版中两个单字（如“合”与“计”）使用分散对齐或双全角空格时，实际间隙可达约 `2.0 * font_size`（本例中 21.06pt），导致成词失败被拆为两个独立的 Atom。随后的 `infer_column_bands()` 将“合”归入项目列带，而游离的“计”被 `header_topology.py::rescue_sparse_body_bands()` 错误抢救为独立列带（Band 2），造成物理网格裂为 6 列，并在合计行产生孤立的 `<td>合</td><td>计</td>`。
@@ -752,29 +1140,59 @@
 
 - 新增 `scripts/run_pdf_diff_review.ps1` 真实审阅运行入口：固定默认的实际输出、测试集和 review 目录，同时允许通过参数覆盖；使用主项目 Python 调用 `build_review()` 生成分类摘要、JSON、HTML 和合成 PNG，不修改原始 PDF、标签或真实 E2E 输出。
 - 修正 `build_review()` 与 Markdown golden comparator 的判定口径：分类、文本 diff 和搜索索引统一先调用 `normalize_markdown()`，移除图片行并归一化空白，避免把资源路径差异误判为正文/格式差异；manifest 标记为 `excluded` 的页面不进入差异审阅列表。真实 `fix/zh_all_table_pages.pdf` 快照复核结果为 1023 页，其中 901 页相同、1 页排除、121 页待审阅；分类为正文 97、混合 10、表格结构 8、表格数量 3、表格文本 1、资源缺失 2。分类 JSON 和离线网页只载入 121 个差异页，合成图与两侧 PNG 资源保留在 `output/fix_zh_all_table_pages_review_20260914/review/`。
+## 2026-09-23
 
-## 2026-09-20
+- 完成 Rust 无线结构 Task 5/6 页面级验收闭环：新增纯 Python 字段 normalizer `src/hexai_pdf_parser/debug/rust_task5_acceptance.py`、三模式 runner `scripts/run_task5_shadow_acceptance.py` 和回归测试 `tests/test_rust_wireless_shadow_differential.py`。normalizer 稳定化 table/region 的 source、rows、cols、bbox、Cell 文本与跨度、空槽位、occupancy owner/conflict/out-of-bounds 及 routing diagnostic；比较器只允许 0.01pt bbox 浮点噪声，不忽略结构字段。
+- 使用 `D:\codes\PDFLayoutParser\fix\zh_all_table_pages.pdf` 的 0-based 页面 `184,188,189,191,192`，分别运行 `python`、`shadow`、`rust`，覆盖 `recover_wireless_tables()` 和 `recover_cells_from_region()`。新输出位于 `D:\codes\PDFLayoutParser\output\rust_migration_task5_20260922\`，包含 15 个 page JSON、15 个 overlay PNG、三份 manifest 和 comparison JSON；输入 SHA256 和绝对 artifact 路径均通过审计。
+- 页面结果明确显示 shadow 的结构化结果与 Python 语义结果一致并保留 17 条 Rust 观测诊断；Rust page/region 在 188、189 以及固定区域输入上存在真实结构差异，184、191、192 的 page route 因 occupancy conflict 走 Python fallback。比较报告共 2894 条差异，全部标为 `defect`，`unclassified_count=0`；默认 Python route、fallback policy、用户 dirty 测试文件均保持不变。
+- Task 5/6 最终验证：normalizer/runner `8 passed`，组合迁移矩阵 `140 passed`，`cargo test --lib` `60 passed`，`cargo check` 与 `git diff --check` 通过。结论为验收和审计交付完成，但 Rust primary gate 仍不通过；后续修复必须逐项处理 defect ledger，并在新的独立输出目录重跑 JSON/PNG。
+- Rust 页面无线表格候选对齐 Python 的 track-first 列分配；纯 separator span 不再被 packed-number 拆分器按空格切开。新增分隔符 span 与宽字段连接 overlap band 的差分回归。五页 r12 acceptance 结构差异为 0、路由诊断仍为 12，真实候选 occupancy 冲突继续触发 fallback；Python primary 未变，未运行性能门禁。
+- NativeRegion 非空列带现在沿用 Python 完成 rescue 后的最终结果，避免 Rust 二次剪枝删除稀疏表头列；页 188 两个真实 region 直出与 Python 逐字段一致。Rust 页面 track-first 补齐 Python 对“三空白分隔、字段数与轨迹数相同、全为冒号字段”的宽 span 切分。新增正反例。五页 r14 输出结构差异为 0、route diagnostic 降至 10（仅 page route fallback），region route 不再 fallback；Python 默认行为保持，Rust primary 仍关闭。验证：pytest 190 passed、cargo lib 64 passed、release binding 构建成功；未测性能。
 
-- 修复个人信用报告中“机构查询记录明细”与“个人/本人查询记录明细”表格仅提取表头一行、明细记录全部丢失的问题。
-- 根因分析：
-  1. `_is_query_record_row` 中编号匹配 `re.fullmatch(r"\d+", item[4])` 未 strip，而合并后的 span 文本常带尾随空格（如 `"1 "`），导致全数字匹配失败；
-  2. 日期判定硬编码 `item[0] >= 120`，而真实 PDF 中四位年份日期的实际起点在 `100.7 ~ 115.8`，导致所有日期行被拒绝；
-  3. 列边界硬编码固定阈值，在不同版面下难以自适应。
-  上述判定失败导致所有数据行未被提取为表格行，误触发了“跨页续表仅有表头”的兜底分支，输出 `rows=1` 表格，所有明细行被退回为散落文本段落。
-- 判定条件与实现：
-  1. `_is_query_record_row` 增加文本 `.strip()`，将日期起点放宽至 `item[0] >= 90`（同时包含“年”），查询原因起点设为 `item[0] >= 340`；
-  2. 优先依据表头四列中心坐标动态计算列分界 `boundaries`，无表头时使用自适应默认值 `[95.0, 220.0, 355.0]`；
-  3. 机构/原因换行续行边界对齐到 `boundaries[1]`，续行累加前序单元格增加空值安全防护。
-- 保持不回读 words 约束：继续消费上层基于 span 合并的行块，不新增多余底层 words 重建。
-- 测试结果：`tests/test_personal_credit_report.py` 10 项测试全部通过（10 passed）。
-- 页面输出核对路径：`output/verified_demo/个人信用报告(本人简版)` 与 `output/verified_demo/个人征信报告（简版）(1)`，两份报告各 5 页已完成端到端解析，机构查询与本人查询明细表格行列及单元格恢复完整，散落文本段落已清除，可视化 PNG 标注完全贴合。
+## 2026-09-27
 
-- 增强个人信用报告定制逻辑：将“机构查询记录明细”和“本人查询记录明细”作为 Row 0（`colspan=4`）纳入表格内。
-- 设计与实现：
-  1. `_make_query_tables` 识别紧邻前置的 section title 行，将其文字及水平边界作为表格 Row 0；
-  2. 原表头行（编号、查询日期、查询机构、查询原因）统一作为 Row 1，明细数据行从 Row 2 开始递增；
-  3. `_trim_query_table` 增加放行逻辑：当表头位于 Row 1 且 Row 0 为机构/本人查询记录明细时保留标题行，避免被误裁；
-  4. `PersonalCreditReportTableExtractor.extract` 保证用精准恢复的 `query_tables` 替换粗糙的候选表格；
-  5. 保持不回读 words 约束，继续消费原生 span 组合数据。
-- 测试结果：`tests/test_personal_credit_report.py` 11 项测试全部通过（11 passed）。
-- 页面输出核对路径：`output/verified_title_demo/个人信用报告(本人简版)` 与 `output/verified_title_demo/个人征信报告（简版）(1)`，两份报告 Markdown 和 PNG 均已确认表格首行为 `colspan=4` 的明细标题。
+- 修复 Page 473 表2 与 Page 932 表3 的逻辑行差异。Page 473 的 wrapped header 只有单个候选 Cell 且没有同级 sibling 或上层 parent 支持时，不再折叠其覆盖的正文物理行；Page 932 的“占预付款期末余额/合计数的比例%”续行不再被 `is_numbered_item_start("合计数...")` 误拒，恢复为同一表头 Cell。
+- 新增两个 Rust RED/GREEN 测试：无 parent/sibling 的 wrapped header 不得压缩行；带百分号的连续表头必须合并。独立输出 `D:\codes\PDFLayoutParser-Fast\output\pdf\page473_932_header_row_fix_20260927\`：Page 473 表2 恢复 `6x2/11`，Page 932 表3 恢复 `7x3/21`，两页目标表逐 Cell 与 Python 0 差异，JSON/PNG 已生成。
+
+## 2026-09-27
+
+- 修复中文无线表格 Page 987 二级表头“间接”被 Rust 拆成两行的问题。根因是 `merge_evidence_contiguous_vertical_header_chain()` 只允许从物理 row 0 开始合并单字中文链；Page 987 的“间”“接”分别位于 header row 1/2，但 native evidence 显示同一 block、source line 连续、列相同、垂直几何紧密。Rust 保留两行，导致全表由 Python 的 `6x7/36` 变为 `7x7/43`。
+- 最小修复：将该 native evidence 合并器限制在调用方根据表结构推断的 header rows 范围内，并允许从任一 header row 开始合并连续 CJK 单字。新增 row1→row2 续字合并 RED/GREEN 用例，同时保留 row0 八字纵向链既有正例。
+- 独立输出：`D:\codes\PDFLayoutParser-Fast\output\pdf\page987_header_continuation_fix_20260927\`。Page 987 恢复 `6x7/36`，与 Python 逐 Cell 文本、row/col、跨度、BBox 0 差异；最终 PNG 已复核。验证：`cargo test --locked` 89 passed；Page987 parity/无线结构相关 pytest 61 passed，另 1 项现有 skip。
+
+## 2026-09-27
+
+- 修复 Page 946 无线表格一行被 Rust 多拆成一行的问题。原因是此前为防止 Page 463 把独立 Latin/CJK 多行项目误并而加入的 ASCII/非 ASCII 脚本边界判断过宽，拒绝了同一 native block、连续 source line、几何重叠的单字中文续字“铺”。现在仅对一侧为单字 CJK 的连续续字放行；完整拉丁项目行/中文行和混合 Latin/CJK 多字符字段仍保持分离。
+- TDD 新增单字中文续字合并正例，修复前 `cells.len()` 为 2、期望 1；保留 Page 463 类型的完整 Latin/CJK 独立字段拒绝反例，以及多字符混合 Latin/CJK 链拒绝反例。`cargo test --locked` 为 `88 passed`；Python 无线结构 parity/merges/grid 相关测试 `61 passed`。
+- 使用当前主线代码独立复核 Page 929–931：三页表数、行列、Cell 数以及逐 Cell 文本/位置/跨度/BBox 均与 Python 0 差异，无需改动。Page 946 独立输出位于 `D:\codes\PDFLayoutParser-Fast\output\pdf\page929_931_946_recheck_and946_fix_20260927\`：Page 946 表格恢复 `29x3/87`，与 Python 逐 Cell 0 差异；页面 JSON/PNG 已生成。既有 SVG 脏改动未纳入本次提交。
+
+## 2026-09-27
+
+- 修复 Page 483 第四张中文无线表 Rust 少一逻辑表头行的问题。根因是 `wrapped_leaf_header_span()` 将单个、位于表体前最后一行的高文本 Cell 当作换行叶表头；它借用前一物理行的多列叶子支持，把正文“主营业务/其中：在某一时点确认”与表头合并，造成整表由 `8x7/51` 压为 `7x7/46`。Python 逻辑网格只在当前候选行存在多列 wrapped leaf 同级项（或存在上层 colspan parent 拓扑）时才折叠此类行。
+- 最小修复：单物理行 wrapped leaf 必须有同一候选行的多个 wrapped sibling，或被上层多列父表头支撑；仅由前一行叶标题产生的 sibling 支持不足以折叠。新增正文长标签不得借用前一表头层支持的 Rust 失败测试，保留既有多级 wrapped leaf 正例。
+- 独立页面输出：`D:\codes\PDFLayoutParser-Fast\output\pdf\page483_wrapped_header_boundary_fix_20260927\`。Page 483 第四表恢复 `8x7/51`，Rust/Python 逐 Cell 文本、row/col、span、BBox 0 差异；前 3 表保持一致。页面 JSON 和可视化 PNG 已生成。
+
+## 2026-09-27
+
+- 修复中文无线表格 Page 463/473 的 Rust 逻辑行差异。Page 463 根因是 `merge_source_contiguous_vertical_cells()` 仅依赖连续 source refs、列和几何重叠，缺少 Python 同等的 ASCII/非 ASCII 脚本边界判断，因而把独立的 Latin/CJK 多行项目文本压进同一 Cell，`21x7` 过度压缩为 `17x7`。Page 473 根因是 `wrapped_leaf_header_span()` 在没有同层兄弟列证据时仍因 `rowspan>1` 强行折叠物理行，导致首个空槽和表头行错位，`6x2` 变为 `5x2`。
+- 最小修复：垂直 Cell 合并拒绝 ASCII 字母与非 ASCII 字段之间的跨行连接；wrapped header 只有在至少两个同层兄弟列提供结构证据时才允许压缩。新增 Latin/CJK 混合链拒绝测试及无兄弟证据的表头压缩拒绝测试。
+- 独立页面输出：`D:\codes\PDFLayoutParser-Fast\output\pdf\page463_473_logical_rows_fix_20260927\`。Page 463 恢复 `21x7/147`，Page 473 第二表恢复 `6x2/11`；两页目标表 Rust 与 Python 逐 Cell 文本、row/col、span、BBox 均为 0 差异，JSON/PNG 均已生成。
+
+## 2026-09-27
+
+- 修复中文无线表格 Page 442、446 的 Rust 漏检与行错位。根因一：Rust `median_positive()` 对偶数样本取上中位数，和 Python `statistics.median()` 的中间均值不同；Page 446 表2 的行容差因此过大，把项目行与多行叶表头合并，`4x7` 变为 `3x7`。根因二：`vertical_header_chain` 特判仅按首行 CJK 文本与 `rowspan>=3` 判断，把普通多字符表头“项目”“受限情况”等扩成整层表头，触发 occupancy conflict，导致 Page 442 表4 和 Page 446 表3 丢失。
+- 最小修复：偶数样本采用 Python 兼容的中间均值；垂直表头链只接受至少三行、每行一个 CJK 字符且以换行连接的真实链，普通多字符表头不再进入该路径。新增两个 Rust 单元测试，分别锁定偶数中位数和垂直链判定。
+- 独立页面输出：`D:\codes\PDFLayoutParser-Fast\output\pdf\page442_443_446_logical_rows_fix_20260927\`。Page 442 恢复 6 张表，Page 446 恢复 6 张表，Page 443 保持 2 张表；三页 Rust 与 Python 逐表逐 Cell 的文本、row/col、span、BBox 均为 0 差异。页面 JSON 和可视化 PNG 均已生成。
+
+## 2026-09-27
+
+- 修复中文无线表格页面索引 `437`、`438`、`439` 的 Rust 逻辑行拆分。根因位于 `rust/wireless_structure.rs::logical_row_components()`：`merge_source_contiguous_vertical_cells()` 已将 native 连续文本合并为一个 Cell，但逻辑行组件仍把 Cell 起始行位于 `body_start` 之前的覆盖范围截断；随后空槽物化将长首列/长表头的续行输出为额外行。该条件同时影响 page 437 第三表首列英文长文本，以及 page 438 第四表、page 439 第一表的多行表头。
+- 最小修复：允许跨入正文边界且从非首行开始的首列 rowspan 参与 body prefix 合并；允许从物理首行开始、跨 `body_start` 的 wrapped header 使用其已证实 rowspan 范围，保留既有 tall wrapped header 和 occupancy 防护。新增两个 Rust 最小失败测试，覆盖表头边界和正文首列跨边界；修复后 `cargo test --locked logical_row_components` 为 `3 passed`。
+- 独立页面输出：`D:\codes\PDFLayoutParser-Fast\output\pdf\page437_439_logical_rows_fix_20260927\`。Rust 结果与 Python 逐表逐 Cell 对比完全一致：page 437 第三表 `3x6/18`、page 438 第四表 `2x3/6`、page 439 第一表 `2x3/6`；文本、row/col、span 和 BBox 均为 0 差异。对应页面 JSON 与可视化 PNG 均已生成并复核。
+- 验证：Rust `cargo test --locked` 为 `81 passed`；相关 Python 无线结构/Parity 测试为 `65 passed`。更宽的 recoverer 测试集合有 1 条既有 fallback 期望失败（`test_recover_cells_from_region_falls_back_when_rust_returns_empty_grid`，与本次逻辑行修改无关），未修改该既有行为。
+
+- **Rust 无线逻辑行与英文相邻列词序 parity 修复**：
+  - **根因**：`wrapped_leaf_header_span` 对“单个多行父表头 + 下一行叶子列”要求额外存在上层 parent 或多个 started cell，导致 Page 463、941-944、1007-1008 多出逻辑行；英文 Rust phrase 聚类在相邻列边界合并日期词，Page 410 少 1 个 Cell。
+  - **修复**：按 sibling leaf 拓扑放宽 Rust wrapped header 合并条件；英文 phrase 聚类遇到明确列边界时不跨列合并，并按视觉 Y 顺序拼接同一 Cell 内词。
+  - **测试**：新增 2 个 wrapped header RED/回归用例和 1 个英文相邻列词序用例；`cargo test --locked --lib` 98 项通过；Python 英文测试 23 项通过。
+  - **页面验证**：同一 PDF、顺序后端、单页目标批次 `[410,463,941,942,943,944,1007,1008]`。Rust/Python 的行列、文本、跨度和 Cell 数一致；Page 463、941-944、1007、1008 逐 Cell signature（含 BBox）完全一致。Page 410 两表为 `7x13/85`、`6x7/39`，结构和文本一致，20 个表头 Cell 的垂直 BBox 分界仍有约 `0.2pt` 既有舍入差异。

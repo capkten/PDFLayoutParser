@@ -7,6 +7,9 @@ the recall-oriented rule pass identifies as table candidates.
 
 from __future__ import annotations
 
+import ctypes
+import os
+import platform
 from pathlib import Path
 import threading
 from typing import Any, List, Optional, Tuple, Union
@@ -21,8 +24,16 @@ from hexai_pdf_parser.ml.yolo_layout_utils import (
     preprocess_yolo_image,
 )
 
-_GLOBAL_SESSION_CACHE: dict[tuple[str, tuple[str, ...]], Any] = {}
+_CPU_PROVIDER = "CPUExecutionProvider"
+_OPENVINO_PROVIDER = "OpenVINOExecutionProvider"
+_VALID_BACKENDS = {"auto", "cpu", "openvino"}
+
+_GLOBAL_SESSION_CACHE: dict[
+    tuple[str, tuple[str, ...], tuple[tuple[str, str], ...]], Any
+] = {}
 _GLOBAL_SESSION_LOCK = threading.Lock()
+_OPENVINO_DLL_HANDLES: List[Any] = []
+_OPENVINO_DLL_DIRECTORIES: set[str] = set()
 
 
 def clear_session_cache() -> None:
@@ -31,28 +42,51 @@ def clear_session_cache() -> None:
         _GLOBAL_SESSION_CACHE.clear()
 
 
-def get_shared_session(
-    model_path: Union[str, Path],
-    providers: Optional[list[str]] = None,
-) -> Any:
-    """Get or create a cached, process-level ONNX Runtime InferenceSession."""
-    abs_path = str(Path(model_path).resolve())
-    providers_tuple = tuple(providers or ["CPUExecutionProvider"])
-    cache_key = (abs_path, providers_tuple)
+def _is_intel_cpu() -> bool:
+    """Return whether the host CPU description identifies an Intel CPU."""
+    try:
+        descriptions = [platform.processor(), platform.uname().processor]
+    except Exception:
+        descriptions = [platform.processor()]
 
-    if cache_key not in _GLOBAL_SESSION_CACHE:
-        with _GLOBAL_SESSION_LOCK:
-            if cache_key not in _GLOBAL_SESSION_CACHE:
-                ort = _require_onnxruntime()
-                _GLOBAL_SESSION_CACHE[cache_key] = ort.InferenceSession(
-                    abs_path,
-                    providers=list(providers_tuple),
-                )
-    return _GLOBAL_SESSION_CACHE[cache_key]
+    return any("intel" in str(description).lower() for description in descriptions)
 
 
-def _require_onnxruntime():
-    """Import and return onnxruntime, or raise a clear error."""
+def _prepare_openvino_dlls() -> None:
+    """Make the pip-installed OpenVINO DLLs loadable on Windows."""
+    if os.name != "nt":
+        return
+
+    try:
+        import openvino
+    except ImportError as exc:
+        raise RuntimeError(
+            "OpenVINO is not installed. Install it with: "
+            "pip install onnxruntime-openvino openvino"
+        ) from exc
+
+    lib_dir = Path(openvino.__file__).resolve().parent / "libs"
+    if not lib_dir.is_dir():
+        raise RuntimeError(f"OpenVINO DLL directory not found: {lib_dir}")
+
+    lib_dir_key = str(lib_dir)
+    if lib_dir_key not in _OPENVINO_DLL_DIRECTORIES:
+        _OPENVINO_DLL_HANDLES.append(os.add_dll_directory(lib_dir_key))
+        _OPENVINO_DLL_DIRECTORIES.add(lib_dir_key)
+
+    # onnxruntime_providers_openvino.dll imports openvino.dll by name. Loading
+    # it explicitly avoids Windows falling back to CPU after provider discovery.
+    try:
+        ctypes.WinDLL(str(lib_dir / "openvino.dll"))
+    except OSError as exc:
+        raise RuntimeError(f"Unable to load OpenVINO runtime from {lib_dir}") from exc
+
+
+def _require_onnxruntime(*, prepare_openvino: bool = False):
+    """Import and return ONNX Runtime, optionally preparing OpenVINO first."""
+    if prepare_openvino:
+        _prepare_openvino_dlls()
+
     try:
         import onnxruntime as ort
 
@@ -62,6 +96,166 @@ def _require_onnxruntime():
             "onnxruntime is required for ML table detection. "
             "Install it with: pip install hexai_pdf_parser[ml]"
         )
+
+
+def _openvino_is_available() -> bool:
+    """Return whether this environment can register OpenVINO with ORT."""
+    try:
+        ort = _require_onnxruntime(prepare_openvino=True)
+        return _OPENVINO_PROVIDER in ort.get_available_providers()
+    except (ImportError, OSError, RuntimeError):
+        return False
+
+
+def _resolve_backend(backend: str = "auto") -> str:
+    """Resolve a requested backend to ``cpu`` or ``openvino``."""
+    normalized_backend = str(backend).lower()
+    if normalized_backend not in _VALID_BACKENDS:
+        raise ValueError(
+            f"Unsupported ML backend {backend!r}; choose one of: "
+            "auto, cpu, openvino"
+        )
+
+    if normalized_backend == "cpu":
+        return "cpu"
+
+    if normalized_backend == "openvino":
+        if not _openvino_is_available():
+            raise RuntimeError(
+                "OpenVINO backend was requested, but its runtime is unavailable. "
+                "Install onnxruntime-openvino and openvino, or use backend='cpu'."
+            )
+        return "openvino"
+
+    if _is_intel_cpu() and _openvino_is_available():
+        return "openvino"
+    return "cpu"
+
+
+def _freeze_provider_options(
+    provider_options: Optional[dict[str, str]],
+) -> tuple[tuple[str, str], ...]:
+    """Convert provider options into a deterministic cache-key component."""
+    if not provider_options:
+        return ()
+    return tuple(sorted((str(key), str(value)) for key, value in provider_options.items()))
+
+
+def _create_session(
+    model_path: str,
+    providers: tuple[str, ...],
+    provider_options: Optional[dict[str, str]],
+) -> Any:
+    """Create an ORT session with the provider-specific graph settings."""
+    use_openvino = _OPENVINO_PROVIDER in providers
+    ort = _require_onnxruntime(prepare_openvino=use_openvino)
+    kwargs: dict[str, Any] = {"providers": list(providers)}
+
+    if use_openvino:
+        session_options = ort.SessionOptions()
+        session_options.graph_optimization_level = (
+            ort.GraphOptimizationLevel.ORT_DISABLE_ALL
+        )
+        kwargs["sess_options"] = session_options
+        if provider_options:
+            kwargs["provider_options"] = [
+                provider_options if provider == _OPENVINO_PROVIDER else {}
+                for provider in providers
+            ]
+
+    return ort.InferenceSession(model_path, **kwargs)
+
+
+def warmup_session(session: Any, input_size: int = 640) -> None:
+    """Warm up an ONNX Runtime session by running a dummy inference pass.
+
+    Ensures kernel compilation, memory buffer allocation, and graph optimizations
+    are fully finished before the first real page detection.
+    """
+    if not hasattr(session, "get_inputs") or not hasattr(session, "run"):
+        return
+    try:
+        inputs = session.get_inputs()
+        if not inputs:
+            return
+        inp = inputs[0]
+        shape = []
+        for dim in getattr(inp, "shape", []):
+            if isinstance(dim, int) and dim > 0:
+                shape.append(dim)
+            elif dim in ("batch", "batch_size") or dim is None or isinstance(dim, str):
+                shape.append(1)
+            else:
+                shape.append(input_size)
+        if len(shape) == 4:
+            c = shape[1] if isinstance(shape[1], int) and shape[1] > 0 else 3
+            h = shape[2] if isinstance(shape[2], int) and shape[2] > 0 else input_size
+            w = shape[3] if isinstance(shape[3], int) and shape[3] > 0 else input_size
+            shape = [1, c, h, w]
+        elif not shape:
+            shape = [1, 3, input_size, input_size]
+        dummy = np.zeros(shape, dtype=np.float32)
+        session.run(None, {inp.name: dummy})
+    except Exception:
+        pass
+
+
+def get_shared_session(
+    model_path: Union[str, Path],
+    providers: Optional[list[str]] = None,
+    backend: str = "auto",
+    provider_options: Optional[dict[str, str]] = None,
+    warmup: bool = True,
+) -> Any:
+    """Get or create a cached, process-level ONNX Runtime InferenceSession."""
+    abs_path = str(Path(model_path).resolve())
+    requested_backend = None if providers is not None else str(backend).lower()
+    resolved_backend = "custom" if providers is not None else _resolve_backend(backend)
+    providers_tuple = tuple(
+        providers
+        if providers is not None
+        else (
+            [_OPENVINO_PROVIDER]
+            if resolved_backend == "openvino"
+            else [_CPU_PROVIDER]
+        )
+    )
+    options_key = _freeze_provider_options(provider_options)
+    cache_key = (abs_path, providers_tuple, options_key)
+
+    with _GLOBAL_SESSION_LOCK:
+        cached_session = _GLOBAL_SESSION_CACHE.get(cache_key)
+        if cached_session is not None:
+            return cached_session
+
+        try:
+            session = _create_session(abs_path, providers_tuple, provider_options)
+            if (
+                resolved_backend == "openvino"
+                and _OPENVINO_PROVIDER not in session.get_providers()
+            ):
+                raise RuntimeError("OpenVINO provider did not become active")
+        except Exception as exc:
+            if requested_backend == "auto" and resolved_backend == "openvino":
+                providers_tuple = (_CPU_PROVIDER,)
+                provider_options = None
+                cache_key = (abs_path, providers_tuple, ())
+                cached_session = _GLOBAL_SESSION_CACHE.get(cache_key)
+                if cached_session is not None:
+                    return cached_session
+                session = _create_session(abs_path, providers_tuple, provider_options)
+            elif requested_backend == "openvino":
+                raise RuntimeError(
+                    f"Unable to create an OpenVINO session for {abs_path}"
+                ) from exc
+            else:
+                raise
+
+        if warmup:
+            warmup_session(session)
+
+        _GLOBAL_SESSION_CACHE[cache_key] = session
+        return session
 
 
 def _resolve_default_model_path() -> Path:
@@ -112,6 +306,12 @@ class MLTableDetector:
         DPI used to rasterize the PDF page for table region detection.
         Since model input is 640x640, 72 DPI (1pt = 1px) is optimal for speed
         and accuracy. Default ``72``.
+    backend:
+        Inference backend: ``"auto"`` detects Intel CPUs and uses OpenVINO
+        when available, ``"cpu"`` forces ONNX Runtime CPU, and ``"openvino"``
+        requires OpenVINO. Default ``"auto"``.
+    provider_options:
+        Optional OpenVINO provider options passed to ONNX Runtime.
     """
 
     def __init__(
@@ -122,6 +322,8 @@ class MLTableDetector:
         table_class_ids: Optional[set[int]] = None,
         input_size: int = 640,
         render_dpi: int = 72,
+        backend: str = "auto",
+        provider_options: Optional[dict[str, str]] = None,
     ) -> None:
         self._model_path = (
             Path(model_path) if model_path else _resolve_default_model_path()
@@ -131,6 +333,8 @@ class MLTableDetector:
         self.table_class_ids = table_class_ids or {0, 4}
         self.input_size = input_size
         self.render_dpi = render_dpi
+        self.backend = backend
+        self.provider_options = dict(provider_options or {})
         self._session = None  # Lazy-loaded
 
     def __enter__(self) -> MLTableDetector:
@@ -142,6 +346,11 @@ class MLTableDetector:
     def close(self) -> None:
         """Release underlying ONNX Runtime session resources."""
         self._session = None
+
+    def warmup(self) -> None:
+        """Explicitly load the session and execute dummy inference to warm up."""
+        session = self._load_session()
+        warmup_session(session, input_size=self.input_size)
 
     # ------------------------------------------------------------------
     # Public API
@@ -232,7 +441,11 @@ class MLTableDetector:
         if self._session is not None:
             return self._session
 
-        self._session = get_shared_session(self._model_path)
+        self._session = get_shared_session(
+            self._model_path,
+            backend=self.backend,
+            provider_options=self.provider_options,
+        )
         return self._session
 
     def _run_inference(self, tensor: np.ndarray) -> np.ndarray:

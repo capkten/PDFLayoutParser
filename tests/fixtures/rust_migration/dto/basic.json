@@ -1,0 +1,148 @@
+{
+  "schema_version": 1,
+  "pages": [
+    {
+      "page": {
+        "schema_version": 1,
+        "width": 595.0,
+        "height": 842.0,
+        "rotation": 0
+      },
+      "tables": [
+        {
+          "schema_version": 1,
+          "rect": {
+            "schema_version": 1,
+            "x0": 50.0,
+            "y0": 100.0,
+            "x1": 500.0,
+            "y1": 400.0
+          },
+          "source": "wired",
+          "confidence": 0.95,
+          "rows": 2,
+          "cols": 2,
+          "cells": [
+            {
+              "schema_version": 1,
+              "text": "标题一",
+              "row": 0,
+              "col": 0,
+              "rect": {
+                "schema_version": 1,
+                "x0": 50.0,
+                "y0": 100.0,
+                "x1": 275.0,
+                "y1": 250.0
+              },
+              "rowspan": 1,
+              "colspan": 1,
+              "source": {
+                "schema_version": 1,
+                "text": "标题一",
+                "rect": {
+                  "schema_version": 1,
+                  "x0": 50.0,
+                  "y0": 100.0,
+                  "x1": 275.0,
+                  "y1": 250.0
+                },
+                "row": 0,
+                "col": 0,
+                "source_refs": [
+                  0
+                ]
+              }
+            },
+            {
+              "schema_version": 1,
+              "text": "标题二",
+              "row": 0,
+              "col": 1,
+              "rect": {
+                "schema_version": 1,
+                "x0": 275.0,
+                "y0": 100.0,
+                "x1": 500.0,
+                "y1": 250.0
+              },
+              "rowspan": 1,
+              "colspan": 1,
+              "source": null
+            },
+            {
+              "schema_version": 1,
+              "text": "数据 1",
+              "row": 1,
+              "col": 0,
+              "rect": {
+                "schema_version": 1,
+                "x0": 50.0,
+                "y0": 250.0,
+                "x1": 275.0,
+                "y1": 400.0
+              },
+              "rowspan": 1,
+              "colspan": 1,
+              "source": null
+            },
+            {
+              "schema_version": 1,
+              "text": "数据 2",
+              "row": 1,
+              "col": 1,
+              "rect": {
+                "schema_version": 1,
+                "x0": 275.0,
+                "y0": 250.0,
+                "x1": 500.0,
+                "y1": 400.0
+              },
+              "rowspan": 1,
+              "colspan": 1,
+              "source": null
+            }
+          ]
+        }
+      ],
+      "spans": [
+        {
+          "schema_version": 1,
+          "text": "测试文本",
+          "rect": {
+            "schema_version": 1,
+            "x0": 50.0,
+            "y0": 100.0,
+            "x1": 150.0,
+            "y1": 120.0
+          },
+          "font": "SimSun",
+          "size": 10.5,
+          "flags": 0,
+          "order": 0,
+          "characters": [
+            {
+              "schema_version": 1,
+              "text": "测",
+              "rect": {
+                "schema_version": 1,
+                "x0": 50.0,
+                "y0": 100.0,
+                "x1": 75.0,
+                "y1": 120.0
+              },
+              "order": 0
+            }
+          ],
+          "source_position": {
+            "schema_version": 1,
+            "block": 0,
+            "line": 0
+          },
+          "block": 0,
+          "line": 0
+        }
+      ]
+    }
+  ]
+}

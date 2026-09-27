@@ -3,8 +3,14 @@ from pathlib import Path
 import fitz
 import pytest
 
-from hexai_pdf_parser.core.models import BBox
-from hexai_pdf_parser.tables.wireless_table_recovery import NativeSpan
+from hexai_pdf_parser import rust_adapter
+from hexai_pdf_parser.core.models import BBox, Cell
+from hexai_pdf_parser.pdf_snapshot import PageSnapshot
+from hexai_pdf_parser.tables.wireless_table_recovery import (
+    NativeSpan,
+    WirelessRecovery,
+    recover_wireless_tables,
+)
 from hexai_pdf_parser.tables.wireless_structure import recoverer
 from hexai_pdf_parser.tables.wireless_structure.recoverer import recover_cells_from_region
 from hexai_pdf_parser.tables.wireless_structure.text_runs import build_text_runs
@@ -14,6 +20,657 @@ PAGE_437_FIXTURE = Path(__file__).parent / "fixtures" / "page_437_wireless.pdf"
 GLOSSARY_PDF = Path(
     r"C:\Users\23662\Downloads\needs_human_report_2026-09-17\needs_human_report_2026-09-17\pdfs\glossary_ec.pdf"
 )
+
+
+def _rust_rect(x0, y0, x1, y1):
+    return {
+        "schema_version": 1,
+        "x0": float(x0),
+        "y0": float(y0),
+        "x1": float(x1),
+        "y1": float(y1),
+    }
+
+
+def _rust_sentinel_cell(text="RUST_SENTINEL"):
+    return {
+        "schema_version": 1,
+        "text": text,
+        "row": 0,
+        "col": 0,
+        "rect": _rust_rect(0, 0, 40, 20),
+        "rowspan": 1,
+        "colspan": 1,
+        "source": None,
+    }
+
+
+def _rust_sentinel_candidate(text="RUST_SENTINEL"):
+    return {
+        "schema_version": 1,
+        "rect": _rust_rect(0, 0, 40, 20),
+        "source": "rust_sentinel",
+        "confidence": 1.0,
+        "rows": 1,
+        "cols": 1,
+        "cells": [_rust_sentinel_cell(text)],
+    }
+
+
+def _snapshot_for_region(region: BBox) -> PageSnapshot:
+    width = max(300.0, region.x1 + 10.0)
+    height = max(200.0, region.y1 + 10.0)
+    return PageSnapshot(
+        schema_version=1,
+        version=1,
+        page_index=0,
+        geometry={
+            "rect": (0.0, 0.0, width, height),
+            "x0": 0.0,
+            "y0": 0.0,
+            "x1": width,
+            "y1": height,
+            "width": width,
+            "height": height,
+            "rotation": 0,
+        },
+        text_blocks=(),
+        spans=(),
+        characters=(),
+        words=(),
+        drawings=(),
+        allowed_regions=(),
+        excluded_regions=(),
+        extraction_options={},
+        summary={},
+    )
+
+
+def _use_snapshot_spans(monkeypatch, spans):
+    monkeypatch.setenv("PDF_RUST_MODE", "python")
+    monkeypatch.setattr(
+        recoverer,
+        "collect_native_spans_from_snapshot",
+        lambda snapshot, allowed_regions: tuple(spans),
+    )
+
+
+def test_recover_cells_from_region_compares_shared_snapshot_python_and_rust(monkeypatch):
+    region = BBox(0, 0, 260, 100)
+
+    def make_span(text, x0, y0, position):
+        return {
+            "text": text,
+            "bbox": (x0, y0, x0 + max(8, len(text) * 8), y0 + 12),
+            "font": "SimSun",
+            "size": 10.0,
+            "flags": 0,
+            "chars": tuple(
+                {
+                    "c": character,
+                    "bbox": (x0 + i * 8, y0, x0 + (i + 1) * 8, y0 + 12),
+                    "raw_source_position": (*position, i),
+                    "source_order": i,
+                }
+                for i, character in enumerate(text)
+            ),
+            "raw_source_position": position,
+            "source_order": position[2],
+        }
+
+    labels = (
+        ("项目", "金额", "比例"),
+        ("收入", "100", "10%"),
+        ("支出", "200", "20%"),
+    )
+    lines = tuple(
+        {
+            "bbox": (0, 10 + row * 25, 260, 22 + row * 25),
+            "raw_source_position": (0, row),
+            "source_order": row,
+            "spans": tuple(
+                make_span(text, 10 + column * 80, 10 + row * 25, (0, row, column))
+                for column, text in enumerate(values)
+            ),
+        }
+        for row, values in enumerate(labels)
+    )
+    snapshot = PageSnapshot(
+        schema_version=1,
+        version=1,
+        page_index=0,
+        geometry={
+            "rect": (0.0, 0.0, 260.0, 100.0),
+            "x0": 0.0,
+            "y0": 0.0,
+            "x1": 260.0,
+            "y1": 100.0,
+            "width": 260.0,
+            "height": 100.0,
+            "rotation": 0,
+        },
+        text_blocks=({
+            "type": 0,
+            "bbox": (0.0, 10.0, 260.0, 82.0),
+            "raw_source_position": (0,),
+            "source_order": 0,
+            "lines": lines,
+        },),
+        spans=tuple(span for line in lines for span in line["spans"]),
+        characters=(),
+        words=(),
+        drawings=(),
+        allowed_regions=(),
+        excluded_regions=(),
+        extraction_options={},
+        summary={},
+    )
+
+    expected = recoverer._recover_cells_from_snapshot_python(snapshot, region)
+    monkeypatch.setenv("PDF_RUST_MODE", "rust")
+    actual = recover_cells_from_region(snapshot, region)
+
+    def signature(result):
+        rows, columns, cells = result
+        return rows, columns, [
+            (cell.row_index, cell.col_index, cell.rowspan, cell.colspan, cell.text)
+            for cell in cells
+        ]
+
+    assert signature(actual) == signature(expected)
+
+
+def test_recover_cells_from_region_uses_python_prepared_native_region(monkeypatch):
+    region = BBox(0, 0, 240, 80)
+    snapshot = _snapshot_for_region(region)
+    spans = [
+        NativeSpan(text, BBox(x0, y, x0 + 30, y + 10), "SimSun", 10, order)
+        for order, (y, x0, text) in enumerate(
+            [
+                (10, 10, "项目"),
+                (10, 110, "金额"),
+                (30, 10, "甲"),
+                (30, 110, "10"),
+                (50, 10, "乙"),
+                (50, 110, "20"),
+            ]
+        )
+    ]
+    received = []
+    native_cell = _rust_sentinel_cell()
+    native_grid = {
+        "schema_version": 1,
+        "rows": 1,
+        "cols": 1,
+        "row_edges": [0.0, 20.0],
+        "col_edges": [0.0, 40.0],
+        "occupancy": [[0]],
+    }
+    native_output = {
+        "schema_version": 1,
+        "grid": {
+            "schema_version": 1,
+            "grid": native_grid,
+            "cells": [native_cell],
+            "empty_slots": [],
+        },
+        "cells": [native_cell],
+        "diagnostics": [],
+    }
+    monkeypatch.setattr(
+        recoverer,
+        "collect_native_spans_from_snapshot",
+        lambda snapshot_input, allowed_regions: tuple(spans),
+    )
+    monkeypatch.setattr(
+        recoverer,
+        "_recover_cells_from_snapshot_python",
+        lambda snapshot_input, region_bbox: (0, 0, []),
+    )
+    monkeypatch.setattr(
+        recoverer.rust_adapter,
+        "recover_native_region",
+        lambda input_dto: received.append(input_dto) or native_output,
+    )
+    monkeypatch.setenv("PDF_RUST_MODE", "rust")
+
+    rows, columns, cells = recover_cells_from_region(snapshot, region)
+
+    assert (rows, columns) == (1, 1)
+    assert [cell.text for cell in cells] == ["RUST_SENTINEL"]
+    assert len(received) == 1
+    assert received[0]["atoms"]
+    assert len(received[0]["bands"]) == 2
+
+
+def test_recover_wireless_tables_consumes_rust_sentinel(monkeypatch):
+    monkeypatch.setenv("PDF_RUST_MODE", "rust")
+    monkeypatch.setattr(
+        "hexai_pdf_parser.tables.wireless_table_recovery._recover_wireless_tables_python",
+        lambda page, excluded_regions=None, allowed_regions=None: WirelessRecovery(
+            tables=[], diagnostics={"source": "python"}
+        ),
+    )
+    monkeypatch.setattr(
+        "hexai_pdf_parser.tables.wireless_table_recovery.collect_native_spans_from_snapshot",
+        lambda page, excluded_regions=None, allowed_regions=None: [],
+    )
+    monkeypatch.setattr(
+        "hexai_pdf_parser.tables.wireless_table_recovery.rust_adapter.recover_wireless_tables",
+        lambda input_dto: {
+            "schema_version": 1,
+            "candidates": [_rust_sentinel_candidate()],
+            "diagnostics": [],
+        },
+    )
+
+    class Page:
+        number = 0
+        rotation = 0
+        rect = type("Rect", (), {"width": 500.0, "height": 500.0})()
+
+    recovery = recover_wireless_tables(Page())
+
+    assert len(recovery.tables) == 1
+    assert recovery.tables[0].source == "rust_sentinel"
+    assert [cell.text for cell in recovery.tables[0].cells] == ["RUST_SENTINEL"]
+
+
+def test_recover_cells_from_region_routes_native_span_exception_to_diagnostic(
+    monkeypatch,
+):
+    region = BBox(0, 0, 160, 70)
+    snapshot = _snapshot_for_region(region)
+    fallback = (1, 1, [Cell("PYTHON_FALLBACK", 0, 0, region)])
+    rust_adapter.clear_diagnostics()
+    monkeypatch.setenv("PDF_RUST_MODE", "rust")
+    monkeypatch.setattr(
+        recoverer,
+        "_recover_cells_from_snapshot_python",
+        lambda page, region_bbox: fallback,
+    )
+
+    def fail_native_span_collection(snapshot_input, allowed_regions):
+        raise ValueError("native span DTO construction failed")
+
+    monkeypatch.setattr(
+        recoverer,
+        "collect_native_spans_from_snapshot",
+        fail_native_span_collection,
+    )
+
+    assert recover_cells_from_region(snapshot, region) == fallback
+    diagnostics = rust_adapter.get_diagnostics()
+    assert len(diagnostics) == 1
+    assert diagnostics[0]["status"] == "rust_fallback"
+    assert diagnostics[0]["path"] == "wireless_structure.recover_cells_from_region"
+    assert diagnostics[0]["error_type"] == "ValueError"
+
+
+def test_recover_cells_from_region_falls_back_when_rust_returns_empty_grid(
+    monkeypatch,
+):
+    region = BBox(0, 0, 160, 70)
+    snapshot = _snapshot_for_region(region)
+    fallback = (1, 1, [Cell("PYTHON_EMPTY_GRID_FALLBACK", 0, 0, region)])
+    monkeypatch.setenv("PDF_RUST_MODE", "rust")
+    monkeypatch.setattr(
+        recoverer,
+        "_build_native_region_input_from_snapshot",
+        lambda page, region_bbox: {"schema_version": 1},
+    )
+    monkeypatch.setattr(
+        recoverer,
+        "_recover_cells_from_snapshot_python",
+        lambda page, region_bbox: fallback,
+    )
+    monkeypatch.setattr(
+        recoverer.rust_adapter,
+        "recover_native_region",
+        lambda input_dto: {
+            "grid": {
+                "grid": {"rows": 0, "cols": 0},
+                "cells": [],
+                "empty_slots": [],
+            },
+            "cells": [],
+            "diagnostics": [],
+        },
+    )
+
+    rust_adapter.clear_diagnostics()
+    assert recover_cells_from_region(snapshot, region) == fallback
+    diagnostics = rust_adapter.get_diagnostics()
+    assert diagnostics[-1]["status"] == "rust_fallback"
+    assert diagnostics[-1]["path"] == "wireless_structure.recover_cells_from_region"
+
+
+def test_recover_cells_from_region_empty_native_input_matches_python_without_fallback(
+    monkeypatch,
+):
+    region = BBox(0, 0, 160, 70)
+    snapshot = _snapshot_for_region(region)
+    monkeypatch.setenv("PDF_RUST_MODE", "rust")
+    rust_adapter.clear_diagnostics()
+
+    assert recover_cells_from_region(snapshot, region) == (0, 0, [])
+    assert rust_adapter.get_diagnostics() == []
+
+
+def test_recover_wireless_tables_routes_native_span_exception_to_diagnostic(
+    monkeypatch,
+):
+    snapshot = _snapshot_for_region(BBox(0, 0, 160, 70))
+    fallback = WirelessRecovery(
+        tables=[], diagnostics={"source": "python_fallback"}
+    )
+    rust_adapter.clear_diagnostics()
+    monkeypatch.setenv("PDF_RUST_MODE", "rust")
+    monkeypatch.setattr(
+        "hexai_pdf_parser.tables.wireless_table_recovery._recover_wireless_tables_from_snapshot_python",
+        lambda page, excluded_regions=None, allowed_regions=None: fallback,
+    )
+
+    def fail_native_span_collection(
+        snapshot_input, excluded_regions=None, allowed_regions=None
+    ):
+        raise ValueError("native span DTO construction failed")
+
+    monkeypatch.setattr(
+        "hexai_pdf_parser.tables.wireless_table_recovery.collect_native_spans_from_snapshot",
+        fail_native_span_collection,
+    )
+
+    recovery = recover_wireless_tables(snapshot)
+
+    assert recovery == fallback
+    diagnostics = rust_adapter.get_diagnostics()
+    assert len(diagnostics) == 1
+    assert diagnostics[0]["status"] == "rust_fallback"
+    assert diagnostics[0]["path"] == "wireless_table_recovery.recover_wireless_tables"
+    assert diagnostics[0]["error_type"] == "ValueError"
+
+
+def test_recover_wireless_tables_matches_python_candidate_confidence_and_cells(monkeypatch):
+    region = BBox(0, 0, 220, 80)
+    snapshot = _snapshot_for_region(region)
+    spans = [
+        NativeSpan(
+            text,
+            BBox(x0, y0, x1, y1),
+            "SimSun",
+            10,
+            order,
+            source_position=(0, row, order),
+        )
+        for order, (text, x0, y0, x1, y1, row) in enumerate(
+            (
+                ("项目", 10.0, 10.0, 30.0, 20.0, 0),
+                ("金额", 120.0, 10.0, 140.0, 20.0, 0),
+                ("甲", 10.0, 30.0, 20.0, 40.0, 1),
+                ("补充", 25.0, 30.0, 35.0, 40.0, 1),
+                ("100", 120.0, 30.0, 140.0, 40.0, 1),
+                ("乙", 10.0, 50.0, 20.0, 60.0, 2),
+                ("200", 120.0, 50.0, 140.0, 60.0, 2),
+            )
+        )
+    ]
+    monkeypatch.setattr(
+        "hexai_pdf_parser.tables.wireless_table_recovery.collect_native_spans_from_snapshot",
+        lambda *args, **kwargs: tuple(spans),
+    )
+    monkeypatch.setenv("PDF_RUST_MODE", "python")
+    expected = recover_wireless_tables(snapshot)
+
+    monkeypatch.setenv("PDF_RUST_MODE", "rust")
+    rust_adapter.clear_diagnostics()
+    actual = recover_wireless_tables(snapshot)
+
+    def signature(recovery):
+        return [
+            (
+                table.rows,
+                table.cols,
+                table.confidence,
+                tuple(
+                    (
+                        cell.row_index,
+                        cell.col_index,
+                        cell.text,
+                        cell.rowspan,
+                        cell.colspan,
+                        tuple(
+                            round(value, 3)
+                            for value in (
+                                cell.bbox.x0,
+                                cell.bbox.y0,
+                                cell.bbox.x1,
+                                cell.bbox.y1,
+                            )
+                        ),
+                    )
+                    for cell in sorted(
+                        table.cells, key=lambda item: (item.row_index, item.col_index)
+                    )
+                ),
+            )
+            for table in recovery.tables
+        ]
+
+    assert signature(expected) == [
+        (
+            3,
+            2,
+            0.8,
+            (
+                (0, 0, "项目", 1, 1, (10.0, 10.0, 30.0, 20.0)),
+                (0, 1, "金额", 1, 1, (120.0, 10.0, 140.0, 20.0)),
+                (1, 0, "甲补充", 1, 1, (10.0, 30.0, 35.0, 40.0)),
+                (1, 1, "100", 1, 1, (120.0, 30.0, 140.0, 40.0)),
+                (2, 0, "乙", 1, 1, (10.0, 50.0, 20.0, 60.0)),
+                (2, 1, "200", 1, 1, (120.0, 50.0, 140.0, 60.0)),
+            ),
+        )
+    ]
+    assert signature(actual) == signature(expected)
+    assert rust_adapter.get_diagnostics() == []
+
+
+def test_recover_wireless_tables_uses_python_left_anchor_for_wide_labels(monkeypatch):
+    region = BBox(0, 0, 240, 80)
+    snapshot = _snapshot_for_region(region)
+    spans = [
+        NativeSpan(
+            text,
+            BBox(x0, y0, x1, y1),
+            "SimSun",
+            10,
+            order,
+            source_position=(0, row, order),
+        )
+        for order, (text, x0, y0, x1, y1, row) in enumerate(
+            (
+                ("项目", 10.0, 10.0, 30.0, 20.0, 0),
+                ("金额", 180.0, 10.0, 200.0, 20.0, 0),
+                ("宽标签", 60.0, 30.0, 190.0, 40.0, 1),
+                ("100", 180.0, 30.0, 200.0, 40.0, 1),
+                ("其他", 10.0, 50.0, 30.0, 60.0, 2),
+                ("200", 180.0, 50.0, 200.0, 60.0, 2),
+            )
+        )
+    ]
+    monkeypatch.setattr(
+        "hexai_pdf_parser.tables.wireless_table_recovery.collect_native_spans_from_snapshot",
+        lambda *args, **kwargs: tuple(spans),
+    )
+    monkeypatch.setenv("PDF_RUST_MODE", "python")
+    expected = recover_wireless_tables(snapshot)
+    monkeypatch.setenv("PDF_RUST_MODE", "rust")
+    rust_adapter.clear_diagnostics()
+    actual = recover_wireless_tables(snapshot)
+
+    def signature(recovery):
+        return [
+            (
+                table.rows,
+                table.cols,
+                table.confidence,
+                tuple(
+                    (cell.row_index, cell.col_index, cell.text, cell.colspan)
+                    for cell in sorted(
+                        table.cells, key=lambda item: (item.row_index, item.col_index)
+                    )
+                ),
+            )
+            for table in recovery.tables
+        ]
+
+    assert signature(expected) == [
+        (
+            3,
+            2,
+            0.8,
+            (
+                (0, 0, "项目", 1),
+                (0, 1, "金额", 1),
+                (1, 0, "宽标签", 1),
+                (1, 1, "100", 1),
+                (2, 0, "其他", 1),
+                (2, 1, "200", 1),
+            ),
+        )
+    ]
+    assert signature(actual) == signature(expected)
+    assert rust_adapter.get_diagnostics() == []
+
+
+def test_recover_wireless_tables_keeps_candidate_tracks_when_wide_cell_joins_bands(monkeypatch):
+    region = BBox(0, 0, 240, 80)
+    snapshot = _snapshot_for_region(region)
+    spans = [
+        NativeSpan(
+            text,
+            BBox(x0, y0, x1, y1),
+            "SimSun",
+            10,
+            order,
+            source_position=(0, row, order),
+        )
+        for order, (text, x0, y0, x1, y1, row) in enumerate(
+            (
+                ("项目", 10.0, 10.0, 30.0, 20.0, 0),
+                ("类别", 100.0, 10.0, 120.0, 20.0, 0),
+                ("金额", 200.0, 10.0, 220.0, 20.0, 0),
+                ("甲", 10.0, 30.0, 30.0, 40.0, 1),
+                ("乙", 100.0, 30.0, 120.0, 40.0, 1),
+                ("100", 200.0, 30.0, 220.0, 40.0, 1),
+                ("宽标签", 10.0, 50.0, 125.0, 60.0, 2),
+                ("200", 200.0, 50.0, 220.0, 60.0, 2),
+            )
+        )
+    ]
+    monkeypatch.setattr(
+        "hexai_pdf_parser.tables.wireless_table_recovery.collect_native_spans_from_snapshot",
+        lambda *args, **kwargs: tuple(spans),
+    )
+    monkeypatch.setenv("PDF_RUST_MODE", "python")
+    expected = recover_wireless_tables(snapshot)
+    monkeypatch.setenv("PDF_RUST_MODE", "rust")
+    rust_adapter.clear_diagnostics()
+    actual = recover_wireless_tables(snapshot)
+
+    def signature(recovery):
+        return [
+            (
+                table.rows,
+                table.cols,
+                round(table.confidence, 3),
+                tuple(
+                    (cell.row_index, cell.col_index, cell.text, cell.colspan)
+                    for cell in sorted(
+                        table.cells, key=lambda item: (item.row_index, item.col_index)
+                    )
+                ),
+            )
+            for table in recovery.tables
+        ]
+
+    assert signature(expected) == [
+        (
+            3,
+            3,
+            0.85,
+            (
+                (0, 0, "项目", 1),
+                (0, 1, "类别", 1),
+                (0, 2, "金额", 1),
+                (1, 0, "甲", 1),
+                (1, 1, "乙", 1),
+                (1, 2, "100", 1),
+                (2, 0, "宽标签", 2),
+                (2, 2, "200", 1),
+            ),
+        )
+    ]
+    assert signature(actual) == signature(expected)
+    assert rust_adapter.get_diagnostics() == []
+
+
+def test_recover_wireless_tables_splits_spaced_multi_field_candidate_like_python(monkeypatch):
+    region = BBox(0, 0, 240, 80)
+    snapshot = _snapshot_for_region(region)
+    spans = [
+        NativeSpan(
+            text,
+            BBox(x0, y0, x1, y1),
+            "SimSun",
+            10,
+            order,
+            source_position=(0, row, order),
+        )
+        for order, (text, x0, y0, x1, y1, row) in enumerate(
+            (
+                ("租赁项目：", 10.0, 10.0, 50.0, 20.0, 0),
+                ("期末金额：", 150.0, 10.0, 190.0, 20.0, 0),
+                ("租赁负债：1,000   固定资产：2,000", 10.0, 30.0, 190.0, 40.0, 1),
+                ("应付利息：300", 10.0, 50.0, 55.0, 60.0, 2),
+                ("折旧金额：400", 150.0, 50.0, 195.0, 60.0, 2),
+            )
+        )
+    ]
+    monkeypatch.setattr(
+        "hexai_pdf_parser.tables.wireless_table_recovery.collect_native_spans_from_snapshot",
+        lambda *args, **kwargs: tuple(spans),
+    )
+    monkeypatch.setenv("PDF_RUST_MODE", "python")
+    expected = recover_wireless_tables(snapshot)
+    monkeypatch.setenv("PDF_RUST_MODE", "rust")
+    rust_adapter.clear_diagnostics()
+    actual = recover_wireless_tables(snapshot)
+
+    def signature(recovery):
+        return [
+            (
+                table.rows,
+                table.cols,
+                tuple(
+                    (
+                        cell.row_index,
+                        cell.col_index,
+                        cell.text,
+                        cell.colspan,
+                        (cell.bbox.x0, cell.bbox.y0, cell.bbox.x1, cell.bbox.y1),
+                    )
+                    for cell in sorted(
+                        table.cells, key=lambda item: (item.row_index, item.col_index)
+                    )
+                ),
+            )
+            for table in recovery.tables
+        ]
+
+    assert signature(actual) == signature(expected)
+    assert rust_adapter.get_diagnostics() == []
 
 
 def test_recover_cells_from_region_converts_new_pipeline_to_project_cells(monkeypatch):
@@ -31,12 +688,9 @@ def test_recover_cells_from_region_converts_new_pipeline_to_project_cells(monkey
             ]
         )
     ]
-    monkeypatch.setattr(
-        "hexai_pdf_parser.tables.wireless_structure.recoverer.collect_native_spans",
-        lambda page, allowed_regions: spans,
-    )
+    _use_snapshot_spans(monkeypatch, spans)
 
-    rows, columns, cells = recover_cells_from_region(object(), region)
+    rows, columns, cells = recover_cells_from_region(_snapshot_for_region(region), region)
 
     assert (rows, columns) == (3, 2)
     assert {(cell.row_index, cell.col_index, cell.text) for cell in cells} == {
@@ -260,7 +914,7 @@ def test_recover_cells_rebuilds_after_exact_slot_conflict_merge(monkeypatch):
 
     monkeypatch.setattr(
         recoverer,
-        "collect_native_spans",
+        "collect_native_spans_from_snapshot",
         lambda page, allowed_regions: [object()],
     )
     monkeypatch.setattr(recoverer, "region_spans", lambda spans, bbox: [object()])
@@ -310,7 +964,7 @@ def test_recover_cells_rebuilds_after_exact_slot_conflict_merge(monkeypatch):
     )
     monkeypatch.setattr(recoverer, "build_grid", counting_build_grid)
 
-    rows, columns, cells = recover_cells_from_region(object(), region)
+    rows, columns, cells = recover_cells_from_region(_snapshot_for_region(region), region)
 
     assert (rows, columns) == (3, 3)
     assert build_grid_calls == 2
@@ -368,11 +1022,7 @@ def test_recoverer_materializes_complete_grid_after_header_span_conflict(monkeyp
             ]
         )
     ]
-    monkeypatch.setattr(
-        recoverer,
-        "collect_native_spans",
-        lambda page, allowed_regions: spans,
-    )
+    _use_snapshot_spans(monkeypatch, spans)
 
     def conflicting_spans(cells, cutoff):
         proposed = [dict(cell) for cell in cells]
@@ -381,7 +1031,7 @@ def test_recoverer_materializes_complete_grid_after_header_span_conflict(monkeyp
 
     monkeypatch.setattr(recoverer, "merge_header_spans", conflicting_spans)
 
-    rows, columns, cells = recover_cells_from_region(object(), region)
+    rows, columns, cells = recover_cells_from_region(_snapshot_for_region(region), region)
 
     occupied = [
         (row, column)
@@ -408,12 +1058,9 @@ def test_recover_cells_from_region_materializes_missing_empty_slot(monkeypatch):
             ]
         )
     ]
-    monkeypatch.setattr(
-        "hexai_pdf_parser.tables.wireless_structure.recoverer.collect_native_spans",
-        lambda page, allowed_regions: spans,
-    )
+    _use_snapshot_spans(monkeypatch, spans)
 
-    rows, columns, cells = recover_cells_from_region(object(), region)
+    rows, columns, cells = recover_cells_from_region(_snapshot_for_region(region), region)
 
     assert (rows, columns, len(cells)) == (3, 2, 6)
     empty = next(cell for cell in cells if cell.row_index == 2 and cell.col_index == 1)
@@ -444,13 +1091,9 @@ def test_recover_cells_restores_header_only_leaf_and_materializes_empty_body(mon
         NativeSpan(text, BBox(x0, y, x0 + 30, y + 10), "SimSun", 10, order)
         for order, (y, x0, text) in enumerate(raw)
     ]
-    monkeypatch.setattr(
-        recoverer,
-        "collect_native_spans",
-        lambda page, allowed_regions: spans,
-    )
+    _use_snapshot_spans(monkeypatch, spans)
 
-    rows, columns, cells = recover_cells_from_region(object(), region)
+    rows, columns, cells = recover_cells_from_region(_snapshot_for_region(region), region)
 
     assert (rows, columns, len(cells)) == (6, 5, 30)
     assert next(
@@ -502,12 +1145,9 @@ def test_recover_cells_merges_wrapped_fields_before_physical_rows(monkeypatch):
         NativeSpan(text, BBox(x0, y, x1, y + 10), "SimSun", 10.5, order)
         for order, (y, x0, x1, text) in enumerate(raw)
     ]
-    monkeypatch.setattr(
-        "hexai_pdf_parser.tables.wireless_structure.recoverer.collect_native_spans",
-        lambda page, allowed_regions: spans,
-    )
+    _use_snapshot_spans(monkeypatch, spans)
 
-    rows, columns, cells = recover_cells_from_region(object(), region)
+    rows, columns, cells = recover_cells_from_region(_snapshot_for_region(region), region)
 
     assert (rows, columns, len(cells)) == (3, 7, 21)
     occupied = {
@@ -549,12 +1189,9 @@ def test_recover_cells_from_region_removes_paired_cjk_artifact_column(monkeypatc
         NativeSpan(text, BBox(x0, y, x1, y + 10), "SimSun", 10.5, order)
         for order, (y, x0, x1, text) in enumerate(raw)
     ]
-    monkeypatch.setattr(
-        "hexai_pdf_parser.tables.wireless_structure.recoverer.collect_native_spans",
-        lambda page, allowed_regions: spans,
-    )
+    _use_snapshot_spans(monkeypatch, spans)
 
-    rows, columns, cells = recover_cells_from_region(object(), region)
+    rows, columns, cells = recover_cells_from_region(_snapshot_for_region(region), region)
 
     assert (rows, columns, len(cells)) == (5, 3, 15)
     assert next(cell for cell in cells if cell.row_index == 0 and cell.col_index == 0).text == "项目"
@@ -581,12 +1218,9 @@ def test_recover_cells_from_region_removes_sparse_alignment_column(monkeypatch):
         NativeSpan(text, BBox(x0, y, x1, y + 10), "SimSun", 10.5, order)
         for order, (y, x0, x1, text) in enumerate(raw)
     ]
-    monkeypatch.setattr(
-        "hexai_pdf_parser.tables.wireless_structure.recoverer.collect_native_spans",
-        lambda page, allowed_regions: spans,
-    )
+    _use_snapshot_spans(monkeypatch, spans)
 
-    rows, columns, cells = recover_cells_from_region(object(), region)
+    rows, columns, cells = recover_cells_from_region(_snapshot_for_region(region), region)
 
     assert (rows, columns, len(cells)) == (4, 3, 12)
     assert next(cell for cell in cells if cell.row_index == 0 and cell.col_index == 0).text == "项目"
@@ -623,12 +1257,9 @@ def test_recover_interleaved_vertical_cjk_columns(monkeypatch):
         NativeSpan(text, BBox(x0, y, x1, y + 10), "SimSun", 10.5, order)
         for order, (y, x0, x1, text) in enumerate(raw)
     ]
-    monkeypatch.setattr(
-        "hexai_pdf_parser.tables.wireless_structure.recoverer.collect_native_spans",
-        lambda page, allowed_regions: spans,
-    )
+    _use_snapshot_spans(monkeypatch, spans)
 
-    rows, columns, cells = recover_cells_from_region(object(), region)
+    rows, columns, cells = recover_cells_from_region(_snapshot_for_region(region), region)
 
     assert (rows, columns) == (3, 3)
     header_col0 = next(cell for cell in cells if cell.row_index == 0 and cell.col_index == 0).text

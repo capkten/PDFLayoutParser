@@ -3216,3 +3216,45 @@ def test_p415_full_extraction_drops_chart_and_keeps_operating_expenses():
         )
     finally:
         doc.close()
+
+
+def test_rust_empty_rule_candidates_still_run_ml(monkeypatch):
+    from types import SimpleNamespace
+    import fitz
+
+    extractor = TableExtractor(use_ml_table_detector=True)
+    fake_page = SimpleNamespace(
+        number=0,
+        rotation=0,
+        rect=fitz.Rect(0, 0, 100, 100),
+        get_text=lambda kind, *args, **kwargs: {"blocks": []}
+        if kind == "rawdict"
+        else [],
+    )
+    called = []
+    dummy_table = Table(
+        bbox=BBox(0, 0, 50, 50),
+        rows=1,
+        cols=1,
+        cells=[Cell("x", 0, 0, BBox(0, 0, 50, 50))],
+    )
+    monkeypatch.setenv("PDF_RUST_MODE", "rust")
+    monkeypatch.setattr(
+        "hexai_pdf_parser.tables.table_extractor.normalize_page_rotation",
+        lambda page: None,
+    )
+    monkeypatch.setattr(
+        "hexai_pdf_parser.extractors.language_detector.detect_page_language",
+        lambda page: "zh",
+    )
+    monkeypatch.setattr(extractor, "_detect_rule_candidates", lambda page, page_language=None: [])
+    monkeypatch.setattr(
+        extractor,
+        "_extract_model_tables",
+        lambda page, wired_tables=None, page_language=None: called.append((wired_tables, page_language)) or [dummy_table],
+    )
+
+    result = extractor.extract(fake_page)
+
+    assert result == [dummy_table]
+    assert called == [([], "zh")]

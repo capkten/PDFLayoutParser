@@ -21,6 +21,12 @@ setup(
             "numpy>=1.20.0",
             "opencv-python>=4.2.0",
         ],
+        "ml-openvino": [
+            "onnxruntime-openvino==1.24.1; python_version >= '3.10'",
+            "openvino==2025.4.1; python_version >= '3.10'",
+            "numpy>=1.20.0",
+            "opencv-python>=4.2.0",
+        ],
         "dev": [
             "pytest>=7.0",
         ],

@@ -35,6 +35,7 @@ from typing import Any, Dict, Iterable, List, Sequence, Tuple
 
 import fitz
 
+from hexai_pdf_parser import rust_adapter
 from hexai_pdf_parser.core.models import BBox, Cell, Table
 
 
@@ -89,6 +90,81 @@ class WirelessRecovery:
     diagnostics: Dict[str, Any]
 
 
+def _rust_bbox(value: Any) -> BBox:
+    if isinstance(value, dict):
+        return BBox(
+            float(value["x0"]),
+            float(value["y0"]),
+            float(value["x1"]),
+            float(value["y1"]),
+        )
+    if isinstance(value, (list, tuple)) and len(value) >= 4:
+        return BBox(
+            float(value[0]),
+            float(value[1]),
+            float(value[2]),
+            float(value[3]),
+        )
+    raise ValueError("Rust cell output is missing a rectangle")
+
+
+def _rust_cells_to_project(
+    raw_cells: Sequence[Dict[str, Any]],
+    rows: int,
+    columns: int,
+) -> List[Cell]:
+    if rows <= 0 or columns <= 0:
+        raise ValueError("Rust grid dimensions must be positive")
+
+    occupied: set[tuple[int, int]] = set()
+    converted: List[Cell] = []
+    for item in raw_cells:
+        if not isinstance(item, dict):
+            raise TypeError("Rust cell output must contain mappings")
+        grid_values = {
+            "row": item["row"],
+            "col": item["col"],
+            "rowspan": item.get("rowspan", 1),
+            "colspan": item.get("colspan", 1),
+        }
+        if any(type(value) is not int for value in grid_values.values()):
+            raise TypeError("Rust cell grid fields must be strict integer values")
+        row = grid_values["row"]
+        column = grid_values["col"]
+        rowspan = grid_values["rowspan"]
+        colspan = grid_values["colspan"]
+        if rowspan <= 0 or colspan <= 0:
+            raise ValueError("Rust cell spans must be positive")
+        if (
+            row < 0
+            or column < 0
+            or row + rowspan > rows
+            or column + colspan > columns
+        ):
+            raise ValueError("Rust cell falls outside its grid")
+        for occupied_row in range(row, row + rowspan):
+            for occupied_column in range(column, column + colspan):
+                slot = (occupied_row, occupied_column)
+                if slot in occupied:
+                    raise ValueError("Rust cell output has an occupancy conflict")
+                occupied.add(slot)
+        converted.append(
+            Cell(
+                text=str(item.get("text", "")).strip(),
+                row_index=row,
+                col_index=column,
+                bbox=_rust_bbox(item.get("rect")),
+                rowspan=rowspan,
+                colspan=colspan,
+            )
+        )
+
+    if len(occupied) != rows * columns:
+        raise ValueError("Rust cell output leaves grid slots unmaterialized")
+    converted.sort(key=lambda cell: (cell.row_index, cell.col_index))
+    return converted
+
+
 def _union(items: Iterable[BBox]) -> BBox:
     boxes = list(items)
     return BBox(
@@ -99,21 +175,25 @@ def _union(items: Iterable[BBox]) -> BBox:
     )
 
 
-def collect_native_spans(
-    page: fitz.Page,
+def collect_native_spans_from_snapshot(
+    snapshot: Any,
     excluded_regions: Sequence[BBox] | None = None,
     allowed_regions: Sequence[BBox] | None = None,
-) -> List[NativeSpan]:
-    """Return native spans in allowed regions and outside excluded regions."""
+) -> tuple[NativeSpan, ...]:
+    """Return native spans from a PageSnapshot in allowed regions and outside excluded regions."""
 
     footer_page_number = re.compile(
         r"^\s*\u7b2c\s*\d+\s*\u9875\s*/\s*\u5171\s*\d+\s*\u9875\s*$"
     )
-    raw = page.get_text("rawdict", flags=fitz.TEXT_PRESERVE_WHITESPACE)
+    geometry = getattr(snapshot, "geometry", {}) or {}
+    page_y0 = float(geometry.get("y0", geometry.get("rect", [0, 0, 0, 0])[1] if "rect" in geometry else 0.0))
+    page_height = float(geometry.get("height", 0.0))
+
     spans: List[NativeSpan] = []
     order = 0
-    for block_index, block in enumerate(raw.get("blocks", [])):
-        if block.get("type") != 0:
+    text_blocks = getattr(snapshot, "text_blocks", ()) or ()
+    for block_index, block in enumerate(text_blocks):
+        if block.get("type", 0) != 0:
             continue
         for line_index, line in enumerate(block.get("lines", [])):
             line_text = "".join(
@@ -121,15 +201,22 @@ def collect_native_spans(
                 for item in line.get("spans", [])
                 for char in item.get("chars", [])
             )
+            line_bbox = line.get("bbox", (0.0, 0.0, 0.0, 0.0))
             if (
                 footer_page_number.match(line_text)
-                and line["bbox"][1] >= page.rect.y0 + page.rect.height * 0.85
+                and line_bbox[1] >= page_y0 + page_height * 0.85
             ):
                 continue
             for span_index, item in enumerate(line.get("spans", [])):
                 text = "".join(char.get("c", "") for char in item.get("chars", []))
                 if not text.strip():
                     continue
+                raw_pos = item.get("raw_source_position")
+                source_pos = (
+                    (int(raw_pos[0]), int(raw_pos[1]), int(raw_pos[2]))
+                    if raw_pos and len(raw_pos) >= 3
+                    else (block_index, line_index, span_index)
+                )
                 spans.append(
                     NativeSpan(
                         text=text,
@@ -142,11 +229,12 @@ def collect_native_spans(
                             for char in item.get("chars", [])
                             if char.get("c", "")
                         ],
-                        source_position=(block_index, line_index, span_index),
+                        source_position=source_pos,
                     )
                 )
                 order += 1
-    return [
+
+    filtered = [
         span
         for span in spans
         if (
@@ -166,6 +254,41 @@ def collect_native_spans(
             )
         )
     ]
+    return tuple(filtered)
+
+
+def collect_native_spans(
+    page: fitz.Page,
+    excluded_regions: Sequence[BBox] | None = None,
+    allowed_regions: Sequence[BBox] | None = None,
+) -> List[NativeSpan]:
+    """Return native spans in allowed regions and outside excluded regions."""
+    if hasattr(page, "schema_version") and hasattr(page, "text_blocks"):
+        snapshot = page
+    elif hasattr(page, "_cached_snapshot") and page._cached_snapshot is not None:
+        snapshot = page._cached_snapshot
+    else:
+        from hexai_pdf_parser.pdf_snapshot import capture_page_snapshot
+
+        snapshot = capture_page_snapshot(
+            page,
+            page_index=getattr(page, "number", 0),
+            allowed_regions=allowed_regions or (),
+            excluded_regions=excluded_regions or (),
+            lightweight=True,
+        )
+        try:
+            page._cached_snapshot = snapshot
+        except (AttributeError, TypeError):
+            pass
+    return list(
+        collect_native_spans_from_snapshot(
+            snapshot,
+            excluded_regions=excluded_regions,
+            allowed_regions=allowed_regions,
+        )
+    )
+
 
 
 def _is_small_superscript(current: TextStrip, candidate: NativeSpan) -> bool:
@@ -408,6 +531,32 @@ def _row_cluster(strips: Sequence[TextStrip]) -> List[List[TextStrip]]:
     sizes = [span.size for strip in strips for span in strip.spans if span.size]
     median_size = statistics.median(sizes) if sizes else 10.0
     tolerance = max(3.5, median_size * 0.48)
+
+    mode = os.environ.get("PDF_RUST_MODE", "python").lower()
+    if mode in ("shadow", "rust"):
+        items_dto = [
+            {
+                "schema_version": 1,
+                "id": idx,
+                "rect": {
+                    "schema_version": 1,
+                    "x0": strip.bbox.x0,
+                    "y0": strip.bbox.y0,
+                    "x1": strip.bbox.x1,
+                    "y1": strip.bbox.y1,
+                },
+                "order": getattr(strip, "order", idx),
+            }
+            for idx, strip in enumerate(strips)
+        ]
+        rust_clusters = rust_adapter.cluster_rows(items_dto, tolerance=tolerance)
+        rust_rows = [
+            [strips[item_idx] for item_idx in c["item_indices"]]
+            for c in rust_clusters
+        ]
+        if mode == "rust":
+            return rust_rows
+
     rows: List[List[TextStrip]] = []
     centers: List[float] = []
     for strip in sorted(strips, key=lambda item: (item.center_y, item.bbox.x0, item.order)):
@@ -902,17 +1051,50 @@ def _table_quality(table: Table) -> tuple[float, int, int]:
     return (table.confidence, populated, table.rows * table.cols)
 
 
-def recover_wireless_tables(
-    page: fitz.Page,
+def _table_from_rust_candidate(candidate: Dict[str, Any]) -> Table:
+    if not isinstance(candidate, dict):
+        raise TypeError("Rust candidate output must be a mapping")
+    rows = int(candidate["rows"])
+    columns = int(candidate["cols"])
+    bbox = _rust_bbox(candidate.get("rect"))
+    cells = _rust_cells_to_project(
+        candidate.get("cells", []), rows, columns
+    )
+    confidence = candidate.get("confidence")
+    return Table(
+        bbox=bbox,
+        rows=rows,
+        cols=columns,
+        cells=cells,
+        confidence=float(confidence) if confidence is not None else None,
+        source=candidate.get("source"),
+    )
+
+
+def _wireless_recovery_from_rust(output: Dict[str, Any]) -> WirelessRecovery:
+    if not isinstance(output, dict):
+        raise TypeError("Rust wireless recovery output must be a mapping")
+    diagnostics = output.get("diagnostics", [])
+    tables = [_table_from_rust_candidate(item) for item in output.get("candidates", [])]
+    return WirelessRecovery(
+        tables=tables,
+        diagnostics={"source": "rust", "rust": diagnostics},
+    )
+
+
+def _recover_wireless_tables_from_snapshot_python(
+    snapshot: Any,
     excluded_regions: Sequence[BBox] | None = None,
     allowed_regions: Sequence[BBox] | None = None,
 ) -> WirelessRecovery:
-    """Recover borderless tables from a native PDF page and retain evidence."""
+    """Recover borderless tables from a PageSnapshot and retain evidence."""
 
-    spans = collect_native_spans(
-        page,
-        excluded_regions=excluded_regions,
-        allowed_regions=allowed_regions,
+    spans = list(
+        collect_native_spans_from_snapshot(
+            snapshot,
+            excluded_regions=excluded_regions,
+            allowed_regions=allowed_regions,
+        )
     )
     strips = merge_text_strips(spans)
     page_signal = _detect_native_span_page_signal(strips)
@@ -983,8 +1165,9 @@ def recover_wireless_tables(
         seen_boxes.append(table.bbox)
         regions.append(evidence)
         accepted_region_indexes.append(len(regions) - 1)
+    page_idx = getattr(snapshot, "page_index", getattr(snapshot, "number", 0))
     diagnostics = {
-        "page_index": page.number,
+        "page_index": page_idx,
         "excluded_regions": [region.__dict__ for region in (excluded_regions or [])],
         "allowed_regions": [region.__dict__ for region in (allowed_regions or [])],
         "native_spans": [
@@ -1031,6 +1214,130 @@ def recover_wireless_tables(
     if not candidate_runs:
         diagnostics["rejected_reason"] = "no consecutive multi-column visual rows"
     return WirelessRecovery(tables=tables, diagnostics=diagnostics)
+
+
+def _recover_wireless_tables_python(
+    page: fitz.Page | Any,
+    excluded_regions: Sequence[BBox] | None = None,
+    allowed_regions: Sequence[BBox] | None = None,
+) -> WirelessRecovery:
+    """Recover borderless tables from a native PDF page and retain evidence."""
+    if hasattr(page, "schema_version") and hasattr(page, "text_blocks"):
+        snapshot = page
+    elif hasattr(page, "_cached_snapshot") and page._cached_snapshot is not None:
+        snapshot = page._cached_snapshot
+    else:
+        from hexai_pdf_parser.pdf_snapshot import capture_page_snapshot
+
+        snapshot = capture_page_snapshot(
+            page,
+            page_index=getattr(page, "number", 0),
+            allowed_regions=allowed_regions or (),
+            excluded_regions=excluded_regions or (),
+            lightweight=True,
+        )
+        try:
+            page._cached_snapshot = snapshot
+        except (AttributeError, TypeError):
+            pass
+    return _recover_wireless_tables_from_snapshot_python(
+        snapshot,
+        excluded_regions=excluded_regions,
+        allowed_regions=allowed_regions,
+    )
+
+
+def recover_wireless_tables(
+    page: fitz.Page | Any,
+    excluded_regions: Sequence[BBox] | None = None,
+    allowed_regions: Sequence[BBox] | None = None,
+) -> WirelessRecovery:
+    """Recover borderless tables from a native PDF page with PDF_RUST_MODE support."""
+    mode = rust_adapter.get_rust_mode("wireless_table_recovery")
+    if mode == "rust" and hasattr(page, "get_text") and not hasattr(page, "schema_version"):
+        try:
+            rect = getattr(page, "rect", None)
+            page_w = float(rect.width) if rect else 595.0
+            page_h = float(rect.height) if rect else 842.0
+            page_y0 = float(rect.y0) if rect else 0.0
+            rotation = int(getattr(page, "rotation", 0))
+            rawdict = page.get_text("rawdict")
+            raw_res = rust_adapter.recover_wireless_tables_from_rawdict(
+                rawdict=rawdict,
+                page_width=page_w,
+                page_height=page_h,
+                rotation=rotation,
+                page_y0=page_y0,
+                allowed_regions=list(allowed_regions) if allowed_regions else None,
+                excluded_regions=list(excluded_regions) if excluded_regions else None,
+            )
+            return _wireless_recovery_from_rust(raw_res)
+        except Exception:
+            pass
+
+    if hasattr(page, "schema_version") and hasattr(page, "text_blocks"):
+        snapshot = page
+    elif hasattr(page, "_cached_snapshot") and page._cached_snapshot is not None:
+        snapshot = page._cached_snapshot
+    else:
+        from hexai_pdf_parser.pdf_snapshot import capture_page_snapshot
+
+        snapshot = capture_page_snapshot(
+            page,
+            page_index=getattr(page, "number", 0),
+            allowed_regions=allowed_regions or (),
+            excluded_regions=excluded_regions or (),
+            lightweight=True,
+        )
+        try:
+            page._cached_snapshot = snapshot
+        except (AttributeError, TypeError):
+            pass
+
+    if mode in ("rust", "shadow"):
+        def _recover_wireless_tables_rust():
+            spans = collect_native_spans_from_snapshot(
+                snapshot,
+                excluded_regions=excluded_regions,
+                allowed_regions=allowed_regions,
+            )
+            geometry = getattr(snapshot, "geometry", {}) or {}
+            page_w = float(geometry.get("width", 0.0))
+            page_h = float(geometry.get("height", 0.0))
+            rotation = int(geometry.get("rotation", 0))
+
+            packed_args = rust_adapter.pack_native_spans(
+                spans=spans,
+                page_width=page_w,
+                page_height=page_h,
+                rotation=rotation,
+                allowed_regions=allowed_regions,
+                excluded_regions=excluded_regions,
+                config={
+                    "line_tolerance": 2.0,
+                    "row_tolerance": 2.0,
+                    "column_tolerance": 2.0,
+                    "span_tolerance": 2.0,
+                    "numeric_tolerance": 2.0,
+                },
+            )
+            return _wireless_recovery_from_rust(
+                rust_adapter.recover_wireless_tables(packed_args)
+            )
+
+        return rust_adapter.run_python_or_rust(
+            mode=mode,
+            python_fn=lambda: _recover_wireless_tables_from_snapshot_python(
+                snapshot, excluded_regions, allowed_regions
+            ),
+            rust_fn=_recover_wireless_tables_rust,
+            path="wireless_table_recovery.recover_wireless_tables",
+        )
+    else:
+        return _recover_wireless_tables_from_snapshot_python(
+            snapshot, excluded_regions, allowed_regions
+        )
+
 
 
 def _table_html(table: Table) -> str:

@@ -104,6 +104,8 @@ def _get_process_worker_resources(
         if wired_line_tolerance is not None:
             extractor_kwargs["wired_line_tolerance"] = wired_line_tolerance
         _PROCESS_WORKER_TABLE_EXTRACTOR = table_extractor_cls(**extractor_kwargs)
+        if hasattr(_PROCESS_WORKER_TABLE_EXTRACTOR, "warmup"):
+            _PROCESS_WORKER_TABLE_EXTRACTOR.warmup()
         _PROCESS_WORKER_RESOURCES_KEY = resource_key
 
     return _PROCESS_WORKER_DOCUMENT, _PROCESS_WORKER_TABLE_EXTRACTOR
@@ -120,6 +122,7 @@ def _run_scanned_page_pipeline(
     pages_dir: str,
     render_dpi: int,
     output_dir,
+    visualize_tables: bool = False,
 ):
     """Render and serialize a scanned page without native extraction."""
     stage_totals: dict[str, float] = {}
@@ -165,23 +168,24 @@ def _run_scanned_page_pipeline(
         if os.path.exists(page_md_path):
             os.remove(page_md_path)
 
-        tables_dir = os.path.join(output_dir, "tables")
-        os.makedirs(tables_dir, exist_ok=True)
-        table_vis_path = os.path.join(
-            tables_dir, f"page-{page.index:03d}.png"
-        )
-        time_stage(
-            "write_table_visualization",
-            lambda: render_table_visualization(
-                source=page_handle,
-                tables=page.tables,
-                output_path=table_vis_path,
-                page_index=page.index,
-                dpi=render_dpi,
-                page_type=None,
-                page_already_normalized=True,
-            ),
-        )
+        if visualize_tables:
+            tables_dir = os.path.join(output_dir, "tables")
+            os.makedirs(tables_dir, exist_ok=True)
+            table_vis_path = os.path.join(
+                tables_dir, f"page-{page.index:03d}.png"
+            )
+            time_stage(
+                "write_table_visualization",
+                lambda: render_table_visualization(
+                    source=page_handle,
+                    tables=page.tables,
+                    output_path=table_vis_path,
+                    page_index=page.index,
+                    dpi=render_dpi,
+                    page_type=None,
+                    page_already_normalized=True,
+                ),
+            )
 
     return stage_totals
 
@@ -206,6 +210,7 @@ def _run_page_pipeline(
     table_extractor=None,
     table_extractor_factory=None,
     ml_render_dpi: Optional[int] = None,
+    visualize_tables: bool = False,
 ):
     """Run all pipeline stages for a single page.
 
@@ -233,6 +238,7 @@ def _run_page_pipeline(
             pages_dir=pages_dir,
             render_dpi=render_dpi,
             output_dir=output_dir,
+            visualize_tables=visualize_tables,
         )
 
     cached_page = CachedPage(page_handle)
@@ -413,23 +419,24 @@ def _run_page_pipeline(
             "write_page_md",
             lambda: MarkdownWriter().write_page(page, page_md_path),
         )
-        tables_dir = os.path.join(output_dir, "tables")
-        os.makedirs(tables_dir, exist_ok=True)
-        table_vis_path = os.path.join(
-            tables_dir, f"page-{page.index:03d}.png"
-        )
-        time_stage(
-            "write_table_visualization",
-            lambda: render_table_visualization(
-                source=page_handle,
-                tables=page.tables,
-                output_path=table_vis_path,
-                page_index=page.index,
-                dpi=render_dpi,
-                page_type=page.page_type if debug else None,
-                page_already_normalized=not debug,
-            ),
-        )
+        if visualize_tables:
+            tables_dir = os.path.join(output_dir, "tables")
+            os.makedirs(tables_dir, exist_ok=True)
+            table_vis_path = os.path.join(
+                tables_dir, f"page-{page.index:03d}.png"
+            )
+            time_stage(
+                "write_table_visualization",
+                lambda: render_table_visualization(
+                    source=page_handle,
+                    tables=page.tables,
+                    output_path=table_vis_path,
+                    page_index=page.index,
+                    dpi=render_dpi,
+                    page_type=page.page_type if debug else None,
+                    page_already_normalized=not debug,
+                ),
+            )
 
     return stage_totals
 
@@ -453,6 +460,7 @@ def _process_page_process_worker(
     table_extractor_cls=TableExtractor,
     page_type: str = "vector",
     ml_render_dpi: Optional[int] = None,
+    visualize_tables: bool = False,
     wired_line_tolerance: Optional[float] = None,
 ) -> tuple[int, Page, dict[str, float], float]:
     """Worker function for process-based parallelism.
@@ -501,6 +509,7 @@ def _process_page_process_worker(
         table_extractor=table_extractor,
         table_extractor_cls=table_extractor_cls,
         ml_render_dpi=ml_render_dpi,
+        visualize_tables=visualize_tables,
     )
 
     total_page_time = perf_counter() - page_start
@@ -520,7 +529,7 @@ class Pipeline:
         self,
         pdf_path: str,
         output_dir: Optional[str] = None,
-        render_dpi: int = 200,
+        render_dpi: int = 72,
         seal_coords: Optional[List[dict]] = None,
         page_indices: Optional[List[int]] = None,
         ml_model_path: Optional[str] = None,
@@ -533,6 +542,7 @@ class Pipeline:
         use_ml_table_detector: bool = True,
         ml_render_dpi: Optional[int] = None,
         wired_line_tolerance: Optional[float] = None,
+        visualize_tables: bool = False,
     ):
         self.pdf_path = pdf_path
         self.output_dir = output_dir
@@ -549,6 +559,7 @@ class Pipeline:
         self.num_workers = num_workers
         self.backend = backend
         self._use_ml_table_detector = use_ml_table_detector
+        self.visualize_tables = visualize_tables
         self._lock = threading.Lock()
         self._fitz_lock = threading.Lock()
         self._stage_totals: dict[str, float] = {}
@@ -697,6 +708,7 @@ class Pipeline:
                 use_ml_table_detector=self._use_ml_table_detector,
                 table_extractor=table_extractor,
                 table_extractor_factory=self._create_table_extractor,
+                visualize_tables=self.visualize_tables,
             )
 
         for stage, elapsed in stage_totals.items():
@@ -714,7 +726,7 @@ class Pipeline:
         # 1. Load PDF
         document, _ = self._time_stage(
             "load",
-            lambda: Loader(self.pdf_path).load(),
+            lambda: Loader(self.pdf_path).load(page_indices=self.page_indices),
         )
 
         # Prepare output directories
@@ -749,6 +761,18 @@ class Pipeline:
             ):
                 continue
             pages_to_process.append(page.index)
+
+        # Preload and warm up models before per-page processing so that
+        # first-page table_extract measures actual calculation time.
+        if (
+            self._use_ml_table_detector
+            and any(document.pages[i].page_type != "scanned" for i in pages_to_process)
+        ):
+            def _warmup_action():
+                extractor = self._create_table_extractor()
+                if hasattr(extractor, "warmup"):
+                    extractor.warmup()
+            self._time_stage("model_warmup", _warmup_action)
 
         num_workers = self.num_workers
         if num_workers is None:
@@ -795,6 +819,7 @@ class Pipeline:
                                 self._get_table_extractor_class(),
                                 page_type=page.page_type,
                                 ml_render_dpi=self.ml_render_dpi,
+                                visualize_tables=self.visualize_tables,
                                 wired_line_tolerance=self._wired_line_tolerance,
                             )
                         )

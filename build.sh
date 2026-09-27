@@ -1,8 +1,6 @@
 #!/bin/bash
 set -e
 
-ARCH=$(uname -m)
-
 # 每次提交代码,请将版本号加1
 VER="1.1.4"
 
@@ -18,24 +16,19 @@ if [[ $1 != "refs/tags/release"* ]]; then
     TIMESTAMP="-$(date +%Y%m%d.%H%M%S)"
 fi
 
-PYVER="37m"
-if [ "py36" = "$2" ];then
-    PYVER="36m"
-elif [ "py37" = "$2" ]; then
-    PYVER="37m"
-elif [ "py38" = "$2" ]; then
-    PYVER="38m"
+mkdir -p dist
+maturin build --release --out dist
+maturin sdist --out dist
+
+shopt -s nullglob
+WHEELS=("dist/${SRV_NAME}-${VER}-cp37-abi3-"*.whl)
+if [ ${#WHEELS[@]} -ne 1 ]; then
+    echo "Expected one cp37-abi3 wheel for ${SRV_NAME} ${VER}; found ${#WHEELS[@]}" >&2
+    exit 1
 fi
 
-RELEASE_FILE="${SRV_NAME}-${VER}-py3-none-any.whl"
-echo $RELEASE_FILE
+RELEASE_FILE=$(basename "${WHEELS[0]}")
+echo "$RELEASE_FILE"
+cp "${WHEELS[0]}" .
 
-mkdir -p dist
-VER=${VER} python setup.py sdist bdist_wheel
-cd dist
-ls -lh
-cd ..
-
-cp dist/${SRV_NAME}-${VER}-py3-none-any.whl .
-
-echo ${RELEASE_FILE} > "release_filename"
+echo "$RELEASE_FILE" > "release_filename"

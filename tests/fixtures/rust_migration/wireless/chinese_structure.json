@@ -1,0 +1,226 @@
+{
+  "schema_version": 1,
+  "description": "Sprint 007 Chinese and mixed wireless structure recovery benchmark fixture",
+  "pages": [
+    {
+      "page": {
+        "schema_version": 1,
+        "width": 595.0,
+        "height": 842.0,
+        "rotation": 0
+      },
+      "chinese_wireless_structure": {
+        "region": {
+          "schema_version": 1,
+          "rect": {
+            "schema_version": 1,
+            "x0": 20.0,
+            "y0": 20.0,
+            "x1": 500.0,
+            "y1": 400.0
+          },
+          "source_order": 0,
+          "allowed": true
+        },
+        "atoms": [
+          {
+            "schema_version": 1,
+            "text": "项目",
+            "rect": {
+              "schema_version": 1,
+              "x0": 30.0,
+              "y0": 30.0,
+              "x1": 80.0,
+              "y1": 50.0
+            },
+            "run_refs": [
+              0
+            ],
+            "row_hint": null,
+            "col_hint": null,
+            "order": 0
+          },
+          {
+            "schema_version": 1,
+            "text": "年初数",
+            "rect": {
+              "schema_version": 1,
+              "x0": 120.0,
+              "y0": 30.0,
+              "x1": 180.0,
+              "y1": 50.0
+            },
+            "run_refs": [
+              1
+            ],
+            "row_hint": null,
+            "col_hint": null,
+            "order": 1
+          },
+          {
+            "schema_version": 1,
+            "text": "年末数",
+            "rect": {
+              "schema_version": 1,
+              "x0": 220.0,
+              "y0": 30.0,
+              "x1": 280.0,
+              "y1": 50.0
+            },
+            "run_refs": [
+              2
+            ],
+            "row_hint": null,
+            "col_hint": null,
+            "order": 2
+          },
+          {
+            "schema_version": 1,
+            "text": "主营收入",
+            "rect": {
+              "schema_version": 1,
+              "x0": 30.0,
+              "y0": 70.0,
+              "x1": 90.0,
+              "y1": 90.0
+            },
+            "run_refs": [
+              3
+            ],
+            "row_hint": null,
+            "col_hint": null,
+            "order": 3
+          },
+          {
+            "schema_version": 1,
+            "text": "1,000.00",
+            "rect": {
+              "schema_version": 1,
+              "x0": 120.0,
+              "y0": 70.0,
+              "x1": 170.0,
+              "y1": 90.0
+            },
+            "run_refs": [
+              4
+            ],
+            "row_hint": null,
+            "col_hint": null,
+            "order": 4
+          },
+          {
+            "schema_version": 1,
+            "text": "1,250.00",
+            "rect": {
+              "schema_version": 1,
+              "x0": 220.0,
+              "y0": 70.0,
+              "x1": 270.0,
+              "y1": 90.0
+            },
+            "run_refs": [
+              5
+            ],
+            "row_hint": null,
+            "col_hint": null,
+            "order": 5
+          },
+          {
+            "schema_version": 1,
+            "text": "营业成本",
+            "rect": {
+              "schema_version": 1,
+              "x0": 30.0,
+              "y0": 110.0,
+              "x1": 90.0,
+              "y1": 130.0
+            },
+            "run_refs": [
+              6
+            ],
+            "row_hint": null,
+            "col_hint": null,
+            "order": 6
+          },
+          {
+            "schema_version": 1,
+            "text": "800.00",
+            "rect": {
+              "schema_version": 1,
+              "x0": 120.0,
+              "y0": 110.0,
+              "x1": 160.0,
+              "y1": 130.0
+            },
+            "run_refs": [
+              7
+            ],
+            "row_hint": null,
+            "col_hint": null,
+            "order": 7
+          },
+          {
+            "schema_version": 1,
+            "text": "950.00",
+            "rect": {
+              "schema_version": 1,
+              "x0": 220.0,
+              "y0": 110.0,
+              "x1": 260.0,
+              "y1": 130.0
+            },
+            "run_refs": [
+              8
+            ],
+            "row_hint": null,
+            "col_hint": null,
+            "order": 8
+          }
+        ],
+        "bands": [
+          {
+            "schema_version": 1,
+            "x0": 30.0,
+            "x1": 90.0,
+            "source_atoms": [
+              0,
+              3,
+              6
+            ],
+            "order": 0
+          },
+          {
+            "schema_version": 1,
+            "x0": 120.0,
+            "x1": 180.0,
+            "source_atoms": [
+              1,
+              4,
+              7
+            ],
+            "order": 1
+          },
+          {
+            "schema_version": 1,
+            "x0": 220.0,
+            "x1": 280.0,
+            "source_atoms": [
+              2,
+              5,
+              8
+            ],
+            "order": 2
+          }
+        ],
+        "config": {
+          "schema_version": 1,
+          "line_tolerance": 2.0,
+          "row_tolerance": 2.0,
+          "column_tolerance": 2.0,
+          "span_tolerance": 2.0,
+          "numeric_tolerance": 2.0
+        }
+      }
+    }
+  ]
+}

@@ -23,6 +23,7 @@ from hexai_pdf_parser.core.models import BBox, Cell, Table
 from hexai_pdf_parser.tables.normalizers.financial_header_handler import (
     normalize_complex_financial_header,
 )
+from hexai_pdf_parser import rust_adapter
 
 _LEFT_ANCHOR_VARIANTS = {"椤圭洰", "项目"}
 
@@ -155,6 +156,104 @@ def _rebuild_text_aligned_table(
     if len(words) < 8:
         return None
 
+    mode = rust_adapter.get_rust_mode(
+        "table-header-normalization/text-alignment-rebuild"
+    )
+    input_dto = _legacy_text_alignment_input(table, words)
+    return rust_adapter.run_python_or_rust(
+        mode=mode,
+        python_fn=lambda: _rebuild_text_aligned_table_python(table, words),
+        rust_fn=lambda dto: _rebuild_text_aligned_table_rust(table, words, dto),
+        input_dto=input_dto,
+        path="table-header-normalization/text-alignment-rebuild",
+    )
+
+
+def _legacy_text_alignment_input(
+    table: Table, words: list[_WordToken]
+) -> dict[str, object]:
+    return {
+        "schema_version": 1,
+        "region": {
+            "schema_version": 1,
+            "rect": {
+                "schema_version": 1,
+                "x0": float(table.bbox.x0),
+                "y0": float(table.bbox.y0),
+                "x1": float(table.bbox.x1),
+                "y1": float(table.bbox.y1),
+            },
+            "source_order": 0,
+            "allowed": True,
+        },
+        "words": [
+            {
+                "schema_version": 1,
+                "rect": {
+                    "schema_version": 1,
+                    "x0": float(word.bbox.x0),
+                    "y0": float(word.bbox.y0),
+                    "x1": float(word.bbox.x1),
+                    "y1": float(word.bbox.y1),
+                },
+                "text": str(word.text),
+                "order": index,
+                "block": None,
+                "line": None,
+            }
+            for index, word in enumerate(words)
+        ],
+        "config": {
+            "schema_version": 1,
+            "line_tolerance": 2.0,
+            "row_tolerance": 2.0,
+            "column_tolerance": 2.0,
+            "span_tolerance": 2.0,
+            "numeric_tolerance": 2.0,
+        },
+    }
+
+
+def _rebuild_text_aligned_table_rust(
+    table: Table, words: list[_WordToken], input_dto: dict[str, object]
+) -> Table:
+    res_cells = rust_adapter.build_legacy_text_alignment(input_dto)
+    if not res_cells:
+        raise ValueError("Rust text-alignment rebuild returned no cells")
+
+    cells = [
+        Cell(
+            text=str(cell["text"]),
+            row_index=int(cell["row"]),
+            col_index=int(cell["col"]),
+            bbox=BBox(
+                float(cell["rect"]["x0"]),
+                float(cell["rect"]["y0"]),
+                float(cell["rect"]["x1"]),
+                float(cell["rect"]["y1"]),
+            ),
+            rowspan=max(1, int(cell.get("rowspan", 1))),
+            colspan=max(1, int(cell.get("colspan", 1))),
+        )
+        for cell in res_cells
+    ]
+    max_row = max(cell.row_index for cell in cells)
+    max_col = max(
+        cell.col_index + max(1, cell.colspan) - 1 for cell in cells
+    )
+    return Table(
+        bbox=_union_word_bboxes(words),
+        rows=max_row + 1,
+        cols=max_col + 1,
+        cells=cells,
+        confidence=table.confidence,
+        source=table.source,
+    )
+
+
+def _rebuild_text_aligned_table_python(
+    table: Table, words: list[_WordToken]
+) -> Table | None:
     row_clusters = _cluster_tokens(words, axis="y", tolerance=17.0)
     if len(row_clusters) < 2:
         return None
@@ -284,14 +383,51 @@ def _looks_like_grouped_financial_header(table: Table, page: fitz.Page) -> bool:
     if not has_left_anchor:
         return False
 
-    for cell in table.cells:
-        text = cell.text.strip()
-        if cell.row_index == 0:
-            for pattern in _GROUP_LABEL_PATTERNS:
-                if pattern in text:
-                    return True
+    if _geometric_grouped_header_ranges(table):
+        return True
 
     return _find_group_header_band(page, table) is not None
+
+
+def _geometric_grouped_header_ranges(
+    table: Table,
+) -> list[tuple[Cell, int, int]]:
+    """Find complete first-row parents and second-row leaf runs by topology."""
+
+    if table.rows < 2 or table.cols < 2:
+        return []
+    top = [
+        cell for cell in table.cells
+        if cell.row_index == 0 and cell.text.strip()
+    ]
+    lower = [
+        cell for cell in table.cells
+        if cell.row_index == 1 and cell.text.strip()
+    ]
+    top.sort(key=lambda cell: cell.col_index)
+    ranges: list[tuple[Cell, int, int]] = []
+    for index, parent in enumerate(top):
+        start = max(0, parent.col_index)
+        next_start = (
+            max(start, top[index + 1].col_index)
+            if index + 1 < len(top)
+            else table.cols
+        )
+        next_start = min(table.cols, next_start)
+        if start >= next_start:
+            continue
+        complete = True
+        for column in range(start, next_start):
+            matches = [
+                child for child in lower
+                if child.col_index <= column < child.col_index + max(1, child.colspan)
+            ]
+            if len(matches) != 1:
+                complete = False
+                break
+        if complete and next_start - start >= 2:
+            ranges.append((parent, start, next_start))
+    return ranges
 
 
 def _collect_words_in_bbox(page: fitz.Page, bbox: BBox) -> list[_WordToken]:
@@ -465,6 +601,7 @@ def _promote_grouped_header(table: Table, page: fitz.Page) -> Table:
     - The left-anchor cell ("项目") in column 0 has its rowspan set to 2.
     - All body cells are left unchanged.
     """
+    table = _normalize_financial_header_tokens(table)
     band = _find_group_header_band(page, table)
     inline_group_label = next(
         (
@@ -484,14 +621,229 @@ def _promote_grouped_header(table: Table, page: fitz.Page) -> Table:
             return _promote_grouped_header_in_place(table, band, page)
         return _promote_external_group_header(table, band)
 
-    promoted_cells: list[Cell] = []
+    mode = rust_adapter.get_rust_mode(
+        "table-header-normalization/grouped-header"
+    )
+    input_dto = _grouped_header_input(table)
+    return rust_adapter.run_python_or_rust(
+        mode=mode,
+        python_fn=lambda: _promote_grouped_header_python(table),
+        rust_fn=lambda dto: _promote_grouped_header_rust(table, dto),
+        input_dto=input_dto,
+        path="table-header-normalization/grouped-header",
+    )
 
+
+def _financial_header_token_input(table: Table) -> dict[str, object]:
+    return {
+        "schema_version": 1,
+        "cells": [
+            {
+                "schema_version": 1,
+                "rect": {
+                    "schema_version": 1,
+                    "x0": cell.bbox.x0,
+                    "y0": cell.bbox.y0,
+                    "x1": cell.bbox.x1,
+                    "y1": cell.bbox.y1,
+                },
+                "text": cell.text,
+                "row": cell.row_index,
+                "col": cell.col_index,
+                "rowspan": cell.rowspan,
+                "colspan": cell.colspan,
+                "source": None,
+            }
+            for cell in table.cells
+        ],
+        "config": {
+            "schema_version": 1,
+            "line_tolerance": 2.0,
+            "row_tolerance": 2.0,
+            "column_tolerance": 2.0,
+            "span_tolerance": 2.0,
+            "numeric_tolerance": 2.0,
+        },
+    }
+
+
+def _table_from_financial_token_output(
+    table: Table, output: dict[str, object]
+) -> Table:
+    cells = output.get("cells")
+    if not isinstance(cells, list):
+        raise ValueError("Rust financial token normalization returned no cells")
+    normalized = [
+        Cell(
+            text=str(cell["text"]),
+            row_index=int(cell["row"]),
+            col_index=int(cell["col"]),
+            bbox=BBox(
+                float(cell["rect"]["x0"]),
+                float(cell["rect"]["y0"]),
+                float(cell["rect"]["x1"]),
+                float(cell["rect"]["y1"]),
+            ),
+            rowspan=max(1, int(cell.get("rowspan", 1))),
+            colspan=max(1, int(cell.get("colspan", 1))),
+        )
+        for cell in cells
+    ]
+    return Table(
+        bbox=table.bbox,
+        rows=table.rows,
+        cols=table.cols,
+        cells=normalized,
+        confidence=table.confidence,
+        source=table.source,
+    )
+
+
+def _normalize_financial_header_tokens_python(table: Table) -> Table:
+    normalized: list[Cell] = []
     for cell in table.cells:
         text = cell.text.strip()
+        if cell.row_index <= 1 and text:
+            words = text.split()
+            if len(words) > 1 and re.fullmatch(r"[0-9,.-]+", words[-1]):
+                text = " ".join(words[:-1]).strip()
+        if text != cell.text:
+            normalized.append(
+                Cell(
+                    text=text,
+                    row_index=cell.row_index,
+                    col_index=cell.col_index,
+                    bbox=cell.bbox,
+                    rowspan=cell.rowspan,
+                    colspan=cell.colspan,
+                )
+            )
+        else:
+            normalized.append(cell)
+    return Table(
+        bbox=table.bbox,
+        rows=table.rows,
+        cols=table.cols,
+        cells=normalized,
+        confidence=table.confidence,
+        source=table.source,
+    )
 
-        # Promote group label: extend colspan to cover all non-anchor columns.
-        is_group_label = _matches_any(text, _GROUP_LABEL_PATTERNS)
-        if is_group_label:
+
+def _normalize_financial_header_tokens(table: Table) -> Table:
+    mode = rust_adapter.get_rust_mode(
+        "table-header-normalization/financial-tokens"
+    )
+    input_dto = _financial_header_token_input(table)
+    return rust_adapter.run_python_or_rust(
+        mode=mode,
+        python_fn=lambda: _normalize_financial_header_tokens_python(table),
+        rust_fn=lambda dto: _table_from_financial_token_output(
+            table, rust_adapter.normalize_financial_header_tokens(dto)
+        ),
+        input_dto=input_dto,
+        path="table-header-normalization/financial-tokens",
+    )
+
+
+def _grouped_header_input(table: Table) -> dict[str, object]:
+    return {
+        "schema_version": 1,
+        "grid": {
+            "schema_version": 1,
+            "grid": {
+                "schema_version": 1,
+                "rows": table.rows,
+                "cols": table.cols,
+                "rect": {
+                    "schema_version": 1,
+                    "x0": table.bbox.x0,
+                    "y0": table.bbox.y0,
+                    "x1": table.bbox.x1,
+                    "y1": table.bbox.y1,
+                },
+            },
+            "cells": [
+                {
+                    "schema_version": 1,
+                    "rect": {
+                        "schema_version": 1,
+                        "x0": cell.bbox.x0,
+                        "y0": cell.bbox.y0,
+                        "x1": cell.bbox.x1,
+                        "y1": cell.bbox.y1,
+                    },
+                    "text": cell.text,
+                    "row": cell.row_index,
+                    "col": cell.col_index,
+                    "rowspan": cell.rowspan,
+                    "colspan": cell.colspan,
+                    "source": None,
+                }
+                for cell in table.cells
+            ],
+            "empty_slots": [],
+        },
+        "config": {
+            "schema_version": 1,
+            "line_tolerance": 2.0,
+            "row_tolerance": 2.0,
+            "column_tolerance": 2.0,
+            "span_tolerance": 2.0,
+            "numeric_tolerance": 2.0,
+        },
+    }
+
+
+def _promote_grouped_header_rust(
+    table: Table, input_dto: dict[str, object]
+) -> Table:
+    output = rust_adapter.infer_header_structure(input_dto)
+    cells = output.get("cells")
+    if not isinstance(cells, list) or not cells:
+        raise ValueError("Rust grouped-header normalization returned no cells")
+    rust_cells = [
+        Cell(
+            text=str(cell["text"]),
+            row_index=int(cell["row"]),
+            col_index=int(cell["col"]),
+            bbox=BBox(
+                float(cell["rect"]["x0"]),
+                float(cell["rect"]["y0"]),
+                float(cell["rect"]["x1"]),
+                float(cell["rect"]["y1"]),
+            ),
+            rowspan=max(1, int(cell.get("rowspan", 1))),
+            colspan=max(1, int(cell.get("colspan", 1))),
+        )
+        for cell in cells
+    ]
+    return Table(
+        bbox=table.bbox,
+        rows=table.rows,
+        cols=table.cols,
+        cells=rust_cells,
+        confidence=table.confidence,
+        source=table.source,
+    )
+
+
+def _promote_grouped_header_python(table: Table) -> Table:
+    ranges = _geometric_grouped_header_ranges(table)
+    range_by_id = {id(parent): (start, end) for parent, start, end in ranges}
+    lower = [
+        cell for cell in table.cells
+        if cell.row_index == 1 and cell.text.strip()
+    ]
+    promoted_cells: list[Cell] = []
+    for cell in table.cells:
+        if cell.row_index == 0 and not cell.text.strip() and any(
+            start <= cell.col_index < end for _, start, end in ranges
+        ):
+            continue
+
+        if id(cell) in range_by_id:
+            _, end = range_by_id[id(cell)]
             promoted_cells.append(
                 Cell(
                     text=cell.text,
@@ -499,20 +851,69 @@ def _promote_grouped_header(table: Table, page: fitz.Page) -> Table:
                     col_index=cell.col_index,
                     bbox=cell.bbox,
                     rowspan=cell.rowspan,
-                    colspan=table.cols - 1,
+                    colspan=max(cell.colspan, end - cell.col_index),
                 )
             )
             continue
 
-        # Promote left anchor: extend rowspan to cover both header rows.
-        if _is_left_anchor(text) and cell.col_index == 0:
+        if (
+            ranges
+            and ranges[0][1] > 0
+            and cell.row_index == 0
+            and cell.col_index == 0
+            and cell.text.strip()
+        ):
             promoted_cells.append(
                 Cell(
                     text=cell.text,
                     row_index=cell.row_index,
                     col_index=cell.col_index,
                     bbox=cell.bbox,
-                    rowspan=2,
+                    rowspan=max(2, cell.rowspan),
+                    colspan=cell.colspan,
+                )
+            )
+            continue
+
+        if cell.row_index == 0 and cell.text.strip():
+            start = cell.col_index
+            end = start + max(1, cell.colspan)
+            has_lower_text = any(
+                child.col_index < end
+                and child.col_index + max(1, child.colspan) > start
+                for child in lower
+            )
+            if not has_lower_text:
+                promoted_cells.append(
+                    Cell(
+                        text=cell.text,
+                        row_index=cell.row_index,
+                        col_index=cell.col_index,
+                        bbox=cell.bbox,
+                        rowspan=max(2, cell.rowspan),
+                        colspan=cell.colspan,
+                    )
+                )
+                continue
+
+        if (
+            cell.row_index == 1
+            and cell.col_index == 0
+            and cell.text.strip()
+            and not any(
+                item.row_index == 0
+                and item.col_index == 0
+                and item.text.strip()
+                for item in table.cells
+            )
+        ):
+            promoted_cells.append(
+                Cell(
+                    text=cell.text,
+                    row_index=cell.row_index,
+                    col_index=cell.col_index,
+                    bbox=cell.bbox,
+                    rowspan=max(2, cell.rowspan),
                     colspan=cell.colspan,
                 )
             )
@@ -520,7 +921,7 @@ def _promote_grouped_header(table: Table, page: fitz.Page) -> Table:
 
         promoted_cells.append(cell)
 
-    return Table(
+    py_table = Table(
         bbox=table.bbox,
         rows=table.rows,
         cols=table.cols,
@@ -528,6 +929,7 @@ def _promote_grouped_header(table: Table, page: fitz.Page) -> Table:
         confidence=table.confidence,
         source=table.source,
     )
+    return py_table
 
 
 def _promote_grouped_header_in_place(

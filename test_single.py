@@ -14,13 +14,20 @@ import os
 import sys
 from pathlib import Path
 
-# 保证优先从项目源码 src 目录加载模块
+# 保证优先从当前工作区源码 src 目录加载模块
 CURRENT_DIR = Path(__file__).resolve().parent
 SRC_DIR = CURRENT_DIR / "src"
-if str(SRC_DIR) not in sys.path:
-    sys.path.insert(0, str(SRC_DIR))
+src_str = str(SRC_DIR)
+# 移除可能存在的其他旧版本路径，确保当前代码绝对优先
+sys.path = [p for p in sys.path if not (("PDFLayoutParser" in p and p != src_str))]
+if src_str not in sys.path:
+    sys.path.insert(0, src_str)
+elif sys.path[0] != src_str:
+    sys.path.remove(src_str)
+    sys.path.insert(0, src_str)
 
 sys.stdout.reconfigure(encoding="utf-8")
+os.environ.setdefault("PDF_RUST_MODE", "rust")
 
 try:
     import pymupdf as fitz
@@ -38,7 +45,7 @@ from hexai_pdf_parser.writers.markdown_writer import MarkdownWriter
 TARGET_PDF_PATH = r"D:\codes\PDFLayoutParser\fix\zh_all_table_pages.pdf"
 OUTPUT_DIR = str(CURRENT_DIR / "output" / "single_page")
 MODEL_PATH = str(CURRENT_DIR / "src" / "hexai_pdf_parser" / "ml" / "table_detector_model" / "best.onnx")
-RENDER_DPI = 200
+RENDER_DPI = 72
 # ==============================================================================
 
 
@@ -69,7 +76,12 @@ def run_single_test(
     print(f"=" * 80)
 
     # 1. 执行 PDFParser 解析
-    with PDFParser(str(pdf_file), ml_model_path=str(ml_model_path)) as parser:
+    with PDFParser(
+        str(pdf_file),
+        render_dpi=dpi,
+        ml_render_dpi=dpi,
+        ml_model_path=str(ml_model_path),
+    ) as parser:
         result = parser.parse(page_indices=[page_index], output_dir=str(out_dir))
         if result.code == -1:
             raise RuntimeError(result.message)

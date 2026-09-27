@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import bisect
 from collections import defaultdict
+import os
 from typing import Dict, List, Optional, Tuple
 
 import fitz
 
+from hexai_pdf_parser import rust_adapter
 from hexai_pdf_parser.core.models import BBox, Cell, Table
 from hexai_pdf_parser.tables.base_table_extractor import BaseTableExtractor
 
@@ -26,6 +28,74 @@ class WiredTableExtractor(BaseTableExtractor):
         # Retain the page object so a mask cannot be mistaken for another
         # page merely because an object id happens to be reused.
         self._last_bar_chart_page: Optional[object] = None
+
+    @staticmethod
+    def _cell_to_dto(cell: Cell) -> Dict[str, object]:
+        return {
+            "schema_version": 1,
+            "text": cell.text,
+            "row": int(cell.row_index),
+            "col": int(cell.col_index),
+            "rect": {
+                "schema_version": 1,
+                "x0": float(cell.bbox.x0),
+                "y0": float(cell.bbox.y0),
+                "x1": float(cell.bbox.x1),
+                "y1": float(cell.bbox.y1),
+            },
+            "rowspan": int(cell.rowspan),
+            "colspan": int(cell.colspan),
+            "source": None,
+        }
+
+    @classmethod
+    def _cells_to_dto(cls, cells: List[Cell]) -> List[Dict[str, object]]:
+        return [cls._cell_to_dto(cell) for cell in cells]
+
+    @staticmethod
+    def _normalize_cell_dto(cell: Dict[str, object]) -> Dict[str, object]:
+        rect = cell["rect"]
+        assert isinstance(rect, dict)
+        return {
+            "schema_version": 1,
+            "text": str(cell.get("text", "")),
+            "row": int(cell["row"]),
+            "col": int(cell["col"]),
+            "rect": {
+                "schema_version": 1,
+                "x0": float(rect["x0"]),
+                "y0": float(rect["y0"]),
+                "x1": float(rect["x1"]),
+                "y1": float(rect["y1"]),
+            },
+            "rowspan": int(cell.get("rowspan", 1)),
+            "colspan": int(cell.get("colspan", 1)),
+            "source": cell.get("source"),
+        }
+
+    @classmethod
+    def _normalize_cells_dto(cls, cells: List[Dict[str, object]]) -> List[Dict[str, object]]:
+        return [cls._normalize_cell_dto(cell) for cell in cells]
+
+    @classmethod
+    def _cells_from_dto(cls, cells: List[Dict[str, object]]) -> List[Cell]:
+        normalized = cls._normalize_cells_dto(cells)
+        return [
+            Cell(
+                text=str(cell["text"]),
+                row_index=int(cell["row"]),
+                col_index=int(cell["col"]),
+                bbox=BBox(
+                    float(cell["rect"]["x0"]),
+                    float(cell["rect"]["y0"]),
+                    float(cell["rect"]["x1"]),
+                    float(cell["rect"]["y1"]),
+                ),
+                rowspan=int(cell["rowspan"]),
+                colspan=int(cell["colspan"]),
+            )
+            for cell in normalized
+        ]
 
     def extract(
         self,
@@ -49,6 +119,32 @@ class WiredTableExtractor(BaseTableExtractor):
         if not table_regions:
             return []
 
+        # 页面级一次性获取 words 和 raw_chars，避免在每个 table region 重复读取 page words
+        try:
+            cached_words = page.get_text("words")
+        except Exception:
+            cached_words = []
+
+        cached_raw_chars: List[Tuple[float, float, float, float, str]] = []
+        try:
+            rawdict = page.get_text("rawdict")
+        except Exception:
+            rawdict = {}
+        if isinstance(rawdict, dict):
+            for block in rawdict.get("blocks", []):
+                for line in block.get("lines", []):
+                    for span in line.get("spans", []):
+                        for char in span.get("chars", []):
+                            value = char.get("c")
+                            bbox = char.get("bbox")
+                            if not isinstance(value, str) or not bbox or len(bbox) < 4:
+                                continue
+                            try:
+                                x0, y0, x1, y1 = (float(value) for value in bbox[:4])
+                            except (TypeError, ValueError):
+                                continue
+                            cached_raw_chars.append((x0, y0, x1, y1, value))
+
         tables: List[Table] = []
         for region_bbox, region_h_lines, region_v_lines in table_regions:
             region_h_lines = self._merge_region_line_coordinates(
@@ -63,7 +159,9 @@ class WiredTableExtractor(BaseTableExtractor):
             if not cells:
                 continue
 
-            cells = self._assign_text_to_line_cells(cells, page)
+            cells = self._assign_text_to_line_cells(
+                cells, page, words=cached_words, raw_chars=cached_raw_chars
+            )
             cells = self._merge_oversegmented_line_columns(cells)
             cells = self._trim_ghost_edge_rows(cells, region_h_lines, tol=self.line_tolerance)
             if not cells:
@@ -928,6 +1026,29 @@ class WiredTableExtractor(BaseTableExtractor):
         *,
         horizontal: bool,
     ) -> List[Tuple[float, float, float, float]]:
+        if not lines:
+            return []
+        input_dto = {"lines": lines, "horizontal": bool(horizontal)}
+        return rust_adapter.run_python_or_rust(
+            mode=rust_adapter.get_rust_mode("wired"),
+            python_fn=lambda: self._merge_region_line_coordinates_python(
+                lines, horizontal=horizontal
+            ),
+            rust_fn=lambda dto: rust_adapter.merge_region_line_coordinates(
+                dto["lines"],
+                horizontal=bool(dto["horizontal"]),
+                tolerance=self.line_tolerance,
+            ),
+            input_dto=input_dto,
+            path="wired.region-lines",
+        )
+
+    def _merge_region_line_coordinates_python(
+        self,
+        lines: List[Tuple[float, float, float, float]],
+        *,
+        horizontal: bool,
+    ) -> List[Tuple[float, float, float, float]]:
         """Merge continuous line fragments that are nearly on the same coordinate.
 
         The global line merge intentionally stays strict so lines from separate
@@ -1015,6 +1136,21 @@ class WiredTableExtractor(BaseTableExtractor):
     ) -> List[Tuple[float, float, float, float]]:
         if not lines:
             return []
+        return rust_adapter.run_python_or_rust(
+            mode=rust_adapter.get_rust_mode("wired"),
+            python_fn=lambda: self._merge_h_lines_python(lines),
+            rust_fn=lambda dto: rust_adapter.merge_h_lines(
+                dto, self.merge_group_tol
+            ),
+            input_dto=lines,
+            path="wired.horizontal-lines",
+        )
+
+    def _merge_h_lines_python(
+        self, lines: List[Tuple[float, float, float, float]]
+    ) -> List[Tuple[float, float, float, float]]:
+        if not lines:
+            return []
 
         sorted_lines = sorted(lines, key=lambda l: (round(l[1], 1), l[0]))
         groups: List[List[Tuple[float, float, float, float]]] = []
@@ -1047,6 +1183,27 @@ class WiredTableExtractor(BaseTableExtractor):
         return merged
 
     def _merge_v_lines(
+        self,
+        lines: List[Tuple[float, float, float, float]],
+        h_lines: Optional[List[Tuple[float, float, float, float]]] = None,
+    ) -> List[Tuple[float, float, float, float]]:
+        if not lines:
+            return []
+        input_dto = {"lines": lines, "h_lines": h_lines or []}
+        return rust_adapter.run_python_or_rust(
+            mode=rust_adapter.get_rust_mode("wired"),
+            python_fn=lambda: self._merge_v_lines_python(lines, h_lines=h_lines),
+            rust_fn=lambda dto: rust_adapter.merge_v_lines(
+                dto["lines"],
+                h_lines=dto["h_lines"],
+                merge_group_tol=self.merge_group_tol,
+                line_tolerance=self.line_tolerance,
+            ),
+            input_dto=input_dto,
+            path="wired.vertical-lines",
+        )
+
+    def _merge_v_lines_python(
         self,
         lines: List[Tuple[float, float, float, float]],
         h_lines: Optional[List[Tuple[float, float, float, float]]] = None,
@@ -1093,22 +1250,47 @@ class WiredTableExtractor(BaseTableExtractor):
         if len(h_lines) < 2 or not v_lines:
             return []
 
+        def rust_regions(dto):
+            raw_regions = rust_adapter.find_table_regions(
+                dto["h_lines"], dto["v_lines"], tolerance=self.line_tolerance
+            )
+            return [
+                (BBox(b["x0"], b["y0"], b["x1"], b["y1"]), h, v)
+                for b, h, v in raw_regions
+            ]
+
+        return rust_adapter.run_python_or_rust(
+            mode=rust_adapter.get_rust_mode("wired"),
+            python_fn=lambda: self._find_table_regions_python(h_lines, v_lines),
+            rust_fn=rust_regions,
+            input_dto={"h_lines": h_lines, "v_lines": v_lines},
+            path="wired.regions",
+        )
+
+    def _find_table_regions_python(
+        self,
+        h_lines: List[Tuple[float, float, float, float]],
+        v_lines: List[Tuple[float, float, float, float]],
+    ) -> List[Tuple[BBox, List[Tuple[float, float, float, float]], List[Tuple[float, float, float, float]]]]:
+        if len(h_lines) < 2 or not v_lines:
+            return []
+
         # Ignore page rules, footer lines, and text underlines that do not
         # participate in the same connected line network as the table.
         h_lines = [
             line
             for line in h_lines
-            if sum(self._lines_intersect(h_line=line, v_line=v_line) for v_line in v_lines) >= 1
+            if sum(self._lines_intersect_python(h_line=line, v_line=v_line) for v_line in v_lines) >= 1
         ]
         v_lines = [
             line
             for line in v_lines
-            if sum(self._lines_intersect(h_line=h_line, v_line=line) for h_line in h_lines) >= 1
+            if sum(self._lines_intersect_python(h_line=h_line, v_line=line) for h_line in h_lines) >= 1
         ]
         h_lines = [
             line
             for line in h_lines
-            if sum(self._lines_intersect(h_line=line, v_line=v_line) for v_line in v_lines) >= 1
+            if sum(self._lines_intersect_python(h_line=line, v_line=v_line) for v_line in v_lines) >= 1
         ]
 
         if len(h_lines) < 2 or not v_lines:
@@ -1118,7 +1300,7 @@ class WiredTableExtractor(BaseTableExtractor):
             h_idx: [
                 v_idx
                 for v_idx, v_line in enumerate(v_lines)
-                if self._lines_intersect(h_line=h_line, v_line=v_line)
+                if self._lines_intersect_python(h_line=h_line, v_line=v_line)
             ]
             for h_idx, h_line in enumerate(h_lines)
         }
@@ -1126,7 +1308,7 @@ class WiredTableExtractor(BaseTableExtractor):
             v_idx: [
                 h_idx
                 for h_idx, h_line in enumerate(h_lines)
-                if self._lines_intersect(h_line=h_line, v_line=v_line)
+                if self._lines_intersect_python(h_line=h_line, v_line=v_line)
             ]
             for v_idx, v_line in enumerate(v_lines)
         }
@@ -1188,6 +1370,24 @@ class WiredTableExtractor(BaseTableExtractor):
         h_line: Tuple[float, float, float, float],
         v_line: Tuple[float, float, float, float],
     ) -> bool:
+        return rust_adapter.run_python_or_rust(
+            mode=rust_adapter.get_rust_mode("wired"),
+            python_fn=lambda: self._lines_intersect_python(
+                h_line=h_line, v_line=v_line
+            ),
+            rust_fn=lambda dto: rust_adapter.lines_intersect(
+                dto["h_line"], dto["v_line"], self.line_tolerance
+            ),
+            input_dto={"h_line": h_line, "v_line": v_line},
+            path="wired.intersection",
+        )
+
+    def _lines_intersect_python(
+        self,
+        *,
+        h_line: Tuple[float, float, float, float],
+        v_line: Tuple[float, float, float, float],
+    ) -> bool:
         """Return whether a horizontal and vertical line touch within tolerance."""
         hx0, hy, hx1, _ = h_line
         vx, vy0, _, vy1 = v_line
@@ -1204,6 +1404,26 @@ class WiredTableExtractor(BaseTableExtractor):
         tol: float = 1.5,
     ) -> List[float]:
         """Snap close coordinates to actual line anchors and merge duplicates within tol."""
+        mode = rust_adapter.get_rust_mode("wired")
+        input_dto = {"coords": coords, "anchors": anchor_coords, "tol": float(tol)}
+        return rust_adapter.run_python_or_rust(
+            mode=mode,
+            python_fn=lambda: WiredTableExtractor._snap_coordinates_python(
+                coords, anchor_coords, tol
+            ),
+            rust_fn=lambda dto: rust_adapter.snap_coordinates(
+                dto["coords"], dto["anchors"], dto["tol"]
+            ),
+            input_dto=input_dto,
+            path="wired.snap-coordinates",
+        )
+
+    @staticmethod
+    def _snap_coordinates_python(
+        coords: List[float],
+        anchor_coords: List[float],
+        tol: float = 1.5,
+    ) -> List[float]:
         snapped = []
         for c in coords:
             matched = [a for a in anchor_coords if abs(a - c) <= tol]
@@ -1228,6 +1448,51 @@ class WiredTableExtractor(BaseTableExtractor):
         return merged
 
     def _snap_grid_coordinates(
+        self,
+        *,
+        start: float,
+        end: float,
+        orthogonal_start: float,
+        orthogonal_end: float,
+        lines: List[Tuple[float, float, float, float]],
+        horizontal: bool,
+    ) -> List[float]:
+        mode = rust_adapter.get_rust_mode("wired")
+        input_dto = {
+            "start": float(start),
+            "end": float(end),
+            "orthogonal_start": float(orthogonal_start),
+            "orthogonal_end": float(orthogonal_end),
+            "lines": lines,
+            "horizontal": bool(horizontal),
+            "tolerance": float(self.line_tolerance),
+            "merge_group_tol": float(self.merge_group_tol),
+        }
+        return rust_adapter.run_python_or_rust(
+            mode=mode,
+            python_fn=lambda: self._snap_grid_coordinates_python(
+                start=start,
+                end=end,
+                orthogonal_start=orthogonal_start,
+                orthogonal_end=orthogonal_end,
+                lines=lines,
+                horizontal=horizontal,
+            ),
+            rust_fn=lambda dto: rust_adapter.snap_grid_coordinates(
+                start=dto["start"],
+                end=dto["end"],
+                orthogonal_start=dto["orthogonal_start"],
+                orthogonal_end=dto["orthogonal_end"],
+                lines=dto["lines"],
+                horizontal=dto["horizontal"],
+                tolerance=dto["tolerance"],
+                merge_group_tol=dto["merge_group_tol"],
+            ),
+            input_dto=input_dto,
+            path="wired.snap-grid",
+        )
+
+    def _snap_grid_coordinates_python(
         self,
         *,
         start: float,
@@ -1325,6 +1590,50 @@ class WiredTableExtractor(BaseTableExtractor):
         )
 
     def _complete_partial_outer_boundaries(
+        self,
+        bbox: BBox,
+        h_lines: List[Tuple[float, float, float, float]],
+        v_lines: List[Tuple[float, float, float, float]],
+        h_ys: List[float],
+        v_xs: List[float],
+    ) -> Tuple[
+        List[Tuple[float, float, float, float]],
+        List[Tuple[float, float, float, float]],
+    ]:
+        mode = rust_adapter.get_rust_mode("wired")
+        input_dto = {
+            "bbox": {
+                "x0": float(bbox.x0),
+                "y0": float(bbox.y0),
+                "x1": float(bbox.x1),
+                "y1": float(bbox.y1),
+            },
+            "h_lines": h_lines,
+            "v_lines": v_lines,
+            "h_ys": h_ys,
+            "v_xs": v_xs,
+            "tolerance": float(self.line_tolerance),
+            "merge_group_tol": float(self.merge_group_tol),
+        }
+        return rust_adapter.run_python_or_rust(
+            mode=mode,
+            python_fn=lambda: self._complete_partial_outer_boundaries_python(
+                bbox, h_lines, v_lines, h_ys, v_xs
+            ),
+            rust_fn=lambda dto: rust_adapter.complete_partial_outer_boundaries(
+                bbox=dto["bbox"],
+                h_lines=dto["h_lines"],
+                v_lines=dto["v_lines"],
+                h_ys=dto["h_ys"],
+                v_xs=dto["v_xs"],
+                tolerance=dto["tolerance"],
+                merge_group_tol=dto["merge_group_tol"],
+            ),
+            input_dto=input_dto,
+            path="wired.outer-boundaries",
+        )
+
+    def _complete_partial_outer_boundaries_python(
         self,
         bbox: BBox,
         h_lines: List[Tuple[float, float, float, float]],
@@ -1467,8 +1776,39 @@ class WiredTableExtractor(BaseTableExtractor):
 
         return effective_h, effective_v
 
-    @staticmethod
     def _trim_ghost_edge_rows(
+        self,
+        cells: List[Cell],
+        h_lines: List[Tuple[float, float, float, float]],
+        tol: float = 2.0,
+    ) -> List[Cell]:
+        mode = rust_adapter.get_rust_mode("wired")
+        input_dto = {
+            "cells": self._cells_to_dto(cells),
+            "h_lines": h_lines,
+            "tol": float(tol),
+        }
+
+        def rust_trim(dto: Dict[str, object]) -> List[Dict[str, object]]:
+            return self._normalize_cells_dto(
+                rust_adapter.trim_ghost_edge_rows(
+                    dto["cells"], dto["h_lines"], tol=float(dto["tol"])
+                )
+            )
+
+        result = rust_adapter.run_python_or_rust(
+            mode=mode,
+            python_fn=lambda: self._cells_to_dto(
+                self._trim_ghost_edge_rows_python(cells, h_lines, tol)
+            ),
+            rust_fn=rust_trim,
+            input_dto=input_dto,
+            path="wired.ghost-rows",
+        )
+        return self._cells_from_dto(result)
+
+    @staticmethod
+    def _trim_ghost_edge_rows_python(
         cells: List[Cell],
         h_lines: List[Tuple[float, float, float, float]],
         tol: float = 2.0,
@@ -1545,6 +1885,48 @@ class WiredTableExtractor(BaseTableExtractor):
         h_lines: List[Tuple[float, float, float, float]],
         v_lines: List[Tuple[float, float, float, float]],
     ) -> List[Cell]:
+        mode = rust_adapter.get_rust_mode("wired")
+        input_dto = {
+            "bbox": {
+                "x0": float(bbox.x0),
+                "y0": float(bbox.y0),
+                "x1": float(bbox.x1),
+                "y1": float(bbox.y1),
+            },
+            "h_lines": h_lines,
+            "v_lines": v_lines,
+            "tolerance": float(self.line_tolerance),
+            "merge_group_tol": float(self.merge_group_tol),
+        }
+
+        def rust_build(dto: Dict[str, object]) -> List[Dict[str, object]]:
+            return self._normalize_cells_dto(
+                rust_adapter.build_cells_for_region(
+                    bbox=dto["bbox"],
+                    h_lines=dto["h_lines"],
+                    v_lines=dto["v_lines"],
+                    tolerance=float(dto["tolerance"]),
+                    merge_group_tol=float(dto["merge_group_tol"]),
+                )
+            )
+
+        result = rust_adapter.run_python_or_rust(
+            mode=mode,
+            python_fn=lambda: self._cells_to_dto(
+                self._build_cells_for_region_python(bbox, h_lines, v_lines)
+            ),
+            rust_fn=rust_build,
+            input_dto=input_dto,
+            path="wired.cells",
+        )
+        return self._cells_from_dto(result)
+
+    def _build_cells_for_region_python(
+        self,
+        bbox: BBox,
+        h_lines: List[Tuple[float, float, float, float]],
+        v_lines: List[Tuple[float, float, float, float]],
+    ) -> List[Cell]:
         existing_v_xs = [line[0] for line in v_lines]
         if existing_v_xs:
             left_v_x = min(existing_v_xs)
@@ -1601,7 +1983,7 @@ class WiredTableExtractor(BaseTableExtractor):
 
         tol = self.line_tolerance
 
-        h_ys = self._snap_grid_coordinates(
+        h_ys = self._snap_grid_coordinates_python(
             start=bbox.y0,
             end=bbox.y1,
             orthogonal_start=bbox.x0,
@@ -1609,7 +1991,7 @@ class WiredTableExtractor(BaseTableExtractor):
             lines=h_lines,
             horizontal=True,
         )
-        v_xs = self._snap_grid_coordinates(
+        v_xs = self._snap_grid_coordinates_python(
             start=bbox.x0,
             end=bbox.x1,
             orthogonal_start=bbox.y0,
@@ -1624,7 +2006,7 @@ class WiredTableExtractor(BaseTableExtractor):
         rows = len(h_ys) - 1
         cols = len(v_xs) - 1
         effective_h_lines, effective_v_lines = (
-            self._complete_partial_outer_boundaries(
+            self._complete_partial_outer_boundaries_python(
                 bbox,
                 h_lines,
                 v_lines,
@@ -1833,31 +2215,130 @@ class WiredTableExtractor(BaseTableExtractor):
         cells.sort(key=lambda cell: (cell.row_index, cell.col_index))
         return cells
 
-    def _assign_text_to_line_cells(self, cells: List[Cell], page: fitz.Page) -> List[Cell]:
-        try:
-            words = page.get_text("words")
-        except Exception:
-            return cells
+    def _assign_text_to_line_cells(
+        self,
+        cells: List[Cell],
+        page: fitz.Page,
+        words: Optional[List[Tuple]] = None,
+        raw_chars: Optional[List[Tuple[float, float, float, float, str]]] = None,
+    ) -> List[Cell]:
+        if words is None:
+            try:
+                words = page.get_text("words")
+            except Exception:
+                return cells
+        if raw_chars is None:
+            raw_chars = []
+            try:
+                rawdict = page.get_text("rawdict")
+            except Exception:
+                rawdict = {}
+            if isinstance(rawdict, dict):
+                for block in rawdict.get("blocks", []):
+                    for line in block.get("lines", []):
+                        for span in line.get("spans", []):
+                            for char in span.get("chars", []):
+                                value = char.get("c")
+                                bbox = char.get("bbox")
+                                if not isinstance(value, str) or not bbox or len(bbox) < 4:
+                                    continue
+                                try:
+                                    x0, y0, x1, y1 = (float(value) for value in bbox[:4])
+                                except (TypeError, ValueError):
+                                    continue
+                                raw_chars.append((x0, y0, x1, y1, value))
 
-        raw_chars: List[Tuple[float, float, float, float, str]] = []
-        try:
-            rawdict = page.get_text("rawdict")
-        except Exception:
-            rawdict = {}
-        if isinstance(rawdict, dict):
-            for block in rawdict.get("blocks", []):
-                for line in block.get("lines", []):
-                    for span in line.get("spans", []):
-                        for char in span.get("chars", []):
-                            value = char.get("c")
-                            bbox = char.get("bbox")
-                            if not isinstance(value, str) or not bbox or len(bbox) < 4:
-                                continue
-                            try:
-                                x0, y0, x1, y1 = (float(value) for value in bbox[:4])
-                            except (TypeError, ValueError):
-                                continue
-                            raw_chars.append((x0, y0, x1, y1, value))
+        input_dto = {
+            "cells": self._cells_to_dto(cells),
+            "words": [
+                {
+                    "schema_version": 1,
+                    "text": str(word[4]),
+                    "rect": {
+                        "schema_version": 1,
+                        "x0": float(word[0]),
+                        "y0": float(word[1]),
+                        "x1": float(word[2]),
+                        "y1": float(word[3]),
+                    },
+                    "order": index,
+                    "block": int(word[5]) if len(word) > 5 else None,
+                    "line": int(word[6]) if len(word) > 6 else None,
+                }
+                for index, word in enumerate(words)
+            ],
+            "chars": [
+                {
+                    "schema_version": 1,
+                    "text": str(char[4]),
+                    "rect": {
+                        "schema_version": 1,
+                        "x0": float(char[0]),
+                        "y0": float(char[1]),
+                        "x1": float(char[2]),
+                        "y1": float(char[3]),
+                    },
+                    "order": index,
+                }
+                for index, char in enumerate(raw_chars)
+            ],
+            "tolerance": float(self.line_tolerance),
+        }
+
+        def rust_assign(dto: Dict[str, object]) -> List[Dict[str, object]]:
+            return self._normalize_cells_dto(
+                rust_adapter.assign_text_to_line_cells(
+                    dto["cells"],
+                    dto["words"],
+                    chars=dto["chars"],
+                    tolerance=float(dto["tolerance"]),
+                )
+            )
+
+        result = rust_adapter.run_python_or_rust(
+            mode=rust_adapter.get_rust_mode("wired"),
+            python_fn=lambda: self._cells_to_dto(
+                self._assign_text_to_line_cells_python(cells, page, words, raw_chars)
+            ),
+            rust_fn=rust_assign,
+            input_dto=input_dto,
+            path="wired.text",
+        )
+        return self._cells_from_dto(result)
+
+    def _assign_text_to_line_cells_python(
+        self,
+        cells: List[Cell],
+        page: fitz.Page,
+        words: Optional[List[Tuple]] = None,
+        raw_chars: Optional[List[Tuple[float, float, float, float, str]]] = None,
+    ) -> List[Cell]:
+        if words is None:
+            try:
+                words = page.get_text("words")
+            except Exception:
+                return cells
+
+        if raw_chars is None:
+            raw_chars = []
+            try:
+                rawdict = page.get_text("rawdict")
+            except Exception:
+                rawdict = {}
+            if isinstance(rawdict, dict):
+                for block in rawdict.get("blocks", []):
+                    for line in block.get("lines", []):
+                        for span in line.get("spans", []):
+                            for char in span.get("chars", []):
+                                value = char.get("c")
+                                bbox = char.get("bbox")
+                                if not isinstance(value, str) or not bbox or len(bbox) < 4:
+                                    continue
+                                try:
+                                    x0, y0, x1, y1 = (float(value) for value in bbox[:4])
+                                except (TypeError, ValueError):
+                                    continue
+                                raw_chars.append((x0, y0, x1, y1, value))
 
         def overlapping_cells(word: Tuple) -> List[int]:
             wx0, wy0, wx1, wy1 = (float(value) for value in word[:4])
@@ -1938,6 +2419,33 @@ class WiredTableExtractor(BaseTableExtractor):
         return cells
 
     def _merge_oversegmented_line_columns(self, cells: List[Cell]) -> List[Cell]:
+        if not cells:
+            return cells
+
+        input_dto = {
+            "cells": self._cells_to_dto(cells),
+            "tolerance": float(self.line_tolerance),
+        }
+
+        def rust_merge(dto: Dict[str, object]) -> List[Dict[str, object]]:
+            return self._normalize_cells_dto(
+                rust_adapter.merge_oversegmented_line_columns(
+                    dto["cells"], tolerance=float(dto["tolerance"])
+                )
+            )
+
+        result = rust_adapter.run_python_or_rust(
+            mode=rust_adapter.get_rust_mode("wired"),
+            python_fn=lambda: self._cells_to_dto(
+                self._merge_oversegmented_line_columns_python(cells)
+            ),
+            rust_fn=rust_merge,
+            input_dto=input_dto,
+            path="wired.columns",
+        )
+        return self._cells_from_dto(result)
+
+    def _merge_oversegmented_line_columns_python(self, cells: List[Cell]) -> List[Cell]:
         if not cells:
             return cells
 

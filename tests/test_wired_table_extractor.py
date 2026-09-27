@@ -6,6 +6,7 @@ import fitz
 import pytest
 
 from hexai_pdf_parser.core.models import BBox, Cell
+from hexai_pdf_parser import rust_adapter
 from hexai_pdf_parser.tables.extractors.wired_table_extractor import WiredTableExtractor
 
 
@@ -24,6 +25,180 @@ def test_extract_lines_ignores_white_fill_only_page_border():
 
     assert h_lines == []
     assert v_lines == []
+
+
+def test_wired_shadow_route_records_rust_error(monkeypatch):
+    extractor = WiredTableExtractor()
+    h_lines = [(0.0, 0.0, 20.0, 0.0), (0.0, 10.0, 20.0, 10.0)]
+    v_lines = [(0.0, 0.0, 0.0, 10.0), (10.0, 0.0, 10.0, 10.0), (20.0, 0.0, 20.0, 10.0)]
+    bbox = BBox(0.0, 0.0, 20.0, 10.0)
+
+    monkeypatch.setenv("PDF_RUST_MODE", "shadow")
+
+    def rust_probe_failure(*args, **kwargs):
+        raise RuntimeError("wired shadow probe failed")
+
+    monkeypatch.setattr(rust_adapter, "build_cells_for_region", rust_probe_failure)
+    rust_adapter.clear_diagnostics()
+
+    result = extractor._build_cells_for_region(bbox, h_lines, v_lines)
+
+    assert result
+    diagnostics = rust_adapter.get_diagnostics()
+    assert len(diagnostics) == 1
+    assert diagnostics[0]["status"] == "rust_fallback"
+    assert diagnostics[0]["path"] == "wired.cells"
+
+
+def test_wired_cell_build_shadow_compares_rust_output_and_keeps_python_result(monkeypatch):
+    extractor = WiredTableExtractor()
+    bbox = BBox(0.0, 0.0, 20.0, 10.0)
+    h_lines = [(0.0, 0.0, 20.0, 0.0), (0.0, 10.0, 20.0, 10.0)]
+    v_lines = [(0.0, 0.0, 0.0, 10.0), (10.0, 0.0, 10.0, 10.0), (20.0, 0.0, 20.0, 10.0)]
+    python_cells = [Cell("python", 0, 0, BBox(0.0, 0.0, 10.0, 10.0))]
+    rust_cells = [
+        {
+            "text": "rust-sentinel",
+            "row": 0,
+            "col": 0,
+            "rect": {"x0": 0.0, "y0": 0.0, "x1": 10.0, "y1": 10.0},
+            "rowspan": 1,
+            "colspan": 1,
+        }
+    ]
+
+    monkeypatch.setenv("PDF_RUST_MODE", "shadow")
+    monkeypatch.setattr(extractor, "_build_cells_for_region_python", lambda *_args: list(python_cells))
+    monkeypatch.setattr(rust_adapter, "build_cells_for_region", lambda **_kwargs: rust_cells)
+    rust_adapter.clear_diagnostics()
+
+    result = extractor._build_cells_for_region(bbox, h_lines, v_lines)
+
+    assert [cell.text for cell in result] == ["python"]
+    diagnostics = rust_adapter.get_diagnostics()
+    assert diagnostics[-1]["status"] == "rust_output_mismatch"
+    assert diagnostics[-1]["path"] == "wired.cells"
+
+
+def test_wired_cell_build_rust_consumes_sentinel(monkeypatch):
+    extractor = WiredTableExtractor()
+    bbox = BBox(0.0, 0.0, 20.0, 10.0)
+    h_lines = [(0.0, 0.0, 20.0, 0.0), (0.0, 10.0, 20.0, 10.0)]
+    v_lines = [(0.0, 0.0, 0.0, 10.0), (10.0, 0.0, 10.0, 10.0), (20.0, 0.0, 20.0, 10.0)]
+    rust_cells = [
+        {
+            "text": "rust-sentinel",
+            "row": 0,
+            "col": 0,
+            "rect": {"x0": 0.0, "y0": 0.0, "x1": 10.0, "y1": 10.0},
+            "rowspan": 1,
+            "colspan": 1,
+        }
+    ]
+
+    monkeypatch.setenv("PDF_RUST_MODE", "rust")
+    monkeypatch.setattr(extractor, "_build_cells_for_region_python", lambda *_args: [])
+    monkeypatch.setattr(rust_adapter, "build_cells_for_region", lambda **_kwargs: rust_cells)
+
+    result = extractor._build_cells_for_region(bbox, h_lines, v_lines)
+
+    assert [cell.text for cell in result] == ["rust-sentinel"]
+
+
+def test_wired_cell_build_rust_failure_falls_back_with_diagnostic(monkeypatch):
+    extractor = WiredTableExtractor()
+    bbox = BBox(0.0, 0.0, 20.0, 10.0)
+    h_lines = [(0.0, 0.0, 20.0, 0.0), (0.0, 10.0, 20.0, 10.0)]
+    v_lines = [(0.0, 0.0, 0.0, 10.0), (10.0, 0.0, 10.0, 10.0), (20.0, 0.0, 20.0, 10.0)]
+    python_cells = [Cell("python-fallback", 0, 0, BBox(0.0, 0.0, 10.0, 10.0))]
+
+    monkeypatch.setenv("PDF_RUST_MODE", "rust")
+    monkeypatch.setattr(extractor, "_build_cells_for_region_python", lambda *_args: list(python_cells))
+
+    def fail(**_kwargs):
+        raise RuntimeError("wired cell build failed")
+
+    monkeypatch.setattr(rust_adapter, "build_cells_for_region", fail)
+    rust_adapter.clear_diagnostics()
+
+    result = extractor._build_cells_for_region(bbox, h_lines, v_lines)
+
+    assert [cell.text for cell in result] == ["python-fallback"]
+    diagnostics = rust_adapter.get_diagnostics()
+    assert diagnostics[-1]["status"] == "rust_fallback"
+    assert diagnostics[-1]["path"] == "wired.cells"
+
+
+def test_wired_text_assignment_rust_consumes_sentinel(monkeypatch):
+    extractor = WiredTableExtractor()
+    cells = [Cell("python", 0, 0, BBox(0.0, 0.0, 10.0, 10.0))]
+    words = [(1.0, 1.0, 5.0, 5.0, "word", 0, 0, 0)]
+    page = SimpleNamespace()
+    rust_cells = [
+        {
+            "text": "rust-text-sentinel",
+            "row": 0,
+            "col": 0,
+            "rect": {"x0": 0.0, "y0": 0.0, "x1": 10.0, "y1": 10.0},
+            "rowspan": 1,
+            "colspan": 1,
+        }
+    ]
+
+    monkeypatch.setenv("PDF_RUST_MODE", "rust")
+    monkeypatch.setattr(extractor, "_assign_text_to_line_cells_python", lambda *_args: list(cells))
+    monkeypatch.setattr(rust_adapter, "assign_text_to_line_cells", lambda *args, **kwargs: rust_cells)
+
+    result = extractor._assign_text_to_line_cells(cells, page, words=words, raw_chars=[])
+
+    assert [cell.text for cell in result] == ["rust-text-sentinel"]
+
+
+def test_wired_column_merge_rust_consumes_sentinel(monkeypatch):
+    extractor = WiredTableExtractor()
+    cells = [Cell("python", 0, 0, BBox(0.0, 0.0, 10.0, 10.0))]
+    rust_cells = [
+        {
+            "text": "rust-column-sentinel",
+            "row": 0,
+            "col": 0,
+            "rect": {"x0": 0.0, "y0": 0.0, "x1": 10.0, "y1": 10.0},
+            "rowspan": 1,
+            "colspan": 1,
+        }
+    ]
+
+    monkeypatch.setenv("PDF_RUST_MODE", "rust")
+    monkeypatch.setattr(extractor, "_merge_oversegmented_line_columns_python", lambda *_args: list(cells))
+    monkeypatch.setattr(rust_adapter, "merge_oversegmented_line_columns", lambda *args, **kwargs: rust_cells)
+
+    result = extractor._merge_oversegmented_line_columns(cells)
+
+    assert [cell.text for cell in result] == ["rust-column-sentinel"]
+
+
+def test_wired_ghost_row_trim_rust_consumes_sentinel(monkeypatch):
+    extractor = WiredTableExtractor()
+    cells = [Cell("python", 0, 0, BBox(0.0, 0.0, 10.0, 10.0))]
+    h_lines = [(0.0, 0.0, 10.0, 0.0), (0.0, 10.0, 10.0, 10.0)]
+    rust_cells = [
+        {
+            "text": "rust-row-sentinel",
+            "row": 0,
+            "col": 0,
+            "rect": {"x0": 0.0, "y0": 0.0, "x1": 10.0, "y1": 10.0},
+            "rowspan": 1,
+            "colspan": 1,
+        }
+    ]
+
+    monkeypatch.setenv("PDF_RUST_MODE", "rust")
+    monkeypatch.setattr(extractor, "_trim_ghost_edge_rows_python", lambda *_args: list(cells))
+    monkeypatch.setattr(rust_adapter, "trim_ghost_edge_rows", lambda *args, **kwargs: rust_cells)
+
+    result = extractor._trim_ghost_edge_rows(cells, h_lines)
+
+    assert [cell.text for cell in result] == ["rust-row-sentinel"]
 
 
 def test_extract_lines_accepts_visible_fill_only_rules():

@@ -36,6 +36,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
+import os
 import fitz
 import copy
 
@@ -49,6 +50,7 @@ from hexai_pdf_parser.core.models import (
     TextBlock,
 )
 from hexai_pdf_parser.page_normalizer import normalize_page_rotation
+from hexai_pdf_parser.rust_adapter import rect_overlap
 
 # Pre-compiled regex for numeric token classification (used per-word)
 _NUMERIC_RE = re.compile(
@@ -338,10 +340,25 @@ class TableExtractor:
     @staticmethod
     def _bbox_overlaps(left: BBox, right: BBox) -> bool:
         """Return whether two regions overlap with positive area."""
-        return (
+        mode = os.environ.get("PDF_RUST_MODE", "python").lower()
+        if mode == "rust":
+            return rect_overlap(
+                {"schema_version": 1, "x0": left.x0, "y0": left.y0, "x1": left.x1, "y1": left.y1},
+                {"schema_version": 1, "x0": right.x0, "y0": right.y0, "x1": right.x1, "y1": right.y1},
+                strict=True,
+            )
+        py_res = (
             min(left.x1, right.x1) > max(left.x0, right.x0)
             and min(left.y1, right.y1) > max(left.y0, right.y0)
         )
+        if mode == "shadow":
+            rust_res = rect_overlap(
+                {"schema_version": 1, "x0": left.x0, "y0": left.y0, "x1": left.x1, "y1": left.y1},
+                {"schema_version": 1, "x0": right.x0, "y0": right.y0, "x1": right.x1, "y1": right.y1},
+                strict=True,
+            )
+            assert rust_res == py_res, f"rect_overlap mismatch: py={py_res} rust={rust_res}"
+        return py_res
 
     @staticmethod
     def _bbox_overlap_ratio(left: BBox, right: BBox) -> float:
@@ -355,6 +372,26 @@ class TableExtractor:
             return 0.0
         return ((ix1 - ix0) * (iy1 - iy0)) / left_area
 
+    def _get_or_create_ml_detector(self):
+        """Get or create the ML table detector instance."""
+        if self._ml_detector is None:
+            from hexai_pdf_parser.ml.ml_table_detector import MLTableDetector
+
+            self._ml_detector = MLTableDetector(
+                model_path=self._ml_model_path,
+                confidence_threshold=self._ml_confidence,
+                render_dpi=self.ml_render_dpi,
+            )
+        return self._ml_detector
+
+    def warmup(self) -> None:
+        """Preload and warm up underlying models so page processing runs at peak speed."""
+        if self._use_ml_table_detector:
+            try:
+                self._get_or_create_ml_detector().warmup()
+            except Exception:
+                pass
+
     def _extract_model_tables(
         self,
         page: fitz.Page,
@@ -367,15 +404,8 @@ class TableExtractor:
 
             page_language = detect_page_language(page)
         try:
-            if self._ml_detector is None:
-                from hexai_pdf_parser.ml.ml_table_detector import MLTableDetector
-
-                self._ml_detector = MLTableDetector(
-                    model_path=self._ml_model_path,
-                    confidence_threshold=self._ml_confidence,
-                    render_dpi=self.ml_render_dpi,
-                )
-            model_items = self._ml_detector.detect_with_scores(page)
+            detector = self._get_or_create_ml_detector()
+            model_items = detector.detect_with_scores(page)
             model_items = self._filter_contained_bboxes(model_items)
             model_items = self._refine_overlapping_model_bboxes(model_items, page)
         except Exception:
@@ -726,19 +756,25 @@ class TableExtractor:
 
         candidates = self._detect_rule_candidates(page, page_language=page_language)
         if not candidates:
-            return []
-
-        wired_tables = [
-            table for table in candidates if table.source == "line_projection"
-        ]
-        if self._use_ml_table_detector:
+            if not self._use_ml_table_detector:
+                return []
             tables = self._extract_model_tables(
-                page, wired_tables=wired_tables, page_language=page_language
+                page,
+                wired_tables=[],
+                page_language=page_language,
             )
         else:
-            tables = self._extract_rule_tables(
-                page, candidates=candidates, page_language=page_language
-            )
+            wired_tables = [
+                table for table in candidates if table.source == "line_projection"
+            ]
+            if self._use_ml_table_detector:
+                tables = self._extract_model_tables(
+                    page, wired_tables=wired_tables, page_language=page_language
+                )
+            else:
+                tables = self._extract_rule_tables(
+                    page, candidates=candidates, page_language=page_language
+                )
 
         # Apply layout rule system when a config with profiles is provided.
         if self._table_config and self._table_config.profiles:
@@ -3815,7 +3851,205 @@ class TableExtractor:
         guides = [float(x) for x in snapshot.get("column_guides") or []]
         return self._build_text_alignment_table(rows, guides, region_bbox)
 
+    def _text_alignment_rust_input(
+        self,
+        region_rows: List[dict],
+        guides: List[float],
+        region_bbox: BBox,
+    ) -> dict:
+        boundaries = [
+            (guides[index] + guides[index + 1]) / 2.0
+            for index in range(len(guides) - 1)
+        ]
+        bands = []
+        for index in range(len(guides)):
+            x0 = region_bbox.x0 if index == 0 else boundaries[index - 1]
+            x1 = region_bbox.x1 if index == len(guides) - 1 else boundaries[index]
+            bands.append(
+                {
+                    "schema_version": 1,
+                    "x0": float(x0),
+                    "x1": float(x1),
+                    "source_atoms": [],
+                    "order": index,
+                }
+            )
+
+        atoms = []
+        for row_index, row in enumerate(region_rows):
+            for token in row.get("tokens", []):
+                text = str(token.get("text", "")).strip()
+                if not text:
+                    continue
+                order = len(atoms)
+                atoms.append(
+                    {
+                        "schema_version": 1,
+                        "text": text,
+                        "rect": {
+                            "schema_version": 1,
+                            "x0": float(token["x0"]),
+                            "y0": float(token["y0"]),
+                            "x1": float(token["x1"]),
+                            "y1": float(token["y1"]),
+                        },
+                        "run_refs": [order],
+                        "row_hint": row_index,
+                        "col_hint": None,
+                        "order": order,
+                    }
+                )
+
+        return {
+            "schema_version": 1,
+            "region": {
+                "schema_version": 1,
+                "rect": {
+                    "schema_version": 1,
+                    "x0": float(region_bbox.x0),
+                    "y0": float(region_bbox.y0),
+                    "x1": float(region_bbox.x1),
+                    "y1": float(region_bbox.y1),
+                },
+                "source_order": 0,
+                "allowed": True,
+            },
+            "atoms": atoms,
+            "bands": bands,
+            "config": {
+                "schema_version": 1,
+                "line_tolerance": float(self.line_tolerance),
+                "row_tolerance": 5.0,
+                "column_tolerance": float(self.line_tolerance),
+                "span_tolerance": float(self.line_tolerance),
+                "numeric_tolerance": float(self.line_tolerance),
+            },
+        }
+
+    @staticmethod
+    def _cells_from_text_alignment_rust(
+        cell_dtos: List[dict],
+        region_rows: List[dict],
+    ) -> List[Cell]:
+        token_bounds = {}
+        for row_index, row in enumerate(region_rows):
+            for token in row.get("tokens", []):
+                key = (row_index, str(token.get("text", "")).strip())
+                bounds = token_bounds.get(key)
+                rect = (
+                    float(token["x0"]),
+                    float(token["y0"]),
+                    float(token["x1"]),
+                    float(token["y1"]),
+                )
+                if bounds is None:
+                    token_bounds[key] = rect
+                else:
+                    token_bounds[key] = (
+                        min(bounds[0], rect[0]),
+                        min(bounds[1], rect[1]),
+                        max(bounds[2], rect[2]),
+                        max(bounds[3], rect[3]),
+                    )
+
+        cells = []
+        occupied = set()
+        for dto in cell_dtos or []:
+            text = str(dto.get("text", "")).strip()
+            if not text:
+                continue
+            row = int(dto["row"])
+            col = int(dto["col"])
+            rowspan = max(1, int(dto.get("rowspan", 1)))
+            colspan = max(1, int(dto.get("colspan", 1)))
+            for occupied_row in range(row, row + rowspan):
+                for occupied_col in range(col, col + colspan):
+                    slot = (occupied_row, occupied_col)
+                    if slot in occupied:
+                        raise ValueError(f"Rust text grid occupancy conflict at {slot}")
+                    occupied.add(slot)
+            rect = dto["rect"]
+            bounds = token_bounds.get((row, text))
+            if bounds is None:
+                bounds = (
+                    float(rect["x0"]),
+                    float(rect["y0"]),
+                    float(rect["x1"]),
+                    float(rect["y1"]),
+                )
+            cells.append(
+                Cell(
+                    text=text,
+                    row_index=row,
+                    col_index=col,
+                    rowspan=rowspan,
+                    colspan=colspan,
+                    bbox=BBox(*bounds),
+                )
+            )
+        cells.sort(key=lambda cell: (cell.row_index, cell.col_index))
+        return cells
+
     def _build_text_alignment_table(
+        self,
+        region_rows: List[dict],
+        guides: List[float],
+        region_bbox: BBox,
+        page: Optional[fitz.Page] = None,
+    ) -> tuple[int, int, List[Cell]]:
+        if len(region_rows) < 1 or len(guides) < 2:
+            return 0, 0, []
+
+        from hexai_pdf_parser import rust_adapter
+
+        mode = rust_adapter.get_rust_mode("table-text-alignment")
+        compact_guides = self._compact_column_guides(region_rows, guides)
+        if len(compact_guides) < 2:
+            return 0, 0, []
+        input_dto = self._text_alignment_rust_input(
+            region_rows,
+            compact_guides,
+            region_bbox,
+        )
+
+        def rust_grid(dto):
+            cells = self._cells_from_text_alignment_rust(
+                rust_adapter.build_general_wireless_cells(dto),
+                region_rows,
+            )
+            cells = self._merge_oversegmented_columns(cells)
+            cells = self._merge_numeric_fragment_columns(cells)
+            cells = self._infer_sparse_rowspans(cells, region_rows, page=page)
+            return self._text_alignment_counts(cells)
+
+        return rust_adapter.run_python_or_rust(
+            mode=mode,
+            python_fn=lambda: self._build_text_alignment_table_python(
+                region_rows,
+                compact_guides,
+                region_bbox,
+                page=page,
+            ),
+            rust_fn=rust_grid,
+            input_dto=input_dto,
+            path="table-text-alignment/grid",
+        )
+
+    @staticmethod
+    def _text_alignment_counts(cells: List[Cell]) -> tuple[int, int, List[Cell]]:
+        if not cells:
+            return 0, 0, []
+        row_count = max(
+            (cell.row_index + max(1, cell.rowspan) - 1 for cell in cells),
+            default=-1,
+        ) + 1
+        col_count = max(
+            (cell.col_index + max(1, cell.colspan) - 1 for cell in cells),
+            default=-1,
+        ) + 1
+        return row_count, col_count, cells
+
+    def _build_text_alignment_table_python(
         self,
         region_rows: List[dict],
         guides: List[float],
@@ -4502,6 +4736,8 @@ class TableExtractor:
                 span_end = row_idx
                 while span_end + 1 <= max_row_index:
                     next_row = span_end + 1
+                    if span_end >= len(rows) or next_row >= len(rows):
+                        break
                     # Check if there is a horizontal line between row span_end and next_row
                     curr_y0 = rows[span_end]["y0"]
                     next_y1 = rows[next_row]["y1"]

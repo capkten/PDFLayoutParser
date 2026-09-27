@@ -1,0 +1,100 @@
+{
+  "schema_version": 1,
+  "description": "Task 3A owned synthetic native-span vectors",
+  "region": {"x0": 0.0, "y0": 0.0, "x1": 360.0, "y1": 120.0},
+  "vectors": [
+    {
+      "fixture": "packed_numeric_split",
+      "spans": [
+        {
+          "text": "100 200",
+          "bbox": [20.0, 10.0, 84.0, 20.0],
+          "font": "SimSun",
+          "size": 10.0,
+          "order": 0,
+          "source_position": [0, 0, 0],
+          "char_boxes": [
+            {"text": "1", "bbox": [20.0, 10.0, 26.0, 20.0]},
+            {"text": "0", "bbox": [26.0, 10.0, 32.0, 20.0]},
+            {"text": "0", "bbox": [32.0, 10.0, 38.0, 20.0]},
+            {"text": " ", "bbox": [38.0, 10.0, 50.0, 20.0]},
+            {"text": "2", "bbox": [50.0, 10.0, 56.0, 20.0]},
+            {"text": "0", "bbox": [56.0, 10.0, 62.0, 20.0]},
+            {"text": "0", "bbox": [62.0, 10.0, 68.0, 20.0]}
+          ]
+        }
+      ]
+    },
+    {
+      "fixture": "empty_whitespace_and_separator",
+      "spans": [
+        {"text": "   ", "bbox": [10.0, 10.0, 30.0, 20.0], "font": "SimSun", "size": 10.0, "order": 0, "source_position": [0, 0, 0], "char_boxes": [{"text": " ", "bbox": [10.0, 10.0, 30.0, 20.0]}]},
+        {"text": "--------", "bbox": [40.0, 10.0, 100.0, 20.0], "font": "SimSun", "size": 10.0, "order": 1, "source_position": [0, 0, 1], "char_boxes": [{"text": "--------", "bbox": [40.0, 10.0, 100.0, 20.0]}]},
+        {"text": "-", "bbox": [110.0, 10.0, 120.0, 20.0], "font": "SimSun", "size": 10.0, "order": 2, "source_position": [0, 0, 2], "char_boxes": [{"text": "-", "bbox": [110.0, 10.0, 120.0, 20.0]}]}
+      ]
+    },
+    {
+      "fixture": "cjk_whitelist_spacing",
+      "spans": [
+        {"text": "合", "bbox": [10.0, 30.0, 20.0, 40.0], "font": "SimSun", "size": 10.0, "order": 0, "source_position": [0, 1, 0], "char_boxes": [{"text": "合", "bbox": [10.0, 30.0, 20.0, 40.0]}]},
+        {"text": "计", "bbox": [41.0, 30.0, 51.0, 40.0], "font": "SimSun", "size": 10.0, "order": 1, "source_position": [0, 1, 1], "char_boxes": [{"text": "计", "bbox": [41.0, 30.0, 51.0, 40.0]}]}
+      ]
+    },
+    {
+      "fixture": "cjk_non_whitelist_spacing",
+      "spans": [
+        {"text": "男", "bbox": [10.0, 50.0, 20.0, 60.0], "font": "SimSun", "size": 10.0, "order": 0, "source_position": [0, 2, 0], "char_boxes": [{"text": "男", "bbox": [10.0, 50.0, 20.0, 60.0]}]},
+        {"text": "女", "bbox": [41.0, 50.0, 51.0, 60.0], "font": "SimSun", "size": 10.0, "order": 1, "source_position": [0, 2, 1], "char_boxes": [{"text": "女", "bbox": [41.0, 50.0, 51.0, 60.0]}]}
+      ]
+    },
+    {
+      "fixture": "superscript_inline_gap",
+      "spans": [
+        {"text": "基", "bbox": [10.0, 70.0, 30.0, 80.0], "font": "SimSun", "size": 10.0, "order": 0, "source_position": [0, 3, 0], "char_boxes": [{"text": "基", "bbox": [10.0, 70.0, 30.0, 80.0]}]},
+        {"text": "2", "bbox": [34.0, 71.0, 40.0, 79.0], "font": "SimSun", "size": 7.0, "order": 1, "source_position": [0, 4, 1], "char_boxes": [{"text": "2", "bbox": [34.0, 71.0, 40.0, 79.0]}]}
+      ]
+    },
+    {
+      "fixture": "vertical_wrapped_witness",
+      "spans": [
+        {"text": "第一行", "bbox": [100.0, 10.0, 160.0, 20.0], "font": "SimSun", "size": 10.0, "order": 0, "source_position": [0, 0, 0], "char_boxes": [{"text": "第", "bbox": [100.0, 10.0, 120.0, 20.0]}, {"text": "一", "bbox": [120.0, 10.0, 140.0, 20.0]}, {"text": "行", "bbox": [140.0, 10.0, 160.0, 20.0]}]},
+        {"text": "第二行", "bbox": [100.0, 24.0, 160.0, 34.0], "font": "SimSun", "size": 10.0, "order": 1, "source_position": [0, 1, 0], "char_boxes": [{"text": "第", "bbox": [100.0, 24.0, 120.0, 34.0]}, {"text": "二", "bbox": [120.0, 24.0, 140.0, 34.0]}, {"text": "行", "bbox": [140.0, 24.0, 160.0, 34.0]}]},
+        {"text": "第三行", "bbox": [100.0, 38.0, 160.0, 48.0], "font": "SimSun", "size": 10.0, "order": 2, "source_position": [0, 2, 0], "char_boxes": [{"text": "第", "bbox": [100.0, 38.0, 120.0, 48.0]}, {"text": "三", "bbox": [120.0, 38.0, 140.0, 48.0]}, {"text": "行", "bbox": [140.0, 38.0, 160.0, 48.0]}]},
+        {"text": "右侧字段", "bbox": [240.0, 24.0, 300.0, 48.0], "font": "SimSun", "size": 10.0, "order": 3, "source_position": [1, 0, 0], "char_boxes": [{"text": "右", "bbox": [240.0, 24.0, 255.0, 48.0]}, {"text": "侧", "bbox": [255.0, 24.0, 270.0, 48.0]}, {"text": "字", "bbox": [270.0, 24.0, 285.0, 48.0]}, {"text": "段", "bbox": [285.0, 24.0, 300.0, 48.0]}]}
+      ]
+    },
+    {
+      "fixture": "source_block_line_noncontinuous",
+      "spans": [
+        {"text": "甲", "bbox": [10.0, 90.0, 20.0, 100.0], "font": "SimSun", "size": 10.0, "order": 0, "source_position": [0, 0, 0], "char_boxes": [{"text": "甲", "bbox": [10.0, 90.0, 20.0, 100.0]}]},
+        {"text": "乙", "bbox": [22.0, 90.0, 32.0, 100.0], "font": "SimSun", "size": 10.0, "order": 1, "source_position": [2, 3, 0], "char_boxes": [{"text": "乙", "bbox": [22.0, 90.0, 32.0, 100.0]}]}
+      ]
+    },
+    {
+      "fixture": "alignment_corridor_veto",
+      "spans": [
+        {"text": "甲", "bbox": [10.0, 10.0, 30.0, 20.0], "font": "SimSun", "size": 10.0, "order": 0, "source_position": [0, 0, 0], "char_boxes": [{"text": "甲", "bbox": [10.0, 10.0, 30.0, 20.0]}]},
+        {"text": "乙", "bbox": [35.0, 10.0, 55.0, 20.0], "font": "SimSun", "size": 10.0, "order": 1, "source_position": [0, 0, 1], "char_boxes": [{"text": "乙", "bbox": [35.0, 10.0, 55.0, 20.0]}]},
+        {"text": "丙", "bbox": [10.0, 30.0, 28.0, 40.0], "font": "SimSun", "size": 10.0, "order": 2, "source_position": [0, 1, 0], "char_boxes": [{"text": "丙", "bbox": [10.0, 30.0, 28.0, 40.0]}]},
+        {"text": "丁", "bbox": [35.0, 30.0, 53.0, 40.0], "font": "SimSun", "size": 10.0, "order": 3, "source_position": [0, 1, 1], "char_boxes": [{"text": "丁", "bbox": [35.0, 30.0, 53.0, 40.0]}]},
+        {"text": "戊", "bbox": [10.0, 50.0, 32.0, 60.0], "font": "SimSun", "size": 10.0, "order": 4, "source_position": [0, 2, 0], "char_boxes": [{"text": "戊", "bbox": [10.0, 50.0, 32.0, 60.0]}]},
+        {"text": "己", "bbox": [35.0, 50.0, 57.0, 60.0], "font": "SimSun", "size": 10.0, "order": 5, "source_position": [0, 2, 1], "char_boxes": [{"text": "己", "bbox": [35.0, 50.0, 57.0, 60.0]}]},
+        {"text": "庚", "bbox": [10.0, 70.0, 26.0, 80.0], "font": "SimSun", "size": 10.0, "order": 6, "source_position": [0, 3, 0], "char_boxes": [{"text": "庚", "bbox": [10.0, 70.0, 26.0, 80.0]}]},
+        {"text": "辛", "bbox": [35.0, 70.0, 51.0, 80.0], "font": "SimSun", "size": 10.0, "order": 7, "source_position": [0, 3, 1], "char_boxes": [{"text": "辛", "bbox": [35.0, 70.0, 51.0, 80.0]}]}
+      ]
+    },
+    {
+      "fixture": "independent_fields_counterexample",
+      "spans": [
+        {"text": "金额", "bbox": [10.0, 90.0, 30.0, 100.0], "font": "SimSun", "size": 10.0, "order": 0, "source_position": [3, 0, 0], "char_boxes": [{"text": "金", "bbox": [10.0, 90.0, 20.0, 100.0]}, {"text": "额", "bbox": [20.0, 90.0, 30.0, 100.0]}]},
+        {"text": "比例", "bbox": [80.0, 90.0, 100.0, 100.0], "font": "SimSun", "size": 10.0, "order": 1, "source_position": [3, 0, 1], "char_boxes": [{"text": "比", "bbox": [80.0, 90.0, 90.0, 100.0]}, {"text": "例", "bbox": [90.0, 90.0, 100.0, 100.0]}]}
+      ]
+    },
+    {
+      "fixture": "single_field_control",
+      "spans": [
+        {"text": "正常字段", "bbox": [10.0, 110.0, 70.0, 120.0], "font": "SimSun", "size": 10.0, "order": 0, "source_position": [4, 0, 0], "char_boxes": [{"text": "正", "bbox": [10.0, 110.0, 25.0, 120.0]}, {"text": "常", "bbox": [25.0, 110.0, 40.0, 120.0]}, {"text": "字", "bbox": [40.0, 110.0, 55.0, 120.0]}, {"text": "段", "bbox": [55.0, 110.0, 70.0, 120.0]}]}
+      ]
+    }
+  ]
+}

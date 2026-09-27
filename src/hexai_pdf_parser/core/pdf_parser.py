@@ -29,13 +29,15 @@ class PDFParser:
         self,
         source,
         *,
-        render_dpi: int = 200,
+        render_dpi: int = 72,
+        ml_render_dpi: Optional[int] = None,
         seal_coords: Optional[List[dict]] = None,
         ml_model_path: Optional[str] = None,
         ml_confidence: float = 0.40,
         num_workers: Optional[int] = None,
         backend: str = "thread",
         debug_pipeline: bool = False,
+        visualize_tables: bool = False,
     ) -> None:
         if isinstance(source, Document):
             self._pdf_path = None
@@ -49,12 +51,14 @@ class PDFParser:
         self._document_complete = self._document is not None
 
         self._render_dpi = render_dpi
+        self._ml_render_dpi = ml_render_dpi
         self._seal_coords = seal_coords or []
         self._ml_model_path = ml_model_path
         self._ml_confidence = ml_confidence
         self._num_workers = num_workers
         self._backend = backend
         self._debug_pipeline = debug_pipeline
+        self._visualize_tables = visualize_tables
 
     def __enter__(self) -> PDFParser:
         return self
@@ -74,6 +78,21 @@ class PDFParser:
         if self._pdf_doc is not None:
             self._pdf_doc.close()
             self._pdf_doc = None
+
+    def warmup(self) -> None:
+        """Preload and warm up models before parsing to eliminate cold-start overhead."""
+        from hexai_pdf_parser.ml.ml_table_detector import (
+            MLTableDetector,
+            _resolve_default_model_path,
+        )
+
+        model_path = self._ml_model_path or _resolve_default_model_path()
+        detector = MLTableDetector(
+            model_path=model_path,
+            confidence_threshold=self._ml_confidence,
+            render_dpi=self._render_dpi,
+        )
+        detector.warmup()
 
     # ------------------------------------------------------------------
     # Response helpers
@@ -117,6 +136,7 @@ class PDFParser:
         *,
         page_indices: Optional[List[int]] = None,
         output_dir: Optional[str] = None,
+        visualize_tables: Optional[bool] = None,
     ) -> ApiResult:
         """Run the full parsing pipeline and return an ApiResult wrapping a Document.
 
@@ -129,10 +149,17 @@ class PDFParser:
 
             from hexai_pdf_parser.core.pipeline import Pipeline
 
+            eff_visualize_tables = (
+                visualize_tables
+                if visualize_tables is not None
+                else self._visualize_tables
+            )
+
             pipeline = Pipeline(
                 pdf_path=self._pdf_path,
                 output_dir=output_dir,
                 render_dpi=self._render_dpi,
+                ml_render_dpi=self._ml_render_dpi,
                 seal_coords=self._seal_coords,
                 page_indices=page_indices,
                 ml_model_path=self._ml_model_path,
@@ -140,6 +167,7 @@ class PDFParser:
                 num_workers=self._num_workers,
                 backend=self._backend,
                 debug_pipeline=self._debug_pipeline,
+                visualize_tables=eff_visualize_tables,
             )
             self._document = pipeline.run()
             self._text_ready = True
@@ -170,7 +198,7 @@ class PDFParser:
             from hexai_pdf_parser.extractors.text_extractor import TextExtractor
 
             pdf_doc = self._get_pdf_doc()
-            document = Loader(self._pdf_path).load(pdf_doc)
+            document = Loader(self._pdf_path).load(pdf_doc, page_indices=page_indices)
             table_extractor = TableExtractor(
                 ml_model_path=self._ml_model_path,
                 ml_confidence=self._ml_confidence,
@@ -218,7 +246,7 @@ class PDFParser:
             from hexai_pdf_parser.tables.table_extractor import TableExtractor
 
             pdf_doc = self._get_pdf_doc()
-            document = Loader(self._pdf_path).load(pdf_doc)
+            document = Loader(self._pdf_path).load(pdf_doc, page_indices=page_indices)
             extractor = TableExtractor(
                 ml_model_path=self._ml_model_path,
                 ml_confidence=self._ml_confidence,
@@ -256,7 +284,7 @@ class PDFParser:
             if pdf_path is None:
                 raise ValueError("extract_images requires a PDF file path, not a Document")
             pdf_doc = self._get_pdf_doc()
-            document = Loader(pdf_path).load(pdf_doc)
+            document = Loader(pdf_path).load(pdf_doc, page_indices=page_indices)
             extractor = ImageExtractor(output_dir)
             images: List[Image] = []
             for page in document.pages:
@@ -291,7 +319,7 @@ class PDFParser:
                 raise ValueError("render_pages requires a PDF file path, not a Document")
             effective_dpi = dpi if dpi is not None else self._render_dpi
             pdf_doc = self._get_pdf_doc()
-            document = Loader(pdf_path).load(pdf_doc)
+            document = Loader(pdf_path).load(pdf_doc, page_indices=page_indices)
             engine = RenderEngine(output_dir, effective_dpi)
             renders: List[RenderInfo] = []
             for page in document.pages:
@@ -596,7 +624,7 @@ class PDFParser:
                 return all_results
             else:
                 pdf_doc = self._get_pdf_doc()
-                document = Loader(self._pdf_path).load(pdf_doc)
+                document = Loader(self._pdf_path).load(pdf_doc, page_indices=page_indices)
                 all_results = []
                 for page in document.pages:
                     if page_indices is not None and page.index not in page_indices:

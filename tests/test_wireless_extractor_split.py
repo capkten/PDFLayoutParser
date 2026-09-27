@@ -126,11 +126,15 @@ def test_chinese_page_candidates_do_not_request_words(monkeypatch):
     from hexai_pdf_parser.tables.extractors.chinese_table_extractor import (
         ChineseTableExtractor,
     )
+    from hexai_pdf_parser.pdf_snapshot import capture_page_snapshot
 
     requested = []
     page = SimpleNamespace(
         get_text=lambda kind, **kwargs: requested.append(kind) or [],
     )
 
-    assert ChineseTableExtractor().extract_text_alignment_candidates(page) == []
-    assert "words" not in requested
+    snapshot = capture_page_snapshot(page, page_index=0)
+    requests_at_capture = list(requested)
+
+    assert ChineseTableExtractor().extract_text_alignment_candidates(snapshot) == []
+    assert requested == requests_at_capture
