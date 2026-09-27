@@ -986,6 +986,11 @@
 
 ## 2026-09-27
 
+- 修复 Page 473 表2 与 Page 932 表3 的逻辑行差异。Page 473 的 wrapped header 只有单个候选 Cell 且没有同级 sibling 或上层 parent 支持时，不再折叠其覆盖的正文物理行；Page 932 的“占预付款期末余额/合计数的比例%”续行不再被 `is_numbered_item_start("合计数...")` 误拒，恢复为同一表头 Cell。
+- 新增两个 Rust RED/GREEN 测试：无 parent/sibling 的 wrapped header 不得压缩行；带百分号的连续表头必须合并。独立输出 `D:\codes\PDFLayoutParser-Fast\output\pdf\page473_932_header_row_fix_20260927\`：Page 473 表2 恢复 `6x2/11`，Page 932 表3 恢复 `7x3/21`，两页目标表逐 Cell 与 Python 0 差异，JSON/PNG 已生成。
+
+## 2026-09-27
+
 - 修复中文无线表格 Page 987 二级表头“间接”被 Rust 拆成两行的问题。根因是 `merge_evidence_contiguous_vertical_header_chain()` 只允许从物理 row 0 开始合并单字中文链；Page 987 的“间”“接”分别位于 header row 1/2，但 native evidence 显示同一 block、source line 连续、列相同、垂直几何紧密。Rust 保留两行，导致全表由 Python 的 `6x7/36` 变为 `7x7/43`。
 - 最小修复：将该 native evidence 合并器限制在调用方根据表结构推断的 header rows 范围内，并允许从任一 header row 开始合并连续 CJK 单字。新增 row1→row2 续字合并 RED/GREEN 用例，同时保留 row0 八字纵向链既有正例。
 - 独立输出：`D:\codes\PDFLayoutParser-Fast\output\pdf\page987_header_continuation_fix_20260927\`。Page 987 恢复 `6x7/36`，与 Python 逐 Cell 文本、row/col、跨度、BBox 0 差异；最终 PNG 已复核。验证：`cargo test --locked` 89 passed；Page987 parity/无线结构相关 pytest 61 passed，另 1 项现有 skip。

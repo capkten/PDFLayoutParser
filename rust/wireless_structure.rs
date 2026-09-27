@@ -1341,10 +1341,13 @@ fn is_numbered_item_start(text: &str) -> bool {
     if trimmed.is_empty() {
         return false;
     }
-    for prefix in &["加：", "加:", "减：", "减:", "其中：", "其中:", "小计", "合计"] {
+    for prefix in &["加：", "加:", "减：", "减:", "其中：", "其中:"] {
         if trimmed.starts_with(prefix) {
             return true;
         }
+    }
+    if trimmed == "小计" || trimmed == "合计" {
+        return true;
     }
     if trimmed.starts_with('(') || trimmed.starts_with('（') {
         let after_open = &trimmed[trimmed.chars().next().unwrap().len_utf8()..];
@@ -3115,8 +3118,9 @@ fn wrapped_leaf_header_span(
                 candidate.col.max(0) as usize,
             )
     });
-    (candidate.rowspan > 1
-        || (started.len() >= 2 && (sibling_support || has_parent_support)))
+    (has_parent_support
+        || (started.len() >= 2 && sibling_support)
+        || (candidate.rowspan > 1 && start == 0 && body_start <= 1))
     .then_some((span_start, end))
 }
 
@@ -6484,6 +6488,16 @@ mod tests {
     }
 
     #[test]
+    fn test_wrapped_leaf_header_without_parent_or_siblings_does_not_collapse_rows() {
+        let cells = vec![
+            make_cell("最近\n十二\n个月", 0, 1, 3, 1),
+            make_cell("正文", 3, 0, 1, 1),
+        ];
+
+        assert_eq!(wrapped_leaf_header_span(&cells, 0, 3), None);
+    }
+
+    #[test]
     fn test_infer_header_spans_promotes_leading_stub_across_proven_header_rows() {
         let cells = vec![
             make_cell("本期发生额", 0, 3, 1, 2),
@@ -7281,5 +7295,37 @@ mod tests {
         assert_eq!(cells.len(), 1);
         assert_eq!((cells[0].row, cells[0].rowspan, cells[0].col), (1, 2, 5));
         assert_eq!(cells[0].text, "间\n接");
+    }
+
+    #[test]
+    fn test_merge_source_contiguous_vertical_cells_merges_wrapped_percent_header() {
+        let source_cell = |text: &str, row: i64, source_ref: i64| -> CellDto {
+            let mut cell = make_cell(text, row, 2, 1, 1);
+            cell.source = Some(PhysicalCell {
+                schema_version: 1,
+                text: text.to_string(),
+                rect: cell.rect.clone(),
+                row,
+                col: 2,
+                colspan: 1,
+                source_refs: vec![source_ref],
+            });
+            cell
+        };
+        let mut cells = vec![
+            source_cell("占预付账款期末余额", 0, 0),
+            source_cell("合计数的比例%", 1, 1),
+        ];
+        cells[1].rect.y0 = 12.0;
+        cells[1].rect.y1 = 22.0;
+        let second_rect = cells[1].rect.clone();
+        if let Some(source) = cells[1].source.as_mut() {
+            source.rect = second_rect;
+        }
+
+        merge_source_contiguous_vertical_cells(&mut cells, None, "row_interleaved", None);
+
+        assert_eq!(cells.len(), 1);
+        assert_eq!(cells[0].text, "占预付账款期末余额\n合计数的比例%");
     }
 }
