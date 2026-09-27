@@ -1134,7 +1134,21 @@ pub fn build_english_cells(input: &EnglishGridInput) -> Vec<CellDto> {
                 .collect();
             topology == first_header_topology
         });
-    let collapse_single_background_header = background_header_rows == 1
+    let header_region_bottom = row_bounds
+        .get(header_rows.saturating_sub(1))
+        .map(|bounds| bounds.1)
+        .unwrap_or(input.region.rect.y0);
+    let full_width_header_lines = input
+        .horizontal_lines
+        .iter()
+        .zip(input.horizontal_line_lengths.iter())
+        .filter(|(line, length)| {
+            **line <= header_region_bottom + 2.0
+                && **length >= (input.region.rect.x1 - input.region.rect.x0) * 0.7
+        })
+        .count();
+    let collapse_single_background_header = (background_header_rows == 1
+        && full_width_header_lines == 0)
         || (background_header_rows == 2 && repeated_header_topology);
     if collapse_single_background_header
         && !row_cells[0].iter().any(|cell| cell.col == 0 && !cell.text.trim().is_empty())
@@ -1712,6 +1726,7 @@ mod tests {
             words,
             backgrounds: Vec::new(),
             horizontal_lines: Vec::new(),
+            horizontal_line_lengths: Vec::new(),
             columns: Vec::new(),
             config: StructureConfig {
                 schema_version: 1,
@@ -1757,6 +1772,7 @@ mod tests {
             words,
             backgrounds: Vec::new(),
             horizontal_lines: Vec::new(),
+            horizontal_line_lengths: Vec::new(),
             columns: Vec::new(),
             config: StructureConfig {
                 schema_version: 1,
@@ -1810,6 +1826,7 @@ mod tests {
                 make_bg(35.0, 50.0, Some(0.5), 2),
             ],
             horizontal_lines: Vec::new(),
+            horizontal_line_lengths: Vec::new(),
             columns: Vec::new(),
             config: StructureConfig {
                 schema_version: 1,
@@ -1892,6 +1909,7 @@ mod tests {
                 make_bg(47.0, 65.0, Some(0.5), 1),
             ],
             horizontal_lines: Vec::new(),
+            horizontal_line_lengths: Vec::new(),
             columns: Vec::new(),
             config: StructureConfig {
                 schema_version: 1,
@@ -2062,6 +2080,7 @@ mod tests {
             ],
             backgrounds: Vec::new(),
             horizontal_lines: vec![17.0],
+            horizontal_line_lengths: Vec::new(),
             columns: Vec::new(),
             config: StructureConfig {
                 schema_version: 1,
@@ -2111,6 +2130,7 @@ mod tests {
                 make_bg(31.0, 40.0, Some(0.5), 3),
             ],
             horizontal_lines: Vec::new(),
+            horizontal_line_lengths: Vec::new(),
             columns: vec![
                 ColumnBandDto {
                     schema_version: 1,
@@ -2174,6 +2194,7 @@ mod tests {
                 make_bg(30.0, 50.0, Some(0.5), 1),
             ],
             horizontal_lines: Vec::new(),
+            horizontal_line_lengths: Vec::new(),
             columns: vec![
                 ColumnBandDto { schema_version: 1, x0: 0.0, x1: 80.0, source_atoms: Vec::new(), order: 0 },
                 ColumnBandDto { schema_version: 1, x0: 80.0, x1: 160.0, source_atoms: Vec::new(), order: 1 },
@@ -2192,5 +2213,54 @@ mod tests {
 
         let cells = build_english_cells(&input);
         assert_eq!(cells.iter().map(|cell| cell.row).max(), Some(1));
+    }
+
+    #[test]
+    fn test_build_english_cells_keeps_single_background_header_with_multiple_internal_lines() {
+        let input = EnglishGridInput {
+            schema_version: 1,
+            region: crate::types::RegionDto {
+                schema_version: 1,
+                rect: Rect4 {
+                    schema_version: 1,
+                    x0: 0.0,
+                    y0: 0.0,
+                    x1: 300.0,
+                    y1: 50.0,
+                },
+                source_order: 0,
+                allowed: true,
+            },
+            words: vec![
+                make_word("Top", 100.0, 1.0, 240.0, 8.0),
+                make_word("Child A", 100.0, 11.0, 150.0, 18.0),
+                make_word("Child B", 180.0, 11.0, 230.0, 18.0),
+                make_word("Value", 10.0, 35.0, 60.0, 42.0),
+                make_word("100", 110.0, 35.0, 140.0, 42.0),
+            ],
+            backgrounds: vec![
+                make_bg(0.0, 30.0, None, 0),
+                make_bg(30.0, 50.0, Some(0.5), 1),
+            ],
+            horizontal_lines: vec![10.0, 20.0],
+            horizontal_line_lengths: vec![300.0, 300.0],
+            columns: vec![
+                ColumnBandDto { schema_version: 1, x0: 0.0, x1: 80.0, source_atoms: Vec::new(), order: 0 },
+                ColumnBandDto { schema_version: 1, x0: 80.0, x1: 160.0, source_atoms: Vec::new(), order: 1 },
+                ColumnBandDto { schema_version: 1, x0: 160.0, x1: 240.0, source_atoms: Vec::new(), order: 2 },
+                ColumnBandDto { schema_version: 1, x0: 240.0, x1: 300.0, source_atoms: Vec::new(), order: 3 },
+            ],
+            config: StructureConfig {
+                schema_version: 1,
+                line_tolerance: 2.0,
+                row_tolerance: 2.0,
+                column_tolerance: 2.0,
+                span_tolerance: 2.0,
+                numeric_tolerance: 2.0,
+            },
+        };
+
+        let cells = build_english_cells(&input);
+        assert_eq!(cells.iter().map(|cell| cell.row).max(), Some(2));
     }
 }
