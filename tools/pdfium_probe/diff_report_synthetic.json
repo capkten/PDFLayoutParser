@@ -53,7 +53,7 @@
             "base_span_count": 3,
             "probe_span_count": 3,
             "candidate_match_count": 3,
-            "char_match_count": 3,
+            "char_match_count": 0,
             "bbox_pass_count": 0,
             "fully_accepted_count": 0,
             "missing_count": 0,
@@ -67,7 +67,7 @@
             },
             "details": [
               {
-                "status": "DELTA_EXCEEDED",
+                "status": "CHAR_MISMATCH",
                 "base_order": 0,
                 "probe_order": 0,
                 "text": "Header in CropBox",
@@ -129,7 +129,8 @@
                 "render_mode_comparable": false,
                 "invisible_comparable": true,
                 "char_verification": {
-                  "matched": true,
+                  "matched": false,
+                  "reason": "char_bbox_delta_exceeded: max_h=0.196 (tol=0.5), max_v=2.38 (tol=0.5)",
                   "base_count": 17,
                   "probe_count": 17,
                   "max_h_delta": 0.196,
@@ -139,7 +140,7 @@
                 }
               },
               {
-                "status": "DELTA_EXCEEDED",
+                "status": "CHAR_MISMATCH",
                 "base_order": 1,
                 "probe_order": 1,
                 "text": "Normal Body Text",
@@ -200,7 +201,8 @@
                 "render_mode_comparable": false,
                 "invisible_comparable": true,
                 "char_verification": {
-                  "matched": true,
+                  "matched": false,
+                  "reason": "char_bbox_delta_exceeded: max_h=0.168 (tol=0.5), max_v=2.04 (tol=0.5)",
                   "base_count": 16,
                   "probe_count": 16,
                   "max_h_delta": 0.168,
@@ -210,7 +212,7 @@
                 }
               },
               {
-                "status": "DELTA_EXCEEDED",
+                "status": "CHAR_MISMATCH",
                 "base_order": 2,
                 "probe_order": 2,
                 "text": "Outside of CropBox",
@@ -273,7 +275,8 @@
                 "render_mode_comparable": false,
                 "invisible_comparable": true,
                 "char_verification": {
-                  "matched": true,
+                  "matched": false,
+                  "reason": "char_bbox_delta_exceeded: max_h=0.35 (tol=0.5), max_v=1.7 (tol=0.5)",
                   "base_count": 18,
                   "probe_count": 18,
                   "max_h_delta": 0.35,
@@ -352,7 +355,7 @@
             "base_span_count": 4,
             "probe_span_count": 4,
             "candidate_match_count": 3,
-            "char_match_count": 3,
+            "char_match_count": 0,
             "bbox_pass_count": 0,
             "fully_accepted_count": 0,
             "missing_count": 1,
@@ -366,7 +369,7 @@
             },
             "details": [
               {
-                "status": "DELTA_EXCEEDED",
+                "status": "CHAR_MISMATCH",
                 "base_order": 0,
                 "probe_order": 0,
                 "text": "Visible Main Title",
@@ -429,7 +432,8 @@
                 "render_mode_comparable": false,
                 "invisible_comparable": true,
                 "char_verification": {
-                  "matched": true,
+                  "matched": false,
+                  "reason": "char_bbox_delta_exceeded: max_h=0.0 (tol=0.5), max_v=2.72 (tol=0.5)",
                   "base_count": 18,
                   "probe_count": 18,
                   "max_h_delta": 0.0,
@@ -439,7 +443,7 @@
                 }
               },
               {
-                "status": "INVISIBLE_MISMATCH",
+                "status": "CHAR_MISMATCH",
                 "base_order": 1,
                 "probe_order": 1,
                 "text": "Invisible OCR Text Layer",
@@ -508,7 +512,8 @@
                 "render_mode_comparable": false,
                 "invisible_comparable": true,
                 "char_verification": {
-                  "matched": true,
+                  "matched": false,
+                  "reason": "char_bbox_delta_exceeded: max_h=0.168 (tol=0.5), max_v=2.04 (tol=0.5)",
                   "base_count": 24,
                   "probe_count": 24,
                   "max_h_delta": 0.168,
@@ -530,7 +535,7 @@
                 "probe_bbox": null
               },
               {
-                "status": "DELTA_EXCEEDED",
+                "status": "CHAR_MISMATCH",
                 "base_order": 3,
                 "probe_order": 3,
                 "text": "Overlapped Text Top",
@@ -594,7 +599,8 @@
                 "render_mode_comparable": false,
                 "invisible_comparable": true,
                 "char_verification": {
-                  "matched": true,
+                  "matched": false,
+                  "reason": "char_bbox_delta_exceeded: max_h=0.168 (tol=0.5), max_v=2.04 (tol=0.5)",
                   "base_count": 19,
                   "probe_count": 19,
                   "max_h_delta": 0.168,
@@ -685,7 +691,7 @@
             "base_span_count": 5,
             "probe_span_count": 4,
             "candidate_match_count": 1,
-            "char_match_count": 1,
+            "char_match_count": 0,
             "bbox_pass_count": 0,
             "fully_accepted_count": 0,
             "missing_count": 4,
@@ -747,7 +753,7 @@
                 "probe_bbox": null
               },
               {
-                "status": "DELTA_EXCEEDED",
+                "status": "CHAR_MISMATCH",
                 "base_order": 4,
                 "probe_order": 3,
                 "text": "( audited )",
@@ -803,7 +809,8 @@
                 "render_mode_comparable": false,
                 "invisible_comparable": true,
                 "char_verification": {
-                  "matched": true,
+                  "matched": false,
+                  "reason": "char_bbox_delta_exceeded: max_h=0.022 (tol=0.5), max_v=1.782 (tol=0.5)",
                   "base_count": 11,
                   "probe_count": 11,
                   "max_h_delta": 0.022,
@@ -918,7 +925,7 @@
             "base_span_count": 1,
             "probe_span_count": 1,
             "candidate_match_count": 1,
-            "char_match_count": 1,
+            "char_match_count": 0,
             "bbox_pass_count": 0,
             "fully_accepted_count": 0,
             "missing_count": 0,
@@ -932,7 +939,7 @@
             },
             "details": [
               {
-                "status": "DELTA_EXCEEDED",
+                "status": "CHAR_MISMATCH",
                 "base_order": 0,
                 "probe_order": 0,
                 "text": "Page Rotation 0 Text",
@@ -997,7 +1004,8 @@
                 "render_mode_comparable": false,
                 "invisible_comparable": true,
                 "char_verification": {
-                  "matched": true,
+                  "matched": false,
+                  "reason": "char_bbox_delta_exceeded: max_h=0.0 (tol=0.5), max_v=2.38 (tol=0.5)",
                   "base_count": 20,
                   "probe_count": 20,
                   "max_h_delta": 0.0,
@@ -1065,7 +1073,7 @@
             "base_span_count": 1,
             "probe_span_count": 1,
             "candidate_match_count": 1,
-            "char_match_count": 1,
+            "char_match_count": 0,
             "bbox_pass_count": 0,
             "fully_accepted_count": 0,
             "missing_count": 0,
@@ -1079,7 +1087,7 @@
             },
             "details": [
               {
-                "status": "DELTA_EXCEEDED",
+                "status": "CHAR_MISMATCH",
                 "base_order": 0,
                 "probe_order": 0,
                 "text": "Page Rotation 90 Text",
@@ -1145,7 +1153,8 @@
                 "render_mode_comparable": false,
                 "invisible_comparable": true,
                 "char_verification": {
-                  "matched": true,
+                  "matched": false,
+                  "reason": "char_bbox_delta_exceeded: max_h=0.0 (tol=0.5), max_v=2.38 (tol=0.5)",
                   "base_count": 21,
                   "probe_count": 21,
                   "max_h_delta": 0.0,
@@ -1213,7 +1222,7 @@
             "base_span_count": 1,
             "probe_span_count": 1,
             "candidate_match_count": 1,
-            "char_match_count": 1,
+            "char_match_count": 0,
             "bbox_pass_count": 0,
             "fully_accepted_count": 0,
             "missing_count": 0,
@@ -1227,7 +1236,7 @@
             },
             "details": [
               {
-                "status": "DELTA_EXCEEDED",
+                "status": "CHAR_MISMATCH",
                 "base_order": 0,
                 "probe_order": 0,
                 "text": "Page Rotation 180 Text",
@@ -1294,7 +1303,8 @@
                 "render_mode_comparable": false,
                 "invisible_comparable": true,
                 "char_verification": {
-                  "matched": true,
+                  "matched": false,
+                  "reason": "char_bbox_delta_exceeded: max_h=0.0 (tol=0.5), max_v=2.38 (tol=0.5)",
                   "base_count": 22,
                   "probe_count": 22,
                   "max_h_delta": 0.0,
@@ -1362,7 +1372,7 @@
             "base_span_count": 1,
             "probe_span_count": 1,
             "candidate_match_count": 1,
-            "char_match_count": 1,
+            "char_match_count": 0,
             "bbox_pass_count": 0,
             "fully_accepted_count": 0,
             "missing_count": 0,
@@ -1376,7 +1386,7 @@
             },
             "details": [
               {
-                "status": "DELTA_EXCEEDED",
+                "status": "CHAR_MISMATCH",
                 "base_order": 0,
                 "probe_order": 0,
                 "text": "Page Rotation 270 Text",
@@ -1443,7 +1453,8 @@
                 "render_mode_comparable": false,
                 "invisible_comparable": true,
                 "char_verification": {
-                  "matched": true,
+                  "matched": false,
+                  "reason": "char_bbox_delta_exceeded: max_h=0.0 (tol=0.5), max_v=2.38 (tol=0.5)",
                   "base_count": 22,
                   "probe_count": 22,
                   "max_h_delta": 0.0,
@@ -1522,7 +1533,7 @@
             "base_span_count": 2,
             "probe_span_count": 2,
             "candidate_match_count": 1,
-            "char_match_count": 1,
+            "char_match_count": 0,
             "bbox_pass_count": 0,
             "fully_accepted_count": 0,
             "missing_count": 1,
@@ -1548,7 +1559,7 @@
                 "probe_bbox": null
               },
               {
-                "status": "DELTA_EXCEEDED",
+                "status": "CHAR_MISMATCH",
                 "base_order": 1,
                 "probe_order": 1,
                 "text": "Table Cell 2",
@@ -1605,7 +1616,8 @@
                 "render_mode_comparable": false,
                 "invisible_comparable": true,
                 "char_verification": {
-                  "matched": true,
+                  "matched": false,
+                  "reason": "char_bbox_delta_exceeded: max_h=0.0 (tol=0.5), max_v=2.04 (tol=0.5)",
                   "base_count": 12,
                   "probe_count": 12,
                   "max_h_delta": 0.0,
@@ -1806,7 +1818,7 @@
       "baseline_json": "D:\\codes\\PDFLayoutParser\\.worktrees\\feat-pdfium-probe-sprint1\\tools\\pdfium_probe\\test_data\\baseline\\synth_invisible_text_pymupdf.json",
       "baseline_sha256": "dd7326ce6dcecc236982990420a94e69d0aa90c149b4c302b0e19b57d670420a",
       "probe_json": "D:\\codes\\PDFLayoutParser\\.worktrees\\feat-pdfium-probe-sprint1\\tools\\pdfium_probe\\test_data\\pdfium_output\\synth_invisible_text_pdfium.json",
-      "probe_sha256": "0dd786d055bbd4dc92bbfdc009c2a1d152e838c88a6a77e7e4ceb124f763a2af"
+      "probe_sha256": "d9fb33cb3638cff6496c984b7595dc59c138e877f25d5dab246551c4b3bdcaac"
     },
     {
       "name": "synth_mixed_fonts",
@@ -1815,7 +1827,7 @@
       "baseline_json": "D:\\codes\\PDFLayoutParser\\.worktrees\\feat-pdfium-probe-sprint1\\tools\\pdfium_probe\\test_data\\baseline\\synth_mixed_fonts_pymupdf.json",
       "baseline_sha256": "2ce7cc8a277cf7d393e93865654de36412487eaa0418c8a15754d0406f6e5398",
       "probe_json": "D:\\codes\\PDFLayoutParser\\.worktrees\\feat-pdfium-probe-sprint1\\tools\\pdfium_probe\\test_data\\pdfium_output\\synth_mixed_fonts_pdfium.json",
-      "probe_sha256": "d42bf205532dfb17ce93c2c70e87cbe152cf59fa2384a6d95df87c94cf1a63d5"
+      "probe_sha256": "c1e62db5df8ba14228dbaf18597b4bb9e02ca5ea251934ef080c01e7e99ab87d"
     },
     {
       "name": "synth_rotations",
@@ -1833,7 +1845,7 @@
       "baseline_json": "D:\\codes\\PDFLayoutParser\\.worktrees\\feat-pdfium-probe-sprint1\\tools\\pdfium_probe\\test_data\\baseline\\synth_segmented_lines_pymupdf.json",
       "baseline_sha256": "833ead64c9c5e20ab9cf73d363533ef50ddcf8879e25700156a8a49a4b894904",
       "probe_json": "D:\\codes\\PDFLayoutParser\\.worktrees\\feat-pdfium-probe-sprint1\\tools\\pdfium_probe\\test_data\\pdfium_output\\synth_segmented_lines_pdfium.json",
-      "probe_sha256": "b50555ac9f4354bbc9117dd290b0390b2790f25a556f551922ae762524bd5d5b"
+      "probe_sha256": "08d51da98a33ebacfa2427749155f8a42535967679ad53013d20284e469843b5"
     }
   ]
 }

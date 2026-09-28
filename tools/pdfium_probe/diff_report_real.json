@@ -52,7 +52,7 @@
           "base_span_count": 178,
           "probe_span_count": 539,
           "candidate_match_count": 24,
-          "char_match_count": 24,
+          "char_match_count": 11,
           "bbox_pass_count": 1,
           "fully_accepted_count": 1,
           "missing_count": 154,
@@ -265,6 +265,7 @@
               "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
+                "reason": "ok",
                 "base_count": 8,
                 "probe_count": 8,
                 "max_h_delta": 0.0001,
@@ -375,6 +376,7 @@
               "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
+                "reason": "ok",
                 "base_count": 19,
                 "probe_count": 19,
                 "max_h_delta": 0.0001,
@@ -472,6 +474,7 @@
               "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
+                "reason": "ok",
                 "base_count": 18,
                 "probe_count": 18,
                 "max_h_delta": 0.0001,
@@ -557,6 +560,7 @@
               "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
+                "reason": "ok",
                 "base_count": 18,
                 "probe_count": 18,
                 "max_h_delta": 0.0001,
@@ -642,6 +646,7 @@
               "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
+                "reason": "ok",
                 "base_count": 18,
                 "probe_count": 18,
                 "max_h_delta": 0.0001,
@@ -718,6 +723,7 @@
               "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
+                "reason": "ok",
                 "base_count": 9,
                 "probe_count": 9,
                 "max_h_delta": 0.0001,
@@ -801,6 +807,7 @@
               "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
+                "reason": "ok",
                 "base_count": 16,
                 "probe_count": 16,
                 "max_h_delta": 0.0001,
@@ -894,7 +901,7 @@
               "probe_bbox": null
             },
             {
-              "status": "DELTA_EXCEEDED",
+              "status": "CHAR_MISMATCH",
               "base_order": 30,
               "probe_order": 440,
               "text": "1",
@@ -940,7 +947,8 @@
               "render_mode_comparable": false,
               "invisible_comparable": true,
               "char_verification": {
-                "matched": true,
+                "matched": false,
+                "reason": "char_bbox_delta_exceeded: max_h=199.6852 (tol=0.5), max_v=334.814 (tol=0.5)",
                 "base_count": 1,
                 "probe_count": 1,
                 "max_h_delta": 199.6852,
@@ -997,6 +1005,7 @@
               "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
+                "reason": "ok",
                 "base_count": 1,
                 "probe_count": 1,
                 "max_h_delta": 0.0,
@@ -1042,7 +1051,7 @@
               "probe_bbox": null
             },
             {
-              "status": "DELTA_EXCEEDED",
+              "status": "CHAR_MISMATCH",
               "base_order": 35,
               "probe_order": 187,
               "text": "0",
@@ -1088,7 +1097,8 @@
               "render_mode_comparable": false,
               "invisible_comparable": true,
               "char_verification": {
-                "matched": true,
+                "matched": false,
+                "reason": "char_bbox_delta_exceeded: max_h=0.0 (tol=0.5), max_v=36.0368 (tol=0.5)",
                 "base_count": 1,
                 "probe_count": 1,
                 "max_h_delta": 0.0,
@@ -1157,6 +1167,7 @@
               "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
+                "reason": "ok",
                 "base_count": 1,
                 "probe_count": 1,
                 "max_h_delta": 0.0001,
@@ -1178,7 +1189,7 @@
               "probe_bbox": null
             },
             {
-              "status": "DELTA_EXCEEDED",
+              "status": "CHAR_MISMATCH",
               "base_order": 39,
               "probe_order": 230,
               "text": "0",
@@ -1224,7 +1235,8 @@
               "render_mode_comparable": false,
               "invisible_comparable": true,
               "char_verification": {
-                "matched": true,
+                "matched": false,
+                "reason": "char_bbox_delta_exceeded: max_h=217.7019 (tol=0.5), max_v=51.0507 (tol=0.5)",
                 "base_count": 1,
                 "probe_count": 1,
                 "max_h_delta": 217.7019,
@@ -1293,6 +1305,7 @@
               "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
+                "reason": "ok",
                 "base_count": 1,
                 "probe_count": 1,
                 "max_h_delta": 0.0001,
@@ -1314,7 +1327,7 @@
               "probe_bbox": null
             },
             {
-              "status": "DELTA_EXCEEDED",
+              "status": "CHAR_MISMATCH",
               "base_order": 43,
               "probe_order": 181,
               "text": "0",
@@ -1360,7 +1373,8 @@
               "render_mode_comparable": false,
               "invisible_comparable": true,
               "char_verification": {
-                "matched": true,
+                "matched": false,
+                "reason": "char_bbox_delta_exceeded: max_h=268.3739 (tol=0.5), max_v=0.0055 (tol=0.5)",
                 "base_count": 1,
                 "probe_count": 1,
                 "max_h_delta": 268.3739,
@@ -1382,7 +1396,7 @@
               "probe_bbox": null
             },
             {
-              "status": "DELTA_EXCEEDED",
+              "status": "CHAR_MISMATCH",
               "base_order": 45,
               "probe_order": 306,
               "text": "0",
@@ -1428,7 +1442,8 @@
               "render_mode_comparable": false,
               "invisible_comparable": true,
               "char_verification": {
-                "matched": true,
+                "matched": false,
+                "reason": "char_bbox_delta_exceeded: max_h=12.7619 (tol=0.5), max_v=132.8766 (tol=0.5)",
                 "base_count": 1,
                 "probe_count": 1,
                 "max_h_delta": 12.7619,
@@ -1450,7 +1465,7 @@
               "probe_bbox": null
             },
             {
-              "status": "DELTA_EXCEEDED",
+              "status": "CHAR_MISMATCH",
               "base_order": 47,
               "probe_order": 538,
               "text": "0",
@@ -1496,7 +1511,8 @@
               "render_mode_comparable": false,
               "invisible_comparable": true,
               "char_verification": {
-                "matched": true,
+                "matched": false,
+                "reason": "char_bbox_delta_exceeded: max_h=256.7381 (tol=0.5), max_v=413.637 (tol=0.5)",
                 "base_count": 1,
                 "probe_count": 1,
                 "max_h_delta": 256.7381,
@@ -1854,7 +1870,7 @@
               "probe_bbox": null
             },
             {
-              "status": "DELTA_EXCEEDED",
+              "status": "CHAR_MISMATCH",
               "base_order": 77,
               "probe_order": 411,
               "text": "--",
@@ -1901,7 +1917,8 @@
               "render_mode_comparable": false,
               "invisible_comparable": true,
               "char_verification": {
-                "matched": true,
+                "matched": false,
+                "reason": "char_bbox_delta_exceeded: max_h=319.7967 (tol=0.5), max_v=123.8683 (tol=0.5)",
                 "base_count": 2,
                 "probe_count": 2,
                 "max_h_delta": 319.7967,
@@ -1935,7 +1952,7 @@
               "probe_bbox": null
             },
             {
-              "status": "DELTA_EXCEEDED",
+              "status": "CHAR_MISMATCH",
               "base_order": 80,
               "probe_order": 456,
               "text": "--",
@@ -1982,7 +1999,8 @@
               "render_mode_comparable": false,
               "invisible_comparable": true,
               "char_verification": {
-                "matched": true,
+                "matched": false,
+                "reason": "char_bbox_delta_exceeded: max_h=176.4136 (tol=0.5), max_v=174.9156 (tol=0.5)",
                 "base_count": 2,
                 "probe_count": 2,
                 "max_h_delta": 176.4136,
@@ -2255,6 +2273,7 @@
               "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
+                "reason": "ok",
                 "base_count": 1,
                 "probe_count": 1,
                 "max_h_delta": 0.0,
@@ -2420,7 +2439,7 @@
               "probe_bbox": null
             },
             {
-              "status": "DELTA_EXCEEDED",
+              "status": "CHAR_MISMATCH",
               "base_order": 113,
               "probe_order": 462,
               "text": "--",
@@ -2467,7 +2486,8 @@
               "render_mode_comparable": false,
               "invisible_comparable": true,
               "char_verification": {
-                "matched": true,
+                "matched": false,
+                "reason": "char_bbox_delta_exceeded: max_h=293.5222 (tol=0.5), max_v=63.0619 (tol=0.5)",
                 "base_count": 2,
                 "probe_count": 2,
                 "max_h_delta": 293.5222,
@@ -2573,7 +2593,7 @@
               "probe_bbox": null
             },
             {
-              "status": "DELTA_EXCEEDED",
+              "status": "CHAR_MISMATCH",
               "base_order": 122,
               "probe_order": 2,
               "text": "1",
@@ -2619,7 +2639,8 @@
               "render_mode_comparable": false,
               "invisible_comparable": true,
               "char_verification": {
-                "matched": true,
+                "matched": false,
+                "reason": "char_bbox_delta_exceeded: max_h=356.0464 (tol=0.5), max_v=158.4041 (tol=0.5)",
                 "base_count": 1,
                 "probe_count": 1,
                 "max_h_delta": 356.0464,
@@ -2677,7 +2698,7 @@
               "probe_bbox": null
             },
             {
-              "status": "DELTA_EXCEEDED",
+              "status": "CHAR_MISMATCH",
               "base_order": 127,
               "probe_order": 448,
               "text": "11",
@@ -2724,7 +2745,8 @@
               "render_mode_comparable": false,
               "invisible_comparable": true,
               "char_verification": {
-                "matched": true,
+                "matched": false,
+                "reason": "char_bbox_delta_exceeded: max_h=343.0682 (tol=0.5), max_v=0.0056 (tol=0.5)",
                 "base_count": 2,
                 "probe_count": 2,
                 "max_h_delta": 343.0682,
@@ -2902,7 +2924,7 @@
               "probe_bbox": null
             },
             {
-              "status": "DELTA_EXCEEDED",
+              "status": "CHAR_MISMATCH",
               "base_order": 142,
               "probe_order": 468,
               "text": "12",
@@ -2949,7 +2971,8 @@
               "render_mode_comparable": false,
               "invisible_comparable": true,
               "char_verification": {
-                "matched": true,
+                "matched": false,
+                "reason": "char_bbox_delta_exceeded: max_h=343.0682 (tol=0.5), max_v=0.0057 (tol=0.5)",
                 "base_count": 2,
                 "probe_count": 2,
                 "max_h_delta": 343.0682,
@@ -2983,7 +3006,7 @@
               "probe_bbox": null
             },
             {
-              "status": "DELTA_EXCEEDED",
+              "status": "CHAR_MISMATCH",
               "base_order": 145,
               "probe_order": 4,
               "text": "12",
@@ -3030,7 +3053,8 @@
               "render_mode_comparable": false,
               "invisible_comparable": true,
               "char_verification": {
-                "matched": true,
+                "matched": false,
+                "reason": "char_bbox_delta_exceeded: max_h=21.8865 (tol=0.5), max_v=110.3595 (tol=0.5)",
                 "base_count": 2,
                 "probe_count": 2,
                 "max_h_delta": 21.8865,
@@ -19971,7 +19995,7 @@
           "base_span_count": 216,
           "probe_span_count": 374,
           "candidate_match_count": 28,
-          "char_match_count": 28,
+          "char_match_count": 15,
           "bbox_pass_count": 1,
           "fully_accepted_count": 1,
           "missing_count": 188,
@@ -20106,7 +20130,7 @@
               "probe_bbox": null
             },
             {
-              "status": "DELTA_EXCEEDED",
+              "status": "CHAR_MISMATCH",
               "base_order": 5,
               "probe_order": 15,
               "text": "0",
@@ -20152,7 +20176,8 @@
               "render_mode_comparable": false,
               "invisible_comparable": true,
               "char_verification": {
-                "matched": true,
+                "matched": false,
+                "reason": "char_bbox_delta_exceeded: max_h=317.1691 (tol=0.5), max_v=0.0056 (tol=0.5)",
                 "base_count": 1,
                 "probe_count": 1,
                 "max_h_delta": 317.1691,
@@ -20162,7 +20187,7 @@
               }
             },
             {
-              "status": "DELTA_EXCEEDED",
+              "status": "CHAR_MISMATCH",
               "base_order": 6,
               "probe_order": 26,
               "text": "0",
@@ -20208,7 +20233,8 @@
               "render_mode_comparable": false,
               "invisible_comparable": true,
               "char_verification": {
-                "matched": true,
+                "matched": false,
+                "reason": "char_bbox_delta_exceeded: max_h=274.3795 (tol=0.5), max_v=12.0144 (tol=0.5)",
                 "base_count": 1,
                 "probe_count": 1,
                 "max_h_delta": 274.3795,
@@ -20218,7 +20244,7 @@
               }
             },
             {
-              "status": "DELTA_EXCEEDED",
+              "status": "CHAR_MISMATCH",
               "base_order": 7,
               "probe_order": 37,
               "text": "0",
@@ -20264,7 +20290,8 @@
               "render_mode_comparable": false,
               "invisible_comparable": true,
               "char_verification": {
-                "matched": true,
+                "matched": false,
+                "reason": "char_bbox_delta_exceeded: max_h=231.5898 (tol=0.5), max_v=24.0257 (tol=0.5)",
                 "base_count": 1,
                 "probe_count": 1,
                 "max_h_delta": 231.5898,
@@ -20274,7 +20301,7 @@
               }
             },
             {
-              "status": "DELTA_EXCEEDED",
+              "status": "CHAR_MISMATCH",
               "base_order": 8,
               "probe_order": 48,
               "text": "0",
@@ -20320,7 +20347,8 @@
               "render_mode_comparable": false,
               "invisible_comparable": true,
               "char_verification": {
-                "matched": true,
+                "matched": false,
+                "reason": "char_bbox_delta_exceeded: max_h=188.8001 (tol=0.5), max_v=36.0368 (tol=0.5)",
                 "base_count": 1,
                 "probe_count": 1,
                 "max_h_delta": 188.8001,
@@ -20330,7 +20358,7 @@
               }
             },
             {
-              "status": "DELTA_EXCEEDED",
+              "status": "CHAR_MISMATCH",
               "base_order": 9,
               "probe_order": 59,
               "text": "0",
@@ -20376,7 +20404,8 @@
               "render_mode_comparable": false,
               "invisible_comparable": true,
               "char_verification": {
-                "matched": true,
+                "matched": false,
+                "reason": "char_bbox_delta_exceeded: max_h=146.0104 (tol=0.5), max_v=48.0479 (tol=0.5)",
                 "base_count": 1,
                 "probe_count": 1,
                 "max_h_delta": 146.0104,
@@ -20386,7 +20415,7 @@
               }
             },
             {
-              "status": "DELTA_EXCEEDED",
+              "status": "CHAR_MISMATCH",
               "base_order": 10,
               "probe_order": 70,
               "text": "0",
@@ -20432,7 +20461,8 @@
               "render_mode_comparable": false,
               "invisible_comparable": true,
               "char_verification": {
-                "matched": true,
+                "matched": false,
+                "reason": "char_bbox_delta_exceeded: max_h=103.2207 (tol=0.5), max_v=60.0591 (tol=0.5)",
                 "base_count": 1,
                 "probe_count": 1,
                 "max_h_delta": 103.2207,
@@ -20442,7 +20472,7 @@
               }
             },
             {
-              "status": "DELTA_EXCEEDED",
+              "status": "CHAR_MISMATCH",
               "base_order": 11,
               "probe_order": 81,
               "text": "0",
@@ -20488,7 +20518,8 @@
               "render_mode_comparable": false,
               "invisible_comparable": true,
               "char_verification": {
-                "matched": true,
+                "matched": false,
+                "reason": "char_bbox_delta_exceeded: max_h=51.798 (tol=0.5), max_v=72.0702 (tol=0.5)",
                 "base_count": 1,
                 "probe_count": 1,
                 "max_h_delta": 51.798,
@@ -20498,7 +20529,7 @@
               }
             },
             {
-              "status": "DELTA_EXCEEDED",
+              "status": "CHAR_MISMATCH",
               "base_order": 12,
               "probe_order": 92,
               "text": "0",
@@ -20544,7 +20575,8 @@
               "render_mode_comparable": false,
               "invisible_comparable": true,
               "char_verification": {
-                "matched": true,
+                "matched": false,
+                "reason": "char_bbox_delta_exceeded: max_h=0.0001 (tol=0.5), max_v=84.0814 (tol=0.5)",
                 "base_count": 1,
                 "probe_count": 1,
                 "max_h_delta": 0.0001,
@@ -20590,7 +20622,7 @@
               "probe_bbox": null
             },
             {
-              "status": "DELTA_EXCEEDED",
+              "status": "CHAR_MISMATCH",
               "base_order": 16,
               "probe_order": 103,
               "text": "0",
@@ -20636,7 +20668,8 @@
               "render_mode_comparable": false,
               "invisible_comparable": true,
               "char_verification": {
-                "matched": true,
+                "matched": false,
+                "reason": "char_bbox_delta_exceeded: max_h=317.1691 (tol=0.5), max_v=84.0814 (tol=0.5)",
                 "base_count": 1,
                 "probe_count": 1,
                 "max_h_delta": 317.1691,
@@ -20646,7 +20679,7 @@
               }
             },
             {
-              "status": "DELTA_EXCEEDED",
+              "status": "CHAR_MISMATCH",
               "base_order": 17,
               "probe_order": 114,
               "text": "0",
@@ -20692,7 +20725,8 @@
               "render_mode_comparable": false,
               "invisible_comparable": true,
               "char_verification": {
-                "matched": true,
+                "matched": false,
+                "reason": "char_bbox_delta_exceeded: max_h=274.3795 (tol=0.5), max_v=96.0926 (tol=0.5)",
                 "base_count": 1,
                 "probe_count": 1,
                 "max_h_delta": 274.3795,
@@ -20702,7 +20736,7 @@
               }
             },
             {
-              "status": "DELTA_EXCEEDED",
+              "status": "CHAR_MISMATCH",
               "base_order": 18,
               "probe_order": 125,
               "text": "0",
@@ -20748,7 +20782,8 @@
               "render_mode_comparable": false,
               "invisible_comparable": true,
               "char_verification": {
-                "matched": true,
+                "matched": false,
+                "reason": "char_bbox_delta_exceeded: max_h=231.5898 (tol=0.5), max_v=108.1037 (tol=0.5)",
                 "base_count": 1,
                 "probe_count": 1,
                 "max_h_delta": 231.5898,
@@ -20962,7 +20997,7 @@
               "probe_bbox": null
             },
             {
-              "status": "DELTA_EXCEEDED",
+              "status": "CHAR_MISMATCH",
               "base_order": 36,
               "probe_order": 2,
               "text": "2",
@@ -21008,7 +21043,8 @@
               "render_mode_comparable": false,
               "invisible_comparable": true,
               "char_verification": {
-                "matched": true,
+                "matched": false,
+                "reason": "char_bbox_delta_exceeded: max_h=446.5053 (tol=0.5), max_v=758.961 (tol=0.5)",
                 "base_count": 1,
                 "probe_count": 1,
                 "max_h_delta": 446.5053,
@@ -22182,6 +22218,7 @@
               "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
+                "reason": "ok",
                 "base_count": 2,
                 "probe_count": 2,
                 "max_h_delta": 0.0001,
@@ -22280,6 +22317,7 @@
               "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
+                "reason": "ok",
                 "base_count": 7,
                 "probe_count": 7,
                 "max_h_delta": 0.0001,
@@ -22381,6 +22419,7 @@
               "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
+                "reason": "ok",
                 "base_count": 10,
                 "probe_count": 10,
                 "max_h_delta": 0.0001,
@@ -22471,6 +22510,7 @@
               "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
+                "reason": "ok",
                 "base_count": 23,
                 "probe_count": 23,
                 "max_h_delta": 0.0001,
@@ -22561,6 +22601,7 @@
               "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
+                "reason": "ok",
                 "base_count": 23,
                 "probe_count": 23,
                 "max_h_delta": 0.0001,
@@ -22630,6 +22671,7 @@
               "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
+                "reason": "ok",
                 "base_count": 2,
                 "probe_count": 2,
                 "max_h_delta": 0.0,
@@ -22740,6 +22782,7 @@
               "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
+                "reason": "ok",
                 "base_count": 19,
                 "probe_count": 19,
                 "max_h_delta": 0.0001,
@@ -22906,6 +22949,7 @@
               "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
+                "reason": "ok",
                 "base_count": 3,
                 "probe_count": 3,
                 "max_h_delta": 0.0001,
@@ -22951,7 +22995,7 @@
               "probe_bbox": null
             },
             {
-              "status": "DELTA_EXCEEDED",
+              "status": "CHAR_MISMATCH",
               "base_order": 162,
               "probe_order": 263,
               "text": "******196401154323",
@@ -23014,7 +23058,8 @@
               "render_mode_comparable": false,
               "invisible_comparable": true,
               "char_verification": {
-                "matched": true,
+                "matched": false,
+                "reason": "char_bbox_delta_exceeded: max_h=106.9743 (tol=0.5), max_v=89.3363 (tol=0.5)",
                 "base_count": 18,
                 "probe_count": 18,
                 "max_h_delta": 106.9743,
@@ -23073,6 +23118,7 @@
               "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
+                "reason": "ok",
                 "base_count": 3,
                 "probe_count": 3,
                 "max_h_delta": 0.0001,
@@ -23143,6 +23189,7 @@
               "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
+                "reason": "ok",
                 "base_count": 15,
                 "probe_count": 15,
                 "max_h_delta": 0.0001,
@@ -23384,6 +23431,7 @@
               "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
+                "reason": "ok",
                 "base_count": 18,
                 "probe_count": 18,
                 "max_h_delta": 0.0001,
@@ -23454,6 +23502,7 @@
               "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
+                "reason": "ok",
                 "base_count": 15,
                 "probe_count": 15,
                 "max_h_delta": 0.0001,
@@ -23639,6 +23688,7 @@
               "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
+                "reason": "ok",
                 "base_count": 10,
                 "probe_count": 10,
                 "max_h_delta": 0.0002,
@@ -23740,6 +23790,7 @@
               "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
+                "reason": "ok",
                 "base_count": 10,
                 "probe_count": 10,
                 "max_h_delta": 0.0002,
@@ -23872,6 +23923,7 @@
               "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
+                "reason": "ok",
                 "base_count": 5,
                 "probe_count": 5,
                 "max_h_delta": 0.0001,
@@ -40106,6 +40158,7 @@
               "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
+                "reason": "ok",
                 "base_count": 1,
                 "probe_count": 1,
                 "max_h_delta": 0.0,
@@ -50302,7 +50355,7 @@
           "base_span_count": 85,
           "probe_span_count": 1049,
           "candidate_match_count": 5,
-          "char_match_count": 5,
+          "char_match_count": 1,
           "bbox_pass_count": 0,
           "fully_accepted_count": 0,
           "missing_count": 80,
@@ -50591,6 +50644,7 @@
               "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
+                "reason": "ok",
                 "base_count": 1,
                 "probe_count": 1,
                 "max_h_delta": 0.0,
@@ -50732,7 +50786,7 @@
               "probe_bbox": null
             },
             {
-              "status": "DELTA_EXCEEDED",
+              "status": "CHAR_MISMATCH",
               "base_order": 31,
               "probe_order": 157,
               "text": "-",
@@ -50778,7 +50832,8 @@
               "render_mode_comparable": false,
               "invisible_comparable": true,
               "char_verification": {
-                "matched": true,
+                "matched": false,
+                "reason": "char_bbox_delta_exceeded: max_h=51.36 (tol=0.5), max_v=0.0449 (tol=0.5)",
                 "base_count": 1,
                 "probe_count": 1,
                 "max_h_delta": 51.36,
@@ -50812,7 +50867,7 @@
               "probe_bbox": null
             },
             {
-              "status": "DELTA_EXCEEDED",
+              "status": "CHAR_MISMATCH",
               "base_order": 34,
               "probe_order": 180,
               "text": "-",
@@ -50858,7 +50913,8 @@
               "render_mode_comparable": false,
               "invisible_comparable": true,
               "char_verification": {
-                "matched": true,
+                "matched": false,
+                "reason": "char_bbox_delta_exceeded: max_h=67.08 (tol=0.5), max_v=14.205 (tol=0.5)",
                 "base_count": 1,
                 "probe_count": 1,
                 "max_h_delta": 67.08,
@@ -50880,7 +50936,7 @@
               "probe_bbox": null
             },
             {
-              "status": "DELTA_EXCEEDED",
+              "status": "CHAR_MISMATCH",
               "base_order": 36,
               "probe_order": 190,
               "text": "-",
@@ -50926,7 +50982,8 @@
               "render_mode_comparable": false,
               "invisible_comparable": true,
               "char_verification": {
-                "matched": true,
+                "matched": false,
+                "reason": "char_bbox_delta_exceeded: max_h=54.36 (tol=0.5), max_v=14.205 (tol=0.5)",
                 "base_count": 1,
                 "probe_count": 1,
                 "max_h_delta": 54.36,
@@ -50972,7 +51029,7 @@
               "probe_bbox": null
             },
             {
-              "status": "DELTA_EXCEEDED",
+              "status": "CHAR_MISMATCH",
               "base_order": 40,
               "probe_order": 192,
               "text": "-",
@@ -51018,7 +51075,8 @@
               "render_mode_comparable": false,
               "invisible_comparable": true,
               "char_verification": {
-                "matched": true,
+                "matched": false,
+                "reason": "char_bbox_delta_exceeded: max_h=389.16 (tol=0.5), max_v=0.0449 (tol=0.5)",
                 "base_count": 1,
                 "probe_count": 1,
                 "max_h_delta": 389.16,

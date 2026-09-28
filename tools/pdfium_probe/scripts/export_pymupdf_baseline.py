@@ -94,14 +94,29 @@ def process_file(pdf_path: str, out_dir: str):
         json.dump(result, f, ensure_ascii=False, indent=2)
     print(f"Exported baseline: {out_file}")
 
+def get_repo_root():
+    if "REPO_ROOT" in os.environ:
+        return os.environ["REPO_ROOT"]
+    root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    direct = os.path.abspath(os.path.join(root, "..", ".."))
+    if os.path.exists(os.path.join(direct, "test.pdf")):
+        return direct
+    worktree_parent = os.path.abspath(os.path.join(direct, "..", ".."))
+    if os.path.exists(os.path.join(worktree_parent, "test.pdf")):
+        return worktree_parent
+    return direct
+
 def export_real_samples(real_baseline_dir: str):
     os.makedirs(real_baseline_dir, exist_ok=True)
+    repo_root = get_repo_root()
+    test_pdf = os.path.join(repo_root, "test.pdf")
+    credit_pdf = os.path.join(repo_root, "征信解析样例.pdf")
     real_targets = [
-        ("d:/codes/PDFLayoutParser/test.pdf", 0, "test_p0_cover"),
-        ("d:/codes/PDFLayoutParser/test.pdf", 1, "test_p1_toc"),
-        ("d:/codes/PDFLayoutParser/test.pdf", 27, "test_p27_table"),
-        ("d:/codes/PDFLayoutParser/征信解析样例.pdf", 0, "credit_p0_header"),
-        ("d:/codes/PDFLayoutParser/征信解析样例.pdf", 1, "credit_p1_detail"),
+        (test_pdf, 0, "test_p0_cover"),
+        (test_pdf, 1, "test_p1_toc"),
+        (test_pdf, 27, "test_p27_table"),
+        (credit_pdf, 0, "credit_p0_header"),
+        (credit_pdf, 1, "credit_p1_detail"),
     ]
     for pdf_path, p_idx, sname in real_targets:
         if not os.path.exists(pdf_path):

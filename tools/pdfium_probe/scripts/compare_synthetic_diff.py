@@ -30,6 +30,18 @@ def compare_characters(base_chars, probe_chars, h_tol=0.5, v_tol=0.5):
             "v_passed": True,
         }
 
+    if len(base_chars) != len(probe_chars):
+        return {
+            "matched": False,
+            "reason": f"char_count_mismatch: base={len(base_chars)} vs probe={len(probe_chars)}",
+            "base_count": len(base_chars),
+            "probe_count": len(probe_chars),
+            "max_h_delta": 999.0,
+            "max_v_delta": 999.0,
+            "h_passed": False,
+            "v_passed": False,
+        }
+
     base_text = "".join(c.get("c", "") for c in base_chars)
     probe_text = "".join(c.get("c", "") for c in probe_chars)
 
@@ -47,7 +59,18 @@ def compare_characters(base_chars, probe_chars, h_tol=0.5, v_tol=0.5):
 
     max_h_delta = 0.0
     max_v_delta = 0.0
-    for b_c, p_c in zip(base_chars, probe_chars):
+    for idx, (b_c, p_c) in enumerate(zip(base_chars, probe_chars)):
+        if b_c.get("c") != p_c.get("c"):
+            return {
+                "matched": False,
+                "reason": f"char_glyph_mismatch at index {idx}: base='{b_c.get('c')}' vs probe='{p_c.get('c')}'",
+                "base_count": len(base_chars),
+                "probe_count": len(probe_chars),
+                "max_h_delta": 999.0,
+                "max_v_delta": 999.0,
+                "h_passed": False,
+                "v_passed": False,
+            }
         bb = b_c.get("bbox", [0, 0, 0, 0])
         pb = p_c.get("bbox", [0, 0, 0, 0])
         h_d = max(abs(bb[0] - pb[0]), abs(bb[2] - pb[2]))
@@ -59,9 +82,11 @@ def compare_characters(base_chars, probe_chars, h_tol=0.5, v_tol=0.5):
 
     h_passed = max_h_delta <= h_tol
     v_passed = max_v_delta <= v_tol
+    matched = h_passed and v_passed
 
     return {
-        "matched": True,
+        "matched": matched,
+        "reason": "ok" if matched else f"char_bbox_delta_exceeded: max_h={round(max_h_delta, 4)} (tol={h_tol}), max_v={round(max_v_delta, 4)} (tol={v_tol})",
         "base_count": len(base_chars),
         "probe_count": len(probe_chars),
         "max_h_delta": round(max_h_delta, 4),
@@ -380,6 +405,13 @@ def compare_spans(base_spans, probe_spans, bbox_tol=0.5, char_h_tol=0.5, char_v_
                     prov_invariants_ok = False
                     prov_violations.append("provenance_fields_missing")
                 else:
+                    p_text = best.get("text", "")
+                    if len(p_text) != p_char_cnt:
+                        prov_invariants_ok = False
+                        prov_violations.append(f"text_length({len(p_text)}) != character_count({p_char_cnt})")
+                    if len(chars) != p_char_cnt:
+                        prov_invariants_ok = False
+                        prov_violations.append(f"characters_list_len({len(chars)}) != character_count({p_char_cnt})")
                     if p_end < p_start:
                         prov_invariants_ok = False
                         prov_violations.append(f"char_end_index({p_end}) < char_start_index({p_start})")
@@ -402,8 +434,8 @@ def compare_spans(base_spans, probe_spans, bbox_tol=0.5, char_h_tol=0.5, char_v_
                         prov_invariants_ok = False
                         prov_violations.append("is_derived_must_be_false")
 
-            # 判定状态
-            if not char_res["matched"]:
+            # 判定状态 (严禁假绿：字符内容、数量、字符BBox误差必须全部通过)
+            if not char_res["matched"] or not char_res.get("h_passed", False) or not char_res.get("v_passed", False):
                 status = "CHAR_MISMATCH"
             elif not inv_ok:
                 status = "INVISIBLE_MISMATCH"

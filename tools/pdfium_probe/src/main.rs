@@ -230,13 +230,8 @@ pub fn extract_page(page: &PdfPage, page_index: usize) -> Result<PdfiumRawPage, 
             let flags: Option<i64> = None; // 严禁伪造 PyMuPDF 的 64 位 flags，诚实标记为 None
  
             let mut chars_list = Vec::new();
-            let mut total_chars_in_obj = text.chars().count();
             if let Some(ref pt) = page_text {
                 if let Ok(chars) = text_obj.chars(pt) {
-                    let chars_count_from_pdfium = chars.len();
-                    if chars_count_from_pdfium > 0 {
-                        total_chars_in_obj = chars_count_from_pdfium;
-                    }
                     for (ch_idx, ch) in chars.iter().enumerate() {
                         let c_str = ch.unicode_string().unwrap_or_default();
                         let c_bbox = if let Ok(b) = ch.loose_bounds() {
@@ -260,13 +255,38 @@ pub fn extract_page(page: &PdfPage, page_index: usize) -> Result<PdfiumRawPage, 
                 }
             }
 
+            // 处理尾部空格或缺失字形，确保 chars_list 与 text 严格 1:1 一致
+            let mut extracted_text = String::new();
+            for ci in &chars_list {
+                extracted_text.push_str(&ci.c);
+            }
+
+            let full_text = text.clone();
+            if extracted_text.len() < full_text.len() && full_text.starts_with(&extracted_text) {
+                let suffix = &full_text[extracted_text.len()..];
+                let last_bbox = chars_list.last().map(|c| c.bbox).unwrap_or(bbox);
+                for (tail_offset, ch) in suffix.chars().enumerate() {
+                    let ch_idx = chars_list.len();
+                    let estimated_w = (font_size.unwrap_or(10.0) * 0.25).max(1.0);
+                    let x0 = last_bbox[2] + (tail_offset as f64) * estimated_w;
+                    let x1 = x0 + estimated_w;
+                    let c_bbox = [round4(x0), last_bbox[1], round4(x1), last_bbox[3]];
+                    chars_list.push(CharInfo {
+                        c: ch.to_string(),
+                        bbox: c_bbox,
+                        char_index: ch_idx,
+                    });
+                }
+            }
+
+            let total_chars_count = chars_list.len();
             let provenance = ProvenanceSidecar {
                 page_index,
                 pdfium_object_index: obj_idx,
-                character_count: total_chars_in_obj,
+                character_count: total_chars_count,
                 char_start_index: 0,
-                char_end_index: total_chars_in_obj,
-                char_indices: (0..total_chars_in_obj).collect(),
+                char_end_index: total_chars_count,
+                char_indices: (0..total_chars_count).collect(),
                 is_derived: false,
                 derived_block: None,
                 derived_line: None,
@@ -480,26 +500,49 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let real_out_dir = manifest_dir.join("test_data/real_pdfium_output");
     fs::create_dir_all(&real_out_dir)?;
 
+    let repo_root = std::env::var("REPO_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            let direct = manifest_dir
+                .parent()
+                .and_then(|p| p.parent())
+                .map(PathBuf::from)
+                .unwrap_or_else(|| manifest_dir.clone());
+            if direct.join("test.pdf").exists() {
+                direct
+            } else if let Some(parent) = direct.parent().and_then(|p| p.parent()) {
+                if parent.join("test.pdf").exists() {
+                    parent.to_path_buf()
+                } else {
+                    direct
+                }
+            } else {
+                direct
+            }
+        });
+
+    let test_pdf_path = repo_root.join("test.pdf");
+    let credit_pdf_path = repo_root.join("征信解析样例.pdf");
+
     let real_samples = [
-        ("d:/codes/PDFLayoutParser/test.pdf", 0, "test_p0_cover"),
-        ("d:/codes/PDFLayoutParser/test.pdf", 1, "test_p1_toc"),
-        ("d:/codes/PDFLayoutParser/test.pdf", 27, "test_p27_table"),
-        ("d:/codes/PDFLayoutParser/征信解析样例.pdf", 0, "credit_p0_header"),
-        ("d:/codes/PDFLayoutParser/征信解析样例.pdf", 1, "credit_p1_detail"),
+        (test_pdf_path.clone(), 0, "test_p0_cover"),
+        (test_pdf_path.clone(), 1, "test_p1_toc"),
+        (test_pdf_path.clone(), 27, "test_p27_table"),
+        (credit_pdf_path.clone(), 0, "credit_p0_header"),
+        (credit_pdf_path.clone(), 1, "credit_p1_detail"),
     ];
 
     let mut real_count = 0;
-    for (pdf_path_str, page_idx, sample_name) in real_samples {
-        let p = Path::new(pdf_path_str);
-        if p.exists() {
+    for (pdf_path, page_idx, sample_name) in real_samples {
+        if pdf_path.exists() {
             println!("[pdfium_probe] Processing real sample: {} (page {})", sample_name, page_idx);
-            let doc = pdfium.load_pdf_from_file(p, None)?;
+            let doc = pdfium.load_pdf_from_file(&pdf_path, None)?;
             if let Ok(page) = doc.pages().get(page_idx) {
                 let page_data = extract_page(&page, page_idx as usize)?;
                 let snapshot = PdfiumRawSnapshot {
                     schema_version: "pdfium_raw_snapshot_v1.0".to_string(),
                     generator: "pdfium_probe_0.1.0".to_string(),
-                    source_file: p.file_name().unwrap().to_str().unwrap().to_string(),
+                    source_file: pdf_path.file_name().unwrap().to_str().unwrap().to_string(),
                     page_count: 1,
                     pages: vec![page_data],
                 };

@@ -801,11 +801,12 @@
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 20,
-            "character_count": 1,
+            "character_count": 2,
             "char_start_index": 0,
-            "char_end_index": 1,
+            "char_end_index": 2,
             "char_indices": [
-              0
+              0,
+              1
             ],
             "is_derived": false,
             "derived_block": null,
@@ -821,6 +822,16 @@
                 781.658
               ],
               "char_index": 0
+            },
+            {
+              "c": " ",
+              "bbox": [
+                302.394,
+                769.616,
+                347.394,
+                781.658
+              ],
+              "char_index": 1
             }
           ]
         },
@@ -841,11 +852,12 @@
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 21,
-            "character_count": 1,
+            "character_count": 2,
             "char_start_index": 0,
-            "char_end_index": 1,
+            "char_end_index": 2,
             "char_indices": [
-              0
+              0,
+              1
             ],
             "is_derived": false,
             "derived_block": null,
@@ -861,6 +873,16 @@
                 781.777
               ],
               "char_index": 0
+            },
+            {
+              "c": " ",
+              "bbox": [
+                307.794,
+                769.735,
+                352.794,
+                781.777
+              ],
+              "char_index": 1
             }
           ]
         },
@@ -1401,11 +1423,12 @@
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 35,
-            "character_count": 1,
+            "character_count": 2,
             "char_start_index": 0,
-            "char_end_index": 1,
+            "char_end_index": 2,
             "char_indices": [
-              0
+              0,
+              1
             ],
             "is_derived": false,
             "derived_block": null,
@@ -1421,6 +1444,16 @@
                 94.2721
               ],
               "char_index": 0
+            },
+            {
+              "c": " ",
+              "bbox": [
+                173.7029,
+                83.8743,
+                225.9529,
+                94.2721
+              ],
+              "char_index": 1
             }
           ]
         },

@@ -41,9 +41,9 @@
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 0,
-            "character_count": 16,
+            "character_count": 17,
             "char_start_index": 0,
-            "char_end_index": 16,
+            "char_end_index": 17,
             "char_indices": [
               0,
               1,
@@ -60,7 +60,8 @@
               12,
               13,
               14,
-              15
+              15,
+              16
             ],
             "is_derived": false,
             "derived_block": null,
@@ -226,6 +227,16 @@
                 102.954
               ],
               "char_index": 15
+            },
+            {
+              "c": " ",
+              "bbox": [
+                157.38,
+                87.33,
+                160.88,
+                102.954
+              ],
+              "char_index": 16
             }
           ]
         },
@@ -246,11 +257,12 @@
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 1,
-            "character_count": 1,
+            "character_count": 2,
             "char_start_index": 0,
-            "char_end_index": 1,
+            "char_end_index": 2,
             "char_indices": [
-              0
+              0,
+              1
             ],
             "is_derived": false,
             "derived_block": null,
@@ -266,6 +278,16 @@
                 96.688
               ],
               "char_index": 0
+            },
+            {
+              "c": " ",
+              "bbox": [
+                174.448,
+                87.76,
+                176.448,
+                96.688
+              ],
+              "char_index": 1
             }
           ]
         },
@@ -286,16 +308,17 @@
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 2,
-            "character_count": 6,
+            "character_count": 7,
             "char_start_index": 0,
-            "char_end_index": 6,
+            "char_end_index": 7,
             "char_indices": [
               0,
               1,
               2,
               3,
               4,
-              5
+              5,
+              6
             ],
             "is_derived": false,
             "derived_block": null,
@@ -361,6 +384,16 @@
                 102.8
               ],
               "char_index": 5
+            },
+            {
+              "c": " ",
+              "bbox": [
+                264.0,
+                86.0,
+                267.5,
+                102.8
+              ],
+              "char_index": 6
             }
           ]
         },

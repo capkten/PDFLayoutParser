@@ -51,12 +51,22 @@ def main():
         "synth_rotations",
         "synth_segmented_lines",
     ]
+    direct = os.path.abspath(os.path.join(root, "..", ".."))
+    if "REPO_ROOT" in os.environ:
+        repo_root = os.environ["REPO_ROOT"]
+    elif os.path.exists(os.path.join(direct, "test.pdf")):
+        repo_root = direct
+    elif os.path.exists(os.path.join(direct, "..", "..", "test.pdf")):
+        repo_root = os.path.abspath(os.path.join(direct, "..", ".."))
+    else:
+        repo_root = direct
+
     real_sample_meta = {
-        "test_p0_cover": {"pdf": "d:/codes/PDFLayoutParser/test.pdf", "page": 0},
-        "test_p1_toc": {"pdf": "d:/codes/PDFLayoutParser/test.pdf", "page": 1},
-        "test_p27_table": {"pdf": "d:/codes/PDFLayoutParser/test.pdf", "page": 27},
-        "credit_p0_header": {"pdf": "d:/codes/PDFLayoutParser/征信解析样例.pdf", "page": 0},
-        "credit_p1_detail": {"pdf": "d:/codes/PDFLayoutParser/征信解析样例.pdf", "page": 1},
+        "test_p0_cover": {"pdf": os.path.join(repo_root, "test.pdf"), "page": 0},
+        "test_p1_toc": {"pdf": os.path.join(repo_root, "test.pdf"), "page": 1},
+        "test_p27_table": {"pdf": os.path.join(repo_root, "test.pdf"), "page": 27},
+        "credit_p0_header": {"pdf": os.path.join(repo_root, "征信解析样例.pdf"), "page": 0},
+        "credit_p1_detail": {"pdf": os.path.join(repo_root, "征信解析样例.pdf"), "page": 1},
     }
 
     print("[verify_deterministic_hashes] Starting 3-run deterministic stability verification...")

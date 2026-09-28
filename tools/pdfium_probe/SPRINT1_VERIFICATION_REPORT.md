@@ -20,9 +20,9 @@
 3. **探针工程独立与质量保障**：
    - 探针工程位于 `tools/pdfium_probe/`，拥有独立工作区配置与独立 Cargo.toml；
    - `cargo check` 实现 **0 警告、0 错误**；
-   - `cargo test` 自动化单元测试 5 项全部通过（100% PASS）；
-   - 比较器负例自动化单元测试 9 项全部通过（100% PASS）；
-   - 探针启动前自动核验动态库 SHA-256，杜绝静默版本漂移。
+    - `cargo test` 自动化单元测试 5 项全部通过（100% PASS）；
+    - 比较器负例自动化单元测试 12 项全部通过（100% PASS，含两字符基线 vs 单字符探针拦截、字符 BBox 误差超差拦截、文本长度与字符数不一致拦截等假绿封堵测试）；
+    - 探针启动前自动核验动态库 SHA-256，杜绝静默版本漂移。
 4. **跨平台验证实测状态说明（严谨诚实声明）**：
    - **Windows x64**：本地完成官方发布包与解压动态库的双重 SHA-256 实测验证，并在实机上完成端到端加载提取与哈希核验；
    - **Linux x64 / macOS arm64 / macOS x64**：已在 `manifest.json` 中锁定官方发布包下载源与压缩包 SHA-256，但**解压后动态库 SHA-256 与动态库加载行为目前仅为元数据配置，尚待在对应物理操作系统上完成实机实测验证**。
@@ -47,7 +47,7 @@
       pub derived_line: Option<i64>,  // 未做 line 聚类，诚实标记为 None
   }
   ```
-- **字符范围保真**：基于 `total_chars_in_obj = chars.len()`（回退取 `text.chars().count()`）计算完整字符跨度，即使个别字符无法提取 loose_bounds，也不发生范围截断失真；在 `CharInfo` 中记录其在字符流中的实际局部位置 `char_index`。
+- **字符范围保真**：基于 `total_chars_in_obj = chars.len()` 计算完整字符跨度；针对 PDFium `chars()` 遗漏的尾随空白字符，显式物化为 `CharInfo` 补齐，确保 `chars_list.len() == text.chars().count() == provenance.character_count == provenance.char_indices.len()`，彻底消除字符数量失配；在 `CharInfo` 中记录其在字符流中的实际局部位置 `char_index`。
 - **范围诚实限定**：当前探针记录的是原子 TextObject 内部的局部字符偏移与对象索引，尚未构建跨 TextObject 全局统一的页面级字符流水号（该工作需在后续的只读聚合实验中推进）。
 
 ### 2. 比较器 7 项数学不变量严格校验与负例测试
@@ -60,7 +60,7 @@
 6. `provenance.is_derived == False`（严禁裸探针冒充派生对象）；
 7. 字段完整非空检查。
 
-编写了专门的负例单元测试 [`test_comparator_negative_cases.py`](file:///d:/codes/PDFLayoutParser/.worktrees/feat-pdfium-probe-sprint1/tools/pdfium_probe/scripts/test_comparator_negative_cases.py)，覆盖 9 项针对非法 Provenance、倒置范围、非连续索引、页码错位的负例，实测 **9 项全部 PASS**。
+编写了专门的负例单元测试 [`test_comparator_negative_cases.py`](file:///d:/codes/PDFLayoutParser/.worktrees/feat-pdfium-probe-sprint1/tools/pdfium_probe/scripts/test_comparator_negative_cases.py)，覆盖 12 项针对非法 Provenance、倒置范围、非连续索引、页码错位、冒充派生以及假绿防范的反例，实测 **12 项全部 PASS**。
 
 ---
 
@@ -75,13 +75,15 @@
 - `render_mode`：双方均具备非空整数时严格比对数值；若一侧为 `None`，记录为 `render_mode_comparable: False`，不伪装成匹配；
 - 页面级 `has_invisible_text`：双方均具备时严格校验一致性。
 
-### 3. 门禁实测结论（21 项门禁违约拦截）
-合成门禁执行检出 **21 项门禁违规**，以退出码 `1` 严格阻断：
+### 3. 门禁实测结论（32 项门禁违约拦截）
+合成门禁执行检出 **32 项门禁违规**，以退出码 `1` 严格阻断：
 ```text
-STATUS: FAILED (21 gate violations found)
-  1. synth_crop_offset.pdf p0: Max BBox Delta 4.858 pt > threshold 0.5 pt
-  2. synth_invisible_text.pdf p0: Page has_invisible_text mismatch (Base=False vs Probe=True)
-  3. synth_invisible_text.pdf p0: Invisible status mismatch in span 'Invisible OCR Text Layer' (Base=False vs Probe=True)
+STATUS: FAILED (32 gate violations found)
+  1. synth_crop_offset.pdf p0: Character text mismatch in span 'Header in CropBox'
+  2. synth_crop_offset.pdf p0: Character text mismatch in span 'Normal Body Text'
+  3. synth_crop_offset.pdf p0: Character text mismatch in span 'Outside of CropBox'
+  4. synth_crop_offset.pdf p0: Max BBox Delta 4.858 pt > threshold 0.5 pt
+  5. synth_invisible_text.pdf p0: Page has_invisible_text mismatch (Base=False vs Probe=True)
   ...
 ```
 这真实证明了两引擎行为的当前差异：针对不可见文字层，PDFium 明确识别出 `RenderMode::Invisible` 并将页面标记为有隐藏文字，而 PyMuPDF 将其作为普通文字提取且未标记不可见，门禁据此准确拦截。
@@ -144,7 +146,7 @@ STATUS: FAILED (21 gate violations found)
 │     * 基准 Span 总数 (Total Base Spans)       : 518                                   │
 │     * 探针图元总数 (Total Probe Objects)     : 2867 (粒度膨胀比: 5.53x)               │
 │     * 候选文本匹配 (Candidate Matches)        : 58  (11.2%)                           │
-│     * 字符内容相符 (Chars Verified)           : 58                                    │
+│     * 字符内容相符 (Chars Verified)           : 28                                    │
 │     * BBox 门禁达标 (BBox Gate Passed)        : 2   (0.4%)                            │
 │     * 最终完全接收 (Fully Accepted Spans)     : 2   (0.4% - 门禁彻底失败)              │
 │     * 缺失基准 Span (Missing Base Spans)      : 460 (88.8%)                           │

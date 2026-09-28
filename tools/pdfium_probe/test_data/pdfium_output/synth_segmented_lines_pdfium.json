@@ -41,9 +41,9 @@
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 6,
-            "character_count": 12,
+            "character_count": 13,
             "char_start_index": 0,
-            "char_end_index": 12,
+            "char_end_index": 13,
             "char_indices": [
               0,
               1,
@@ -56,7 +56,8 @@
               8,
               9,
               10,
-              11
+              11,
+              12
             ],
             "is_derived": false,
             "derived_block": null,
@@ -182,6 +183,16 @@
                 132.532
               ],
               "char_index": 11
+            },
+            {
+              "c": " ",
+              "bbox": [
+                124.02,
+                119.14,
+                127.02,
+                132.532
+              ],
+              "char_index": 12
             }
           ]
         },
