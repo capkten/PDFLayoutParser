@@ -241,10 +241,10 @@ def _join_query_items(items: list[tuple[float, float, float, float, str]]) -> st
 
 
 def _is_query_record_row(row: list[tuple[float, float, float, float, str]]) -> bool:
-    """Return True for a row with the four query-record column anchors."""
+    """Return True for a row with distinct query number, date, and reason columns."""
     texts = [item[4].strip() for item in row]
     has_number = any(item[0] < 110 and re.fullmatch(r"\d+", text) for item, text in zip(row, texts))
-    has_date = any(item[0] < 240 and "年" in text for item, text in zip(row, texts))
+    has_date = any(105.0 <= item[0] < 240 and "年" in text for item, text in zip(row, texts))
     has_reason = any(item[0] >= 340 for item in row)
     return has_number and has_date and has_reason
 
@@ -809,15 +809,8 @@ class PersonalCreditReportTableExtractor(TableExtractor):
         t_dto = time.perf_counter() - t1
 
         t2 = time.perf_counter()
-        result = rust_adapter.run_python_or_rust(
-            mode=mode,
-            python_fn=lambda: self._apply_personal_credit_rules(candidates, page),
-            rust_fn=lambda dto: rust_adapter.personal_credit_tables_to_project(
-                rust_adapter.recover_personal_credit_tables(dto)
-            ),
-            input_dto=input_dto,
-            path="personal-credit.extract_tables",
-        )
+        rust_output = rust_adapter.recover_personal_credit_tables(input_dto)
+        result = rust_adapter.personal_credit_tables_to_project(rust_output)
         t_rust_or_fn = time.perf_counter() - t2
         t_total = time.perf_counter() - t0
 
