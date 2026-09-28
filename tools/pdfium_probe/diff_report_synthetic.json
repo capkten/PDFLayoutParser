@@ -24,7 +24,11 @@
         "spans": {
           "base_span_count": 3,
           "probe_span_count": 3,
-          "matched_count": 3,
+          "candidate_match_count": 3,
+          "char_match_count": 3,
+          "bbox_pass_count": 0,
+          "fully_accepted_count": 0,
+          "missing_count": 0,
           "max_bbox_delta": 4.858,
           "p95_bbox_delta": 4.858,
           "order_inversion": {
@@ -149,6 +153,7 @@
           "matched_count": 0,
           "max_rect_delta": 0.0,
           "max_point_delta": 0.0,
+          "max_width_delta": 0.0,
           "details": []
         }
       }
@@ -179,7 +184,11 @@
         "spans": {
           "base_span_count": 4,
           "probe_span_count": 4,
-          "matched_count": 4,
+          "candidate_match_count": 4,
+          "char_match_count": 4,
+          "bbox_pass_count": 0,
+          "fully_accepted_count": 0,
+          "missing_count": 0,
           "max_bbox_delta": 5.744,
           "p95_bbox_delta": 5.744,
           "order_inversion": {
@@ -340,6 +349,7 @@
           "matched_count": 0,
           "max_rect_delta": 0.0,
           "max_point_delta": 0.0,
+          "max_width_delta": 0.0,
           "details": []
         }
       }
@@ -370,7 +380,11 @@
         "spans": {
           "base_span_count": 5,
           "probe_span_count": 4,
-          "matched_count": 4,
+          "candidate_match_count": 4,
+          "char_match_count": 4,
+          "bbox_pass_count": 0,
+          "fully_accepted_count": 0,
+          "missing_count": 1,
           "max_bbox_delta": 5.026,
           "p95_bbox_delta": 5.026,
           "order_inversion": {
@@ -543,6 +557,7 @@
           "matched_count": 0,
           "max_rect_delta": 0.0,
           "max_point_delta": 0.0,
+          "max_width_delta": 0.0,
           "details": []
         }
       }
@@ -573,7 +588,11 @@
         "spans": {
           "base_span_count": 1,
           "probe_span_count": 1,
-          "matched_count": 1,
+          "candidate_match_count": 1,
+          "char_match_count": 1,
+          "bbox_pass_count": 0,
+          "fully_accepted_count": 0,
+          "missing_count": 0,
           "max_bbox_delta": 4.984,
           "p95_bbox_delta": 4.984,
           "order_inversion": {
@@ -626,6 +645,7 @@
           "matched_count": 0,
           "max_rect_delta": 0.0,
           "max_point_delta": 0.0,
+          "max_width_delta": 0.0,
           "details": []
         }
       },
@@ -649,7 +669,11 @@
         "spans": {
           "base_span_count": 1,
           "probe_span_count": 1,
-          "matched_count": 1,
+          "candidate_match_count": 1,
+          "char_match_count": 1,
+          "bbox_pass_count": 0,
+          "fully_accepted_count": 0,
+          "missing_count": 0,
           "max_bbox_delta": 4.984,
           "p95_bbox_delta": 4.984,
           "order_inversion": {
@@ -702,6 +726,7 @@
           "matched_count": 0,
           "max_rect_delta": 0.0,
           "max_point_delta": 0.0,
+          "max_width_delta": 0.0,
           "details": []
         }
       },
@@ -725,7 +750,11 @@
         "spans": {
           "base_span_count": 1,
           "probe_span_count": 1,
-          "matched_count": 1,
+          "candidate_match_count": 1,
+          "char_match_count": 1,
+          "bbox_pass_count": 0,
+          "fully_accepted_count": 0,
+          "missing_count": 0,
           "max_bbox_delta": 4.984,
           "p95_bbox_delta": 4.984,
           "order_inversion": {
@@ -778,6 +807,7 @@
           "matched_count": 0,
           "max_rect_delta": 0.0,
           "max_point_delta": 0.0,
+          "max_width_delta": 0.0,
           "details": []
         }
       },
@@ -801,7 +831,11 @@
         "spans": {
           "base_span_count": 1,
           "probe_span_count": 1,
-          "matched_count": 1,
+          "candidate_match_count": 1,
+          "char_match_count": 1,
+          "bbox_pass_count": 0,
+          "fully_accepted_count": 0,
+          "missing_count": 0,
           "max_bbox_delta": 4.984,
           "p95_bbox_delta": 4.984,
           "order_inversion": {
@@ -854,6 +888,7 @@
           "matched_count": 0,
           "max_rect_delta": 0.0,
           "max_point_delta": 0.0,
+          "max_width_delta": 0.0,
           "details": []
         }
       }
@@ -884,7 +919,11 @@
         "spans": {
           "base_span_count": 2,
           "probe_span_count": 2,
-          "matched_count": 2,
+          "candidate_match_count": 2,
+          "char_match_count": 2,
+          "bbox_pass_count": 0,
+          "fully_accepted_count": 0,
+          "missing_count": 0,
           "max_bbox_delta": 4.164,
           "p95_bbox_delta": 4.164,
           "order_inversion": {
@@ -973,6 +1012,7 @@
           "matched_count": 6,
           "max_rect_delta": 0.0,
           "max_point_delta": 0.0,
+          "max_width_delta": 0.0,
           "details": [
             {
               "base_index": 0,
@@ -980,6 +1020,7 @@
               "status": "MATCHED_EXACT",
               "rect_delta": 0.0,
               "point_delta": 0.0,
+              "width_delta": 0.0,
               "base_rect": [
                 50.0,
                 80.0,
@@ -1002,6 +1043,7 @@
               "status": "MATCHED_EXACT",
               "rect_delta": 0.0,
               "point_delta": 0.0,
+              "width_delta": 0.0,
               "base_rect": [
                 50.0,
                 180.0,
@@ -1024,6 +1066,7 @@
               "status": "MATCHED_EXACT",
               "rect_delta": 0.0,
               "point_delta": 0.0,
+              "width_delta": 0.0,
               "base_rect": [
                 180.0,
                 180.0,
@@ -1046,6 +1089,7 @@
               "status": "MATCHED_EXACT",
               "rect_delta": 0.0,
               "point_delta": 0.0,
+              "width_delta": 0.0,
               "base_rect": [
                 320.0,
                 180.0,
@@ -1068,6 +1112,7 @@
               "status": "MATCHED_EXACT",
               "rect_delta": 0.0,
               "point_delta": 0.0,
+              "width_delta": 0.0,
               "base_rect": [
                 50.0,
                 80.0,
@@ -1090,6 +1135,7 @@
               "status": "MATCHED_EXACT",
               "rect_delta": 0.0,
               "point_delta": 0.0,
+              "width_delta": 0.0,
               "base_rect": [
                 450.0,
                 80.0,
