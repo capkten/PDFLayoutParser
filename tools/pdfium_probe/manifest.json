@@ -1,0 +1,44 @@
+{
+  "release_tag": "chromium/8066",
+  "verified_at": "2026-09-28T17:05:00+08:00",
+  "verification_method": "certutil_and_stream_sha256_verification",
+  "note": "win-x64已在当前Windows宿主环境下完成压缩包和解压动态库的双重本地校验与加载；linux-x64与mac-arm64已通过官方发布源流式校验压缩包SHA-256，解压动态库哈希将在对应环境运行时由探针强校验门禁核验。",
+  "platforms": {
+    "win-x64": {
+      "archive_name": "pdfium-win-x64.tgz",
+      "archive_url": "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/8066/pdfium-win-x64.tgz",
+      "archive_size": 3823498,
+      "archive_sha256": "739a57d597d864297909cc40a2411eba728490c76a0fa25e3ea299c7f6b07020",
+      "library_relpath": "native/win-x64/pdfium.dll",
+      "library_sha256": "d42c452a4cf8ca19a87e9c659d4e05035be742c21696ac13431cf73ac1bbf14b",
+      "verification_status": "locally_verified_archive_and_library"
+    },
+    "linux-x64": {
+      "archive_name": "pdfium-linux-x64.tgz",
+      "archive_url": "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/8066/pdfium-linux-x64.tgz",
+      "archive_size": 3743765,
+      "archive_sha256": "0b43f405477cf2cfc4dbff06905093c3309756c6bca1fb9da99234a2ca97fed2",
+      "library_relpath": "native/linux-x64/libpdfium.so",
+      "library_sha256": null,
+      "verification_status": "remote_archive_sha256_verified"
+    },
+    "mac-arm64": {
+      "archive_name": "pdfium-mac-arm64.tgz",
+      "archive_url": "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/8066/pdfium-mac-arm64.tgz",
+      "archive_size": 3483717,
+      "archive_sha256": "336219e80580b93c6523f44db7dc1de59cc497b13a7390ddac84223f68ca162b",
+      "library_relpath": "native/mac-arm64/libpdfium.dylib",
+      "library_sha256": null,
+      "verification_status": "remote_archive_sha256_verified"
+    },
+    "mac-x64": {
+      "archive_name": "pdfium-mac-x64.tgz",
+      "archive_url": "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/8066/pdfium-mac-x64.tgz",
+      "archive_size": 3676986,
+      "archive_sha256": "841ecac278cdd46288dd065873522cf72f3996560d8978f473d336f01d59942c",
+      "library_relpath": "native/mac-x64/libpdfium.dylib",
+      "library_sha256": null,
+      "verification_status": "remote_archive_sha256_verified"
+    }
+  }
+}

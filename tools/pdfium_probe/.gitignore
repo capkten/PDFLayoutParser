@@ -1,0 +1,13 @@
+# Rust build artifacts
+target/
+
+# Re-include scripts directory (root .gitignore has unanchored 'scripts')
+!scripts/
+!scripts/**
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+**/__pycache__/**
+**/*.pyc

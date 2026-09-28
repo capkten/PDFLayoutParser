@@ -1,0 +1,1922 @@
+{
+  "generator": "pdfium_probe_0.1.0",
+  "source_file": "test.pdf",
+  "page_count": 1,
+  "pages": [
+    {
+      "page_index": 0,
+      "width": 595.3,
+      "height": 841.9,
+      "rotation": 0,
+      "crop_box": [
+        0.0,
+        0.0,
+        595.3,
+        841.9
+      ],
+      "media_box": [
+        0.0,
+        0.0,
+        595.3,
+        841.9
+      ],
+      "spans": [
+        {
+          "order": 0,
+          "text": "宝",
+          "bbox": [
+            233.979,
+            44.402,
+            241.962,
+            52.412
+          ],
+          "font": "MLJNAR+SimSun",
+          "size": 180.0,
+          "flags": null,
+          "source_position": [
+            0,
+            0,
+            0
+          ],
+          "characters": [
+            {
+              "c": "宝",
+              "bbox": [
+                233.52,
+                44.1951,
+                242.52,
+                53.1501
+              ]
+            }
+          ]
+        },
+        {
+          "order": 1,
+          "text": "山",
+          "bbox": [
+            243.789,
+            44.609,
+            250.431,
+            52.376
+          ],
+          "font": "MLJNAR+SimSun",
+          "size": 180.0,
+          "flags": null,
+          "source_position": [
+            0,
+            0,
+            1
+          ],
+          "characters": [
+            {
+              "c": "山",
+              "bbox": [
+                242.52,
+                44.1951,
+                251.52,
+                53.1501
+              ]
+            }
+          ]
+        },
+        {
+          "order": 2,
+          "text": "钢",
+          "bbox": [
+            251.799,
+            44.573,
+            259.782,
+            52.655
+          ],
+          "font": "MLJNAR+SimSun",
+          "size": 180.0,
+          "flags": null,
+          "source_position": [
+            0,
+            0,
+            2
+          ],
+          "characters": [
+            {
+              "c": "钢",
+              "bbox": [
+                251.52,
+                44.1951,
+                260.52,
+                53.1501
+              ]
+            }
+          ]
+        },
+        {
+          "order": 3,
+          "text": "铁",
+          "bbox": [
+            260.871,
+            44.465,
+            269.169,
+            52.799
+          ],
+          "font": "MLJNAR+SimSun",
+          "size": 180.0,
+          "flags": null,
+          "source_position": [
+            0,
+            0,
+            3
+          ],
+          "characters": [
+            {
+              "c": "铁",
+              "bbox": [
+                260.52,
+                44.1951,
+                269.52,
+                53.1501
+              ]
+            }
+          ]
+        },
+        {
+          "order": 4,
+          "text": "股",
+          "bbox": [
+            269.871,
+            44.852,
+            278.061,
+            52.727
+          ],
+          "font": "MLJNAR+SimSun",
+          "size": 180.0,
+          "flags": null,
+          "source_position": [
+            0,
+            0,
+            4
+          ],
+          "characters": [
+            {
+              "c": "股",
+              "bbox": [
+                269.52,
+                44.1951,
+                278.52,
+                53.1501
+              ]
+            }
+          ]
+        },
+        {
+          "order": 5,
+          "text": "份",
+          "bbox": [
+            278.871,
+            44.537,
+            287.133,
+            52.826
+          ],
+          "font": "MLJNAR+SimSun",
+          "size": 180.0,
+          "flags": null,
+          "source_position": [
+            0,
+            0,
+            5
+          ],
+          "characters": [
+            {
+              "c": "份",
+              "bbox": [
+                278.52,
+                44.1951,
+                287.52,
+                53.1501
+              ]
+            }
+          ]
+        },
+        {
+          "order": 6,
+          "text": "有",
+          "bbox": [
+            287.907,
+            44.438,
+            296.133,
+            52.799
+          ],
+          "font": "MLJNAR+SimSun",
+          "size": 180.0,
+          "flags": null,
+          "source_position": [
+            0,
+            0,
+            6
+          ],
+          "characters": [
+            {
+              "c": "有",
+              "bbox": [
+                287.52,
+                44.1951,
+                296.52,
+                53.1501
+              ]
+            }
+          ]
+        },
+        {
+          "order": 7,
+          "text": "限",
+          "bbox": [
+            297.645,
+            44.717,
+            305.097,
+            52.799
+          ],
+          "font": "MLJNAR+SimSun",
+          "size": 180.0,
+          "flags": null,
+          "source_position": [
+            0,
+            0,
+            7
+          ],
+          "characters": [
+            {
+              "c": "限",
+              "bbox": [
+                296.52,
+                44.1951,
+                305.52,
+                53.1501
+              ]
+            }
+          ]
+        },
+        {
+          "order": 8,
+          "text": "公",
+          "bbox": [
+            306.15,
+            44.645,
+            313.989,
+            52.826
+          ],
+          "font": "MLJNAR+SimSun",
+          "size": 180.0,
+          "flags": null,
+          "source_position": [
+            0,
+            0,
+            8
+          ],
+          "characters": [
+            {
+              "c": "公",
+              "bbox": [
+                305.52,
+                44.1951,
+                314.52,
+                53.1501
+              ]
+            }
+          ]
+        },
+        {
+          "order": 9,
+          "text": "司",
+          "bbox": [
+            315.222,
+            44.825,
+            322.287,
+            52.727
+          ],
+          "font": "MLJNAR+SimSun",
+          "size": 180.0,
+          "flags": null,
+          "source_position": [
+            0,
+            0,
+            9
+          ],
+          "characters": [
+            {
+              "c": "司",
+              "bbox": [
+                314.52,
+                44.1951,
+                323.52,
+                53.1501
+              ]
+            }
+          ]
+        },
+        {
+          "order": 10,
+          "text": "2",
+          "bbox": [
+            324.024,
+            46.031,
+            327.579,
+            51.89
+          ],
+          "font": "PUIWCS+Calibri",
+          "size": 180.0,
+          "flags": null,
+          "source_position": [
+            0,
+            0,
+            10
+          ],
+          "characters": [
+            {
+              "c": "2",
+              "bbox": [
+                323.5199,
+                42.6561,
+                328.0739,
+                54.6981
+              ]
+            }
+          ]
+        },
+        {
+          "order": 11,
+          "text": "0",
+          "bbox": [
+            328.3944,
+            46.031,
+            332.3274,
+            51.962
+          ],
+          "font": "PUIWCS+Calibri",
+          "size": 180.0,
+          "flags": null,
+          "source_position": [
+            0,
+            0,
+            11
+          ],
+          "characters": [
+            {
+              "c": "0",
+              "bbox": [
+                328.0794,
+                42.6561,
+                332.6334,
+                54.6981
+              ]
+            }
+          ]
+        },
+        {
+          "order": 12,
+          "text": "2",
+          "bbox": [
+            333.1428,
+            46.031,
+            336.6978,
+            51.89
+          ],
+          "font": "PUIWCS+Calibri",
+          "size": 180.0,
+          "flags": null,
+          "source_position": [
+            0,
+            0,
+            12
+          ],
+          "characters": [
+            {
+              "c": "2",
+              "bbox": [
+                332.6388,
+                42.6561,
+                337.1928,
+                54.6981
+              ]
+            }
+          ]
+        },
+        {
+          "order": 13,
+          "text": "5",
+          "bbox": [
+            337.6392,
+            46.121,
+            341.2302,
+            51.962
+          ],
+          "font": "PUIWCS+Calibri",
+          "size": 180.0,
+          "flags": null,
+          "source_position": [
+            0,
+            0,
+            13
+          ],
+          "characters": [
+            {
+              "c": "5",
+              "bbox": [
+                337.1982,
+                42.6561,
+                341.7522,
+                54.6981
+              ]
+            }
+          ]
+        },
+        {
+          "order": 14,
+          "text": "年",
+          "bbox": [
+            342.027,
+            44.438,
+            350.253,
+            52.826
+          ],
+          "font": "MLJNAR+SimSun",
+          "size": 180.0,
+          "flags": null,
+          "source_position": [
+            0,
+            0,
+            14
+          ],
+          "characters": [
+            {
+              "c": "年",
+              "bbox": [
+                341.64,
+                44.1951,
+                350.64,
+                53.1501
+              ]
+            }
+          ]
+        },
+        {
+          "order": 15,
+          "text": "年",
+          "bbox": [
+            351.027,
+            44.438,
+            359.253,
+            52.826
+          ],
+          "font": "MLJNAR+SimSun",
+          "size": 180.0,
+          "flags": null,
+          "source_position": [
+            0,
+            0,
+            15
+          ],
+          "characters": [
+            {
+              "c": "年",
+              "bbox": [
+                350.64,
+                44.1951,
+                359.64,
+                53.1501
+              ]
+            }
+          ]
+        },
+        {
+          "order": 16,
+          "text": "度",
+          "bbox": [
+            359.955,
+            44.402,
+            368.109,
+            52.799
+          ],
+          "font": "MLJNAR+SimSun",
+          "size": 180.0,
+          "flags": null,
+          "source_position": [
+            0,
+            0,
+            16
+          ],
+          "characters": [
+            {
+              "c": "度",
+              "bbox": [
+                359.64,
+                44.1951,
+                368.64,
+                53.1501
+              ]
+            }
+          ]
+        },
+        {
+          "order": 17,
+          "text": "报",
+          "bbox": [
+            368.919,
+            44.537,
+            377.217,
+            52.799
+          ],
+          "font": "MLJNAR+SimSun",
+          "size": 180.0,
+          "flags": null,
+          "source_position": [
+            0,
+            0,
+            17
+          ],
+          "characters": [
+            {
+              "c": "报",
+              "bbox": [
+                368.64,
+                44.1951,
+                377.64,
+                53.1501
+              ]
+            }
+          ]
+        },
+        {
+          "order": 18,
+          "text": "告",
+          "bbox": [
+            378.207,
+            44.501,
+            386.01,
+            52.691
+          ],
+          "font": "MLJNAR+SimSun",
+          "size": 180.0,
+          "flags": null,
+          "source_position": [
+            0,
+            0,
+            18
+          ],
+          "characters": [
+            {
+              "c": "告",
+              "bbox": [
+                377.64,
+                44.1951,
+                386.64,
+                53.1501
+              ]
+            }
+          ]
+        },
+        {
+          "order": 19,
+          "text": "1",
+          "bbox": [
+            298.605,
+            773.045,
+            301.917,
+            778.85
+          ],
+          "font": "PUIWCS+Calibri",
+          "size": 180.0,
+          "flags": null,
+          "source_position": [
+            0,
+            0,
+            19
+          ],
+          "characters": [
+            {
+              "c": "1",
+              "bbox": [
+                297.84,
+                769.616,
+                302.394,
+                781.658
+              ]
+            }
+          ]
+        },
+        {
+          "order": 20,
+          "text": "/",
+          "bbox": [
+            304.32,
+            772.408,
+            307.74,
+            780.193
+          ],
+          "font": "PUIWCS+Calibri",
+          "size": 180.0,
+          "flags": null,
+          "source_position": [
+            0,
+            0,
+            20
+          ],
+          "characters": [
+            {
+              "c": "/",
+              "bbox": [
+                304.32,
+                769.735,
+                307.794,
+                781.777
+              ]
+            }
+          ]
+        },
+        {
+          "order": 21,
+          "text": "2",
+          "bbox": [
+            310.344,
+            772.991,
+            313.899,
+            778.85
+          ],
+          "font": "PUIWCS+Calibri",
+          "size": 180.0,
+          "flags": null,
+          "source_position": [
+            0,
+            0,
+            21
+          ],
+          "characters": [
+            {
+              "c": "2",
+              "bbox": [
+                309.84,
+                769.616,
+                314.394,
+                781.658
+              ]
+            }
+          ]
+        },
+        {
+          "order": 22,
+          "text": "4",
+          "bbox": [
+            314.6064,
+            773.054,
+            318.7014,
+            778.868
+          ],
+          "font": "PUIWCS+Calibri",
+          "size": 180.0,
+          "flags": null,
+          "source_position": [
+            0,
+            0,
+            22
+          ],
+          "characters": [
+            {
+              "c": "4",
+              "bbox": [
+                314.3994,
+                769.616,
+                318.9534,
+                781.658
+              ]
+            }
+          ]
+        },
+        {
+          "order": 23,
+          "text": "5",
+          "bbox": [
+            319.3998,
+            773.081,
+            322.9908,
+            778.922
+          ],
+          "font": "PUIWCS+Calibri",
+          "size": 180.0,
+          "flags": null,
+          "source_position": [
+            0,
+            0,
+            23
+          ],
+          "characters": [
+            {
+              "c": "5",
+              "bbox": [
+                318.9588,
+                769.616,
+                323.5128,
+                781.658
+              ]
+            }
+          ]
+        },
+        {
+          "order": 24,
+          "text": "公",
+          "bbox": [
+            90.6115,
+            84.3968,
+            99.7134,
+            93.8958
+          ],
+          "font": "MLJNAR+SimSun",
+          "size": 209.0,
+          "flags": null,
+          "source_position": [
+            0,
+            0,
+            24
+          ],
+          "characters": [
+            {
+              "c": "公",
+              "bbox": [
+                89.88,
+                83.8743,
+                100.33,
+                94.2721
+              ]
+            }
+          ]
+        },
+        {
+          "order": 25,
+          "text": "司",
+          "bbox": [
+            101.1349,
+            84.6058,
+            109.3382,
+            93.7809
+          ],
+          "font": "MLJNAR+SimSun",
+          "size": 209.0,
+          "flags": null,
+          "source_position": [
+            0,
+            0,
+            25
+          ],
+          "characters": [
+            {
+              "c": "司",
+              "bbox": [
+                100.3198,
+                83.8743,
+                110.7698,
+                94.2721
+              ]
+            }
+          ]
+        },
+        {
+          "order": 26,
+          "text": "代",
+          "bbox": [
+            111.245,
+            84.1564,
+            120.8381,
+            93.9794
+          ],
+          "font": "MLJNAR+SimSun",
+          "size": 209.0,
+          "flags": null,
+          "source_position": [
+            0,
+            0,
+            26
+          ],
+          "characters": [
+            {
+              "c": "代",
+              "bbox": [
+                110.8792,
+                83.8743,
+                121.3292,
+                94.2721
+              ]
+            }
+          ]
+        },
+        {
+          "order": 27,
+          "text": "码",
+          "bbox": [
+            121.6849,
+            84.4803,
+            131.2361,
+            93.6973
+          ],
+          "font": "MLJNAR+SimSun",
+          "size": 209.0,
+          "flags": null,
+          "source_position": [
+            0,
+            0,
+            27
+          ],
+          "characters": [
+            {
+              "c": "码",
+              "bbox": [
+                121.3191,
+                83.8743,
+                131.7691,
+                94.2721
+              ]
+            }
+          ]
+        },
+        {
+          "order": 28,
+          "text": "：",
+          "bbox": [
+            133.1847,
+            89.0052,
+            134.7,
+            93.0807
+          ],
+          "font": "MLJNAR+SimSun",
+          "size": 209.0,
+          "flags": null,
+          "source_position": [
+            0,
+            0,
+            28
+          ],
+          "characters": [
+            {
+              "c": "：",
+              "bbox": [
+                131.8785,
+                83.8743,
+                142.3285,
+                94.2721
+              ]
+            }
+          ]
+        },
+        {
+          "order": 29,
+          "text": "6",
+          "bbox": [
+            142.8112,
+            85.4836,
+            147.0121,
+            92.7254
+          ],
+          "font": "MLJNAR+SimSun",
+          "size": 209.0,
+          "flags": null,
+          "source_position": [
+            0,
+            0,
+            29
+          ],
+          "characters": [
+            {
+              "c": "6",
+              "bbox": [
+                142.32,
+                83.8743,
+                147.545,
+                94.2721
+              ]
+            }
+          ]
+        },
+        {
+          "order": 30,
+          "text": "0",
+          "bbox": [
+            147.9706,
+            85.4836,
+            152.1714,
+            92.7254
+          ],
+          "font": "MLJNAR+SimSun",
+          "size": 209.0,
+          "flags": null,
+          "source_position": [
+            0,
+            0,
+            30
+          ],
+          "characters": [
+            {
+              "c": "0",
+              "bbox": [
+                147.4794,
+                83.8743,
+                152.7044,
+                94.2721
+              ]
+            }
+          ]
+        },
+        {
+          "order": 31,
+          "text": "0",
+          "bbox": [
+            153.2503,
+            85.4836,
+            157.4512,
+            92.7254
+          ],
+          "font": "MLJNAR+SimSun",
+          "size": 209.0,
+          "flags": null,
+          "source_position": [
+            0,
+            0,
+            31
+          ],
+          "characters": [
+            {
+              "c": "0",
+              "bbox": [
+                152.7591,
+                83.8743,
+                157.9841,
+                94.2721
+              ]
+            }
+          ]
+        },
+        {
+          "order": 32,
+          "text": "0",
+          "bbox": [
+            158.53,
+            85.4836,
+            162.7309,
+            92.7254
+          ],
+          "font": "MLJNAR+SimSun",
+          "size": 209.0,
+          "flags": null,
+          "source_position": [
+            0,
+            0,
+            32
+          ],
+          "characters": [
+            {
+              "c": "0",
+              "bbox": [
+                158.0388,
+                83.8743,
+                163.2638,
+                94.2721
+              ]
+            }
+          ]
+        },
+        {
+          "order": 33,
+          "text": "1",
+          "bbox": [
+            164.3791,
+            85.4418,
+            167.3573,
+            92.6418
+          ],
+          "font": "MLJNAR+SimSun",
+          "size": 209.0,
+          "flags": null,
+          "source_position": [
+            0,
+            0,
+            33
+          ],
+          "characters": [
+            {
+              "c": "1",
+              "bbox": [
+                163.1982,
+                83.8743,
+                168.4232,
+                94.2721
+              ]
+            }
+          ]
+        },
+        {
+          "order": 34,
+          "text": "9",
+          "bbox": [
+            168.9273,
+            85.4836,
+            173.1282,
+            92.7254
+          ],
+          "font": "MLJNAR+SimSun",
+          "size": 209.0,
+          "flags": null,
+          "source_position": [
+            0,
+            0,
+            34
+          ],
+          "characters": [
+            {
+              "c": "9",
+              "bbox": [
+                168.4779,
+                83.8743,
+                173.7029,
+                94.2721
+              ]
+            }
+          ]
+        },
+        {
+          "order": 35,
+          "text": "公",
+          "bbox": [
+            437.0515,
+            84.3968,
+            446.1534,
+            93.8958
+          ],
+          "font": "MLJNAR+SimSun",
+          "size": 209.0,
+          "flags": null,
+          "source_position": [
+            0,
+            0,
+            35
+          ],
+          "characters": [
+            {
+              "c": "公",
+              "bbox": [
+                436.32,
+                83.8743,
+                446.77,
+                94.2721
+              ]
+            }
+          ]
+        },
+        {
+          "order": 36,
+          "text": "司",
+          "bbox": [
+            447.575,
+            84.6058,
+            455.7782,
+            93.7809
+          ],
+          "font": "MLJNAR+SimSun",
+          "size": 209.0,
+          "flags": null,
+          "source_position": [
+            0,
+            0,
+            36
+          ],
+          "characters": [
+            {
+              "c": "司",
+              "bbox": [
+                446.7598,
+                83.8743,
+                457.2098,
+                94.2721
+              ]
+            }
+          ]
+        },
+        {
+          "order": 37,
+          "text": "简",
+          "bbox": [
+            457.894,
+            84.031,
+            466.9959,
+            93.9376
+          ],
+          "font": "MLJNAR+SimSun",
+          "size": 209.0,
+          "flags": null,
+          "source_position": [
+            0,
+            0,
+            37
+          ],
+          "characters": [
+            {
+              "c": "简",
+              "bbox": [
+                457.3192,
+                83.8743,
+                467.7692,
+                94.2721
+              ]
+            }
+          ]
+        },
+        {
+          "order": 38,
+          "text": "称",
+          "bbox": [
+            468.1248,
+            84.1564,
+            477.6761,
+            93.7809
+          ],
+          "font": "MLJNAR+SimSun",
+          "size": 209.0,
+          "flags": null,
+          "source_position": [
+            0,
+            0,
+            38
+          ],
+          "characters": [
+            {
+              "c": "称",
+              "bbox": [
+                467.759,
+                83.8743,
+                478.209,
+                94.2721
+              ]
+            }
+          ]
+        },
+        {
+          "order": 39,
+          "text": "：",
+          "bbox": [
+            479.6248,
+            89.0052,
+            481.14,
+            93.0807
+          ],
+          "font": "MLJNAR+SimSun",
+          "size": 209.0,
+          "flags": null,
+          "source_position": [
+            0,
+            0,
+            39
+          ],
+          "characters": [
+            {
+              "c": "：",
+              "bbox": [
+                478.3185,
+                83.8743,
+                488.7685,
+                94.2721
+              ]
+            }
+          ]
+        },
+        {
+          "order": 40,
+          "text": "宝",
+          "bbox": [
+            489.413,
+            84.1146,
+            498.6821,
+            93.4151
+          ],
+          "font": "MLJNAR+SimSun",
+          "size": 209.0,
+          "flags": null,
+          "source_position": [
+            0,
+            0,
+            40
+          ],
+          "characters": [
+            {
+              "c": "宝",
+              "bbox": [
+                488.88,
+                83.8743,
+                499.33,
+                94.2721
+              ]
+            }
+          ]
+        },
+        {
+          "order": 41,
+          "text": "钢",
+          "bbox": [
+            499.6438,
+            84.3132,
+            508.913,
+            93.6973
+          ],
+          "font": "MLJNAR+SimSun",
+          "size": 209.0,
+          "flags": null,
+          "source_position": [
+            0,
+            0,
+            41
+          ],
+          "characters": [
+            {
+              "c": "钢",
+              "bbox": [
+                499.3199,
+                83.8743,
+                509.7699,
+                94.2721
+              ]
+            }
+          ]
+        },
+        {
+          "order": 42,
+          "text": "股",
+          "bbox": [
+            510.2868,
+            84.6371,
+            519.7963,
+            93.7809
+          ],
+          "font": "MLJNAR+SimSun",
+          "size": 209.0,
+          "flags": null,
+          "source_position": [
+            0,
+            0,
+            42
+          ],
+          "characters": [
+            {
+              "c": "股",
+              "bbox": [
+                509.8792,
+                83.8743,
+                520.3292,
+                94.2721
+              ]
+            }
+          ]
+        },
+        {
+          "order": 43,
+          "text": "份",
+          "bbox": [
+            520.7266,
+            84.2714,
+            530.3198,
+            93.8958
+          ],
+          "font": "MLJNAR+SimSun",
+          "size": 209.0,
+          "flags": null,
+          "source_position": [
+            0,
+            0,
+            43
+          ],
+          "characters": [
+            {
+              "c": "份",
+              "bbox": [
+                520.3191,
+                83.8743,
+                530.7691,
+                94.2721
+              ]
+            }
+          ]
+        },
+        {
+          "order": 44,
+          "text": "宝",
+          "bbox": [
+            201.575,
+            206.732,
+            220.935,
+            226.5309
+          ],
+          "font": "PRMMSH+SimHei",
+          "size": 439.0,
+          "flags": null,
+          "source_position": [
+            0,
+            0,
+            44
+          ],
+          "characters": [
+            {
+              "c": "宝",
+              "bbox": [
+                200.28,
+                206.3149,
+                222.23,
+                228.5942
+              ]
+            }
+          ]
+        },
+        {
+          "order": 45,
+          "text": "山",
+          "bbox": [
+            224.5986,
+            207.5002,
+            242.0708,
+            226.9479
+          ],
+          "font": "PRMMSH+SimHei",
+          "size": 439.0,
+          "flags": null,
+          "source_position": [
+            0,
+            0,
+            45
+          ],
+          "characters": [
+            {
+              "c": "山",
+              "bbox": [
+                222.3597,
+                206.3149,
+                244.3097,
+                228.5942
+              ]
+            }
+          ]
+        },
+        {
+          "order": 46,
+          "text": "钢",
+          "bbox": [
+            245.1198,
+            206.8198,
+            264.7651,
+            227.2113
+          ],
+          "font": "PRMMSH+SimHei",
+          "size": 439.0,
+          "flags": null,
+          "source_position": [
+            0,
+            0,
+            46
+          ],
+          "characters": [
+            {
+              "c": "钢",
+              "bbox": [
+                244.4394,
+                206.3149,
+                266.3894,
+                228.5942
+              ]
+            }
+          ]
+        },
+        {
+          "order": 47,
+          "text": "铁",
+          "bbox": [
+            267.1996,
+            207.0612,
+            287.7887,
+            227.2113
+          ],
+          "font": "PRMMSH+SimHei",
+          "size": 439.0,
+          "flags": null,
+          "source_position": [
+            0,
+            0,
+            47
+          ],
+          "characters": [
+            {
+              "c": "铁",
+              "bbox": [
+                266.5191,
+                206.3149,
+                288.4691,
+                228.5942
+              ]
+            }
+          ]
+        },
+        {
+          "order": 48,
+          "text": "股",
+          "bbox": [
+            289.3671,
+            208.1148,
+            309.8684,
+            227.5406
+          ],
+          "font": "PRMMSH+SimHei",
+          "size": 439.0,
+          "flags": null,
+          "source_position": [
+            0,
+            0,
+            48
+          ],
+          "characters": [
+            {
+              "c": "股",
+              "bbox": [
+                288.5988,
+                206.3149,
+                310.5488,
+                228.5942
+              ]
+            }
+          ]
+        },
+        {
+          "order": 49,
+          "text": "份",
+          "bbox": [
+            311.4467,
+            206.9954,
+            331.9481,
+            227.2991
+          ],
+          "font": "PRMMSH+SimHei",
+          "size": 439.0,
+          "flags": null,
+          "source_position": [
+            0,
+            0,
+            49
+          ],
+          "characters": [
+            {
+              "c": "份",
+              "bbox": [
+                310.6785,
+                206.3149,
+                332.6285,
+                228.5942
+              ]
+            }
+          ]
+        },
+        {
+          "order": 50,
+          "text": "有",
+          "bbox": [
+            333.702,
+            206.9954,
+            353.4131,
+            227.2113
+          ],
+          "font": "PRMMSH+SimHei",
+          "size": 439.0,
+          "flags": null,
+          "source_position": [
+            0,
+            0,
+            50
+          ],
+          "characters": [
+            {
+              "c": "有",
+              "bbox": [
+                332.7582,
+                206.3149,
+                354.7082,
+                228.5942
+              ]
+            }
+          ]
+        },
+        {
+          "order": 51,
+          "text": "限",
+          "bbox": [
+            357.0768,
+            207.9392,
+            376.1075,
+            227.1235
+          ],
+          "font": "PRMMSH+SimHei",
+          "size": 439.0,
+          "flags": null,
+          "source_position": [
+            0,
+            0,
+            51
+          ],
+          "characters": [
+            {
+              "c": "限",
+              "bbox": [
+                354.8379,
+                206.3149,
+                376.7879,
+                228.5942
+              ]
+            }
+          ]
+        },
+        {
+          "order": 52,
+          "text": "公",
+          "bbox": [
+            377.9492,
+            207.0612,
+            397.9238,
+            227.1235
+          ],
+          "font": "PRMMSH+SimHei",
+          "size": 439.0,
+          "flags": null,
+          "source_position": [
+            0,
+            0,
+            52
+          ],
+          "characters": [
+            {
+              "c": "公",
+              "bbox": [
+                376.9176,
+                206.3149,
+                398.8676,
+                228.5942
+              ]
+            }
+          ]
+        },
+        {
+          "order": 53,
+          "text": "司",
+          "bbox": [
+            400.446,
+            208.0051,
+            418.7084,
+            227.2113
+          ],
+          "font": "PRMMSH+SimHei",
+          "size": 439.0,
+          "flags": null,
+          "source_position": [
+            0,
+            0,
+            53
+          ],
+          "characters": [
+            {
+              "c": "司",
+              "bbox": [
+                398.9973,
+                206.3149,
+                420.9473,
+                228.5942
+              ]
+            }
+          ]
+        },
+        {
+          "order": 54,
+          "text": "2",
+          "bbox": [
+            233.9604,
+            238.0797,
+            242.9599,
+            253.2252
+          ],
+          "font": "PRMMSH+SimHei",
+          "size": 439.0,
+          "flags": null,
+          "source_position": [
+            0,
+            0,
+            54
+          ],
+          "characters": [
+            {
+              "c": "2",
+              "bbox": [
+                233.28,
+                234.875,
+                244.255,
+                257.1542
+              ]
+            }
+          ]
+        },
+        {
+          "order": 55,
+          "text": "0",
+          "bbox": [
+            245.0003,
+            238.1674,
+            254.2632,
+            253.7958
+          ],
+          "font": "PRMMSH+SimHei",
+          "size": 439.0,
+          "flags": null,
+          "source_position": [
+            0,
+            0,
+            55
+          ],
+          "characters": [
+            {
+              "c": "0",
+              "bbox": [
+                244.3198,
+                234.875,
+                255.2948,
+                257.1542
+              ]
+            }
+          ]
+        },
+        {
+          "order": 56,
+          "text": "2",
+          "bbox": [
+            256.0401,
+            238.0797,
+            265.0396,
+            253.2252
+          ],
+          "font": "PRMMSH+SimHei",
+          "size": 439.0,
+          "flags": null,
+          "source_position": [
+            0,
+            0,
+            56
+          ],
+          "characters": [
+            {
+              "c": "2",
+              "bbox": [
+                255.3597,
+                234.875,
+                266.3347,
+                257.1542
+              ]
+            }
+          ]
+        },
+        {
+          "order": 57,
+          "text": "5",
+          "bbox": [
+            266.8703,
+            238.4967,
+            276.2869,
+            253.5544
+          ],
+          "font": "PRMMSH+SimHei",
+          "size": 439.0,
+          "flags": null,
+          "source_position": [
+            0,
+            0,
+            57
+          ],
+          "characters": [
+            {
+              "c": "5",
+              "bbox": [
+                266.5191,
+                234.875,
+                277.4941,
+                257.1542
+              ]
+            }
+          ]
+        },
+        {
+          "order": 58,
+          "text": "年",
+          "bbox": [
+            278.5028,
+            235.3798,
+            298.4774,
+            255.8591
+          ],
+          "font": "PRMMSH+SimHei",
+          "size": 439.0,
+          "flags": null,
+          "source_position": [
+            0,
+            0,
+            58
+          ],
+          "characters": [
+            {
+              "c": "年",
+              "bbox": [
+                277.559,
+                234.875,
+                299.509,
+                257.1542
+              ]
+            }
+          ]
+        },
+        {
+          "order": 59,
+          "text": "年",
+          "bbox": [
+            300.5826,
+            235.3798,
+            320.5571,
+            255.8591
+          ],
+          "font": "PRMMSH+SimHei",
+          "size": 439.0,
+          "flags": null,
+          "source_position": [
+            0,
+            0,
+            59
+          ],
+          "characters": [
+            {
+              "c": "年",
+              "bbox": [
+                299.6387,
+                234.875,
+                321.5887,
+                257.1542
+              ]
+            }
+          ]
+        },
+        {
+          "order": 60,
+          "text": "度",
+          "bbox": [
+            322.5744,
+            235.4676,
+            342.6367,
+            256.0128
+          ],
+          "font": "PRMMSH+SimHei",
+          "size": 439.0,
+          "flags": null,
+          "source_position": [
+            0,
+            0,
+            60
+          ],
+          "characters": [
+            {
+              "c": "度",
+              "bbox": [
+                321.7184,
+                234.875,
+                343.6684,
+                257.1542
+              ]
+            }
+          ]
+        },
+        {
+          "order": 61,
+          "text": "报",
+          "bbox": [
+            344.4785,
+            235.5554,
+            365.0677,
+            255.7713
+          ],
+          "font": "PRMMSH+SimHei",
+          "size": 439.0,
+          "flags": null,
+          "source_position": [
+            0,
+            0,
+            61
+          ],
+          "characters": [
+            {
+              "c": "报",
+              "bbox": [
+                343.7981,
+                234.875,
+                365.7481,
+                257.1542
+              ]
+            }
+          ]
+        },
+        {
+          "order": 62,
+          "text": "告",
+          "bbox": [
+            367.0851,
+            235.709,
+            386.6205,
+            255.6835
+          ],
+          "font": "PRMMSH+SimHei",
+          "size": 439.0,
+          "flags": null,
+          "source_position": [
+            0,
+            0,
+            62
+          ],
+          "characters": [
+            {
+              "c": "告",
+              "bbox": [
+                365.8778,
+                234.875,
+                387.8278,
+                257.1542
+              ]
+            }
+          ]
+        }
+      ],
+      "drawings": [
+        {
+          "drawing_index": 0,
+          "rect": [
+            89.85,
+            785.78,
+            530.4,
+            786.5
+          ],
+          "width": 0.05,
+          "color": null,
+          "fill": null,
+          "items": [
+            {
+              "cmd": "l",
+              "points": [
+                [
+                  89.85,
+                  786.5
+                ],
+                [
+                  530.4,
+                  786.5
+                ]
+              ]
+            },
+            {
+              "cmd": "l",
+              "points": [
+                [
+                  530.4,
+                  786.5
+                ],
+                [
+                  530.4,
+                  785.78
+                ]
+              ]
+            },
+            {
+              "cmd": "l",
+              "points": [
+                [
+                  530.4,
+                  785.78
+                ],
+                [
+                  89.85,
+                  785.78
+                ]
+              ]
+            },
+            {
+              "cmd": "l",
+              "points": [
+                [
+                  89.85,
+                  785.78
+                ],
+                [
+                  89.85,
+                  786.5
+                ]
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

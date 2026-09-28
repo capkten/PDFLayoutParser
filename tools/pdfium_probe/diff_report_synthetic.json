@@ -1,0 +1,1032 @@
+[
+  {
+    "file": "synth_crop_offset.pdf",
+    "base_page_count": 1,
+    "probe_page_count": 1,
+    "pages": [
+      {
+        "geometry": {
+          "page_index": 0,
+          "width_match": true,
+          "height_match": true,
+          "rotation_match": true,
+          "base_dims": [
+            500.0,
+            500.0,
+            0
+          ],
+          "probe_dims": [
+            500.0,
+            500.0,
+            0
+          ]
+        },
+        "spans": {
+          "base_span_count": 3,
+          "probe_span_count": 3,
+          "matched_count": 3,
+          "max_bbox_delta": 4.858,
+          "p95_bbox_delta": 4.858,
+          "details": [
+            {
+              "status": "MATCHED",
+              "base_order": 0,
+              "probe_order": 0,
+              "text": "Header in CropBox",
+              "base_bbox": [
+                100.0,
+                104.95,
+                219.042,
+                124.186
+              ],
+              "probe_bbox": [
+                101.12,
+                109.808,
+                218.944,
+                122.772
+              ],
+              "delta_max": 4.858,
+              "delta_x0": 1.12,
+              "delta_y0": 4.858,
+              "delta_x1": 0.098,
+              "delta_y1": 1.414,
+              "base_font": "Helvetica",
+              "probe_font": "Helvetica",
+              "base_size": 14.0,
+              "probe_size": 14.0,
+              "char_verification": {
+                "matched": true,
+                "base_count": 17,
+                "probe_count": 17,
+                "max_h_delta": 0.196,
+                "max_v_delta": 2.38
+              }
+            },
+            {
+              "status": "MATCHED",
+              "base_order": 1,
+              "probe_order": 1,
+              "text": "Normal Body Text",
+              "base_bbox": [
+                100.0,
+                207.1,
+                196.024,
+                223.588
+              ],
+              "probe_bbox": [
+                100.912,
+                211.408,
+                195.94,
+                222.508
+              ],
+              "delta_max": 4.308,
+              "delta_x0": 0.912,
+              "delta_y0": 4.308,
+              "delta_x1": 0.084,
+              "delta_y1": 1.08,
+              "base_font": "Helvetica",
+              "probe_font": "Helvetica",
+              "base_size": 12.0,
+              "probe_size": 12.0,
+              "char_verification": {
+                "matched": true,
+                "base_count": 16,
+                "probe_count": 16,
+                "max_h_delta": 0.168,
+                "max_v_delta": 2.04
+              }
+            },
+            {
+              "status": "MATCHED",
+              "base_order": 2,
+              "probe_order": 2,
+              "text": "Outside of CropBox",
+              "base_bbox": [
+                20.0,
+                19.25,
+                107.26,
+                32.99
+              ],
+              "probe_bbox": [
+                20.48,
+                22.71,
+                107.19,
+                31.98
+              ],
+              "delta_max": 3.46,
+              "delta_x0": 0.48,
+              "delta_y0": 3.46,
+              "delta_x1": 0.07,
+              "delta_y1": 1.01,
+              "base_font": "Helvetica",
+              "probe_font": "Helvetica",
+              "base_size": 10.0,
+              "probe_size": 10.0,
+              "char_verification": {
+                "matched": true,
+                "base_count": 18,
+                "probe_count": 18,
+                "max_h_delta": 0.35,
+                "max_v_delta": 1.7
+              }
+            }
+          ]
+        },
+        "drawings": {
+          "base_drawing_count": 0,
+          "probe_drawing_count": 0,
+          "matched_count": 0,
+          "max_rect_delta": 0.0,
+          "details": []
+        }
+      }
+    ]
+  },
+  {
+    "file": "synth_invisible_text.pdf",
+    "base_page_count": 1,
+    "probe_page_count": 1,
+    "pages": [
+      {
+        "geometry": {
+          "page_index": 0,
+          "width_match": true,
+          "height_match": true,
+          "rotation_match": true,
+          "base_dims": [
+            500.0,
+            500.0,
+            0
+          ],
+          "probe_dims": [
+            500.0,
+            500.0,
+            0
+          ]
+        },
+        "spans": {
+          "base_span_count": 4,
+          "probe_span_count": 4,
+          "matched_count": 4,
+          "max_bbox_delta": 5.744,
+          "p95_bbox_delta": 5.744,
+          "details": [
+            {
+              "status": "MATCHED",
+              "base_order": 0,
+              "probe_order": 0,
+              "text": "Visible Main Title",
+              "base_bbox": [
+                50.0,
+                82.8,
+                170.912,
+                104.784
+              ],
+              "probe_bbox": [
+                50.064,
+                88.544,
+                170.256,
+                100.176
+              ],
+              "delta_max": 5.744,
+              "delta_x0": 0.064,
+              "delta_y0": 5.744,
+              "delta_x1": 0.656,
+              "delta_y1": 4.608,
+              "base_font": "Helvetica",
+              "probe_font": "Helvetica",
+              "base_size": 16.0,
+              "probe_size": 16.0,
+              "char_verification": {
+                "matched": true,
+                "base_count": 18,
+                "probe_count": 18,
+                "max_h_delta": 0.0,
+                "max_v_delta": 2.72
+              }
+            },
+            {
+              "status": "MATCHED",
+              "base_order": 1,
+              "probe_order": 1,
+              "text": "Invisible OCR Text Layer",
+              "base_bbox": [
+                50.0,
+                137.1,
+                183.368,
+                153.588
+              ],
+              "probe_bbox": [
+                51.116,
+                141.252,
+                183.536,
+                152.508
+              ],
+              "delta_max": 4.152,
+              "delta_x0": 1.116,
+              "delta_y0": 4.152,
+              "delta_x1": 0.168,
+              "delta_y1": 1.08,
+              "base_font": "Helvetica",
+              "probe_font": "Helvetica",
+              "base_size": 12.0,
+              "probe_size": 12.0,
+              "char_verification": {
+                "matched": true,
+                "base_count": 24,
+                "probe_count": 24,
+                "max_h_delta": 0.168,
+                "max_v_delta": 2.04
+              }
+            },
+            {
+              "status": "MATCHED",
+              "base_order": 2,
+              "probe_order": 2,
+              "text": "Overlapped Text Base",
+              "base_bbox": [
+                50.0,
+                187.1,
+                169.388,
+                203.588
+              ],
+              "probe_bbox": [
+                50.576,
+                191.252,
+                168.896,
+                202.376
+              ],
+              "delta_max": 4.152,
+              "delta_x0": 0.576,
+              "delta_y0": 4.152,
+              "delta_x1": 0.492,
+              "delta_y1": 1.212,
+              "base_font": "Helvetica",
+              "probe_font": "Helvetica",
+              "base_size": 12.0,
+              "probe_size": 12.0,
+              "char_verification": {
+                "matched": true,
+                "base_count": 20,
+                "probe_count": 20,
+                "max_h_delta": 0.168,
+                "max_v_delta": 2.04
+              }
+            },
+            {
+              "status": "MATCHED",
+              "base_order": 3,
+              "probe_order": 3,
+              "text": "Overlapped Text Top",
+              "base_bbox": [
+                50.0,
+                187.1,
+                162.716,
+                203.588
+              ],
+              "probe_bbox": [
+                50.576,
+                191.252,
+                162.236,
+                202.376
+              ],
+              "delta_max": 4.152,
+              "delta_x0": 0.576,
+              "delta_y0": 4.152,
+              "delta_x1": 0.48,
+              "delta_y1": 1.212,
+              "base_font": "Helvetica",
+              "probe_font": "Helvetica",
+              "base_size": 12.0,
+              "probe_size": 12.0,
+              "char_verification": {
+                "matched": true,
+                "base_count": 19,
+                "probe_count": 19,
+                "max_h_delta": 0.168,
+                "max_v_delta": 2.04
+              }
+            }
+          ]
+        },
+        "drawings": {
+          "base_drawing_count": 0,
+          "probe_drawing_count": 0,
+          "matched_count": 0,
+          "max_rect_delta": 0.0,
+          "details": []
+        }
+      }
+    ]
+  },
+  {
+    "file": "synth_mixed_fonts.pdf",
+    "base_page_count": 1,
+    "probe_page_count": 1,
+    "pages": [
+      {
+        "geometry": {
+          "page_index": 0,
+          "width_match": true,
+          "height_match": true,
+          "rotation_match": true,
+          "base_dims": [
+            600.0,
+            400.0,
+            0
+          ],
+          "probe_dims": [
+            600.0,
+            400.0,
+            0
+          ]
+        },
+        "spans": {
+          "base_span_count": 5,
+          "probe_span_count": 4,
+          "matched_count": 4,
+          "max_bbox_delta": 5.026,
+          "p95_bbox_delta": 5.026,
+          "details": [
+            {
+              "status": "MATCHED",
+              "base_order": 0,
+              "probe_order": 0,
+              "text": "Project Revenue:",
+              "base_bbox": [
+                50.0,
+                84.95,
+                157.38,
+                104.186
+              ],
+              "probe_bbox": [
+                51.078,
+                89.976,
+                156.148,
+                102.926
+              ],
+              "delta_max": 5.026,
+              "delta_x0": 1.078,
+              "delta_y0": 5.026,
+              "delta_x1": 1.232,
+              "delta_y1": 1.26,
+              "base_font": "Helvetica",
+              "probe_font": "Helvetica",
+              "base_size": 14.0,
+              "probe_size": 14.0,
+              "char_verification": {
+                "matched": true,
+                "base_count": 16,
+                "probe_count": 16,
+                "max_h_delta": 0.63,
+                "max_v_delta": 2.38
+              }
+            },
+            {
+              "status": "MATCHED",
+              "base_order": 1,
+              "probe_order": 1,
+              "text": "1",
+              "base_bbox": [
+                170.0,
+                86.4,
+                174.448,
+                97.392
+              ],
+              "probe_bbox": [
+                170.872,
+                89.248,
+                172.984,
+                95.0
+              ],
+              "delta_max": 2.848,
+              "delta_x0": 0.872,
+              "delta_y0": 2.848,
+              "delta_x1": 1.464,
+              "delta_y1": 2.392,
+              "base_font": "Helvetica",
+              "probe_font": "Helvetica",
+              "base_size": 8.0,
+              "probe_size": 8.0,
+              "char_verification": {
+                "matched": true,
+                "base_count": 1,
+                "probe_count": 1,
+                "max_h_delta": 0.0,
+                "max_v_delta": 1.36
+              }
+            },
+            {
+              "status": "PROBE_MISSING",
+              "base_order": 2,
+              "text": " ",
+              "base_bbox": [
+                174.448,
+                81.0,
+                180.0,
+                102.8
+              ],
+              "probe_bbox": null
+            },
+            {
+              "status": "MATCHED",
+              "base_order": 3,
+              "probe_order": 2,
+              "text": "主要业务收入",
+              "base_bbox": [
+                180.0,
+                86.0,
+                264.0,
+                102.8
+              ],
+              "probe_bbox": [
+                180.658,
+                88.296,
+                263.398,
+                101.414
+              ],
+              "delta_max": 2.296,
+              "delta_x0": 0.658,
+              "delta_y0": 2.296,
+              "delta_x1": 0.602,
+              "delta_y1": 1.386,
+              "base_font": "Song",
+              "probe_font": "Song",
+              "base_size": 14.0,
+              "probe_size": 14.0,
+              "char_verification": {
+                "matched": true,
+                "base_count": 6,
+                "probe_count": 6,
+                "max_h_delta": 0.0,
+                "max_v_delta": 0.0
+              }
+            },
+            {
+              "status": "MATCHED",
+              "base_order": 4,
+              "probe_order": 3,
+              "text": "( audited )",
+              "base_bbox": [
+                300.0,
+                88.417,
+                345.21,
+                103.091
+              ],
+              "probe_bbox": [
+                300.451,
+                92.366,
+                344.759,
+                102.343
+              ],
+              "delta_max": 3.949,
+              "delta_x0": 0.451,
+              "delta_y0": 3.949,
+              "delta_x1": 0.451,
+              "delta_y1": 0.748,
+              "base_font": "Times-Roman",
+              "probe_font": "Times-Roman",
+              "base_size": 11.0,
+              "probe_size": 11.0,
+              "char_verification": {
+                "matched": true,
+                "base_count": 11,
+                "probe_count": 11,
+                "max_h_delta": 0.022,
+                "max_v_delta": 1.782
+              }
+            }
+          ]
+        },
+        "drawings": {
+          "base_drawing_count": 0,
+          "probe_drawing_count": 0,
+          "matched_count": 0,
+          "max_rect_delta": 0.0,
+          "details": []
+        }
+      }
+    ]
+  },
+  {
+    "file": "synth_rotations.pdf",
+    "base_page_count": 4,
+    "probe_page_count": 4,
+    "pages": [
+      {
+        "geometry": {
+          "page_index": 0,
+          "width_match": true,
+          "height_match": true,
+          "rotation_match": true,
+          "base_dims": [
+            400.0,
+            600.0,
+            0
+          ],
+          "probe_dims": [
+            400.0,
+            600.0,
+            0
+          ]
+        },
+        "spans": {
+          "base_span_count": 1,
+          "probe_span_count": 1,
+          "matched_count": 1,
+          "max_bbox_delta": 4.984,
+          "p95_bbox_delta": 4.984,
+          "details": [
+            {
+              "status": "MATCHED",
+              "base_order": 0,
+              "probe_order": 0,
+              "text": "Page Rotation 0 Text",
+              "base_bbox": [
+                100.0,
+                134.95,
+                231.516,
+                154.186
+              ],
+              "probe_bbox": [
+                101.078,
+                139.934,
+                231.418,
+                152.926
+              ],
+              "delta_max": 4.984,
+              "delta_x0": 1.078,
+              "delta_y0": 4.984,
+              "delta_x1": 0.098,
+              "delta_y1": 1.26,
+              "base_font": "Helvetica",
+              "probe_font": "Helvetica",
+              "base_size": 14.0,
+              "probe_size": 14.0,
+              "char_verification": {
+                "matched": true,
+                "base_count": 20,
+                "probe_count": 20,
+                "max_h_delta": 0.0,
+                "max_v_delta": 2.38
+              }
+            }
+          ]
+        },
+        "drawings": {
+          "base_drawing_count": 0,
+          "probe_drawing_count": 0,
+          "matched_count": 0,
+          "max_rect_delta": 0.0,
+          "details": []
+        }
+      },
+      {
+        "geometry": {
+          "page_index": 1,
+          "width_match": true,
+          "height_match": true,
+          "rotation_match": true,
+          "base_dims": [
+            600.0,
+            400.0,
+            90
+          ],
+          "probe_dims": [
+            600.0,
+            400.0,
+            90
+          ]
+        },
+        "spans": {
+          "base_span_count": 1,
+          "probe_span_count": 1,
+          "matched_count": 1,
+          "max_bbox_delta": 4.984,
+          "p95_bbox_delta": 4.984,
+          "details": [
+            {
+              "status": "MATCHED",
+              "base_order": 0,
+              "probe_order": 0,
+              "text": "Page Rotation 90 Text",
+              "base_bbox": [
+                100.0,
+                134.95,
+                239.3,
+                154.186
+              ],
+              "probe_bbox": [
+                101.078,
+                139.934,
+                239.202,
+                152.926
+              ],
+              "delta_max": 4.984,
+              "delta_x0": 1.078,
+              "delta_y0": 4.984,
+              "delta_x1": 0.098,
+              "delta_y1": 1.26,
+              "base_font": "Helvetica",
+              "probe_font": "Helvetica",
+              "base_size": 14.0,
+              "probe_size": 14.0,
+              "char_verification": {
+                "matched": true,
+                "base_count": 21,
+                "probe_count": 21,
+                "max_h_delta": 0.0,
+                "max_v_delta": 2.38
+              }
+            }
+          ]
+        },
+        "drawings": {
+          "base_drawing_count": 0,
+          "probe_drawing_count": 0,
+          "matched_count": 0,
+          "max_rect_delta": 0.0,
+          "details": []
+        }
+      },
+      {
+        "geometry": {
+          "page_index": 2,
+          "width_match": true,
+          "height_match": true,
+          "rotation_match": true,
+          "base_dims": [
+            400.0,
+            600.0,
+            180
+          ],
+          "probe_dims": [
+            400.0,
+            600.0,
+            180
+          ]
+        },
+        "spans": {
+          "base_span_count": 1,
+          "probe_span_count": 1,
+          "matched_count": 1,
+          "max_bbox_delta": 4.984,
+          "p95_bbox_delta": 4.984,
+          "details": [
+            {
+              "status": "MATCHED",
+              "base_order": 0,
+              "probe_order": 0,
+              "text": "Page Rotation 180 Text",
+              "base_bbox": [
+                100.0,
+                134.95,
+                247.084,
+                154.186
+              ],
+              "probe_bbox": [
+                101.078,
+                139.934,
+                246.986,
+                152.926
+              ],
+              "delta_max": 4.984,
+              "delta_x0": 1.078,
+              "delta_y0": 4.984,
+              "delta_x1": 0.098,
+              "delta_y1": 1.26,
+              "base_font": "Helvetica",
+              "probe_font": "Helvetica",
+              "base_size": 14.0,
+              "probe_size": 14.0,
+              "char_verification": {
+                "matched": true,
+                "base_count": 22,
+                "probe_count": 22,
+                "max_h_delta": 0.0,
+                "max_v_delta": 2.38
+              }
+            }
+          ]
+        },
+        "drawings": {
+          "base_drawing_count": 0,
+          "probe_drawing_count": 0,
+          "matched_count": 0,
+          "max_rect_delta": 0.0,
+          "details": []
+        }
+      },
+      {
+        "geometry": {
+          "page_index": 3,
+          "width_match": true,
+          "height_match": true,
+          "rotation_match": true,
+          "base_dims": [
+            600.0,
+            400.0,
+            270
+          ],
+          "probe_dims": [
+            600.0,
+            400.0,
+            270
+          ]
+        },
+        "spans": {
+          "base_span_count": 1,
+          "probe_span_count": 1,
+          "matched_count": 1,
+          "max_bbox_delta": 4.984,
+          "p95_bbox_delta": 4.984,
+          "details": [
+            {
+              "status": "MATCHED",
+              "base_order": 0,
+              "probe_order": 0,
+              "text": "Page Rotation 270 Text",
+              "base_bbox": [
+                100.0,
+                134.95,
+                247.084,
+                154.186
+              ],
+              "probe_bbox": [
+                101.078,
+                139.934,
+                246.986,
+                152.926
+              ],
+              "delta_max": 4.984,
+              "delta_x0": 1.078,
+              "delta_y0": 4.984,
+              "delta_x1": 0.098,
+              "delta_y1": 1.26,
+              "base_font": "Helvetica",
+              "probe_font": "Helvetica",
+              "base_size": 14.0,
+              "probe_size": 14.0,
+              "char_verification": {
+                "matched": true,
+                "base_count": 22,
+                "probe_count": 22,
+                "max_h_delta": 0.0,
+                "max_v_delta": 2.38
+              }
+            }
+          ]
+        },
+        "drawings": {
+          "base_drawing_count": 0,
+          "probe_drawing_count": 0,
+          "matched_count": 0,
+          "max_rect_delta": 0.0,
+          "details": []
+        }
+      }
+    ]
+  },
+  {
+    "file": "synth_segmented_lines.pdf",
+    "base_page_count": 1,
+    "probe_page_count": 1,
+    "pages": [
+      {
+        "geometry": {
+          "page_index": 0,
+          "width_match": true,
+          "height_match": true,
+          "rotation_match": true,
+          "base_dims": [
+            500.0,
+            400.0,
+            0
+          ],
+          "probe_dims": [
+            500.0,
+            400.0,
+            0
+          ]
+        },
+        "spans": {
+          "base_span_count": 2,
+          "probe_span_count": 2,
+          "matched_count": 2,
+          "max_bbox_delta": 4.164,
+          "p95_bbox_delta": 4.164,
+          "details": [
+            {
+              "status": "MATCHED",
+              "base_order": 0,
+              "probe_order": 0,
+              "text": "Table Cell 1",
+              "base_bbox": [
+                60.0,
+                117.1,
+                124.02,
+                133.588
+              ],
+              "probe_bbox": [
+                60.276,
+                121.264,
+                121.824,
+                130.132
+              ],
+              "delta_max": 4.164,
+              "delta_x0": 0.276,
+              "delta_y0": 4.164,
+              "delta_x1": 2.196,
+              "delta_y1": 3.456,
+              "base_font": "Helvetica",
+              "probe_font": "Helvetica",
+              "base_size": 12.0,
+              "probe_size": 12.0,
+              "char_verification": {
+                "matched": true,
+                "base_count": 12,
+                "probe_count": 12,
+                "max_h_delta": 0.0,
+                "max_v_delta": 2.04
+              }
+            },
+            {
+              "status": "MATCHED",
+              "base_order": 1,
+              "probe_order": 1,
+              "text": "Table Cell 2",
+              "base_bbox": [
+                250.0,
+                117.1,
+                314.02,
+                133.588
+              ],
+              "probe_bbox": [
+                250.276,
+                121.264,
+                313.384,
+                130.132
+              ],
+              "delta_max": 4.164,
+              "delta_x0": 0.276,
+              "delta_y0": 4.164,
+              "delta_x1": 0.636,
+              "delta_y1": 3.456,
+              "base_font": "Helvetica",
+              "probe_font": "Helvetica",
+              "base_size": 12.0,
+              "probe_size": 12.0,
+              "char_verification": {
+                "matched": true,
+                "base_count": 12,
+                "probe_count": 12,
+                "max_h_delta": 0.0,
+                "max_v_delta": 2.04
+              }
+            }
+          ]
+        },
+        "drawings": {
+          "base_drawing_count": 6,
+          "probe_drawing_count": 6,
+          "matched_count": 6,
+          "max_rect_delta": 0.0,
+          "details": [
+            {
+              "base_index": 0,
+              "probe_index": 0,
+              "status": "MATCHED",
+              "rect_delta": 0.0,
+              "base_rect": [
+                50.0,
+                80.0,
+                450.0,
+                80.0
+              ],
+              "probe_rect": [
+                50.0,
+                80.0,
+                450.0,
+                80.0
+              ],
+              "base_width": 1.5,
+              "probe_width": 1.5,
+              "items_matched": true,
+              "item_point_max_delta": 0.0
+            },
+            {
+              "base_index": 1,
+              "probe_index": 1,
+              "status": "MATCHED",
+              "rect_delta": 0.0,
+              "base_rect": [
+                50.0,
+                180.0,
+                180.0,
+                180.0
+              ],
+              "probe_rect": [
+                50.0,
+                180.0,
+                180.0,
+                180.0
+              ],
+              "base_width": 1.0,
+              "probe_width": 1.0,
+              "items_matched": true,
+              "item_point_max_delta": 0.0
+            },
+            {
+              "base_index": 2,
+              "probe_index": 2,
+              "status": "MATCHED",
+              "rect_delta": 0.0,
+              "base_rect": [
+                180.0,
+                180.0,
+                320.0,
+                180.0
+              ],
+              "probe_rect": [
+                180.0,
+                180.0,
+                320.0,
+                180.0
+              ],
+              "base_width": 1.0,
+              "probe_width": 1.0,
+              "items_matched": true,
+              "item_point_max_delta": 0.0
+            },
+            {
+              "base_index": 3,
+              "probe_index": 3,
+              "status": "MATCHED",
+              "rect_delta": 0.0,
+              "base_rect": [
+                320.0,
+                180.0,
+                450.0,
+                180.0
+              ],
+              "probe_rect": [
+                320.0,
+                180.0,
+                450.0,
+                180.0
+              ],
+              "base_width": 1.0,
+              "probe_width": 1.0,
+              "items_matched": true,
+              "item_point_max_delta": 0.0
+            },
+            {
+              "base_index": 4,
+              "probe_index": 4,
+              "status": "MATCHED",
+              "rect_delta": 0.0,
+              "base_rect": [
+                50.0,
+                80.0,
+                50.0,
+                180.0
+              ],
+              "probe_rect": [
+                50.0,
+                80.0,
+                50.0,
+                180.0
+              ],
+              "base_width": 1.0,
+              "probe_width": 1.0,
+              "items_matched": true,
+              "item_point_max_delta": 0.0
+            },
+            {
+              "base_index": 5,
+              "probe_index": 5,
+              "status": "MATCHED",
+              "rect_delta": 0.0,
+              "base_rect": [
+                450.0,
+                80.0,
+                450.0,
+                180.0
+              ],
+              "probe_rect": [
+                450.0,
+                80.0,
+                450.0,
+                180.0
+              ],
+              "base_width": 1.0,
+              "probe_width": 1.0,
+              "items_matched": true,
+              "item_point_max_delta": 0.0
+            }
+          ]
+        }
+      }
+    ]
+  }
+]
