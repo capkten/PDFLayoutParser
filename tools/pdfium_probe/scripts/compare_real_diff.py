@@ -102,9 +102,9 @@ def main():
     print(f"Fully Accepted Spans  : {total_fully_accepted} ({total_fully_accepted / max(1, total_base_spans) * 100:.1f}%)")
     print(f"Missing Base Spans    : {total_missing_spans} ({total_missing_spans / max(1, total_base_spans) * 100:.1f}%)")
     print(f"Total Drawings Match  : {total_matched_drawings} / {total_base_drawings} (100% matched within rect/point/width tol)")
-    print("\nScope Limitation Note: 452/452 drawings match is limited to these 4 pages under current comparison model;")
+    print(f"\nScope Limitation Note: {total_matched_drawings}/{total_base_drawings} drawings match is limited to these {len(report)} pages under current comparison model;")
     print("does not imply coverage for all PDF types, Bezier curves, clip paths, or transparency.")
-    print("\nDIAGNOSTIC STATUS: Text grain fragmentation (8.25x) and LineBox/GlyphBox offset confirm gate NOT PASSED.")
+    print(f"\nDIAGNOSTIC STATUS: Text grain fragmentation ({total_probe_spans / max(1, total_base_spans):.2f}x) and LineBox/GlyphBox offset confirm gate NOT PASSED.")
     print("Script Role: Diagnostic baseline audit script (output written to diff_report_real.json). Non-blocking for CI.")
     print("Sprint 1 Final Verdict: Probe and diff infrastructure verified. Text Snapshot quality gate NOT PASSED. Strictly forbid connecting to table recovery algorithms. Sprint 2 will conduct read-only aggregation experiments.")
 

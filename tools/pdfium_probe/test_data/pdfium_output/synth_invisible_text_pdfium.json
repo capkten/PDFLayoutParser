@@ -1,9 +1,11 @@
 {
+  "schema_version": "pdfium_raw_snapshot_v1.0",
   "generator": "pdfium_probe_0.1.0",
   "source_file": "synth_invisible_text.pdf",
   "page_count": 1,
   "pages": [
     {
+      "schema_version": "pdfium_raw_page_v1.0",
       "page_index": 0,
       "width": 500.0,
       "height": 500.0,
@@ -20,6 +22,7 @@
         500.0,
         500.0
       ],
+      "has_invisible_text": true,
       "spans": [
         {
           "order": 0,
@@ -32,12 +35,17 @@
           ],
           "font": "Helvetica",
           "size": 16.0,
-          "flags": null,
-          "source_position": [
-            0,
-            0,
-            0
-          ],
+          "flags": 0,
+          "render_mode": 0,
+          "is_invisible": false,
+          "provenance": {
+            "page_index": 0,
+            "pdfium_object_index": 0,
+            "character_count": 18,
+            "is_derived": false,
+            "derived_block": null,
+            "derived_line": null
+          },
           "characters": [
             {
               "c": "V",
@@ -214,12 +222,17 @@
           ],
           "font": "Helvetica",
           "size": 12.0,
-          "flags": null,
-          "source_position": [
-            0,
-            0,
-            1
-          ],
+          "flags": 64,
+          "render_mode": 3,
+          "is_invisible": true,
+          "provenance": {
+            "page_index": 0,
+            "pdfium_object_index": 1,
+            "character_count": 24,
+            "is_derived": false,
+            "derived_block": null,
+            "derived_line": null
+          },
           "characters": [
             {
               "c": "I",
@@ -441,7 +454,7 @@
         },
         {
           "order": 2,
-          "text": "Overlapped Text Base",
+          "text": "Overlapped Text Base ",
           "bbox": [
             50.576,
             191.252,
@@ -450,12 +463,17 @@
           ],
           "font": "Helvetica",
           "size": 12.0,
-          "flags": null,
-          "source_position": [
-            0,
-            0,
-            2
-          ],
+          "flags": 0,
+          "render_mode": 0,
+          "is_invisible": false,
+          "provenance": {
+            "page_index": 0,
+            "pdfium_object_index": 2,
+            "character_count": 20,
+            "is_derived": false,
+            "derived_block": null,
+            "derived_line": null
+          },
           "characters": [
             {
               "c": "O",
@@ -650,12 +668,17 @@
           ],
           "font": "Helvetica",
           "size": 12.0,
-          "flags": null,
-          "source_position": [
-            0,
-            0,
-            3
-          ],
+          "flags": 0,
+          "render_mode": 0,
+          "is_invisible": false,
+          "provenance": {
+            "page_index": 0,
+            "pdfium_object_index": 3,
+            "character_count": 19,
+            "is_derived": false,
+            "derived_block": null,
+            "derived_line": null
+          },
           "characters": [
             {
               "c": "O",

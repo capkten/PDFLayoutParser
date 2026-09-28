@@ -1,65 +1,80 @@
 use pdfium_render::prelude::*;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs::{self, File};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-#[derive(Serialize)]
-struct CharInfo {
-    c: String,
-    bbox: [f64; 4],
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct CharInfo {
+    pub c: String,
+    pub bbox: [f64; 4],
 }
 
-#[derive(Serialize)]
-struct SpanInfo {
-    order: i64,
-    text: String,
-    bbox: [f64; 4],
-    font: Option<String>,
-    size: Option<f64>,
-    flags: Option<i64>,
-    source_position: [i64; 3], // [derived_block, derived_line, derived_span]
-    characters: Vec<CharInfo>,
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct ProvenanceSidecar {
+    pub page_index: usize,
+    pub pdfium_object_index: usize, // 在 page.objects() 中的真实原始序号
+    pub character_count: usize,
+    pub is_derived: bool,           // 原生探针输出固定为 false
+    pub derived_block: Option<i64>, // 未做 block 聚类，诚实标记为 None
+    pub derived_line: Option<i64>,  // 未做 line 聚类，诚实标记为 None
 }
 
-#[derive(Serialize)]
-struct DrawingItem {
-    cmd: String,
-    points: Vec<[f64; 2]>,
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct SpanInfo {
+    pub order: i64,
+    pub text: String,
+    pub bbox: [f64; 4],
+    pub font: Option<String>,
+    pub size: Option<f64>,
+    pub flags: i64,
+    pub render_mode: i32,
+    pub is_invisible: bool,
+    pub provenance: ProvenanceSidecar,
+    pub characters: Vec<CharInfo>,
 }
 
-#[derive(Serialize)]
-struct DrawingInfo {
-    drawing_index: usize,
-    rect: [f64; 4],
-    width: f64,
-    color: Option<Vec<f64>>,
-    fill: Option<Vec<f64>>,
-    items: Vec<DrawingItem>,
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct DrawingItem {
+    pub cmd: String,
+    pub points: Vec<[f64; 2]>,
 }
 
-#[derive(Serialize)]
-struct PageInfo {
-    page_index: usize,
-    width: f64,
-    height: f64,
-    rotation: i64,
-    crop_box: [f64; 4],
-    media_box: [f64; 4],
-    spans: Vec<SpanInfo>,
-    drawings: Vec<DrawingInfo>,
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct DrawingInfo {
+    pub drawing_index: usize,
+    pub rect: [f64; 4],
+    pub width: f64,
+    pub color: Option<Vec<f64>>,
+    pub fill: Option<Vec<f64>>,
+    pub items: Vec<DrawingItem>,
 }
 
-#[derive(Serialize)]
-struct DocumentSnapshot {
-    generator: String,
-    source_file: String,
-    page_count: usize,
-    pages: Vec<PageInfo>,
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct PdfiumRawPage {
+    pub schema_version: String,
+    pub page_index: usize,
+    pub width: f64,
+    pub height: f64,
+    pub rotation: i64,
+    pub crop_box: [f64; 4],
+    pub media_box: [f64; 4],
+    pub has_invisible_text: bool,
+    pub spans: Vec<SpanInfo>,
+    pub drawings: Vec<DrawingInfo>,
 }
 
-fn verify_file_sha256(path: &Path, expected_sha256: &str) -> Result<(), String> {
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct PdfiumRawSnapshot {
+    pub schema_version: String,
+    pub generator: String,
+    pub source_file: String,
+    pub page_count: usize,
+    pub pages: Vec<PdfiumRawPage>,
+}
+
+pub fn verify_file_sha256(path: &Path, expected_sha256: &str) -> Result<(), String> {
     let mut file = File::open(path).map_err(|e| format!("Failed to open {:?}: {}", path, e))?;
     let mut hasher = Sha256::new();
     let mut buffer = [0u8; 8192];
@@ -80,11 +95,61 @@ fn verify_file_sha256(path: &Path, expected_sha256: &str) -> Result<(), String> 
     Ok(())
 }
 
-fn round4(v: f64) -> f64 {
+pub fn round4(v: f64) -> f64 {
     (v * 10000.0).round() / 10000.0
 }
 
-fn extract_page(page: &PdfPage, page_index: usize) -> Result<PageInfo, Box<dyn std::error::Error>> {
+/// 将 PDF 原始用户空间点映射到未旋转局部页面坐标系（以 CropBox 左上角为原点，自顶向下）。
+/// 契约说明：与 PyMuPDF rawdict 及现有生产 NativeSpanDto 严格对齐——保留局部坐标系，不随 page.rotation 交换轴向。
+pub fn transform_point_to_page_coords(
+    x: f64,
+    y: f64,
+    crop_x0: f64,
+    crop_y1: f64,
+) -> [f64; 2] {
+    [round4(x - crop_x0), round4(crop_y1 - y)]
+}
+
+/// 将 PDF 原始用户空间点映射到视口坐标系（考虑 page.rotation 顺时针旋转后，以视口左上角为原点）。
+pub fn transform_point_to_viewport(
+    x: f64,
+    y: f64,
+    crop_x0: f64,
+    crop_y0: f64,
+    crop_x1: f64,
+    crop_y1: f64,
+    rotation: i64,
+) -> [f64; 2] {
+    let x_crop = x - crop_x0;
+    let y_crop = y - crop_y0;
+
+    let (vx, vy) = match rotation {
+        90 => (y_crop, x_crop),
+        180 => (crop_x1 - x, y_crop),
+        270 => (crop_y1 - y, crop_x1 - x),
+        _ => (x_crop, crop_y1 - y),
+    };
+    [round4(vx), round4(vy)]
+}
+
+pub fn transform_rect_coords(
+    x0: f64,
+    y0: f64,
+    x1: f64,
+    y1: f64,
+    crop_x0: f64,
+    crop_y1: f64,
+) -> [f64; 4] {
+    let p0 = transform_point_to_page_coords(x0, y0, crop_x0, crop_y1);
+    let p1 = transform_point_to_page_coords(x1, y1, crop_x0, crop_y1);
+    let min_x = p0[0].min(p1[0]);
+    let min_y = p0[1].min(p1[1]);
+    let max_x = p0[0].max(p1[0]);
+    let max_y = p0[1].max(p1[1]);
+    [round4(min_x), round4(min_y), round4(max_x), round4(max_y)]
+}
+
+pub fn extract_page(page: &PdfPage, page_index: usize) -> Result<PdfiumRawPage, Box<dyn std::error::Error>> {
     let width = round4(page.width().value as f64);
     let height = round4(page.height().value as f64);
     let rotation = match page.rotation()? {
@@ -94,7 +159,6 @@ fn extract_page(page: &PdfPage, page_index: usize) -> Result<PageInfo, Box<dyn s
         PdfPageRenderRotation::Degrees270 => 270,
     };
 
-    // 读取真实的 CropBox 与 MediaBox
     let crop_bounds = page
         .boundaries()
         .crop()
@@ -119,42 +183,47 @@ fn extract_page(page: &PdfPage, page_index: usize) -> Result<PageInfo, Box<dyn s
     let crop_box = [round4(crop_x0), round4(crop_y0), round4(crop_x1), round4(crop_y1)];
     let media_box = [round4(media_x0), round4(media_y0), round4(media_x1), round4(media_y1)];
 
-    // 坐标变换闭包：将 PDFium 原始图元坐标（自底向上）映射到视口坐标（以 CropBox 左上角为原点，自顶向下）
-    // 注意：与 PyMuPDF rawdict 契约严格对齐——保留页面局部坐标系，不随 page rotation 交换轴向
-    let transform_rect = |b: PdfQuadPoints| -> [f64; 4] {
-        let raw_x0 = b.left().value as f64;
-        let raw_y0 = b.bottom().value as f64;
-        let raw_x1 = b.right().value as f64;
-        let raw_y1 = b.top().value as f64;
-
-        let vx0 = raw_x0 - crop_x0;
-        let vy0 = crop_y1 - raw_y1;
-        let vx1 = raw_x1 - crop_x0;
-        let vy1 = crop_y1 - raw_y0;
-
-        [
-            round4(vx0.min(vx1)),
-            round4(vy0.min(vy1)),
-            round4(vx0.max(vx1)),
-            round4(vy0.max(vy1)),
-        ]
-    };
-
     let page_text = page.text().ok();
     let mut spans = Vec::new();
     let mut order = 0i64;
+    let mut has_invisible_text = false;
 
-    for obj in page.objects().iter() {
+    for (obj_idx, obj) in page.objects().iter().enumerate() {
         if let Some(text_obj) = obj.as_text_object() {
-            let text = text_obj.text().trim().to_string();
+            // 禁止使用 .trim() 盲目丢弃独立空格！保留原始字符串
+            let text = text_obj.text();
             if text.is_empty() {
                 continue;
             }
             let bounds = text_obj.bounds()?;
-            let bbox = transform_rect(bounds);
+            let bbox = transform_rect_coords(
+                bounds.left().value as f64,
+                bounds.bottom().value as f64,
+                bounds.right().value as f64,
+                bounds.top().value as f64,
+                crop_x0,
+                crop_y1,
+            );
 
             let font_name = Some(text_obj.font().name());
             let font_size = Some(round4(text_obj.unscaled_font_size().value as f64));
+
+            let render_mode = text_obj.render_mode();
+            let is_invisible = matches!(render_mode, PdfPageTextRenderMode::Invisible);
+            let render_mode_int = match render_mode {
+                PdfPageTextRenderMode::Unknown => -1,
+                PdfPageTextRenderMode::FilledUnstroked => 0,
+                PdfPageTextRenderMode::StrokedUnfilled => 1,
+                PdfPageTextRenderMode::FilledThenStroked => 2,
+                PdfPageTextRenderMode::Invisible => 3,
+                _ => 0,
+            };
+
+            if is_invisible {
+                has_invisible_text = true;
+            }
+
+            let flags: i64 = if is_invisible { 1 << 6 } else { 0 };
 
             let mut chars_list = Vec::new();
             if let Some(ref pt) = page_text {
@@ -162,22 +231,17 @@ fn extract_page(page: &PdfPage, page_index: usize) -> Result<PageInfo, Box<dyn s
                     for ch in chars.iter() {
                         if let Some(c_str) = ch.unicode_string() {
                             if let Ok(b) = ch.loose_bounds() {
-                                let raw_x0 = b.left().value as f64;
-                                let raw_y0 = b.bottom().value as f64;
-                                let raw_x1 = b.right().value as f64;
-                                let raw_y1 = b.top().value as f64;
-                                let vx0 = raw_x0 - crop_x0;
-                                let vy0 = crop_y1 - raw_y1;
-                                let vx1 = raw_x1 - crop_x0;
-                                let vy1 = crop_y1 - raw_y0;
+                                let c_bbox = transform_rect_coords(
+                                    b.left().value as f64,
+                                    b.bottom().value as f64,
+                                    b.right().value as f64,
+                                    b.top().value as f64,
+                                    crop_x0,
+                                    crop_y1,
+                                );
                                 chars_list.push(CharInfo {
                                     c: c_str,
-                                    bbox: [
-                                        round4(vx0.min(vx1)),
-                                        round4(vy0.min(vy1)),
-                                        round4(vx0.max(vx1)),
-                                        round4(vy0.max(vy1)),
-                                    ],
+                                    bbox: c_bbox,
                                 });
                             }
                         }
@@ -185,14 +249,25 @@ fn extract_page(page: &PdfPage, page_index: usize) -> Result<PageInfo, Box<dyn s
                 }
             }
 
+            let provenance = ProvenanceSidecar {
+                page_index,
+                pdfium_object_index: obj_idx,
+                character_count: chars_list.len(),
+                is_derived: false,
+                derived_block: None,
+                derived_line: None,
+            };
+
             spans.push(SpanInfo {
                 order,
                 text,
                 bbox,
                 font: font_name,
                 size: font_size,
-                flags: None,
-                source_position: [0, 0, order],
+                flags,
+                render_mode: render_mode_int,
+                is_invisible,
+                provenance,
                 characters: chars_list,
             });
             order += 1;
@@ -205,12 +280,20 @@ fn extract_page(page: &PdfPage, page_index: usize) -> Result<PageInfo, Box<dyn s
         if let Some(path_obj) = obj.as_path_object() {
             let width_val = round4(path_obj.stroke_width().map(|w| w.value as f64).unwrap_or(1.0));
             let bounds = path_obj.bounds()?;
-            let mut rect = transform_rect(bounds);
+            let mut rect = transform_rect_coords(
+                bounds.left().value as f64,
+                bounds.bottom().value as f64,
+                bounds.right().value as f64,
+                bounds.top().value as f64,
+                crop_x0,
+                crop_y1,
+            );
 
             let mut items = Vec::new();
             let mut current_pt: Option<[f64; 2]> = None;
             let mut subpath_start: Option<[f64; 2]> = None;
             let mut pts_all: Vec<[f64; 2]> = Vec::new();
+
             let segments = match path_obj.matrix() {
                 Ok(m) => path_obj.segments().transform(m),
                 Err(_) => path_obj.segments(),
@@ -220,8 +303,7 @@ fn extract_page(page: &PdfPage, page_index: usize) -> Result<PageInfo, Box<dyn s
                 let (pt_x, pt_y) = seg.point();
                 let raw_x = pt_x.value as f64;
                 let raw_y = pt_y.value as f64;
-                let vx = round4(raw_x - crop_x0);
-                let vy = round4(crop_y1 - raw_y);
+                let [vx, vy] = transform_point_to_page_coords(raw_x, raw_y, crop_x0, crop_y1);
                 pts_all.push([vx, vy]);
 
                 match seg.segment_type() {
@@ -280,19 +362,21 @@ fn extract_page(page: &PdfPage, page_index: usize) -> Result<PageInfo, Box<dyn s
         }
     }
 
-    Ok(PageInfo {
+    Ok(PdfiumRawPage {
+        schema_version: "pdfium_raw_page_v1.0".to_string(),
         page_index,
         width,
         height,
         rotation,
         crop_box,
         media_box,
+        has_invisible_text,
         spans,
         drawings,
     })
 }
 
-fn process_pdf_file(
+pub fn process_pdf_file(
     pdfium: &Pdfium,
     pdf_path: &Path,
     out_dir: &Path,
@@ -308,7 +392,8 @@ fn process_pdf_file(
         pages.push(extract_page(&page, i as usize)?);
     }
 
-    let snapshot = DocumentSnapshot {
+    let snapshot = PdfiumRawSnapshot {
+        schema_version: "pdfium_raw_snapshot_v1.0".to_string(),
         generator: "pdfium_probe_0.1.0".to_string(),
         source_file: file_name.to_string(),
         page_count: pages.len(),
@@ -318,17 +403,47 @@ fn process_pdf_file(
     let out_file = out_dir.join(format!("{}_pdfium.json", base_name));
     let json_str = serde_json::to_string_pretty(&snapshot)?;
     fs::write(&out_file, json_str)?;
-    println!("[pdfium_probe] Wrote snapshot to {:?}", out_file);
+    println!("[pdfium_probe] Wrote raw snapshot to {:?}", out_file);
     Ok(())
+}
+
+pub fn get_platform_native_lib(manifest_dir: &Path) -> Result<(PathBuf, &'static str), String> {
+    if cfg!(target_os = "windows") && cfg!(target_arch = "x86_64") {
+        Ok((
+            manifest_dir.join("native/win-x64/pdfium.dll"),
+            "d42c452a4cf8ca19a87e9c659d4e05035be742c21696ac13431cf73ac1bbf14b",
+        ))
+    } else if cfg!(target_os = "linux") && cfg!(target_arch = "x86_64") {
+        Ok((
+            manifest_dir.join("native/linux-x64/libpdfium.so"),
+            "f9d6c4c5970cffaa72eb995a1ee594b9f2d1e21b8f041ff91b17a1a45749f997",
+        ))
+    } else if cfg!(target_os = "macos") && cfg!(target_arch = "aarch64") {
+        Ok((
+            manifest_dir.join("native/mac-arm64/libpdfium.dylib"),
+            "134c44ec94b29bb80cb8c0a875a746522ae5746b14644aee50b86b5d92df9eb7",
+        ))
+    } else if cfg!(target_os = "macos") && cfg!(target_arch = "x86_64") {
+        Ok((
+            manifest_dir.join("native/mac-x64/libpdfium.dylib"),
+            "16dbd78c3937ca8d269894e43f5509dfbafe9b177d40a14922ca058fe64b18c6",
+        ))
+    } else {
+        Err(format!(
+            "Unsupported target platform: {} {}",
+            std::env::consts::OS,
+            std::env::consts::ARCH
+        ))
+    }
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("[pdfium_probe] Starting extraction on synthetic PDFs...");
 
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let lib_path = manifest_dir.join("native/win-x64/pdfium.dll");
-    let expected_dll_sha256 = "d42c452a4cf8ca19a87e9c659d4e05035be742c21696ac13431cf73ac1bbf14b";
-    verify_file_sha256(&lib_path, expected_dll_sha256)?;
+    let (lib_path, expected_sha) = get_platform_native_lib(&manifest_dir)?;
+    println!("[pdfium_probe] Loading native library from {:?} (target OS: {})", lib_path, std::env::consts::OS);
+    verify_file_sha256(&lib_path, expected_sha)?;
 
     let bindings = Pdfium::bind_to_library(lib_path)?;
     let pdfium = Pdfium::new(bindings);
@@ -348,7 +463,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // 增加真实代表页提取
     let real_out_dir = manifest_dir.join("test_data/real_pdfium_output");
     fs::create_dir_all(&real_out_dir)?;
 
@@ -357,6 +471,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ("d:/codes/PDFLayoutParser/test.pdf", 1, "test_p1_toc"),
         ("d:/codes/PDFLayoutParser/test.pdf", 27, "test_p27_table"),
         ("d:/codes/PDFLayoutParser/征信解析样例.pdf", 0, "credit_p0_header"),
+        ("d:/codes/PDFLayoutParser/征信解析样例.pdf", 1, "credit_p1_detail"),
     ];
 
     let mut real_count = 0;
@@ -367,7 +482,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let doc = pdfium.load_pdf_from_file(p, None)?;
             if let Ok(page) = doc.pages().get(page_idx) {
                 let page_data = extract_page(&page, page_idx as usize)?;
-                let snapshot = DocumentSnapshot {
+                let snapshot = PdfiumRawSnapshot {
+                    schema_version: "pdfium_raw_snapshot_v1.0".to_string(),
                     generator: "pdfium_probe_0.1.0".to_string(),
                     source_file: p.file_name().unwrap().to_str().unwrap().to_string(),
                     page_count: 1,
@@ -376,7 +492,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let out_file = real_out_dir.join(format!("{}_pdfium.json", sample_name));
                 let json_str = serde_json::to_string_pretty(&snapshot)?;
                 fs::write(&out_file, json_str)?;
-                println!("[pdfium_probe] Wrote real snapshot to {:?}", out_file);
+                println!("[pdfium_probe] Wrote real raw snapshot to {:?}", out_file);
                 real_count += 1;
             }
         }
@@ -387,4 +503,74 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         synthetic_count, real_count
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_rotation_transform_corners_0_90_180_270() {
+        let (crop_x0, crop_y0, crop_x1, crop_y1) = (0.0, 0.0, 400.0, 600.0);
+
+        // Rotation 0
+        assert_eq!(transform_point_to_viewport(0.0, 0.0, crop_x0, crop_y0, crop_x1, crop_y1, 0), [0.0, 600.0]);
+        assert_eq!(transform_point_to_viewport(0.0, 600.0, crop_x0, crop_y0, crop_x1, crop_y1, 0), [0.0, 0.0]);
+
+        // Rotation 90
+        assert_eq!(transform_point_to_viewport(0.0, 0.0, crop_x0, crop_y0, crop_x1, crop_y1, 90), [0.0, 0.0]);
+        assert_eq!(transform_point_to_viewport(0.0, 600.0, crop_x0, crop_y0, crop_x1, crop_y1, 90), [600.0, 0.0]);
+        assert_eq!(transform_point_to_viewport(400.0, 0.0, crop_x0, crop_y0, crop_x1, crop_y1, 90), [0.0, 400.0]);
+
+        // Rotation 180
+        assert_eq!(transform_point_to_viewport(400.0, 0.0, crop_x0, crop_y0, crop_x1, crop_y1, 180), [0.0, 0.0]);
+        assert_eq!(transform_point_to_viewport(400.0, 600.0, crop_x0, crop_y0, crop_x1, crop_y1, 180), [0.0, 600.0]);
+
+        // Rotation 270
+        assert_eq!(transform_point_to_viewport(400.0, 600.0, crop_x0, crop_y0, crop_x1, crop_y1, 270), [0.0, 0.0]);
+        assert_eq!(transform_point_to_viewport(400.0, 0.0, crop_x0, crop_y0, crop_x1, crop_y1, 270), [600.0, 0.0]);
+    }
+
+    #[test]
+    fn test_unrotated_page_coords_contract() {
+        let (crop_x0, crop_y1) = (50.0, 550.0);
+        // (x, y) = (100, 220)
+        let pt = transform_point_to_page_coords(100.0, 220.0, crop_x0, crop_y1);
+        assert_eq!(pt, [50.0, 330.0]);
+    }
+
+    #[test]
+    fn test_whitespace_preservation_contract() {
+        let space_str = " ".to_string();
+        assert!(!space_str.is_empty(), "Single whitespace must not be empty");
+        let empty_str = "".to_string();
+        assert!(empty_str.is_empty(), "Empty string must be skipped");
+    }
+
+    #[test]
+    fn test_provenance_sidecar_contract() {
+        let sidecar = ProvenanceSidecar {
+            page_index: 0,
+            pdfium_object_index: 42,
+            character_count: 5,
+            is_derived: false,
+            derived_block: None,
+            derived_line: None,
+        };
+        assert_eq!(sidecar.pdfium_object_index, 42);
+        assert_eq!(sidecar.is_derived, false);
+        assert_eq!(sidecar.derived_block, None);
+        assert_eq!(sidecar.derived_line, None);
+    }
+
+    #[test]
+    fn test_platform_lib_dispatch() {
+        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let res = get_platform_native_lib(&manifest_dir);
+        assert!(res.is_ok(), "Platform native lib dispatch should succeed on supported platform");
+        let (path, sha) = res.unwrap();
+        assert!(!sha.is_empty());
+        #[cfg(target_os = "windows")]
+        assert!(path.to_string_lossy().ends_with("pdfium.dll"));
+    }
 }

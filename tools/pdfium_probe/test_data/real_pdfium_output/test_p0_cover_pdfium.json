@@ -1,9 +1,11 @@
 {
+  "schema_version": "pdfium_raw_snapshot_v1.0",
   "generator": "pdfium_probe_0.1.0",
   "source_file": "test.pdf",
   "page_count": 1,
   "pages": [
     {
+      "schema_version": "pdfium_raw_page_v1.0",
       "page_index": 0,
       "width": 595.3,
       "height": 841.9,
@@ -20,6 +22,7 @@
         595.3,
         841.9
       ],
+      "has_invisible_text": false,
       "spans": [
         {
           "order": 0,
@@ -32,12 +35,17 @@
           ],
           "font": "MLJNAR+SimSun",
           "size": 180.0,
-          "flags": null,
-          "source_position": [
-            0,
-            0,
-            0
-          ],
+          "flags": 0,
+          "render_mode": 0,
+          "is_invisible": false,
+          "provenance": {
+            "page_index": 0,
+            "pdfium_object_index": 0,
+            "character_count": 1,
+            "is_derived": false,
+            "derived_block": null,
+            "derived_line": null
+          },
           "characters": [
             {
               "c": "宝",
@@ -61,12 +69,17 @@
           ],
           "font": "MLJNAR+SimSun",
           "size": 180.0,
-          "flags": null,
-          "source_position": [
-            0,
-            0,
-            1
-          ],
+          "flags": 0,
+          "render_mode": 0,
+          "is_invisible": false,
+          "provenance": {
+            "page_index": 0,
+            "pdfium_object_index": 1,
+            "character_count": 1,
+            "is_derived": false,
+            "derived_block": null,
+            "derived_line": null
+          },
           "characters": [
             {
               "c": "山",
@@ -90,12 +103,17 @@
           ],
           "font": "MLJNAR+SimSun",
           "size": 180.0,
-          "flags": null,
-          "source_position": [
-            0,
-            0,
-            2
-          ],
+          "flags": 0,
+          "render_mode": 0,
+          "is_invisible": false,
+          "provenance": {
+            "page_index": 0,
+            "pdfium_object_index": 2,
+            "character_count": 1,
+            "is_derived": false,
+            "derived_block": null,
+            "derived_line": null
+          },
           "characters": [
             {
               "c": "钢",
@@ -119,12 +137,17 @@
           ],
           "font": "MLJNAR+SimSun",
           "size": 180.0,
-          "flags": null,
-          "source_position": [
-            0,
-            0,
-            3
-          ],
+          "flags": 0,
+          "render_mode": 0,
+          "is_invisible": false,
+          "provenance": {
+            "page_index": 0,
+            "pdfium_object_index": 3,
+            "character_count": 1,
+            "is_derived": false,
+            "derived_block": null,
+            "derived_line": null
+          },
           "characters": [
             {
               "c": "铁",
@@ -148,12 +171,17 @@
           ],
           "font": "MLJNAR+SimSun",
           "size": 180.0,
-          "flags": null,
-          "source_position": [
-            0,
-            0,
-            4
-          ],
+          "flags": 0,
+          "render_mode": 0,
+          "is_invisible": false,
+          "provenance": {
+            "page_index": 0,
+            "pdfium_object_index": 4,
+            "character_count": 1,
+            "is_derived": false,
+            "derived_block": null,
+            "derived_line": null
+          },
           "characters": [
             {
               "c": "股",
@@ -177,12 +205,17 @@
           ],
           "font": "MLJNAR+SimSun",
           "size": 180.0,
-          "flags": null,
-          "source_position": [
-            0,
-            0,
-            5
-          ],
+          "flags": 0,
+          "render_mode": 0,
+          "is_invisible": false,
+          "provenance": {
+            "page_index": 0,
+            "pdfium_object_index": 5,
+            "character_count": 1,
+            "is_derived": false,
+            "derived_block": null,
+            "derived_line": null
+          },
           "characters": [
             {
               "c": "份",
@@ -206,12 +239,17 @@
           ],
           "font": "MLJNAR+SimSun",
           "size": 180.0,
-          "flags": null,
-          "source_position": [
-            0,
-            0,
-            6
-          ],
+          "flags": 0,
+          "render_mode": 0,
+          "is_invisible": false,
+          "provenance": {
+            "page_index": 0,
+            "pdfium_object_index": 6,
+            "character_count": 1,
+            "is_derived": false,
+            "derived_block": null,
+            "derived_line": null
+          },
           "characters": [
             {
               "c": "有",
@@ -235,12 +273,17 @@
           ],
           "font": "MLJNAR+SimSun",
           "size": 180.0,
-          "flags": null,
-          "source_position": [
-            0,
-            0,
-            7
-          ],
+          "flags": 0,
+          "render_mode": 0,
+          "is_invisible": false,
+          "provenance": {
+            "page_index": 0,
+            "pdfium_object_index": 7,
+            "character_count": 1,
+            "is_derived": false,
+            "derived_block": null,
+            "derived_line": null
+          },
           "characters": [
             {
               "c": "限",
@@ -264,12 +307,17 @@
           ],
           "font": "MLJNAR+SimSun",
           "size": 180.0,
-          "flags": null,
-          "source_position": [
-            0,
-            0,
-            8
-          ],
+          "flags": 0,
+          "render_mode": 0,
+          "is_invisible": false,
+          "provenance": {
+            "page_index": 0,
+            "pdfium_object_index": 8,
+            "character_count": 1,
+            "is_derived": false,
+            "derived_block": null,
+            "derived_line": null
+          },
           "characters": [
             {
               "c": "公",
@@ -293,12 +341,17 @@
           ],
           "font": "MLJNAR+SimSun",
           "size": 180.0,
-          "flags": null,
-          "source_position": [
-            0,
-            0,
-            9
-          ],
+          "flags": 0,
+          "render_mode": 0,
+          "is_invisible": false,
+          "provenance": {
+            "page_index": 0,
+            "pdfium_object_index": 9,
+            "character_count": 1,
+            "is_derived": false,
+            "derived_block": null,
+            "derived_line": null
+          },
           "characters": [
             {
               "c": "司",
@@ -322,12 +375,17 @@
           ],
           "font": "PUIWCS+Calibri",
           "size": 180.0,
-          "flags": null,
-          "source_position": [
-            0,
-            0,
-            10
-          ],
+          "flags": 0,
+          "render_mode": 0,
+          "is_invisible": false,
+          "provenance": {
+            "page_index": 0,
+            "pdfium_object_index": 10,
+            "character_count": 1,
+            "is_derived": false,
+            "derived_block": null,
+            "derived_line": null
+          },
           "characters": [
             {
               "c": "2",
@@ -351,12 +409,17 @@
           ],
           "font": "PUIWCS+Calibri",
           "size": 180.0,
-          "flags": null,
-          "source_position": [
-            0,
-            0,
-            11
-          ],
+          "flags": 0,
+          "render_mode": 0,
+          "is_invisible": false,
+          "provenance": {
+            "page_index": 0,
+            "pdfium_object_index": 11,
+            "character_count": 1,
+            "is_derived": false,
+            "derived_block": null,
+            "derived_line": null
+          },
           "characters": [
             {
               "c": "0",
@@ -380,12 +443,17 @@
           ],
           "font": "PUIWCS+Calibri",
           "size": 180.0,
-          "flags": null,
-          "source_position": [
-            0,
-            0,
-            12
-          ],
+          "flags": 0,
+          "render_mode": 0,
+          "is_invisible": false,
+          "provenance": {
+            "page_index": 0,
+            "pdfium_object_index": 12,
+            "character_count": 1,
+            "is_derived": false,
+            "derived_block": null,
+            "derived_line": null
+          },
           "characters": [
             {
               "c": "2",
@@ -409,12 +477,17 @@
           ],
           "font": "PUIWCS+Calibri",
           "size": 180.0,
-          "flags": null,
-          "source_position": [
-            0,
-            0,
-            13
-          ],
+          "flags": 0,
+          "render_mode": 0,
+          "is_invisible": false,
+          "provenance": {
+            "page_index": 0,
+            "pdfium_object_index": 13,
+            "character_count": 1,
+            "is_derived": false,
+            "derived_block": null,
+            "derived_line": null
+          },
           "characters": [
             {
               "c": "5",
@@ -438,12 +511,17 @@
           ],
           "font": "MLJNAR+SimSun",
           "size": 180.0,
-          "flags": null,
-          "source_position": [
-            0,
-            0,
-            14
-          ],
+          "flags": 0,
+          "render_mode": 0,
+          "is_invisible": false,
+          "provenance": {
+            "page_index": 0,
+            "pdfium_object_index": 14,
+            "character_count": 1,
+            "is_derived": false,
+            "derived_block": null,
+            "derived_line": null
+          },
           "characters": [
             {
               "c": "年",
@@ -467,12 +545,17 @@
           ],
           "font": "MLJNAR+SimSun",
           "size": 180.0,
-          "flags": null,
-          "source_position": [
-            0,
-            0,
-            15
-          ],
+          "flags": 0,
+          "render_mode": 0,
+          "is_invisible": false,
+          "provenance": {
+            "page_index": 0,
+            "pdfium_object_index": 15,
+            "character_count": 1,
+            "is_derived": false,
+            "derived_block": null,
+            "derived_line": null
+          },
           "characters": [
             {
               "c": "年",
@@ -496,12 +579,17 @@
           ],
           "font": "MLJNAR+SimSun",
           "size": 180.0,
-          "flags": null,
-          "source_position": [
-            0,
-            0,
-            16
-          ],
+          "flags": 0,
+          "render_mode": 0,
+          "is_invisible": false,
+          "provenance": {
+            "page_index": 0,
+            "pdfium_object_index": 16,
+            "character_count": 1,
+            "is_derived": false,
+            "derived_block": null,
+            "derived_line": null
+          },
           "characters": [
             {
               "c": "度",
@@ -525,12 +613,17 @@
           ],
           "font": "MLJNAR+SimSun",
           "size": 180.0,
-          "flags": null,
-          "source_position": [
-            0,
-            0,
-            17
-          ],
+          "flags": 0,
+          "render_mode": 0,
+          "is_invisible": false,
+          "provenance": {
+            "page_index": 0,
+            "pdfium_object_index": 17,
+            "character_count": 1,
+            "is_derived": false,
+            "derived_block": null,
+            "derived_line": null
+          },
           "characters": [
             {
               "c": "报",
@@ -554,12 +647,17 @@
           ],
           "font": "MLJNAR+SimSun",
           "size": 180.0,
-          "flags": null,
-          "source_position": [
-            0,
-            0,
-            18
-          ],
+          "flags": 0,
+          "render_mode": 0,
+          "is_invisible": false,
+          "provenance": {
+            "page_index": 0,
+            "pdfium_object_index": 18,
+            "character_count": 1,
+            "is_derived": false,
+            "derived_block": null,
+            "derived_line": null
+          },
           "characters": [
             {
               "c": "告",
@@ -574,7 +672,7 @@
         },
         {
           "order": 19,
-          "text": "1",
+          "text": "1 ",
           "bbox": [
             298.605,
             773.045,
@@ -583,12 +681,17 @@
           ],
           "font": "PUIWCS+Calibri",
           "size": 180.0,
-          "flags": null,
-          "source_position": [
-            0,
-            0,
-            19
-          ],
+          "flags": 0,
+          "render_mode": 2,
+          "is_invisible": false,
+          "provenance": {
+            "page_index": 0,
+            "pdfium_object_index": 20,
+            "character_count": 1,
+            "is_derived": false,
+            "derived_block": null,
+            "derived_line": null
+          },
           "characters": [
             {
               "c": "1",
@@ -603,7 +706,7 @@
         },
         {
           "order": 20,
-          "text": "/",
+          "text": "/ ",
           "bbox": [
             304.32,
             772.408,
@@ -612,12 +715,17 @@
           ],
           "font": "PUIWCS+Calibri",
           "size": 180.0,
-          "flags": null,
-          "source_position": [
-            0,
-            0,
-            20
-          ],
+          "flags": 0,
+          "render_mode": 0,
+          "is_invisible": false,
+          "provenance": {
+            "page_index": 0,
+            "pdfium_object_index": 21,
+            "character_count": 1,
+            "is_derived": false,
+            "derived_block": null,
+            "derived_line": null
+          },
           "characters": [
             {
               "c": "/",
@@ -641,12 +749,17 @@
           ],
           "font": "PUIWCS+Calibri",
           "size": 180.0,
-          "flags": null,
-          "source_position": [
-            0,
-            0,
-            21
-          ],
+          "flags": 0,
+          "render_mode": 2,
+          "is_invisible": false,
+          "provenance": {
+            "page_index": 0,
+            "pdfium_object_index": 22,
+            "character_count": 1,
+            "is_derived": false,
+            "derived_block": null,
+            "derived_line": null
+          },
           "characters": [
             {
               "c": "2",
@@ -670,12 +783,17 @@
           ],
           "font": "PUIWCS+Calibri",
           "size": 180.0,
-          "flags": null,
-          "source_position": [
-            0,
-            0,
-            22
-          ],
+          "flags": 0,
+          "render_mode": 2,
+          "is_invisible": false,
+          "provenance": {
+            "page_index": 0,
+            "pdfium_object_index": 23,
+            "character_count": 1,
+            "is_derived": false,
+            "derived_block": null,
+            "derived_line": null
+          },
           "characters": [
             {
               "c": "4",
@@ -699,12 +817,17 @@
           ],
           "font": "PUIWCS+Calibri",
           "size": 180.0,
-          "flags": null,
-          "source_position": [
-            0,
-            0,
-            23
-          ],
+          "flags": 0,
+          "render_mode": 2,
+          "is_invisible": false,
+          "provenance": {
+            "page_index": 0,
+            "pdfium_object_index": 24,
+            "character_count": 1,
+            "is_derived": false,
+            "derived_block": null,
+            "derived_line": null
+          },
           "characters": [
             {
               "c": "5",
@@ -728,12 +851,17 @@
           ],
           "font": "MLJNAR+SimSun",
           "size": 209.0,
-          "flags": null,
-          "source_position": [
-            0,
-            0,
-            24
-          ],
+          "flags": 0,
+          "render_mode": 0,
+          "is_invisible": false,
+          "provenance": {
+            "page_index": 0,
+            "pdfium_object_index": 25,
+            "character_count": 1,
+            "is_derived": false,
+            "derived_block": null,
+            "derived_line": null
+          },
           "characters": [
             {
               "c": "公",
@@ -757,12 +885,17 @@
           ],
           "font": "MLJNAR+SimSun",
           "size": 209.0,
-          "flags": null,
-          "source_position": [
-            0,
-            0,
-            25
-          ],
+          "flags": 0,
+          "render_mode": 0,
+          "is_invisible": false,
+          "provenance": {
+            "page_index": 0,
+            "pdfium_object_index": 26,
+            "character_count": 1,
+            "is_derived": false,
+            "derived_block": null,
+            "derived_line": null
+          },
           "characters": [
             {
               "c": "司",
@@ -786,12 +919,17 @@
           ],
           "font": "MLJNAR+SimSun",
           "size": 209.0,
-          "flags": null,
-          "source_position": [
-            0,
-            0,
-            26
-          ],
+          "flags": 0,
+          "render_mode": 0,
+          "is_invisible": false,
+          "provenance": {
+            "page_index": 0,
+            "pdfium_object_index": 27,
+            "character_count": 1,
+            "is_derived": false,
+            "derived_block": null,
+            "derived_line": null
+          },
           "characters": [
             {
               "c": "代",
@@ -815,12 +953,17 @@
           ],
           "font": "MLJNAR+SimSun",
           "size": 209.0,
-          "flags": null,
-          "source_position": [
-            0,
-            0,
-            27
-          ],
+          "flags": 0,
+          "render_mode": 0,
+          "is_invisible": false,
+          "provenance": {
+            "page_index": 0,
+            "pdfium_object_index": 28,
+            "character_count": 1,
+            "is_derived": false,
+            "derived_block": null,
+            "derived_line": null
+          },
           "characters": [
             {
               "c": "码",
@@ -844,12 +987,17 @@
           ],
           "font": "MLJNAR+SimSun",
           "size": 209.0,
-          "flags": null,
-          "source_position": [
-            0,
-            0,
-            28
-          ],
+          "flags": 0,
+          "render_mode": 0,
+          "is_invisible": false,
+          "provenance": {
+            "page_index": 0,
+            "pdfium_object_index": 29,
+            "character_count": 1,
+            "is_derived": false,
+            "derived_block": null,
+            "derived_line": null
+          },
           "characters": [
             {
               "c": "：",
@@ -873,12 +1021,17 @@
           ],
           "font": "MLJNAR+SimSun",
           "size": 209.0,
-          "flags": null,
-          "source_position": [
-            0,
-            0,
-            29
-          ],
+          "flags": 0,
+          "render_mode": 0,
+          "is_invisible": false,
+          "provenance": {
+            "page_index": 0,
+            "pdfium_object_index": 30,
+            "character_count": 1,
+            "is_derived": false,
+            "derived_block": null,
+            "derived_line": null
+          },
           "characters": [
             {
               "c": "6",
@@ -902,12 +1055,17 @@
           ],
           "font": "MLJNAR+SimSun",
           "size": 209.0,
-          "flags": null,
-          "source_position": [
-            0,
-            0,
-            30
-          ],
+          "flags": 0,
+          "render_mode": 0,
+          "is_invisible": false,
+          "provenance": {
+            "page_index": 0,
+            "pdfium_object_index": 31,
+            "character_count": 1,
+            "is_derived": false,
+            "derived_block": null,
+            "derived_line": null
+          },
           "characters": [
             {
               "c": "0",
@@ -931,12 +1089,17 @@
           ],
           "font": "MLJNAR+SimSun",
           "size": 209.0,
-          "flags": null,
-          "source_position": [
-            0,
-            0,
-            31
-          ],
+          "flags": 0,
+          "render_mode": 0,
+          "is_invisible": false,
+          "provenance": {
+            "page_index": 0,
+            "pdfium_object_index": 32,
+            "character_count": 1,
+            "is_derived": false,
+            "derived_block": null,
+            "derived_line": null
+          },
           "characters": [
             {
               "c": "0",
@@ -960,12 +1123,17 @@
           ],
           "font": "MLJNAR+SimSun",
           "size": 209.0,
-          "flags": null,
-          "source_position": [
-            0,
-            0,
-            32
-          ],
+          "flags": 0,
+          "render_mode": 0,
+          "is_invisible": false,
+          "provenance": {
+            "page_index": 0,
+            "pdfium_object_index": 33,
+            "character_count": 1,
+            "is_derived": false,
+            "derived_block": null,
+            "derived_line": null
+          },
           "characters": [
             {
               "c": "0",
@@ -989,12 +1157,17 @@
           ],
           "font": "MLJNAR+SimSun",
           "size": 209.0,
-          "flags": null,
-          "source_position": [
-            0,
-            0,
-            33
-          ],
+          "flags": 0,
+          "render_mode": 0,
+          "is_invisible": false,
+          "provenance": {
+            "page_index": 0,
+            "pdfium_object_index": 34,
+            "character_count": 1,
+            "is_derived": false,
+            "derived_block": null,
+            "derived_line": null
+          },
           "characters": [
             {
               "c": "1",
@@ -1009,7 +1182,7 @@
         },
         {
           "order": 34,
-          "text": "9",
+          "text": "9 ",
           "bbox": [
             168.9273,
             85.4836,
@@ -1018,12 +1191,17 @@
           ],
           "font": "MLJNAR+SimSun",
           "size": 209.0,
-          "flags": null,
-          "source_position": [
-            0,
-            0,
-            34
-          ],
+          "flags": 0,
+          "render_mode": 0,
+          "is_invisible": false,
+          "provenance": {
+            "page_index": 0,
+            "pdfium_object_index": 35,
+            "character_count": 1,
+            "is_derived": false,
+            "derived_block": null,
+            "derived_line": null
+          },
           "characters": [
             {
               "c": "9",
@@ -1047,12 +1225,17 @@
           ],
           "font": "MLJNAR+SimSun",
           "size": 209.0,
-          "flags": null,
-          "source_position": [
-            0,
-            0,
-            35
-          ],
+          "flags": 0,
+          "render_mode": 0,
+          "is_invisible": false,
+          "provenance": {
+            "page_index": 0,
+            "pdfium_object_index": 36,
+            "character_count": 1,
+            "is_derived": false,
+            "derived_block": null,
+            "derived_line": null
+          },
           "characters": [
             {
               "c": "公",
@@ -1076,12 +1259,17 @@
           ],
           "font": "MLJNAR+SimSun",
           "size": 209.0,
-          "flags": null,
-          "source_position": [
-            0,
-            0,
-            36
-          ],
+          "flags": 0,
+          "render_mode": 0,
+          "is_invisible": false,
+          "provenance": {
+            "page_index": 0,
+            "pdfium_object_index": 37,
+            "character_count": 1,
+            "is_derived": false,
+            "derived_block": null,
+            "derived_line": null
+          },
           "characters": [
             {
               "c": "司",
@@ -1105,12 +1293,17 @@
           ],
           "font": "MLJNAR+SimSun",
           "size": 209.0,
-          "flags": null,
-          "source_position": [
-            0,
-            0,
-            37
-          ],
+          "flags": 0,
+          "render_mode": 0,
+          "is_invisible": false,
+          "provenance": {
+            "page_index": 0,
+            "pdfium_object_index": 38,
+            "character_count": 1,
+            "is_derived": false,
+            "derived_block": null,
+            "derived_line": null
+          },
           "characters": [
             {
               "c": "简",
@@ -1134,12 +1327,17 @@
           ],
           "font": "MLJNAR+SimSun",
           "size": 209.0,
-          "flags": null,
-          "source_position": [
-            0,
-            0,
-            38
-          ],
+          "flags": 0,
+          "render_mode": 0,
+          "is_invisible": false,
+          "provenance": {
+            "page_index": 0,
+            "pdfium_object_index": 39,
+            "character_count": 1,
+            "is_derived": false,
+            "derived_block": null,
+            "derived_line": null
+          },
           "characters": [
             {
               "c": "称",
@@ -1163,12 +1361,17 @@
           ],
           "font": "MLJNAR+SimSun",
           "size": 209.0,
-          "flags": null,
-          "source_position": [
-            0,
-            0,
-            39
-          ],
+          "flags": 0,
+          "render_mode": 0,
+          "is_invisible": false,
+          "provenance": {
+            "page_index": 0,
+            "pdfium_object_index": 40,
+            "character_count": 1,
+            "is_derived": false,
+            "derived_block": null,
+            "derived_line": null
+          },
           "characters": [
             {
               "c": "：",
@@ -1192,12 +1395,17 @@
           ],
           "font": "MLJNAR+SimSun",
           "size": 209.0,
-          "flags": null,
-          "source_position": [
-            0,
-            0,
-            40
-          ],
+          "flags": 0,
+          "render_mode": 0,
+          "is_invisible": false,
+          "provenance": {
+            "page_index": 0,
+            "pdfium_object_index": 41,
+            "character_count": 1,
+            "is_derived": false,
+            "derived_block": null,
+            "derived_line": null
+          },
           "characters": [
             {
               "c": "宝",
@@ -1221,12 +1429,17 @@
           ],
           "font": "MLJNAR+SimSun",
           "size": 209.0,
-          "flags": null,
-          "source_position": [
-            0,
-            0,
-            41
-          ],
+          "flags": 0,
+          "render_mode": 0,
+          "is_invisible": false,
+          "provenance": {
+            "page_index": 0,
+            "pdfium_object_index": 42,
+            "character_count": 1,
+            "is_derived": false,
+            "derived_block": null,
+            "derived_line": null
+          },
           "characters": [
             {
               "c": "钢",
@@ -1250,12 +1463,17 @@
           ],
           "font": "MLJNAR+SimSun",
           "size": 209.0,
-          "flags": null,
-          "source_position": [
-            0,
-            0,
-            42
-          ],
+          "flags": 0,
+          "render_mode": 0,
+          "is_invisible": false,
+          "provenance": {
+            "page_index": 0,
+            "pdfium_object_index": 43,
+            "character_count": 1,
+            "is_derived": false,
+            "derived_block": null,
+            "derived_line": null
+          },
           "characters": [
             {
               "c": "股",
@@ -1279,12 +1497,17 @@
           ],
           "font": "MLJNAR+SimSun",
           "size": 209.0,
-          "flags": null,
-          "source_position": [
-            0,
-            0,
-            43
-          ],
+          "flags": 0,
+          "render_mode": 0,
+          "is_invisible": false,
+          "provenance": {
+            "page_index": 0,
+            "pdfium_object_index": 44,
+            "character_count": 1,
+            "is_derived": false,
+            "derived_block": null,
+            "derived_line": null
+          },
           "characters": [
             {
               "c": "份",
@@ -1308,12 +1531,17 @@
           ],
           "font": "PRMMSH+SimHei",
           "size": 439.0,
-          "flags": null,
-          "source_position": [
-            0,
-            0,
-            44
-          ],
+          "flags": 0,
+          "render_mode": 2,
+          "is_invisible": false,
+          "provenance": {
+            "page_index": 0,
+            "pdfium_object_index": 45,
+            "character_count": 1,
+            "is_derived": false,
+            "derived_block": null,
+            "derived_line": null
+          },
           "characters": [
             {
               "c": "宝",
@@ -1337,12 +1565,17 @@
           ],
           "font": "PRMMSH+SimHei",
           "size": 439.0,
-          "flags": null,
-          "source_position": [
-            0,
-            0,
-            45
-          ],
+          "flags": 0,
+          "render_mode": 2,
+          "is_invisible": false,
+          "provenance": {
+            "page_index": 0,
+            "pdfium_object_index": 46,
+            "character_count": 1,
+            "is_derived": false,
+            "derived_block": null,
+            "derived_line": null
+          },
           "characters": [
             {
               "c": "山",
@@ -1366,12 +1599,17 @@
           ],
           "font": "PRMMSH+SimHei",
           "size": 439.0,
-          "flags": null,
-          "source_position": [
-            0,
-            0,
-            46
-          ],
+          "flags": 0,
+          "render_mode": 2,
+          "is_invisible": false,
+          "provenance": {
+            "page_index": 0,
+            "pdfium_object_index": 47,
+            "character_count": 1,
+            "is_derived": false,
+            "derived_block": null,
+            "derived_line": null
+          },
           "characters": [
             {
               "c": "钢",
@@ -1395,12 +1633,17 @@
           ],
           "font": "PRMMSH+SimHei",
           "size": 439.0,
-          "flags": null,
-          "source_position": [
-            0,
-            0,
-            47
-          ],
+          "flags": 0,
+          "render_mode": 2,
+          "is_invisible": false,
+          "provenance": {
+            "page_index": 0,
+            "pdfium_object_index": 48,
+            "character_count": 1,
+            "is_derived": false,
+            "derived_block": null,
+            "derived_line": null
+          },
           "characters": [
             {
               "c": "铁",
@@ -1424,12 +1667,17 @@
           ],
           "font": "PRMMSH+SimHei",
           "size": 439.0,
-          "flags": null,
-          "source_position": [
-            0,
-            0,
-            48
-          ],
+          "flags": 0,
+          "render_mode": 2,
+          "is_invisible": false,
+          "provenance": {
+            "page_index": 0,
+            "pdfium_object_index": 49,
+            "character_count": 1,
+            "is_derived": false,
+            "derived_block": null,
+            "derived_line": null
+          },
           "characters": [
             {
               "c": "股",
@@ -1453,12 +1701,17 @@
           ],
           "font": "PRMMSH+SimHei",
           "size": 439.0,
-          "flags": null,
-          "source_position": [
-            0,
-            0,
-            49
-          ],
+          "flags": 0,
+          "render_mode": 2,
+          "is_invisible": false,
+          "provenance": {
+            "page_index": 0,
+            "pdfium_object_index": 50,
+            "character_count": 1,
+            "is_derived": false,
+            "derived_block": null,
+            "derived_line": null
+          },
           "characters": [
             {
               "c": "份",
@@ -1482,12 +1735,17 @@
           ],
           "font": "PRMMSH+SimHei",
           "size": 439.0,
-          "flags": null,
-          "source_position": [
-            0,
-            0,
-            50
-          ],
+          "flags": 0,
+          "render_mode": 2,
+          "is_invisible": false,
+          "provenance": {
+            "page_index": 0,
+            "pdfium_object_index": 51,
+            "character_count": 1,
+            "is_derived": false,
+            "derived_block": null,
+            "derived_line": null
+          },
           "characters": [
             {
               "c": "有",
@@ -1511,12 +1769,17 @@
           ],
           "font": "PRMMSH+SimHei",
           "size": 439.0,
-          "flags": null,
-          "source_position": [
-            0,
-            0,
-            51
-          ],
+          "flags": 0,
+          "render_mode": 2,
+          "is_invisible": false,
+          "provenance": {
+            "page_index": 0,
+            "pdfium_object_index": 52,
+            "character_count": 1,
+            "is_derived": false,
+            "derived_block": null,
+            "derived_line": null
+          },
           "characters": [
             {
               "c": "限",
@@ -1540,12 +1803,17 @@
           ],
           "font": "PRMMSH+SimHei",
           "size": 439.0,
-          "flags": null,
-          "source_position": [
-            0,
-            0,
-            52
-          ],
+          "flags": 0,
+          "render_mode": 2,
+          "is_invisible": false,
+          "provenance": {
+            "page_index": 0,
+            "pdfium_object_index": 53,
+            "character_count": 1,
+            "is_derived": false,
+            "derived_block": null,
+            "derived_line": null
+          },
           "characters": [
             {
               "c": "公",
@@ -1569,12 +1837,17 @@
           ],
           "font": "PRMMSH+SimHei",
           "size": 439.0,
-          "flags": null,
-          "source_position": [
-            0,
-            0,
-            53
-          ],
+          "flags": 0,
+          "render_mode": 2,
+          "is_invisible": false,
+          "provenance": {
+            "page_index": 0,
+            "pdfium_object_index": 54,
+            "character_count": 1,
+            "is_derived": false,
+            "derived_block": null,
+            "derived_line": null
+          },
           "characters": [
             {
               "c": "司",
@@ -1598,12 +1871,17 @@
           ],
           "font": "PRMMSH+SimHei",
           "size": 439.0,
-          "flags": null,
-          "source_position": [
-            0,
-            0,
-            54
-          ],
+          "flags": 0,
+          "render_mode": 2,
+          "is_invisible": false,
+          "provenance": {
+            "page_index": 0,
+            "pdfium_object_index": 55,
+            "character_count": 1,
+            "is_derived": false,
+            "derived_block": null,
+            "derived_line": null
+          },
           "characters": [
             {
               "c": "2",
@@ -1627,12 +1905,17 @@
           ],
           "font": "PRMMSH+SimHei",
           "size": 439.0,
-          "flags": null,
-          "source_position": [
-            0,
-            0,
-            55
-          ],
+          "flags": 0,
+          "render_mode": 2,
+          "is_invisible": false,
+          "provenance": {
+            "page_index": 0,
+            "pdfium_object_index": 56,
+            "character_count": 1,
+            "is_derived": false,
+            "derived_block": null,
+            "derived_line": null
+          },
           "characters": [
             {
               "c": "0",
@@ -1656,12 +1939,17 @@
           ],
           "font": "PRMMSH+SimHei",
           "size": 439.0,
-          "flags": null,
-          "source_position": [
-            0,
-            0,
-            56
-          ],
+          "flags": 0,
+          "render_mode": 2,
+          "is_invisible": false,
+          "provenance": {
+            "page_index": 0,
+            "pdfium_object_index": 57,
+            "character_count": 1,
+            "is_derived": false,
+            "derived_block": null,
+            "derived_line": null
+          },
           "characters": [
             {
               "c": "2",
@@ -1685,12 +1973,17 @@
           ],
           "font": "PRMMSH+SimHei",
           "size": 439.0,
-          "flags": null,
-          "source_position": [
-            0,
-            0,
-            57
-          ],
+          "flags": 0,
+          "render_mode": 2,
+          "is_invisible": false,
+          "provenance": {
+            "page_index": 0,
+            "pdfium_object_index": 58,
+            "character_count": 1,
+            "is_derived": false,
+            "derived_block": null,
+            "derived_line": null
+          },
           "characters": [
             {
               "c": "5",
@@ -1714,12 +2007,17 @@
           ],
           "font": "PRMMSH+SimHei",
           "size": 439.0,
-          "flags": null,
-          "source_position": [
-            0,
-            0,
-            58
-          ],
+          "flags": 0,
+          "render_mode": 2,
+          "is_invisible": false,
+          "provenance": {
+            "page_index": 0,
+            "pdfium_object_index": 59,
+            "character_count": 1,
+            "is_derived": false,
+            "derived_block": null,
+            "derived_line": null
+          },
           "characters": [
             {
               "c": "年",
@@ -1743,12 +2041,17 @@
           ],
           "font": "PRMMSH+SimHei",
           "size": 439.0,
-          "flags": null,
-          "source_position": [
-            0,
-            0,
-            59
-          ],
+          "flags": 0,
+          "render_mode": 2,
+          "is_invisible": false,
+          "provenance": {
+            "page_index": 0,
+            "pdfium_object_index": 60,
+            "character_count": 1,
+            "is_derived": false,
+            "derived_block": null,
+            "derived_line": null
+          },
           "characters": [
             {
               "c": "年",
@@ -1772,12 +2075,17 @@
           ],
           "font": "PRMMSH+SimHei",
           "size": 439.0,
-          "flags": null,
-          "source_position": [
-            0,
-            0,
-            60
-          ],
+          "flags": 0,
+          "render_mode": 2,
+          "is_invisible": false,
+          "provenance": {
+            "page_index": 0,
+            "pdfium_object_index": 61,
+            "character_count": 1,
+            "is_derived": false,
+            "derived_block": null,
+            "derived_line": null
+          },
           "characters": [
             {
               "c": "度",
@@ -1801,12 +2109,17 @@
           ],
           "font": "PRMMSH+SimHei",
           "size": 439.0,
-          "flags": null,
-          "source_position": [
-            0,
-            0,
-            61
-          ],
+          "flags": 0,
+          "render_mode": 2,
+          "is_invisible": false,
+          "provenance": {
+            "page_index": 0,
+            "pdfium_object_index": 62,
+            "character_count": 1,
+            "is_derived": false,
+            "derived_block": null,
+            "derived_line": null
+          },
           "characters": [
             {
               "c": "报",
@@ -1830,12 +2143,17 @@
           ],
           "font": "PRMMSH+SimHei",
           "size": 439.0,
-          "flags": null,
-          "source_position": [
-            0,
-            0,
-            62
-          ],
+          "flags": 0,
+          "render_mode": 2,
+          "is_invisible": false,
+          "provenance": {
+            "page_index": 0,
+            "pdfium_object_index": 63,
+            "character_count": 1,
+            "is_derived": false,
+            "derived_block": null,
+            "derived_line": null
+          },
           "characters": [
             {
               "c": "告",

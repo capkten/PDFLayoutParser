@@ -1,9 +1,11 @@
 {
+  "schema_version": "pdfium_raw_snapshot_v1.0",
   "generator": "pdfium_probe_0.1.0",
   "source_file": "synth_rotations.pdf",
   "page_count": 4,
   "pages": [
     {
+      "schema_version": "pdfium_raw_page_v1.0",
       "page_index": 0,
       "width": 400.0,
       "height": 600.0,
@@ -20,6 +22,7 @@
         400.0,
         600.0
       ],
+      "has_invisible_text": false,
       "spans": [
         {
           "order": 0,
@@ -32,12 +35,17 @@
           ],
           "font": "Helvetica",
           "size": 14.0,
-          "flags": null,
-          "source_position": [
-            0,
-            0,
-            0
-          ],
+          "flags": 0,
+          "render_mode": 0,
+          "is_invisible": false,
+          "provenance": {
+            "page_index": 0,
+            "pdfium_object_index": 0,
+            "character_count": 20,
+            "is_derived": false,
+            "derived_block": null,
+            "derived_line": null
+          },
           "characters": [
             {
               "c": "P",
@@ -225,6 +233,7 @@
       "drawings": []
     },
     {
+      "schema_version": "pdfium_raw_page_v1.0",
       "page_index": 1,
       "width": 600.0,
       "height": 400.0,
@@ -241,6 +250,7 @@
         400.0,
         600.0
       ],
+      "has_invisible_text": false,
       "spans": [
         {
           "order": 0,
@@ -253,12 +263,17 @@
           ],
           "font": "Helvetica",
           "size": 14.0,
-          "flags": null,
-          "source_position": [
-            0,
-            0,
-            0
-          ],
+          "flags": 0,
+          "render_mode": 0,
+          "is_invisible": false,
+          "provenance": {
+            "page_index": 1,
+            "pdfium_object_index": 0,
+            "character_count": 21,
+            "is_derived": false,
+            "derived_block": null,
+            "derived_line": null
+          },
           "characters": [
             {
               "c": "P",
@@ -455,6 +470,7 @@
       "drawings": []
     },
     {
+      "schema_version": "pdfium_raw_page_v1.0",
       "page_index": 2,
       "width": 400.0,
       "height": 600.0,
@@ -471,6 +487,7 @@
         400.0,
         600.0
       ],
+      "has_invisible_text": false,
       "spans": [
         {
           "order": 0,
@@ -483,12 +500,17 @@
           ],
           "font": "Helvetica",
           "size": 14.0,
-          "flags": null,
-          "source_position": [
-            0,
-            0,
-            0
-          ],
+          "flags": 0,
+          "render_mode": 0,
+          "is_invisible": false,
+          "provenance": {
+            "page_index": 2,
+            "pdfium_object_index": 0,
+            "character_count": 22,
+            "is_derived": false,
+            "derived_block": null,
+            "derived_line": null
+          },
           "characters": [
             {
               "c": "P",
@@ -694,6 +716,7 @@
       "drawings": []
     },
     {
+      "schema_version": "pdfium_raw_page_v1.0",
       "page_index": 3,
       "width": 600.0,
       "height": 400.0,
@@ -710,6 +733,7 @@
         400.0,
         600.0
       ],
+      "has_invisible_text": false,
       "spans": [
         {
           "order": 0,
@@ -722,12 +746,17 @@
           ],
           "font": "Helvetica",
           "size": 14.0,
-          "flags": null,
-          "source_position": [
-            0,
-            0,
-            0
-          ],
+          "flags": 0,
+          "render_mode": 0,
+          "is_invisible": false,
+          "provenance": {
+            "page_index": 3,
+            "pdfium_object_index": 0,
+            "character_count": 22,
+            "is_derived": false,
+            "derived_block": null,
+            "derived_line": null
+          },
           "characters": [
             {
               "c": "P",

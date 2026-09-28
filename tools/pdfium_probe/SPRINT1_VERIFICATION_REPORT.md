@@ -2,148 +2,186 @@
 
 - **实施周期**: Sprint 1 (2026-09-28)
 - **基线起点**: Commit `9181024`
-- **实施提交**: Commit `8a958e2`、`b1cba5c`（以及本轮度规深化提交）
+- **实施提交**: Commit `8a958e2`、`b1cba5c`、`efd5d58`、`88d68e0` 及终局闭环提交
 - **隔离分支**: `feat/pdfium-probe-sprint1`
 - **隔离路径**: `d:\codes\PDFLayoutParser\.worktrees\feat-pdfium-probe-sprint1`
 - **探针工程**: `tools/pdfium_probe/` (完全独立 Cargo.toml，不污染根工作区)
-- **最终验收结论**: **探针工程建设完成；差分器分层度规健全；4 个真实代表页矢量路径在当前比较模型下全部匹配；文本 Snapshot 等价门禁仍失败；严禁接入表格恢复算法。**
+- **终局验收结论**: **探针工程建设与差分器严格加固全面完成；5 个真实代表页矢量路径（888/888）在当前比较模型下全部拓扑匹配；三次重复运行规范化 JSON 哈希 100% 确定性稳定；文本 Snapshot 等价门禁彻底失败（合格率仅 0.4%）；验收不通过；严禁接入表格恢复算法；分支封存，绝不合并至主线。**
 
 ---
 
 ## 一、生产环境与代码红线核验（100% 达标）
 
 1. **生产构建零污染**：
-   - 根目录 `Cargo.toml` 保持干净，未引入 PDFium 依赖，未注册 `tools/pdfium_probe` 成员；
-   - 根目录执行 `cargo check` 正常通过（0.09s），零编译阻断。
+   - 根目录 `Cargo.toml` 保持纯净，未引入任何 PDFium 依赖，未注册 `tools/pdfium_probe` 成员；
+   - 根目录执行 `cargo check` 正常通过，零编译阻断。
 2. **生产算法文件零修改**：
-   - `rust/wireless_structure.rs`、`rust/wired.rs`、`rust/native_span.rs`、`rust/types.rs` 等所有算法文件代码修改量严格为 **0**。
-3. **探针工程独立与警告清理**：
-   - 探针工程位于 `tools/pdfium_probe/`，拥有独立的 Cargo.toml；
+   - `rust/wireless_structure.rs`、`rust/wired.rs`、`rust/native_span.rs`、`rust/types.rs` 等所有生产核心算法文件代码修改量严格为 **0**。
+3. **探针工程独立与质量保障**：
+   - 探针工程位于 `tools/pdfium_probe/`，拥有独立工作区配置与独立 Cargo.toml；
    - `cargo check` 实现 **0 警告、0 错误**；
+   - `cargo test` 自动化单元测试 5 项全部通过（100% PASS）；
    - 探针启动前自动核验动态库 SHA-256，杜绝静默版本漂移。
 4. **多平台元数据实测核验 (`manifest.json`)**：
    - 锁定官方 `bblanchon/pdfium-binaries` Release `chromium/8066`；
-   - Windows x64：本地完成压缩包与解压动态库的双重 SHA-256 实测验证；
+   - Windows x64：本地完成压缩包与解压动态库的双重 SHA-256 实测核验；
    - Linux x64 / macOS arm64 / macOS x64：完成官方发布源压缩包流式 SHA-256 核验并在 manifest 中明确标注验证状态；
    - 提供 `scripts/download_pdfium.py` 实现多平台自动下载与确定性哈希核验。
 
 ---
 
-## 二、矢量线段（Drawings）容差体系与真实样本实测
+## 二、来源凭证诚实性改造与契约命名（解决阻断问题）
+
+### 1. 消除伪造三元组，重构 `ProvenanceSidecar`
+- **历史问题**：此前代码将探针提取的每个 Span 的 `source_position` 固定硬编码为 `[0, 0, order]`，冒充 PyMuPDF 的 `[block_idx, line_idx, span_idx]` 来源凭据，违反诚实性原则。
+- **重构方案**：彻底移除伪造的 `source_position`，引入独立 Sidecar 凭据结构：
+  ```rust
+  #[derive(Debug, Clone, Serialize, Deserialize)]
+  pub struct ProvenanceSidecar {
+      pub page_index: usize,
+      pub pdfium_object_index: usize,
+      pub character_count: usize,
+      pub is_derived: bool,
+      pub derived_block: Option<usize>,
+      pub derived_line: Option<usize>,
+  }
+  ```
+  探针生成的每一个原子 TextObject 均诚实记录其在 PDFium 中的原始对象索引与字符数量，并显式标注 `is_derived: false`、`derived_block: None`、`derived_line: None`，绝不虚构块/行层级信息。
+
+### 2. 输出结构命名重构与 Schema 版本标注（拒绝冒充）
+- 探针数据结构明确重构为 `PdfiumRawSnapshot`、`PdfiumRawPage`、`PdfiumRawSpan` 及 `PdfiumRawDrawing`；
+- 输出 JSON 顶部显式标注：
+  ```json
+  "schema_version": "pdfium_raw_snapshot_v1.0",
+  "generator": "pdfium_probe_0.1.0"
+  ```
+- 严格杜绝冒充生产环境的 `PageSnapshotDto`，防止未经聚合验证的裸图元被下游错误反序列化接入。
+
+### 3. 空白保留与隐藏文本提取
+- **空白保留**：移除 `.trim()` 操作，完整保留包含空格的原生 TextObject 字符串；
+- **渲染模式提取**：调用 `text_obj.render_mode()`，识别 `PdfPageTextRenderMode::Invisible`（PDF 规范模式 3）及其他渲染模式；
+- **隐藏文本标记**：在 Span 级别记录 `render_mode: u8` 和 `is_invisible: bool`，在页面级别记录 `has_invisible_text: bool`；
+- **差分器对齐**：比较器同步提取并核验双方的 `render_mode` 及隐藏文字标记。
+
+---
+
+## 三、旋转与坐标契约：PyMuPDF 未旋转坐标系科学实测
+
+### 1. 坐标系真相推导与实测证据
+在对包含 0°、90°、180°、270° 旋转的合成样本（`synth_rotations.pdf`）以及财报横版表格（`test_p27_table.pdf`，页面自身包含 90° 旋转）进行深度调试后，确立了以下科学事实：
+1. **PyMuPDF `rawdict` 的几何坐标本质**：
+   - 实测证明：PyMuPDF 的 `page.get_text("rawdict")` 与 `page.get_drawings()` 返回的所有图元 BBox 与点坐标，**默认全部处于未旋转的页面局部坐标系（Unrotated Page Space）**，根本不会随着 `page.rotation` 旋转轴向！
+   - 现有的生产端 Rust 算法库 `collect_native_spans_from_rawdict` 在消费 `rawdict` 时，直接处理的就是该未旋转局部坐标系。
+2. **探针坐标契约对齐**：
+   - 探针 `transform_point_to_page_coords` 将 PDF 原始左下角原点（Bottom-Left）正确翻转为左上角原点（Top-Left）：`[x, page_height - y]`；
+   - 探针同时实现了视口仿射变换 `transform_point_to_viewport`（供旋转渲染场景使用），并在自动化单元测试中验证了 0°/90°/180°/270° 四角映射的数学一致性；
+   - 当探针保持未旋转局部坐标系契约时，`synth_rotations.pdf` 的 4 个页面（0°、90°、180°、270°）与基准的 BBox Delta **完全恒定为 4.984 pt**，彻底排除了坐标系轴向错乱的假象。
+
+---
+
+## 四、矢量线段（Drawings）容差体系与真实样本实测
 
 ### 1. 矢量线段容差体系定义与浮点精度红线
-不同 PDF 引擎在矢量线条提取上存在浮点舍入、发丝线表示和矩形指令差异。比较器确立了以下明确的判定容差与精度规则：
+比较器确立了以下明确的判定容差与精度规则：
 *   **外包围盒容差 (`rect_tol`)**: $\le 0.5 \text{ pt}$
 *   **线段端点容差 (`point_tol`)**: $\le 0.5 \text{ pt}$（支持端点正反双向判定）
 *   **线宽容差 (`width_tol`)**: $\le 0.95 \text{ pt}$（以桥接 PDFium 真实发丝线 0.05 pt 与 MuPDF 默认值 1.0 pt）
-*   **浮点门禁精度原则（严禁舍入伪通过）**：门禁判定一律基于未经舍入的原始浮点数绝对差（如 `raw_width_delta = abs(b_w - p_w)`、`raw_max_bbox_delta`），杜绝因预先四舍五入将 `0.95004` 截断为 `0.95` 而产生的假绿灯；`round(..., 4)` 仅用于生成 JSON 报告与终端展示。
+*   **浮点门禁精度原则（严禁舍入伪通过）**：门禁判定一律基于未经舍入的原始浮点数绝对差（`raw_width_delta = abs(b_w - p_w)`、`raw_max_bbox_delta`），杜绝因预先四舍五入截断产生的假绿灯；`round(..., 4)` 仅用于生成 JSON 报告与终端展示。
 *   **数据缺失显式标记**：若图元一侧包含线宽而另一侧缺失，直接标记为 `WIDTH_DATA_MISSING` 状态，严禁将缺失值伪装为 0 差异。
 *   **矩形语义等价判定**: PyMuPDF 单条 `'re'` 指令与 PDFium 4 段闭合 `'l'` 线段在 Rect 吻合且线宽满足 `width_tol` 时判定为语义等价 (`MATCHED_SEMANTIC_RECT`)。
 
-### 2. 真实代表页实测表现
-在探针为 `path_obj.segments()` 接入 `path_obj.matrix()?` 矩阵变换后，4 个真实页面的全部 452 条线段均在上述容差内匹配：
-*   **个人征信报告页 (`credit_p0_header`)**: Base 429 条 vs Probe 429 条，**匹配 429 / 429 (100%)**；Max Rect Delta = **0.0001 pt**，Max Point Delta = **0.0 pt**，Max Width Delta = **0.0 pt**（所有线宽完全一致）；
-*   **财报横版表格页 (`test_p27_table`)**: Base 21 条 vs Probe 21 条，**匹配 21 / 21 (100%)**；Max Rect Delta = **0.0 pt**，Max Point Delta = **0.0 pt**；其中 20 条表格框线线宽均为 0.48 pt（$\Delta = 0.0 \text{ pt}$），仅顶部分割发丝线产生 0.95 pt 宽度差异；
+### 2. 5 个真实代表页实测表现（888 / 888 拓扑匹配）
+在探针为 `path_obj.segments()` 接入 `path_obj.matrix()?` 矩阵变换后，方案冻结规定的全部 5 个真实代表页面的 888 条线段在上述容差内全部匹配：
+*   **个人征信表头页 (`credit_p0_header`)**: Base 429 条 vs Probe 429 条，**匹配 429 / 429 (100%)**；Max Rect Delta = **0.0001 pt**，Max Point Delta = **0.0 pt**，Max Width Delta = **0.0 pt**；
+*   **个人征信明细表格页 (`credit_p1_detail`)**: Base 436 条 vs Probe 436 条，**匹配 436 / 436 (100%)**；Max Rect Delta = **0.0 pt**，Max Point Delta = **0.0 pt**，Max Width Delta = **0.0 pt**；
+*   **财报横版表格页 (`test_p27_table`)**: Base 21 条 vs Probe 21 条，**匹配 21 / 21 (100%)**；Max Rect Delta = **0.0 pt**，Max Point Delta = **0.0 pt**；
 *   **财报封面 (`test_p0_cover`)**: Base 1 条 vs Probe 1 条，**匹配 1 / 1 (100%)**；Max Rect Delta = **0.0 pt**；
 *   **财报目录 (`test_p1_toc`)**: Base 1 条 vs Probe 1 条，**匹配 1 / 1 (100%)**；Max Rect Delta = **0.0 pt**。
 
-### 3. 真实 Drawing 结论的严格限定（重要）
-> **结论范围限定**：上述 `452 / 452` 匹配结论**仅代表当前 4 个真实代表页面、当前 chromium/8066 动态库及当前比较器模型下有效**。
-> 它**不代表**：
-> 1. 所有复杂商业 PDF 类型的路径均能匹配；
-> 2. 三次贝塞尔曲线（Bezier）、复杂 Clip 裁剪路径、复合 Path 运算或图元透明度等特性已经对齐；
-> 3. 后续若涉及更复杂的报表页面，必须补充包含曲线与裁剪路径的专门样本。
+> **结论范围限定**：上述 `888 / 888` 匹配结论**仅代表当前 5 个真实代表页面、当前 chromium/8066 动态库及当前比较器模型下有效**。它不代表涵盖所有复杂商业 PDF 类型的路径（如复杂 Bezier 曲线、Clip 裁剪路径或混合透明度）。
 
 ---
 
-## 三、文本比对的分层统计机制（候选匹配 vs 门禁通过）
+## 五、三次运行确定性规范化哈希核验（100% 确定性）
 
-为杜绝将“找到了文本候选”误读为“等价通过”，比较器现已实现 5 层分离统计：
-1. **Candidate Match (`candidate_match_count`)**: 找到 1:1 相同文本候选对象的基准 Span 数；
-2. **Chars Verified (`char_match_count`)**: 内部逐字符文本完全相符的 Span 数；
-3. **BBox Passed (`bbox_pass_count`)**: 最大 BBox 误差 $\le \text{bbox\_tol}$ (0.5 pt) 的 Span 数；
-4. **Fully Accepted (`fully_accepted_count`)**: 文本、字符与 BBox 均完全达标的最终通过数；
-5. **Missing Spans (`missing_count`)**: 未能找到任何对应文本候选对象的基准 Span 数。
+针对 5 个合成样本与 5 个真实代表页（共 10 个样本），运行脚本 `scripts/verify_deterministic_hashes.py` 执行了 3 次端到端独立的探针二进制提取，并对生成的规范化 JSON 计算 SHA-256。
+
+- **核验台账文件**: [DETERMINISTIC_HASH_LEDGER.json](file:///d:/codes/PDFLayoutParser/.worktrees/feat-pdfium-probe-sprint1/tools/pdfium_probe/DETERMINISTIC_HASH_LEDGER.json)
+- **核验结果**: **全部 10 个样本在 3 次提取运行中产生的规范化 JSON 哈希 100% 相同，没有任何漂移**。
+
+```text
+================================================================================
+           Sprint 1 Deterministic Triple-Run Hash Verification Summary
+================================================================================
+  [real] credit_p0_header       : PASS (100% Identical) -> 1fdd7a66924318cf0d4f8510fcf6a621...
+  [real] credit_p1_detail       : PASS (100% Identical) -> f9423a4007be21eabe6d543fa42b3864...
+  [real] test_p0_cover          : PASS (100% Identical) -> bae808a45b96a912e27538a0f71a71c8...
+  [real] test_p1_toc            : PASS (100% Identical) -> a1c347c0bdfd996571007c37796ca64a...
+  [real] test_p27_table         : PASS (100% Identical) -> cc0f967221f4651301721ee717d2193f...
+  [synthetic] synth_crop_offset : PASS (100% Identical) -> 62e97f252c34c2c2b508afc1c9b64a9b...
+  [synthetic] synth_invisible   : PASS (100% Identical) -> 9d4bad68610d3daa36cd725ca67a9c13...
+  [synthetic] synth_mixed_fonts : PASS (100% Identical) -> 6648d414138efa7754461ac2b0a94dd7...
+  [synthetic] synth_rotations   : PASS (100% Identical) -> 28001b4cbee38e654e0ce9a3dc6feda7...
+  [synthetic] synth_segmented   : PASS (100% Identical) -> 281daa3ad75940bf566ee32822f6e66d...
+STATUS: PASSED (All 10 sample outputs exhibit 100% identical SHA-256 hashes across 3 runs)
+```
 
 ---
 
-## 四、双层差分脚本体系与定位分工
+## 六、比较器严格门禁漏洞封堵与靶向实测（CI 阻断拦截）
 
-比较体系严格区分“阻断式 CI 质量门禁”与“摸底诊断台账”，避免职责混淆：
-1. **自动化 CI 质量门禁 (`compare_synthetic_diff.py`)**：
-   - **定位**：严格阻断式门禁（Strict Quality Gate）。
-   - **机制**：针对靶向合成用例进行全项自动化审计。若存在几何不匹配、字符文本不符、纯空格缺失、图元拓扑失配或 `raw_max_bbox_delta > bbox_tol`，立即返回**非零退出码 (`exit 1`)**，自动阻断 CI 流程。
-2. **真实代表页诊断台账 (`compare_real_diff.py`)**：
-   - **定位**：真实样本摸底诊断工具（Diagnostic & Baseline Audit Tool）。
-   - **机制**：针对代表性真实报表页面输出分层匹配指标、粒度膨胀比、丢失 Span 列表及未聚合图元列表，生成数据台账 (`diff_report_real.json`)。其退出码**不作为自动化 CI 阻断依据**，主要用于为后续算法演进提供客观数据支撑。
+比较器经过全面加固，彻底封堵了历史漏洞：
+1. **缺失文件封堵**：若 Probe JSON 文件缺失，标记 `PROBE_FILE_MISSING`，严禁静默跳过，直接记入门禁违约；
+2. **旋转字段核实**：修复原代码误读基准旋转 `bp["rotation"]` 的笔误，正确核对 `pp["rotation"]`；
+3. **多余图元惩罚**：将多余未映射图元 `BASE_MISSING` 纳入质量门禁失败判定；
+4. **元数据全项审查**：增加 `page_count`、`crop_box`、`media_box` 严格一致性比对。
 
----
-
-## 五、靶向合成测试实测表现（严格 CI 门禁拦截）
-
-在合成样本上执行严格门禁比较，检出 9 项门禁违规，门禁以退出码 `1` 拦截：
+### 靶向合成测试实测表现 (Exit Code: 1，检出 19 项违规违约)
 
 | 合成测试用例 | 靶向机制 | Base Spans | Probe Spans | 候选匹配 | 字符相符 | BBox达标 | 最终通过 | 丢失数 | 逆序数 | Max BBox Delta | Drawings 匹配 | 门禁判定 |
 | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
 | `synth_crop_offset.pdf` | CropBox 视口平移 | 3 | 3 | 3 | 3 | **0** | **0** | 0 | 0 | 4.858 pt | 0 / 0 | **FAIL** (超差) |
-| `synth_invisible_text.pdf` | 不可见/重叠文字 | 4 | 4 | 4 | 4 | **0** | **0** | 0 | 0 | 5.744 pt | 0 / 0 | **FAIL** (超差) |
-| `synth_mixed_fonts.pdf` | 混排与字号突变 | 5 | 4 | 4 | 4 | **0** | **0** | **1** | 0 | 5.026 pt | 0 / 0 | **FAIL** (缺Span+超差) |
+| `synth_invisible_text.pdf` | 不可见/重叠文字 | 4 | 4 | 3 | 3 | **0** | **0** | 1 | 0 | 5.744 pt | 0 / 0 | **FAIL** (空格形态/超差) |
+| `synth_mixed_fonts.pdf` | 混排与字号突变 | 5 | 4 | 1 | 1 | **0** | **0** | **4** | 0 | 3.949 pt | 0 / 0 | **FAIL** (缺Span+超差) |
 | `synth_rotations.pdf` | 0°/90°/180°/270° 旋转 | 4 | 4 | 4 | 4 | **0** | **0** | 0 | 0 | 4.984 pt | 0 / 0 | **FAIL** (超差) |
-| `synth_segmented_lines.pdf` | 连续/断续线段网格 | 2 | 2 | 2 | 2 | **0** | **0** | 0 | 0 | 4.164 pt | **6 / 6 (100%)** | **FAIL** (文本超差) |
+| `synth_segmented_lines.pdf` | 连续/断续线段网格 | 2 | 2 | 1 | 1 | **0** | **0** | 1 | 0 | 4.164 pt | **6 / 6 (100%)** | **FAIL** (文本超差) |
 
 ---
 
-## 六、真实代表页差分实测数据（摸底诊断分层指标）
+## 七、真实代表页差分实测数据（摸底诊断分层指标）
 
 ```text
-┌───────────────────────────────── 真实样本分层指标汇总 ─────────────────────────────────┐
+┌───────────────────────────────── 5 个真实样本分层指标汇总 ───────────────────────────────┐
 │                                                                                       │
 │  1. 页面几何 (Geometry): 宽高与旋转全部 100% 严丝合缝                                  │
 │                                                                                       │
-│  2. 矢量图元 (Drawings) 拓扑: 452 / 452 满足 (rect_tol=0.5, point_tol=0.5, width_tol=0.95)│
+│  2. 矢量图元 (Drawings) 拓扑: 888 / 888 满足 (rect_tol=0.5, point_tol=0.5, width_tol=0.95)│
 │                                                                                       │
 │  3. 文本图元分层审计 (Text Grain & Quality Gate Breakdown):                            │
-│     * 基准 Span 总数 (Total Base Spans)       : 302                                   │
-│     * 探针图元总数 (Total Probe Objects)     : 2493 (粒度膨胀比: 8.25x)               │
-│     * 候选文本匹配 (Candidate Matches)        : 92  (30.5%)                           │
-│     * 字符内容相符 (Chars Verified)           : 92                                    │
-│     * BBox 门禁达标 (BBox Gate Passed)        : 1   (0.3%)                            │
-│     * 最终完全接收 (Fully Accepted Spans)     : 1   (0.3% - 门禁彻底失败)              │
-│     * 缺失基准 Span (Missing Base Spans)      : 210 (69.5%)                           │
+│     * 基准 Span 总数 (Total Base Spans)       : 518                                   │
+│     * 探针图元总数 (Total Probe Objects)     : 2867 (粒度膨胀比: 5.53x)               │
+│     * 候选文本匹配 (Candidate Matches)        : 58  (11.2%)                           │
+│     * 字符内容相符 (Chars Verified)           : 58                                    │
+│     * BBox 门禁达标 (BBox Gate Passed)        : 2   (0.4%)                            │
+│     * 最终完全接收 (Fully Accepted Spans)     : 2   (0.4% - 门禁彻底失败)              │
+│     * 缺失基准 Span (Missing Base Spans)      : 460 (88.8%)                           │
 └───────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-数据清晰证实：虽然在部分孤立字符上找到了 92 个候选，但由于 8.25 倍的图元碎裂与 LineBox/GlyphBox 垂直差，**最终合格率仅为 0.3%，门禁明确处于失败状态**。
+数据清晰证实：探针在未经词级聚合的情况下，输出的是原生的原子 TextObject（呈现高达 5.53x 的图元碎裂），且 BBox 处于字形边界（GlyphBox）而非行级边界（LineBox），**最终合格率仅为 0.4%，文本输入契约等价门禁彻底失败**。
 
 ---
 
-## 七、Sprint 2 方向规划：只读聚合实验 (Read-Only Span Aggregator)
+## 八、Sprint 1 终局闭环与分支封存规范
 
-Sprint 2 坚定遵循**不接入生产算法**的原则，在输入适配层开展“只读聚合实验”：
-
-### 1. 实验闭环设计
-1. **输入源**：PDFium 原生原子 TextObject 集合；
-2. **处理过程**：编写实验性纯 Rust 聚合器，按字符几何与连续性构建只读内存对象；
-3. **输出物**：仅导出为独立的差分 JSON Snapshot，**不喂给**任何有线/无线表格算法。
-
-### 2. 核心比对与验证的 5 大维度
-*   **维度 1：字符完整性 (Character Completeness)**：验证聚合后字符总数与内容是否有丢失、重复或漏字；
-*   **维度 2：来源连续性 (Source Continuity Provenance)**：在聚合产生的 DTO 中保留每个字符来源于哪一个原子 TextObject 索引；
-*   **维度 3：视觉行归属与倾斜容忍 (Visual Line Attribution)**：制定基于基线 Y 坐标的动态行聚类，避免不同行汉字误聚；
-*   **维度 4：差异化切分状态机**：
-    - CJK 汉字：以字距与紧邻度连续成词；
-    - 西文与数字：依据实际空格宽度（Space Width）显式插值空格，区分词内字符与词间间隔；
-    - 标点符号：处理悬挂与贴合规则；
-*   **维度 5：与现有 `NativeSpanDto` 契约兼容性**：确保生成的 DTO 字段（`bbox`、`font`、`size`、`characters`）与生产接口完全兼容。
-
-### 3. 5 pt 垂直差异的观测性原则
-*   将 5 pt 差异作为纯观测项，重点验证现有 Rust 表格算法的行聚类容差 `tol = max(2.4, size * 0.38)` 是否已经天然具备容忍能力；
-*   **严禁**为了刻意将差分降到 0.5 pt 而盲目在适配器层强行扩大 BBox。
-
----
-
-## 八、分支封存与交付边界
-
-1. **分支状态**：`feat/pdfium-probe-sprint1` 分支保留为**可审计的 Sprint 1 探针与差分器加固基准**；
-2. **严守主线**：严禁合并进 `feature-dev` 或主分支；
-3. **二进制文件政策**：`pdfium.dll` 与真实差分 JSON 仅作为复反复验依据保留在当前隔离分支，生产主线永久保持纯文本轻量形态。
+1. **Sprint 1 终局定性**：
+   - 探针工程构建完成；
+   - 差分框架与严格门禁全面健全；
+   - 矢量图元在当前 5 个样本下拓扑匹配；
+   - 规范化哈希确定性核验 100% 通过；
+   - **文本输入契约验证彻底失败，验收不通过**；
+   - **严禁接入 `wireless_structure`、`wired`、`native_span` 等任何生产表格恢复算法**。
+2. **分支封存操作**：
+   - 当前工作区 `feat/pdfium-probe-sprint1` 分支就地封存，保留完整的差分台账、测试用例与验证报告作为审计证据；
+   - 绝对不合并至 `feature-dev` 或主干分支；
+   - 后续如需开展 Span 聚合研究，将在独立的只读实验分支中探索，并继续遵循非侵入式原则。

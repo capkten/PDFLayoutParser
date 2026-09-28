@@ -87,15 +87,46 @@ def process_file(pdf_path: str, out_dir: str):
         json.dump(result, f, ensure_ascii=False, indent=2)
     print(f"Exported baseline: {out_file}")
 
+def export_real_samples(real_baseline_dir: str):
+    os.makedirs(real_baseline_dir, exist_ok=True)
+    real_targets = [
+        ("d:/codes/PDFLayoutParser/test.pdf", 0, "test_p0_cover"),
+        ("d:/codes/PDFLayoutParser/test.pdf", 1, "test_p1_toc"),
+        ("d:/codes/PDFLayoutParser/test.pdf", 27, "test_p27_table"),
+        ("d:/codes/PDFLayoutParser/征信解析样例.pdf", 0, "credit_p0_header"),
+        ("d:/codes/PDFLayoutParser/征信解析样例.pdf", 1, "credit_p1_detail"),
+    ]
+    for pdf_path, p_idx, sname in real_targets:
+        if not os.path.exists(pdf_path):
+            continue
+        doc = fitz.open(pdf_path)
+        if p_idx < len(doc):
+            page_data = export_page_baseline(doc[p_idx], 0)
+            result = {
+                "generator": f"PyMuPDF_{fitz.__version__}",
+                "source_file": os.path.basename(pdf_path),
+                "sample_name": sname,
+                "page_count": 1,
+                "pages": [page_data],
+            }
+            out_file = os.path.join(real_baseline_dir, f"{sname}_pymupdf.json")
+            with open(out_file, "w", encoding="utf-8") as f:
+                json.dump(result, f, ensure_ascii=False, indent=2)
+            print(f"Exported real baseline: {out_file}")
+        doc.close()
+
 def main():
     root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
     synthetic_dir = os.path.join(root, "test_data", "synthetic")
     baseline_dir = os.path.join(root, "test_data", "baseline")
+    real_baseline_dir = os.path.join(root, "test_data", "real_baseline")
     os.makedirs(baseline_dir, exist_ok=True)
 
     pdf_files = glob.glob(os.path.join(synthetic_dir, "*.pdf"))
     for pdf in pdf_files:
         process_file(pdf, baseline_dir)
+
+    export_real_samples(real_baseline_dir)
 
 if __name__ == "__main__":
     main()

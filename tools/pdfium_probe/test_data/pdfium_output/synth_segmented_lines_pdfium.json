@@ -1,9 +1,11 @@
 {
+  "schema_version": "pdfium_raw_snapshot_v1.0",
   "generator": "pdfium_probe_0.1.0",
   "source_file": "synth_segmented_lines.pdf",
   "page_count": 1,
   "pages": [
     {
+      "schema_version": "pdfium_raw_page_v1.0",
       "page_index": 0,
       "width": 500.0,
       "height": 400.0,
@@ -20,10 +22,11 @@
         500.0,
         400.0
       ],
+      "has_invisible_text": false,
       "spans": [
         {
           "order": 0,
-          "text": "Table Cell 1",
+          "text": "Table Cell 1 ",
           "bbox": [
             60.276,
             121.264,
@@ -32,12 +35,17 @@
           ],
           "font": "Helvetica",
           "size": 12.0,
-          "flags": null,
-          "source_position": [
-            0,
-            0,
-            0
-          ],
+          "flags": 0,
+          "render_mode": 0,
+          "is_invisible": false,
+          "provenance": {
+            "page_index": 0,
+            "pdfium_object_index": 6,
+            "character_count": 12,
+            "is_derived": false,
+            "derived_block": null,
+            "derived_line": null
+          },
           "characters": [
             {
               "c": "T",
@@ -160,12 +168,17 @@
           ],
           "font": "Helvetica",
           "size": 12.0,
-          "flags": null,
-          "source_position": [
-            0,
-            0,
-            1
-          ],
+          "flags": 0,
+          "render_mode": 0,
+          "is_invisible": false,
+          "provenance": {
+            "page_index": 0,
+            "pdfium_object_index": 7,
+            "character_count": 12,
+            "is_derived": false,
+            "derived_block": null,
+            "derived_line": null
+          },
           "characters": [
             {
               "c": "T",

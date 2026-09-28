@@ -3,6 +3,16 @@ import os
 import sys
 import glob
 import argparse
+import hashlib
+
+def compute_file_sha256(path):
+    if not os.path.exists(path):
+        return None
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        while chunk := f.read(8192):
+            h.update(chunk)
+    return h.hexdigest()
 
 def compare_characters(base_chars, probe_chars, h_tol=0.5, v_tol=0.5):
     """
@@ -409,24 +419,56 @@ def compare_file(base_path, probe_path, bbox_tol=0.5, rect_tol=0.5, point_tol=0.
     with open(probe_path, "r", encoding="utf-8") as f:
         probe = json.load(f)
 
+    page_count_match = base["page_count"] == probe["page_count"]
     file_diff = {
         "file": base["source_file"],
         "base_page_count": base["page_count"],
         "probe_page_count": probe["page_count"],
+        "page_count_match": page_count_match,
+        "base_schema": base.get("schema_version", "legacy_snapshot"),
+        "probe_schema": probe.get("schema_version", "unknown"),
         "pages": [],
     }
 
-    for p_idx in range(min(base["page_count"], probe["page_count"])):
+    max_pages = max(base["page_count"], probe["page_count"])
+    for p_idx in range(max_pages):
+        if p_idx >= len(base["pages"]):
+            file_diff["pages"].append({
+                "page_index": p_idx,
+                "status": "BASE_PAGE_MISSING",
+            })
+            continue
+        if p_idx >= len(probe["pages"]):
+            file_diff["pages"].append({
+                "page_index": p_idx,
+                "status": "PROBE_PAGE_MISSING",
+            })
+            continue
+
         bp = base["pages"][p_idx]
         pp = probe["pages"][p_idx]
+
+        b_crop = bp.get("crop_box")
+        p_crop = pp.get("crop_box")
+        crop_delta = max(abs(b_crop[i] - p_crop[i]) for i in range(4)) if b_crop and p_crop else 0.0
+
+        b_media = bp.get("media_box")
+        p_media = pp.get("media_box")
+        media_delta = max(abs(b_media[i] - p_media[i]) for i in range(4)) if b_media and p_media else 0.0
 
         geo_diff = {
             "page_index": p_idx,
             "width_match": bp["width"] == pp["width"],
             "height_match": bp["height"] == pp["height"],
             "rotation_match": bp["rotation"] == pp["rotation"],
+            "crop_match": crop_delta <= rect_tol,
+            "media_match": media_delta <= rect_tol,
+            "crop_delta": round(crop_delta, 4),
+            "media_delta": round(media_delta, 4),
             "base_dims": (bp["width"], bp["height"], bp["rotation"]),
-            "probe_dims": (pp["width"], pp["height"], bp["rotation"]),
+            "probe_dims": (pp["width"], pp["height"], pp["rotation"]),
+            "base_crop": b_crop,
+            "probe_crop": p_crop,
         }
 
         span_diff = compare_spans(bp.get("spans", []), pp.get("spans", []), bbox_tol=bbox_tol)
@@ -439,6 +481,7 @@ def compare_file(base_path, probe_path, bbox_tol=0.5, rect_tol=0.5, point_tol=0.
         )
 
         file_diff["pages"].append({
+            "page_index": p_idx,
             "geometry": geo_diff,
             "spans": span_diff,
             "drawings": drawing_diff,
@@ -469,46 +512,103 @@ def main():
     probe_dir = os.path.join(root, "test_data", "pdfium_output")
 
     report = []
+    hash_ledger = []
+    gate_failures = []
+
+    synthetic_pdf_dir = os.path.join(root, "test_data", "synthetic")
     base_files = glob.glob(os.path.join(baseline_dir, "*_pymupdf.json"))
-    for bf in base_files:
+
+    if not base_files:
+        gate_failures.append("No baseline JSON files found in test_data/baseline")
+
+    for bf in sorted(base_files):
         name = os.path.basename(bf).replace("_pymupdf.json", "")
+        pdf_file = os.path.join(synthetic_pdf_dir, f"{name}.pdf")
         pf = os.path.join(probe_dir, f"{name}_pdfium.json")
-        if os.path.exists(pf):
-            file_diff = compare_file(
-                bf, pf,
-                bbox_tol=args.bbox_tol,
-                rect_tol=args.rect_tol,
-                point_tol=args.point_tol,
-                width_tol=args.width_tol
-            )
-            report.append(file_diff)
+
+        pdf_sha = compute_file_sha256(pdf_file)
+        base_sha = compute_file_sha256(bf)
+        probe_sha = compute_file_sha256(pf)
+
+        hash_ledger.append({
+            "name": name,
+            "pdf_file": pdf_file if os.path.exists(pdf_file) else None,
+            "pdf_sha256": pdf_sha,
+            "baseline_json": bf,
+            "baseline_sha256": base_sha,
+            "probe_json": pf,
+            "probe_sha256": probe_sha,
+        })
+
+        if not os.path.exists(pf):
+            gate_failures.append(f"Missing probe output file for baseline: {name}_pdfium.json")
+            report.append({
+                "file": f"{name}.pdf",
+                "status": "PROBE_FILE_MISSING",
+                "base_file": bf,
+                "probe_file": pf,
+                "pages": [],
+            })
+            continue
+
+        file_diff = compare_file(
+            bf, pf,
+            bbox_tol=args.bbox_tol,
+            rect_tol=args.rect_tol,
+            point_tol=args.point_tol,
+            width_tol=args.width_tol
+        )
+        report.append(file_diff)
 
     out_report_path = os.path.join(root, "diff_report_synthetic.json")
     with open(out_report_path, "w", encoding="utf-8") as f:
-        json.dump(report, f, ensure_ascii=False, indent=2)
+        json.dump({"summary_report": report, "hash_ledger": hash_ledger}, f, ensure_ascii=False, indent=2)
     print(f"Comparison complete! Detailed JSON report written to {out_report_path}")
-
-    gate_failures = []
 
     print("\n" + "="*80)
     print("      Sprint 1 Synthetic Double-Parser Comparison Summary (1-to-1)")
     print("="*80)
     for r in report:
+        if r.get("status") == "PROBE_FILE_MISSING":
+            print(f"\n[Case] {r['file']}: PROBE FILE MISSING ({r['probe_file']})")
+            continue
+
         print(f"\n[Case] {r['file']}")
+        if not r.get("page_count_match", True):
+            gate_failures.append(f"{r['file']}: Page count mismatch (Base={r['base_page_count']} vs Probe={r['probe_page_count']})")
+            print(f"  * Page count mismatch: Base={r['base_page_count']} vs Probe={r['probe_page_count']}")
+
         for p in r["pages"]:
+            p_idx = p["page_index"]
+            if p.get("status") == "BASE_PAGE_MISSING":
+                gate_failures.append(f"{r['file']} p{p_idx}: Missing base page")
+                print(f"  Page {p_idx}: BASE_PAGE_MISSING")
+                continue
+            if p.get("status") == "PROBE_PAGE_MISSING":
+                gate_failures.append(f"{r['file']} p{p_idx}: Missing probe page")
+                print(f"  Page {p_idx}: PROBE_PAGE_MISSING")
+                continue
+
             geo = p["geometry"]
             s = p["spans"]
             d = p["drawings"]
-            p_idx = geo["page_index"]
+
             dims_ok = geo["width_match"] and geo["height_match"] and geo["rotation_match"]
+            crop_ok = geo.get("crop_match", True)
+            media_ok = geo.get("media_match", True)
+
             if not dims_ok:
-                gate_failures.append(f"{r['file']} p{p_idx}: Geometry mismatch (Base={geo['base_dims']} vs Probe={geo['probe_dims']})")
+                gate_failures.append(f"{r['file']} p{p_idx}: Geometry dimension mismatch (Base={geo['base_dims']} vs Probe={geo['probe_dims']})")
+            if not crop_ok:
+                gate_failures.append(f"{r['file']} p{p_idx}: CropBox delta {geo.get('crop_delta')} pt > threshold {args.rect_tol} pt")
+            if not media_ok:
+                gate_failures.append(f"{r['file']} p{p_idx}: MediaBox delta {geo.get('media_delta')} pt > threshold {args.rect_tol} pt")
 
             inversion_info = s.get("order_inversion", {})
             inv_count = inversion_info.get("inversion_count", 0)
 
             print(f"  Page {p_idx}:")
-            print(f"    - Geometry: Dims Match={dims_ok} (Base={geo['base_dims']}, Probe={geo['probe_dims']})")
+            print(f"    - Geometry: Dims Match={dims_ok} (Base={geo['base_dims']}, Probe={geo['probe_dims']}), CropMatch={crop_ok}")
             print(f"    - Spans   : Base={s['base_span_count']}, Probe={s['probe_span_count']} | Candidates={s['candidate_match_count']}, CharsOK={s['char_match_count']}, BBoxPass={s['bbox_pass_count']}, FullyAccepted={s['fully_accepted_count']}, Missing={s['missing_count']}")
             print(f"                Max BBox Delta={s['max_bbox_delta']} pt, P95={s['p95_bbox_delta']} pt, Inversions={inv_count}")
             print(f"    - Drawings: Base={d['base_drawing_count']}, Probe={d['probe_drawing_count']}, Matched={d['matched_count']}")
@@ -522,6 +622,9 @@ def main():
                     gate_failures.append(f"{r['file']} p{p_idx}: Non-empty span missing in probe: '{item['text']}'")
                 elif item["status"] == "PROBE_MISSING" and not item["text"].strip():
                     gate_failures.append(f"{r['file']} p{p_idx}: Whitespace span missing in probe: '{item['text']}' (Base span count={s['base_span_count']} vs Probe={s['probe_span_count']})")
+                elif item["status"] == "BASE_MISSING":
+                    # 严格等价门禁：未聚合/多余的图元必须被拦截
+                    gate_failures.append(f"{r['file']} p{p_idx}: Extra unmapped probe span/TextObject: '{item['text']}'")
 
             raw_bbox_delta = s.get("raw_max_bbox_delta", s["max_bbox_delta"])
             if raw_bbox_delta > args.bbox_tol:
