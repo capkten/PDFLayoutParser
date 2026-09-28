@@ -598,3 +598,87 @@ def test_report_metadata_filter_does_not_remove_wired_tables(
     result = PersonalCreditReportTableExtractor().extract(page)
 
     assert (table in result) is should_retain
+
+
+def test_query_table_handles_spaced_tokens_and_vertical_tolerances():
+    from types import SimpleNamespace
+    from hexai_pdf_parser.core.models import BBox
+    from hexai_pdf_parser.extractors.personal_credit_report import (
+        _make_query_table,
+        _normalize_spaced_items,
+    )
+
+    # 1. 验证空格与多空格拆分
+    raw_items = [
+        (73.0, 38.5, 220.2, 47.5, "12                               026年04月11日"),
+        (73.0, 57.5, 119.7, 66.5, "13                "),
+    ]
+    normalized = _normalize_spaced_items(raw_items)
+    assert len(normalized) == 3
+    assert normalized[0][4] == "12"
+    assert normalized[0][0] == 73.0
+    assert normalized[0][2] < 95.0
+    assert "026年04月11日" in normalized[1][4]
+    assert normalized[1][0] >= 95.0
+    assert normalized[2][4] == "13"
+    assert normalized[2][2] < 95.0
+
+    # 2. 验证左右列 3.07 pt 高低差聚合为单行
+    from hexai_pdf_parser.extractors.personal_credit_report import _query_rows
+    dummy_page = SimpleNamespace(
+        get_text=lambda mode: [
+            (73.34, 229.86, 83.04, 238.86, "22", 0, 0, 0),
+            (154.36, 229.86, 220.17, 238.86, "2025年12月07日", 0, 1, 0),
+            (263.46, 232.93, 398.46, 241.93, "招商银行股份有限公司信用卡中心", 0, 2, 0),
+            (462.22, 232.93, 498.22, 241.93, "贷后管理", 0, 3, 0),
+        ]
+    )
+    rows = _query_rows(dummy_page)
+    assert len(rows) == 1
+    assert [item[4] for item in rows[0]] == [
+        "22",
+        "2025年12月07日",
+        "招商银行股份有限公司信用卡中心",
+        "贷后管理",
+    ]
+
+
+def test_extract_page_char_words_exact_bbox():
+    from types import SimpleNamespace
+    from hexai_pdf_parser.extractors.personal_credit_report import _extract_page_char_words
+
+    rawdict = {
+        "blocks": [
+            {
+                "lines": [
+                    {
+                        "spans": [
+                            {
+                                "chars": [
+                                    {"c": "2", "bbox": (73.0, 10.0, 78.0, 20.0)},
+                                    {"c": "1", "bbox": (78.0, 10.0, 83.0, 20.0)},
+                                    {"c": " ", "bbox": (83.0, 10.0, 90.0, 20.0)},
+                                    {"c": " ", "bbox": (90.0, 10.0, 150.0, 20.0)},
+                                    {"c": "2", "bbox": (154.36, 10.0, 160.0, 20.0)},
+                                    {"c": "0", "bbox": (160.0, 10.0, 166.0, 20.0)},
+                                    {"c": "2", "bbox": (166.0, 10.0, 172.0, 20.0)},
+                                    {"c": "5", "bbox": (172.0, 10.0, 178.0, 20.0)},
+                                    {"c": "年", "bbox": (178.0, 10.0, 186.0, 20.0)},
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        ]
+    }
+    mock_page = SimpleNamespace(get_text=lambda mode: rawdict if mode == "rawdict" else [])
+    words = _extract_page_char_words(mock_page)
+    assert len(words) == 2
+    assert words[0][4] == "21"
+    assert words[0][:4] == (73.0, 10.0, 83.0, 20.0)
+    assert words[1][4] == "2025年"
+    # 严格检验起始坐标是真实字符的 154.36，而不是被大量空格估算推移的坐标
+    assert words[1][0] == 154.36
+    assert words[1][2] == 186.0
+
