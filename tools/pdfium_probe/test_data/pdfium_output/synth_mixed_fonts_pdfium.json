@@ -35,13 +35,33 @@
           ],
           "font": "Helvetica",
           "size": 14.0,
-          "flags": 0,
+          "flags": null,
           "render_mode": 0,
           "is_invisible": false,
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 0,
             "character_count": 16,
+            "char_start_index": 0,
+            "char_end_index": 16,
+            "char_indices": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12,
+              13,
+              14,
+              15
+            ],
             "is_derived": false,
             "derived_block": null,
             "derived_line": null
@@ -54,7 +74,8 @@
                 87.33,
                 59.338,
                 102.954
-              ]
+              ],
+              "char_index": 0
             },
             {
               "c": "r",
@@ -63,7 +84,8 @@
                 87.33,
                 64.196,
                 102.954
-              ]
+              ],
+              "char_index": 1
             },
             {
               "c": "o",
@@ -72,7 +94,8 @@
                 87.33,
                 71.784,
                 102.954
-              ]
+              ],
+              "char_index": 2
             },
             {
               "c": "j",
@@ -81,7 +104,8 @@
                 87.33,
                 74.892,
                 102.954
-              ]
+              ],
+              "char_index": 3
             },
             {
               "c": "e",
@@ -90,7 +114,8 @@
                 87.33,
                 82.676,
                 102.954
-              ]
+              ],
+              "char_index": 4
             },
             {
               "c": "c",
@@ -99,7 +124,8 @@
                 87.33,
                 89.676,
                 102.954
-              ]
+              ],
+              "char_index": 5
             },
             {
               "c": "t",
@@ -108,7 +134,8 @@
                 87.33,
                 93.568,
                 102.954
-              ]
+              ],
+              "char_index": 6
             },
             {
               "c": " ",
@@ -117,7 +144,8 @@
                 87.33,
                 97.46,
                 102.954
-              ]
+              ],
+              "char_index": 7
             },
             {
               "c": "R",
@@ -126,7 +154,8 @@
                 87.33,
                 107.568,
                 102.954
-              ]
+              ],
+              "char_index": 8
             },
             {
               "c": "e",
@@ -135,7 +164,8 @@
                 87.33,
                 115.352,
                 102.954
-              ]
+              ],
+              "char_index": 9
             },
             {
               "c": "v",
@@ -144,7 +174,8 @@
                 87.33,
                 122.352,
                 102.954
-              ]
+              ],
+              "char_index": 10
             },
             {
               "c": "e",
@@ -153,7 +184,8 @@
                 87.33,
                 130.136,
                 102.954
-              ]
+              ],
+              "char_index": 11
             },
             {
               "c": "n",
@@ -162,7 +194,8 @@
                 87.33,
                 137.92,
                 102.954
-              ]
+              ],
+              "char_index": 12
             },
             {
               "c": "u",
@@ -171,7 +204,8 @@
                 87.33,
                 145.704,
                 102.954
-              ]
+              ],
+              "char_index": 13
             },
             {
               "c": "e",
@@ -180,7 +214,8 @@
                 87.33,
                 153.488,
                 102.954
-              ]
+              ],
+              "char_index": 14
             },
             {
               "c": ":",
@@ -189,7 +224,8 @@
                 87.33,
                 157.38,
                 102.954
-              ]
+              ],
+              "char_index": 15
             }
           ]
         },
@@ -204,13 +240,18 @@
           ],
           "font": "Helvetica",
           "size": 8.0,
-          "flags": 0,
+          "flags": null,
           "render_mode": 0,
           "is_invisible": false,
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 1,
             "character_count": 1,
+            "char_start_index": 0,
+            "char_end_index": 1,
+            "char_indices": [
+              0
+            ],
             "is_derived": false,
             "derived_block": null,
             "derived_line": null
@@ -223,7 +264,8 @@
                 87.76,
                 174.448,
                 96.688
-              ]
+              ],
+              "char_index": 0
             }
           ]
         },
@@ -238,13 +280,23 @@
           ],
           "font": "Song",
           "size": 14.0,
-          "flags": 0,
+          "flags": null,
           "render_mode": 0,
           "is_invisible": false,
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 2,
             "character_count": 6,
+            "char_start_index": 0,
+            "char_end_index": 6,
+            "char_indices": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              5
+            ],
             "is_derived": false,
             "derived_block": null,
             "derived_line": null
@@ -257,7 +309,8 @@
                 86.0,
                 194.0,
                 102.8
-              ]
+              ],
+              "char_index": 0
             },
             {
               "c": "要",
@@ -266,7 +319,8 @@
                 86.0,
                 208.0,
                 102.8
-              ]
+              ],
+              "char_index": 1
             },
             {
               "c": "业",
@@ -275,7 +329,8 @@
                 86.0,
                 222.0,
                 102.8
-              ]
+              ],
+              "char_index": 2
             },
             {
               "c": "务",
@@ -284,7 +339,8 @@
                 86.0,
                 236.0,
                 102.8
-              ]
+              ],
+              "char_index": 3
             },
             {
               "c": "收",
@@ -293,7 +349,8 @@
                 86.0,
                 250.0,
                 102.8
-              ]
+              ],
+              "char_index": 4
             },
             {
               "c": "入",
@@ -302,7 +359,8 @@
                 86.0,
                 264.0,
                 102.8
-              ]
+              ],
+              "char_index": 5
             }
           ]
         },
@@ -317,13 +375,28 @@
           ],
           "font": "Times-Roman",
           "size": 11.0,
-          "flags": 0,
+          "flags": null,
           "render_mode": 0,
           "is_invisible": false,
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 3,
             "character_count": 11,
+            "char_start_index": 0,
+            "char_end_index": 11,
+            "char_indices": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10
+            ],
             "is_derived": false,
             "derived_block": null,
             "derived_line": null
@@ -336,7 +409,8 @@
                 90.199,
                 303.663,
                 102.365
-              ]
+              ],
+              "char_index": 0
             },
             {
               "c": " ",
@@ -345,7 +419,8 @@
                 90.199,
                 306.413,
                 102.365
-              ]
+              ],
+              "char_index": 1
             },
             {
               "c": "a",
@@ -354,7 +429,8 @@
                 90.199,
                 311.297,
                 102.365
-              ]
+              ],
+              "char_index": 2
             },
             {
               "c": "u",
@@ -363,7 +439,8 @@
                 90.199,
                 316.797,
                 102.365
-              ]
+              ],
+              "char_index": 3
             },
             {
               "c": "d",
@@ -372,7 +449,8 @@
                 90.199,
                 322.319,
                 102.365
-              ]
+              ],
+              "char_index": 4
             },
             {
               "c": "i",
@@ -381,7 +459,8 @@
                 90.199,
                 325.355,
                 102.365
-              ]
+              ],
+              "char_index": 5
             },
             {
               "c": "t",
@@ -390,7 +469,8 @@
                 90.199,
                 328.424,
                 102.365
-              ]
+              ],
+              "char_index": 6
             },
             {
               "c": "e",
@@ -399,7 +479,8 @@
                 90.199,
                 333.297,
                 102.365
-              ]
+              ],
+              "char_index": 7
             },
             {
               "c": "d",
@@ -408,7 +489,8 @@
                 90.199,
                 338.819,
                 102.365
-              ]
+              ],
+              "char_index": 8
             },
             {
               "c": " ",
@@ -417,7 +499,8 @@
                 90.199,
                 341.547,
                 102.365
-              ]
+              ],
+              "char_index": 9
             },
             {
               "c": ")",
@@ -426,7 +509,8 @@
                 90.199,
                 345.21,
                 102.365
-              ]
+              ],
+              "char_index": 10
             }
           ]
         }

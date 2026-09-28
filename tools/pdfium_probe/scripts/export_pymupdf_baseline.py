@@ -101,7 +101,7 @@ def export_real_samples(real_baseline_dir: str):
             continue
         doc = fitz.open(pdf_path)
         if p_idx < len(doc):
-            page_data = export_page_baseline(doc[p_idx], 0)
+            page_data = export_page_baseline(doc[p_idx], p_idx)
             result = {
                 "generator": f"PyMuPDF_{fitz.__version__}",
                 "source_file": os.path.basename(pdf_path),

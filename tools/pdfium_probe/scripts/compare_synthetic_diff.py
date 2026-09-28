@@ -338,9 +338,29 @@ def compare_spans(base_spans, probe_spans, bbox_tol=0.5, char_h_tol=0.5, char_v_
             if bbox_ok:
                 bbox_pass_count += 1
 
+            # 隐藏文本与渲染模式核验
+            b_inv = bool(b_span.get("is_invisible", False))
+            p_inv = bool(best.get("is_invisible", False))
+            inv_ok = (b_inv == p_inv)
+
+            # 来源凭证完整性核验
+            prov = best.get("provenance", {})
+            prov_ok = (
+                isinstance(prov, dict) and
+                prov.get("pdfium_object_index") is not None and
+                prov.get("character_count", 0) == len(best.get("characters", [])) and
+                prov.get("is_derived") is False and
+                prov.get("char_start_index") is not None and
+                prov.get("char_end_index") is not None
+            )
+
             # 判定状态
             if not char_res["matched"]:
                 status = "CHAR_MISMATCH"
+            elif not inv_ok:
+                status = "INVISIBLE_MISMATCH"
+            elif not prov_ok:
+                status = "PROVENANCE_INVALID"
             elif not bbox_ok:
                 status = "DELTA_EXCEEDED"
             else:
@@ -367,6 +387,11 @@ def compare_spans(base_spans, probe_spans, bbox_tol=0.5, char_h_tol=0.5, char_v_
                 "probe_font": best.get("font"),
                 "base_size": b_span.get("size"),
                 "probe_size": best.get("size"),
+                "base_invisible": b_inv,
+                "probe_invisible": p_inv,
+                "base_render_mode": b_span.get("render_mode"),
+                "probe_render_mode": best.get("render_mode"),
+                "provenance": prov,
                 "char_verification": char_res,
             })
         else:
@@ -420,11 +445,13 @@ def compare_file(base_path, probe_path, bbox_tol=0.5, rect_tol=0.5, point_tol=0.
         probe = json.load(f)
 
     page_count_match = base["page_count"] == probe["page_count"]
+    schema_ok = (probe.get("schema_version") == "pdfium_raw_snapshot_v1.0")
     file_diff = {
         "file": base["source_file"],
         "base_page_count": base["page_count"],
         "probe_page_count": probe["page_count"],
         "page_count_match": page_count_match,
+        "schema_match": schema_ok,
         "base_schema": base.get("schema_version", "legacy_snapshot"),
         "probe_schema": probe.get("schema_version", "unknown"),
         "pages": [],
@@ -456,8 +483,17 @@ def compare_file(base_path, probe_path, bbox_tol=0.5, rect_tol=0.5, point_tol=0.
         p_media = pp.get("media_box")
         media_delta = max(abs(b_media[i] - p_media[i]) for i in range(4)) if b_media and p_media else 0.0
 
+        page_idx_match = (bp.get("page_index") == pp.get("page_index"))
+        has_invis_match = (bp.get("has_invisible_text", False) == pp.get("has_invisible_text", False))
+
         geo_diff = {
             "page_index": p_idx,
+            "base_page_index": bp.get("page_index"),
+            "probe_page_index": pp.get("page_index"),
+            "page_index_match": page_idx_match,
+            "has_invisible_text_match": has_invis_match,
+            "base_has_invisible": bp.get("has_invisible_text", False),
+            "probe_has_invisible": pp.get("has_invisible_text", False),
             "width_match": bp["width"] == pp["width"],
             "height_match": bp["height"] == pp["height"],
             "rotation_match": bp["rotation"] == pp["rotation"],
@@ -574,6 +610,9 @@ def main():
             continue
 
         print(f"\n[Case] {r['file']}")
+        if not r.get("schema_match", True):
+            gate_failures.append(f"{r['file']}: Invalid probe schema_version '{r.get('probe_schema')}' (expected 'pdfium_raw_snapshot_v1.0')")
+
         if not r.get("page_count_match", True):
             gate_failures.append(f"{r['file']}: Page count mismatch (Base={r['base_page_count']} vs Probe={r['probe_page_count']})")
             print(f"  * Page count mismatch: Base={r['base_page_count']} vs Probe={r['probe_page_count']}")
@@ -592,6 +631,12 @@ def main():
             geo = p["geometry"]
             s = p["spans"]
             d = p["drawings"]
+
+            if not geo.get("page_index_match", True):
+                gate_failures.append(f"{r['file']} p{p_idx}: Page index mismatch (Base={geo.get('base_page_index')} vs Probe={geo.get('probe_page_index')})")
+
+            if not geo.get("has_invisible_text_match", True):
+                gate_failures.append(f"{r['file']} p{p_idx}: Page has_invisible_text mismatch (Base={geo.get('base_has_invisible')} vs Probe={geo.get('probe_has_invisible')})")
 
             dims_ok = geo["width_match"] and geo["height_match"] and geo["rotation_match"]
             crop_ok = geo.get("crop_match", True)
@@ -618,6 +663,10 @@ def main():
             for item in s["details"]:
                 if item["status"] == "CHAR_MISMATCH":
                     gate_failures.append(f"{r['file']} p{p_idx}: Character text mismatch in span '{item['text']}'")
+                elif item["status"] == "INVISIBLE_MISMATCH":
+                    gate_failures.append(f"{r['file']} p{p_idx}: Invisible status mismatch in span '{item['text']}' (Base={item.get('base_invisible')} vs Probe={item.get('probe_invisible')})")
+                elif item["status"] == "PROVENANCE_INVALID":
+                    gate_failures.append(f"{r['file']} p{p_idx}: Invalid provenance sidecar for '{item['text']}'")
                 elif item["status"] == "PROBE_MISSING" and item["text"].strip():
                     gate_failures.append(f"{r['file']} p{p_idx}: Non-empty span missing in probe: '{item['text']}'")
                 elif item["status"] == "PROBE_MISSING" and not item["text"].strip():

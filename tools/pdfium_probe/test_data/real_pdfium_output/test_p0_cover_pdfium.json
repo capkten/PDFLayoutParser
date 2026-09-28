@@ -35,13 +35,18 @@
           ],
           "font": "MLJNAR+SimSun",
           "size": 180.0,
-          "flags": 0,
+          "flags": null,
           "render_mode": 0,
           "is_invisible": false,
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 0,
             "character_count": 1,
+            "char_start_index": 0,
+            "char_end_index": 1,
+            "char_indices": [
+              0
+            ],
             "is_derived": false,
             "derived_block": null,
             "derived_line": null
@@ -54,7 +59,8 @@
                 44.1951,
                 242.52,
                 53.1501
-              ]
+              ],
+              "char_index": 0
             }
           ]
         },
@@ -69,13 +75,18 @@
           ],
           "font": "MLJNAR+SimSun",
           "size": 180.0,
-          "flags": 0,
+          "flags": null,
           "render_mode": 0,
           "is_invisible": false,
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 1,
             "character_count": 1,
+            "char_start_index": 0,
+            "char_end_index": 1,
+            "char_indices": [
+              0
+            ],
             "is_derived": false,
             "derived_block": null,
             "derived_line": null
@@ -88,7 +99,8 @@
                 44.1951,
                 251.52,
                 53.1501
-              ]
+              ],
+              "char_index": 0
             }
           ]
         },
@@ -103,13 +115,18 @@
           ],
           "font": "MLJNAR+SimSun",
           "size": 180.0,
-          "flags": 0,
+          "flags": null,
           "render_mode": 0,
           "is_invisible": false,
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 2,
             "character_count": 1,
+            "char_start_index": 0,
+            "char_end_index": 1,
+            "char_indices": [
+              0
+            ],
             "is_derived": false,
             "derived_block": null,
             "derived_line": null
@@ -122,7 +139,8 @@
                 44.1951,
                 260.52,
                 53.1501
-              ]
+              ],
+              "char_index": 0
             }
           ]
         },
@@ -137,13 +155,18 @@
           ],
           "font": "MLJNAR+SimSun",
           "size": 180.0,
-          "flags": 0,
+          "flags": null,
           "render_mode": 0,
           "is_invisible": false,
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 3,
             "character_count": 1,
+            "char_start_index": 0,
+            "char_end_index": 1,
+            "char_indices": [
+              0
+            ],
             "is_derived": false,
             "derived_block": null,
             "derived_line": null
@@ -156,7 +179,8 @@
                 44.1951,
                 269.52,
                 53.1501
-              ]
+              ],
+              "char_index": 0
             }
           ]
         },
@@ -171,13 +195,18 @@
           ],
           "font": "MLJNAR+SimSun",
           "size": 180.0,
-          "flags": 0,
+          "flags": null,
           "render_mode": 0,
           "is_invisible": false,
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 4,
             "character_count": 1,
+            "char_start_index": 0,
+            "char_end_index": 1,
+            "char_indices": [
+              0
+            ],
             "is_derived": false,
             "derived_block": null,
             "derived_line": null
@@ -190,7 +219,8 @@
                 44.1951,
                 278.52,
                 53.1501
-              ]
+              ],
+              "char_index": 0
             }
           ]
         },
@@ -205,13 +235,18 @@
           ],
           "font": "MLJNAR+SimSun",
           "size": 180.0,
-          "flags": 0,
+          "flags": null,
           "render_mode": 0,
           "is_invisible": false,
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 5,
             "character_count": 1,
+            "char_start_index": 0,
+            "char_end_index": 1,
+            "char_indices": [
+              0
+            ],
             "is_derived": false,
             "derived_block": null,
             "derived_line": null
@@ -224,7 +259,8 @@
                 44.1951,
                 287.52,
                 53.1501
-              ]
+              ],
+              "char_index": 0
             }
           ]
         },
@@ -239,13 +275,18 @@
           ],
           "font": "MLJNAR+SimSun",
           "size": 180.0,
-          "flags": 0,
+          "flags": null,
           "render_mode": 0,
           "is_invisible": false,
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 6,
             "character_count": 1,
+            "char_start_index": 0,
+            "char_end_index": 1,
+            "char_indices": [
+              0
+            ],
             "is_derived": false,
             "derived_block": null,
             "derived_line": null
@@ -258,7 +299,8 @@
                 44.1951,
                 296.52,
                 53.1501
-              ]
+              ],
+              "char_index": 0
             }
           ]
         },
@@ -273,13 +315,18 @@
           ],
           "font": "MLJNAR+SimSun",
           "size": 180.0,
-          "flags": 0,
+          "flags": null,
           "render_mode": 0,
           "is_invisible": false,
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 7,
             "character_count": 1,
+            "char_start_index": 0,
+            "char_end_index": 1,
+            "char_indices": [
+              0
+            ],
             "is_derived": false,
             "derived_block": null,
             "derived_line": null
@@ -292,7 +339,8 @@
                 44.1951,
                 305.52,
                 53.1501
-              ]
+              ],
+              "char_index": 0
             }
           ]
         },
@@ -307,13 +355,18 @@
           ],
           "font": "MLJNAR+SimSun",
           "size": 180.0,
-          "flags": 0,
+          "flags": null,
           "render_mode": 0,
           "is_invisible": false,
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 8,
             "character_count": 1,
+            "char_start_index": 0,
+            "char_end_index": 1,
+            "char_indices": [
+              0
+            ],
             "is_derived": false,
             "derived_block": null,
             "derived_line": null
@@ -326,7 +379,8 @@
                 44.1951,
                 314.52,
                 53.1501
-              ]
+              ],
+              "char_index": 0
             }
           ]
         },
@@ -341,13 +395,18 @@
           ],
           "font": "MLJNAR+SimSun",
           "size": 180.0,
-          "flags": 0,
+          "flags": null,
           "render_mode": 0,
           "is_invisible": false,
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 9,
             "character_count": 1,
+            "char_start_index": 0,
+            "char_end_index": 1,
+            "char_indices": [
+              0
+            ],
             "is_derived": false,
             "derived_block": null,
             "derived_line": null
@@ -360,7 +419,8 @@
                 44.1951,
                 323.52,
                 53.1501
-              ]
+              ],
+              "char_index": 0
             }
           ]
         },
@@ -375,13 +435,18 @@
           ],
           "font": "PUIWCS+Calibri",
           "size": 180.0,
-          "flags": 0,
+          "flags": null,
           "render_mode": 0,
           "is_invisible": false,
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 10,
             "character_count": 1,
+            "char_start_index": 0,
+            "char_end_index": 1,
+            "char_indices": [
+              0
+            ],
             "is_derived": false,
             "derived_block": null,
             "derived_line": null
@@ -394,7 +459,8 @@
                 42.6561,
                 328.0739,
                 54.6981
-              ]
+              ],
+              "char_index": 0
             }
           ]
         },
@@ -409,13 +475,18 @@
           ],
           "font": "PUIWCS+Calibri",
           "size": 180.0,
-          "flags": 0,
+          "flags": null,
           "render_mode": 0,
           "is_invisible": false,
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 11,
             "character_count": 1,
+            "char_start_index": 0,
+            "char_end_index": 1,
+            "char_indices": [
+              0
+            ],
             "is_derived": false,
             "derived_block": null,
             "derived_line": null
@@ -428,7 +499,8 @@
                 42.6561,
                 332.6334,
                 54.6981
-              ]
+              ],
+              "char_index": 0
             }
           ]
         },
@@ -443,13 +515,18 @@
           ],
           "font": "PUIWCS+Calibri",
           "size": 180.0,
-          "flags": 0,
+          "flags": null,
           "render_mode": 0,
           "is_invisible": false,
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 12,
             "character_count": 1,
+            "char_start_index": 0,
+            "char_end_index": 1,
+            "char_indices": [
+              0
+            ],
             "is_derived": false,
             "derived_block": null,
             "derived_line": null
@@ -462,7 +539,8 @@
                 42.6561,
                 337.1928,
                 54.6981
-              ]
+              ],
+              "char_index": 0
             }
           ]
         },
@@ -477,13 +555,18 @@
           ],
           "font": "PUIWCS+Calibri",
           "size": 180.0,
-          "flags": 0,
+          "flags": null,
           "render_mode": 0,
           "is_invisible": false,
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 13,
             "character_count": 1,
+            "char_start_index": 0,
+            "char_end_index": 1,
+            "char_indices": [
+              0
+            ],
             "is_derived": false,
             "derived_block": null,
             "derived_line": null
@@ -496,7 +579,8 @@
                 42.6561,
                 341.7522,
                 54.6981
-              ]
+              ],
+              "char_index": 0
             }
           ]
         },
@@ -511,13 +595,18 @@
           ],
           "font": "MLJNAR+SimSun",
           "size": 180.0,
-          "flags": 0,
+          "flags": null,
           "render_mode": 0,
           "is_invisible": false,
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 14,
             "character_count": 1,
+            "char_start_index": 0,
+            "char_end_index": 1,
+            "char_indices": [
+              0
+            ],
             "is_derived": false,
             "derived_block": null,
             "derived_line": null
@@ -530,7 +619,8 @@
                 44.1951,
                 350.64,
                 53.1501
-              ]
+              ],
+              "char_index": 0
             }
           ]
         },
@@ -545,13 +635,18 @@
           ],
           "font": "MLJNAR+SimSun",
           "size": 180.0,
-          "flags": 0,
+          "flags": null,
           "render_mode": 0,
           "is_invisible": false,
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 15,
             "character_count": 1,
+            "char_start_index": 0,
+            "char_end_index": 1,
+            "char_indices": [
+              0
+            ],
             "is_derived": false,
             "derived_block": null,
             "derived_line": null
@@ -564,7 +659,8 @@
                 44.1951,
                 359.64,
                 53.1501
-              ]
+              ],
+              "char_index": 0
             }
           ]
         },
@@ -579,13 +675,18 @@
           ],
           "font": "MLJNAR+SimSun",
           "size": 180.0,
-          "flags": 0,
+          "flags": null,
           "render_mode": 0,
           "is_invisible": false,
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 16,
             "character_count": 1,
+            "char_start_index": 0,
+            "char_end_index": 1,
+            "char_indices": [
+              0
+            ],
             "is_derived": false,
             "derived_block": null,
             "derived_line": null
@@ -598,7 +699,8 @@
                 44.1951,
                 368.64,
                 53.1501
-              ]
+              ],
+              "char_index": 0
             }
           ]
         },
@@ -613,13 +715,18 @@
           ],
           "font": "MLJNAR+SimSun",
           "size": 180.0,
-          "flags": 0,
+          "flags": null,
           "render_mode": 0,
           "is_invisible": false,
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 17,
             "character_count": 1,
+            "char_start_index": 0,
+            "char_end_index": 1,
+            "char_indices": [
+              0
+            ],
             "is_derived": false,
             "derived_block": null,
             "derived_line": null
@@ -632,7 +739,8 @@
                 44.1951,
                 377.64,
                 53.1501
-              ]
+              ],
+              "char_index": 0
             }
           ]
         },
@@ -647,13 +755,18 @@
           ],
           "font": "MLJNAR+SimSun",
           "size": 180.0,
-          "flags": 0,
+          "flags": null,
           "render_mode": 0,
           "is_invisible": false,
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 18,
             "character_count": 1,
+            "char_start_index": 0,
+            "char_end_index": 1,
+            "char_indices": [
+              0
+            ],
             "is_derived": false,
             "derived_block": null,
             "derived_line": null
@@ -666,7 +779,8 @@
                 44.1951,
                 386.64,
                 53.1501
-              ]
+              ],
+              "char_index": 0
             }
           ]
         },
@@ -681,13 +795,18 @@
           ],
           "font": "PUIWCS+Calibri",
           "size": 180.0,
-          "flags": 0,
+          "flags": null,
           "render_mode": 2,
           "is_invisible": false,
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 20,
             "character_count": 1,
+            "char_start_index": 0,
+            "char_end_index": 1,
+            "char_indices": [
+              0
+            ],
             "is_derived": false,
             "derived_block": null,
             "derived_line": null
@@ -700,7 +819,8 @@
                 769.616,
                 302.394,
                 781.658
-              ]
+              ],
+              "char_index": 0
             }
           ]
         },
@@ -715,13 +835,18 @@
           ],
           "font": "PUIWCS+Calibri",
           "size": 180.0,
-          "flags": 0,
+          "flags": null,
           "render_mode": 0,
           "is_invisible": false,
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 21,
             "character_count": 1,
+            "char_start_index": 0,
+            "char_end_index": 1,
+            "char_indices": [
+              0
+            ],
             "is_derived": false,
             "derived_block": null,
             "derived_line": null
@@ -734,7 +859,8 @@
                 769.735,
                 307.794,
                 781.777
-              ]
+              ],
+              "char_index": 0
             }
           ]
         },
@@ -749,13 +875,18 @@
           ],
           "font": "PUIWCS+Calibri",
           "size": 180.0,
-          "flags": 0,
+          "flags": null,
           "render_mode": 2,
           "is_invisible": false,
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 22,
             "character_count": 1,
+            "char_start_index": 0,
+            "char_end_index": 1,
+            "char_indices": [
+              0
+            ],
             "is_derived": false,
             "derived_block": null,
             "derived_line": null
@@ -768,7 +899,8 @@
                 769.616,
                 314.394,
                 781.658
-              ]
+              ],
+              "char_index": 0
             }
           ]
         },
@@ -783,13 +915,18 @@
           ],
           "font": "PUIWCS+Calibri",
           "size": 180.0,
-          "flags": 0,
+          "flags": null,
           "render_mode": 2,
           "is_invisible": false,
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 23,
             "character_count": 1,
+            "char_start_index": 0,
+            "char_end_index": 1,
+            "char_indices": [
+              0
+            ],
             "is_derived": false,
             "derived_block": null,
             "derived_line": null
@@ -802,7 +939,8 @@
                 769.616,
                 318.9534,
                 781.658
-              ]
+              ],
+              "char_index": 0
             }
           ]
         },
@@ -817,13 +955,18 @@
           ],
           "font": "PUIWCS+Calibri",
           "size": 180.0,
-          "flags": 0,
+          "flags": null,
           "render_mode": 2,
           "is_invisible": false,
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 24,
             "character_count": 1,
+            "char_start_index": 0,
+            "char_end_index": 1,
+            "char_indices": [
+              0
+            ],
             "is_derived": false,
             "derived_block": null,
             "derived_line": null
@@ -836,7 +979,8 @@
                 769.616,
                 323.5128,
                 781.658
-              ]
+              ],
+              "char_index": 0
             }
           ]
         },
@@ -851,13 +995,18 @@
           ],
           "font": "MLJNAR+SimSun",
           "size": 209.0,
-          "flags": 0,
+          "flags": null,
           "render_mode": 0,
           "is_invisible": false,
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 25,
             "character_count": 1,
+            "char_start_index": 0,
+            "char_end_index": 1,
+            "char_indices": [
+              0
+            ],
             "is_derived": false,
             "derived_block": null,
             "derived_line": null
@@ -870,7 +1019,8 @@
                 83.8743,
                 100.33,
                 94.2721
-              ]
+              ],
+              "char_index": 0
             }
           ]
         },
@@ -885,13 +1035,18 @@
           ],
           "font": "MLJNAR+SimSun",
           "size": 209.0,
-          "flags": 0,
+          "flags": null,
           "render_mode": 0,
           "is_invisible": false,
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 26,
             "character_count": 1,
+            "char_start_index": 0,
+            "char_end_index": 1,
+            "char_indices": [
+              0
+            ],
             "is_derived": false,
             "derived_block": null,
             "derived_line": null
@@ -904,7 +1059,8 @@
                 83.8743,
                 110.7698,
                 94.2721
-              ]
+              ],
+              "char_index": 0
             }
           ]
         },
@@ -919,13 +1075,18 @@
           ],
           "font": "MLJNAR+SimSun",
           "size": 209.0,
-          "flags": 0,
+          "flags": null,
           "render_mode": 0,
           "is_invisible": false,
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 27,
             "character_count": 1,
+            "char_start_index": 0,
+            "char_end_index": 1,
+            "char_indices": [
+              0
+            ],
             "is_derived": false,
             "derived_block": null,
             "derived_line": null
@@ -938,7 +1099,8 @@
                 83.8743,
                 121.3292,
                 94.2721
-              ]
+              ],
+              "char_index": 0
             }
           ]
         },
@@ -953,13 +1115,18 @@
           ],
           "font": "MLJNAR+SimSun",
           "size": 209.0,
-          "flags": 0,
+          "flags": null,
           "render_mode": 0,
           "is_invisible": false,
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 28,
             "character_count": 1,
+            "char_start_index": 0,
+            "char_end_index": 1,
+            "char_indices": [
+              0
+            ],
             "is_derived": false,
             "derived_block": null,
             "derived_line": null
@@ -972,7 +1139,8 @@
                 83.8743,
                 131.7691,
                 94.2721
-              ]
+              ],
+              "char_index": 0
             }
           ]
         },
@@ -987,13 +1155,18 @@
           ],
           "font": "MLJNAR+SimSun",
           "size": 209.0,
-          "flags": 0,
+          "flags": null,
           "render_mode": 0,
           "is_invisible": false,
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 29,
             "character_count": 1,
+            "char_start_index": 0,
+            "char_end_index": 1,
+            "char_indices": [
+              0
+            ],
             "is_derived": false,
             "derived_block": null,
             "derived_line": null
@@ -1006,7 +1179,8 @@
                 83.8743,
                 142.3285,
                 94.2721
-              ]
+              ],
+              "char_index": 0
             }
           ]
         },
@@ -1021,13 +1195,18 @@
           ],
           "font": "MLJNAR+SimSun",
           "size": 209.0,
-          "flags": 0,
+          "flags": null,
           "render_mode": 0,
           "is_invisible": false,
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 30,
             "character_count": 1,
+            "char_start_index": 0,
+            "char_end_index": 1,
+            "char_indices": [
+              0
+            ],
             "is_derived": false,
             "derived_block": null,
             "derived_line": null
@@ -1040,7 +1219,8 @@
                 83.8743,
                 147.545,
                 94.2721
-              ]
+              ],
+              "char_index": 0
             }
           ]
         },
@@ -1055,13 +1235,18 @@
           ],
           "font": "MLJNAR+SimSun",
           "size": 209.0,
-          "flags": 0,
+          "flags": null,
           "render_mode": 0,
           "is_invisible": false,
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 31,
             "character_count": 1,
+            "char_start_index": 0,
+            "char_end_index": 1,
+            "char_indices": [
+              0
+            ],
             "is_derived": false,
             "derived_block": null,
             "derived_line": null
@@ -1074,7 +1259,8 @@
                 83.8743,
                 152.7044,
                 94.2721
-              ]
+              ],
+              "char_index": 0
             }
           ]
         },
@@ -1089,13 +1275,18 @@
           ],
           "font": "MLJNAR+SimSun",
           "size": 209.0,
-          "flags": 0,
+          "flags": null,
           "render_mode": 0,
           "is_invisible": false,
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 32,
             "character_count": 1,
+            "char_start_index": 0,
+            "char_end_index": 1,
+            "char_indices": [
+              0
+            ],
             "is_derived": false,
             "derived_block": null,
             "derived_line": null
@@ -1108,7 +1299,8 @@
                 83.8743,
                 157.9841,
                 94.2721
-              ]
+              ],
+              "char_index": 0
             }
           ]
         },
@@ -1123,13 +1315,18 @@
           ],
           "font": "MLJNAR+SimSun",
           "size": 209.0,
-          "flags": 0,
+          "flags": null,
           "render_mode": 0,
           "is_invisible": false,
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 33,
             "character_count": 1,
+            "char_start_index": 0,
+            "char_end_index": 1,
+            "char_indices": [
+              0
+            ],
             "is_derived": false,
             "derived_block": null,
             "derived_line": null
@@ -1142,7 +1339,8 @@
                 83.8743,
                 163.2638,
                 94.2721
-              ]
+              ],
+              "char_index": 0
             }
           ]
         },
@@ -1157,13 +1355,18 @@
           ],
           "font": "MLJNAR+SimSun",
           "size": 209.0,
-          "flags": 0,
+          "flags": null,
           "render_mode": 0,
           "is_invisible": false,
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 34,
             "character_count": 1,
+            "char_start_index": 0,
+            "char_end_index": 1,
+            "char_indices": [
+              0
+            ],
             "is_derived": false,
             "derived_block": null,
             "derived_line": null
@@ -1176,7 +1379,8 @@
                 83.8743,
                 168.4232,
                 94.2721
-              ]
+              ],
+              "char_index": 0
             }
           ]
         },
@@ -1191,13 +1395,18 @@
           ],
           "font": "MLJNAR+SimSun",
           "size": 209.0,
-          "flags": 0,
+          "flags": null,
           "render_mode": 0,
           "is_invisible": false,
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 35,
             "character_count": 1,
+            "char_start_index": 0,
+            "char_end_index": 1,
+            "char_indices": [
+              0
+            ],
             "is_derived": false,
             "derived_block": null,
             "derived_line": null
@@ -1210,7 +1419,8 @@
                 83.8743,
                 173.7029,
                 94.2721
-              ]
+              ],
+              "char_index": 0
             }
           ]
         },
@@ -1225,13 +1435,18 @@
           ],
           "font": "MLJNAR+SimSun",
           "size": 209.0,
-          "flags": 0,
+          "flags": null,
           "render_mode": 0,
           "is_invisible": false,
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 36,
             "character_count": 1,
+            "char_start_index": 0,
+            "char_end_index": 1,
+            "char_indices": [
+              0
+            ],
             "is_derived": false,
             "derived_block": null,
             "derived_line": null
@@ -1244,7 +1459,8 @@
                 83.8743,
                 446.77,
                 94.2721
-              ]
+              ],
+              "char_index": 0
             }
           ]
         },
@@ -1259,13 +1475,18 @@
           ],
           "font": "MLJNAR+SimSun",
           "size": 209.0,
-          "flags": 0,
+          "flags": null,
           "render_mode": 0,
           "is_invisible": false,
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 37,
             "character_count": 1,
+            "char_start_index": 0,
+            "char_end_index": 1,
+            "char_indices": [
+              0
+            ],
             "is_derived": false,
             "derived_block": null,
             "derived_line": null
@@ -1278,7 +1499,8 @@
                 83.8743,
                 457.2098,
                 94.2721
-              ]
+              ],
+              "char_index": 0
             }
           ]
         },
@@ -1293,13 +1515,18 @@
           ],
           "font": "MLJNAR+SimSun",
           "size": 209.0,
-          "flags": 0,
+          "flags": null,
           "render_mode": 0,
           "is_invisible": false,
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 38,
             "character_count": 1,
+            "char_start_index": 0,
+            "char_end_index": 1,
+            "char_indices": [
+              0
+            ],
             "is_derived": false,
             "derived_block": null,
             "derived_line": null
@@ -1312,7 +1539,8 @@
                 83.8743,
                 467.7692,
                 94.2721
-              ]
+              ],
+              "char_index": 0
             }
           ]
         },
@@ -1327,13 +1555,18 @@
           ],
           "font": "MLJNAR+SimSun",
           "size": 209.0,
-          "flags": 0,
+          "flags": null,
           "render_mode": 0,
           "is_invisible": false,
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 39,
             "character_count": 1,
+            "char_start_index": 0,
+            "char_end_index": 1,
+            "char_indices": [
+              0
+            ],
             "is_derived": false,
             "derived_block": null,
             "derived_line": null
@@ -1346,7 +1579,8 @@
                 83.8743,
                 478.209,
                 94.2721
-              ]
+              ],
+              "char_index": 0
             }
           ]
         },
@@ -1361,13 +1595,18 @@
           ],
           "font": "MLJNAR+SimSun",
           "size": 209.0,
-          "flags": 0,
+          "flags": null,
           "render_mode": 0,
           "is_invisible": false,
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 40,
             "character_count": 1,
+            "char_start_index": 0,
+            "char_end_index": 1,
+            "char_indices": [
+              0
+            ],
             "is_derived": false,
             "derived_block": null,
             "derived_line": null
@@ -1380,7 +1619,8 @@
                 83.8743,
                 488.7685,
                 94.2721
-              ]
+              ],
+              "char_index": 0
             }
           ]
         },
@@ -1395,13 +1635,18 @@
           ],
           "font": "MLJNAR+SimSun",
           "size": 209.0,
-          "flags": 0,
+          "flags": null,
           "render_mode": 0,
           "is_invisible": false,
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 41,
             "character_count": 1,
+            "char_start_index": 0,
+            "char_end_index": 1,
+            "char_indices": [
+              0
+            ],
             "is_derived": false,
             "derived_block": null,
             "derived_line": null
@@ -1414,7 +1659,8 @@
                 83.8743,
                 499.33,
                 94.2721
-              ]
+              ],
+              "char_index": 0
             }
           ]
         },
@@ -1429,13 +1675,18 @@
           ],
           "font": "MLJNAR+SimSun",
           "size": 209.0,
-          "flags": 0,
+          "flags": null,
           "render_mode": 0,
           "is_invisible": false,
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 42,
             "character_count": 1,
+            "char_start_index": 0,
+            "char_end_index": 1,
+            "char_indices": [
+              0
+            ],
             "is_derived": false,
             "derived_block": null,
             "derived_line": null
@@ -1448,7 +1699,8 @@
                 83.8743,
                 509.7699,
                 94.2721
-              ]
+              ],
+              "char_index": 0
             }
           ]
         },
@@ -1463,13 +1715,18 @@
           ],
           "font": "MLJNAR+SimSun",
           "size": 209.0,
-          "flags": 0,
+          "flags": null,
           "render_mode": 0,
           "is_invisible": false,
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 43,
             "character_count": 1,
+            "char_start_index": 0,
+            "char_end_index": 1,
+            "char_indices": [
+              0
+            ],
             "is_derived": false,
             "derived_block": null,
             "derived_line": null
@@ -1482,7 +1739,8 @@
                 83.8743,
                 520.3292,
                 94.2721
-              ]
+              ],
+              "char_index": 0
             }
           ]
         },
@@ -1497,13 +1755,18 @@
           ],
           "font": "MLJNAR+SimSun",
           "size": 209.0,
-          "flags": 0,
+          "flags": null,
           "render_mode": 0,
           "is_invisible": false,
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 44,
             "character_count": 1,
+            "char_start_index": 0,
+            "char_end_index": 1,
+            "char_indices": [
+              0
+            ],
             "is_derived": false,
             "derived_block": null,
             "derived_line": null
@@ -1516,7 +1779,8 @@
                 83.8743,
                 530.7691,
                 94.2721
-              ]
+              ],
+              "char_index": 0
             }
           ]
         },
@@ -1531,13 +1795,18 @@
           ],
           "font": "PRMMSH+SimHei",
           "size": 439.0,
-          "flags": 0,
+          "flags": null,
           "render_mode": 2,
           "is_invisible": false,
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 45,
             "character_count": 1,
+            "char_start_index": 0,
+            "char_end_index": 1,
+            "char_indices": [
+              0
+            ],
             "is_derived": false,
             "derived_block": null,
             "derived_line": null
@@ -1550,7 +1819,8 @@
                 206.3149,
                 222.23,
                 228.5942
-              ]
+              ],
+              "char_index": 0
             }
           ]
         },
@@ -1565,13 +1835,18 @@
           ],
           "font": "PRMMSH+SimHei",
           "size": 439.0,
-          "flags": 0,
+          "flags": null,
           "render_mode": 2,
           "is_invisible": false,
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 46,
             "character_count": 1,
+            "char_start_index": 0,
+            "char_end_index": 1,
+            "char_indices": [
+              0
+            ],
             "is_derived": false,
             "derived_block": null,
             "derived_line": null
@@ -1584,7 +1859,8 @@
                 206.3149,
                 244.3097,
                 228.5942
-              ]
+              ],
+              "char_index": 0
             }
           ]
         },
@@ -1599,13 +1875,18 @@
           ],
           "font": "PRMMSH+SimHei",
           "size": 439.0,
-          "flags": 0,
+          "flags": null,
           "render_mode": 2,
           "is_invisible": false,
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 47,
             "character_count": 1,
+            "char_start_index": 0,
+            "char_end_index": 1,
+            "char_indices": [
+              0
+            ],
             "is_derived": false,
             "derived_block": null,
             "derived_line": null
@@ -1618,7 +1899,8 @@
                 206.3149,
                 266.3894,
                 228.5942
-              ]
+              ],
+              "char_index": 0
             }
           ]
         },
@@ -1633,13 +1915,18 @@
           ],
           "font": "PRMMSH+SimHei",
           "size": 439.0,
-          "flags": 0,
+          "flags": null,
           "render_mode": 2,
           "is_invisible": false,
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 48,
             "character_count": 1,
+            "char_start_index": 0,
+            "char_end_index": 1,
+            "char_indices": [
+              0
+            ],
             "is_derived": false,
             "derived_block": null,
             "derived_line": null
@@ -1652,7 +1939,8 @@
                 206.3149,
                 288.4691,
                 228.5942
-              ]
+              ],
+              "char_index": 0
             }
           ]
         },
@@ -1667,13 +1955,18 @@
           ],
           "font": "PRMMSH+SimHei",
           "size": 439.0,
-          "flags": 0,
+          "flags": null,
           "render_mode": 2,
           "is_invisible": false,
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 49,
             "character_count": 1,
+            "char_start_index": 0,
+            "char_end_index": 1,
+            "char_indices": [
+              0
+            ],
             "is_derived": false,
             "derived_block": null,
             "derived_line": null
@@ -1686,7 +1979,8 @@
                 206.3149,
                 310.5488,
                 228.5942
-              ]
+              ],
+              "char_index": 0
             }
           ]
         },
@@ -1701,13 +1995,18 @@
           ],
           "font": "PRMMSH+SimHei",
           "size": 439.0,
-          "flags": 0,
+          "flags": null,
           "render_mode": 2,
           "is_invisible": false,
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 50,
             "character_count": 1,
+            "char_start_index": 0,
+            "char_end_index": 1,
+            "char_indices": [
+              0
+            ],
             "is_derived": false,
             "derived_block": null,
             "derived_line": null
@@ -1720,7 +2019,8 @@
                 206.3149,
                 332.6285,
                 228.5942
-              ]
+              ],
+              "char_index": 0
             }
           ]
         },
@@ -1735,13 +2035,18 @@
           ],
           "font": "PRMMSH+SimHei",
           "size": 439.0,
-          "flags": 0,
+          "flags": null,
           "render_mode": 2,
           "is_invisible": false,
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 51,
             "character_count": 1,
+            "char_start_index": 0,
+            "char_end_index": 1,
+            "char_indices": [
+              0
+            ],
             "is_derived": false,
             "derived_block": null,
             "derived_line": null
@@ -1754,7 +2059,8 @@
                 206.3149,
                 354.7082,
                 228.5942
-              ]
+              ],
+              "char_index": 0
             }
           ]
         },
@@ -1769,13 +2075,18 @@
           ],
           "font": "PRMMSH+SimHei",
           "size": 439.0,
-          "flags": 0,
+          "flags": null,
           "render_mode": 2,
           "is_invisible": false,
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 52,
             "character_count": 1,
+            "char_start_index": 0,
+            "char_end_index": 1,
+            "char_indices": [
+              0
+            ],
             "is_derived": false,
             "derived_block": null,
             "derived_line": null
@@ -1788,7 +2099,8 @@
                 206.3149,
                 376.7879,
                 228.5942
-              ]
+              ],
+              "char_index": 0
             }
           ]
         },
@@ -1803,13 +2115,18 @@
           ],
           "font": "PRMMSH+SimHei",
           "size": 439.0,
-          "flags": 0,
+          "flags": null,
           "render_mode": 2,
           "is_invisible": false,
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 53,
             "character_count": 1,
+            "char_start_index": 0,
+            "char_end_index": 1,
+            "char_indices": [
+              0
+            ],
             "is_derived": false,
             "derived_block": null,
             "derived_line": null
@@ -1822,7 +2139,8 @@
                 206.3149,
                 398.8676,
                 228.5942
-              ]
+              ],
+              "char_index": 0
             }
           ]
         },
@@ -1837,13 +2155,18 @@
           ],
           "font": "PRMMSH+SimHei",
           "size": 439.0,
-          "flags": 0,
+          "flags": null,
           "render_mode": 2,
           "is_invisible": false,
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 54,
             "character_count": 1,
+            "char_start_index": 0,
+            "char_end_index": 1,
+            "char_indices": [
+              0
+            ],
             "is_derived": false,
             "derived_block": null,
             "derived_line": null
@@ -1856,7 +2179,8 @@
                 206.3149,
                 420.9473,
                 228.5942
-              ]
+              ],
+              "char_index": 0
             }
           ]
         },
@@ -1871,13 +2195,18 @@
           ],
           "font": "PRMMSH+SimHei",
           "size": 439.0,
-          "flags": 0,
+          "flags": null,
           "render_mode": 2,
           "is_invisible": false,
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 55,
             "character_count": 1,
+            "char_start_index": 0,
+            "char_end_index": 1,
+            "char_indices": [
+              0
+            ],
             "is_derived": false,
             "derived_block": null,
             "derived_line": null
@@ -1890,7 +2219,8 @@
                 234.875,
                 244.255,
                 257.1542
-              ]
+              ],
+              "char_index": 0
             }
           ]
         },
@@ -1905,13 +2235,18 @@
           ],
           "font": "PRMMSH+SimHei",
           "size": 439.0,
-          "flags": 0,
+          "flags": null,
           "render_mode": 2,
           "is_invisible": false,
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 56,
             "character_count": 1,
+            "char_start_index": 0,
+            "char_end_index": 1,
+            "char_indices": [
+              0
+            ],
             "is_derived": false,
             "derived_block": null,
             "derived_line": null
@@ -1924,7 +2259,8 @@
                 234.875,
                 255.2948,
                 257.1542
-              ]
+              ],
+              "char_index": 0
             }
           ]
         },
@@ -1939,13 +2275,18 @@
           ],
           "font": "PRMMSH+SimHei",
           "size": 439.0,
-          "flags": 0,
+          "flags": null,
           "render_mode": 2,
           "is_invisible": false,
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 57,
             "character_count": 1,
+            "char_start_index": 0,
+            "char_end_index": 1,
+            "char_indices": [
+              0
+            ],
             "is_derived": false,
             "derived_block": null,
             "derived_line": null
@@ -1958,7 +2299,8 @@
                 234.875,
                 266.3347,
                 257.1542
-              ]
+              ],
+              "char_index": 0
             }
           ]
         },
@@ -1973,13 +2315,18 @@
           ],
           "font": "PRMMSH+SimHei",
           "size": 439.0,
-          "flags": 0,
+          "flags": null,
           "render_mode": 2,
           "is_invisible": false,
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 58,
             "character_count": 1,
+            "char_start_index": 0,
+            "char_end_index": 1,
+            "char_indices": [
+              0
+            ],
             "is_derived": false,
             "derived_block": null,
             "derived_line": null
@@ -1992,7 +2339,8 @@
                 234.875,
                 277.4941,
                 257.1542
-              ]
+              ],
+              "char_index": 0
             }
           ]
         },
@@ -2007,13 +2355,18 @@
           ],
           "font": "PRMMSH+SimHei",
           "size": 439.0,
-          "flags": 0,
+          "flags": null,
           "render_mode": 2,
           "is_invisible": false,
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 59,
             "character_count": 1,
+            "char_start_index": 0,
+            "char_end_index": 1,
+            "char_indices": [
+              0
+            ],
             "is_derived": false,
             "derived_block": null,
             "derived_line": null
@@ -2026,7 +2379,8 @@
                 234.875,
                 299.509,
                 257.1542
-              ]
+              ],
+              "char_index": 0
             }
           ]
         },
@@ -2041,13 +2395,18 @@
           ],
           "font": "PRMMSH+SimHei",
           "size": 439.0,
-          "flags": 0,
+          "flags": null,
           "render_mode": 2,
           "is_invisible": false,
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 60,
             "character_count": 1,
+            "char_start_index": 0,
+            "char_end_index": 1,
+            "char_indices": [
+              0
+            ],
             "is_derived": false,
             "derived_block": null,
             "derived_line": null
@@ -2060,7 +2419,8 @@
                 234.875,
                 321.5887,
                 257.1542
-              ]
+              ],
+              "char_index": 0
             }
           ]
         },
@@ -2075,13 +2435,18 @@
           ],
           "font": "PRMMSH+SimHei",
           "size": 439.0,
-          "flags": 0,
+          "flags": null,
           "render_mode": 2,
           "is_invisible": false,
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 61,
             "character_count": 1,
+            "char_start_index": 0,
+            "char_end_index": 1,
+            "char_indices": [
+              0
+            ],
             "is_derived": false,
             "derived_block": null,
             "derived_line": null
@@ -2094,7 +2459,8 @@
                 234.875,
                 343.6684,
                 257.1542
-              ]
+              ],
+              "char_index": 0
             }
           ]
         },
@@ -2109,13 +2475,18 @@
           ],
           "font": "PRMMSH+SimHei",
           "size": 439.0,
-          "flags": 0,
+          "flags": null,
           "render_mode": 2,
           "is_invisible": false,
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 62,
             "character_count": 1,
+            "char_start_index": 0,
+            "char_end_index": 1,
+            "char_indices": [
+              0
+            ],
             "is_derived": false,
             "derived_block": null,
             "derived_line": null
@@ -2128,7 +2499,8 @@
                 234.875,
                 365.7481,
                 257.1542
-              ]
+              ],
+              "char_index": 0
             }
           ]
         },
@@ -2143,13 +2515,18 @@
           ],
           "font": "PRMMSH+SimHei",
           "size": 439.0,
-          "flags": 0,
+          "flags": null,
           "render_mode": 2,
           "is_invisible": false,
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 63,
             "character_count": 1,
+            "char_start_index": 0,
+            "char_end_index": 1,
+            "char_indices": [
+              0
+            ],
             "is_derived": false,
             "derived_block": null,
             "derived_line": null
@@ -2162,7 +2539,8 @@
                 234.875,
                 387.8278,
                 257.1542
-              ]
+              ],
+              "char_index": 0
             }
           ]
         }

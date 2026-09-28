@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 pub struct CharInfo {
     pub c: String,
     pub bbox: [f64; 4],
+    pub char_index: usize, // 字符在当前原子 TextObject 内的 0-indexed 局部位置
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -16,6 +17,9 @@ pub struct ProvenanceSidecar {
     pub page_index: usize,
     pub pdfium_object_index: usize, // 在 page.objects() 中的真实原始序号
     pub character_count: usize,
+    pub char_start_index: usize,    // 当前 TextObject 字符起止范围 [start, end)
+    pub char_end_index: usize,
+    pub char_indices: Vec<usize>,   // 每个字符的局部索引序列
     pub is_derived: bool,           // 原生探针输出固定为 false
     pub derived_block: Option<i64>, // 未做 block 聚类，诚实标记为 None
     pub derived_line: Option<i64>,  // 未做 line 聚类，诚实标记为 None
@@ -28,7 +32,7 @@ pub struct SpanInfo {
     pub bbox: [f64; 4],
     pub font: Option<String>,
     pub size: Option<f64>,
-    pub flags: i64,
+    pub flags: Option<i64>, // PDFium 原生 TextObject 无 PyMuPDF 风格 flags，显式为 None
     pub render_mode: i32,
     pub is_invisible: bool,
     pub provenance: ProvenanceSidecar,
@@ -223,12 +227,12 @@ pub fn extract_page(page: &PdfPage, page_index: usize) -> Result<PdfiumRawPage, 
                 has_invisible_text = true;
             }
 
-            let flags: i64 = if is_invisible { 1 << 6 } else { 0 };
-
+            let flags: Option<i64> = None; // 严禁伪造 PyMuPDF 的 64 位 flags，诚实标记为 None
+ 
             let mut chars_list = Vec::new();
             if let Some(ref pt) = page_text {
                 if let Ok(chars) = text_obj.chars(pt) {
-                    for ch in chars.iter() {
+                    for (ch_idx, ch) in chars.iter().enumerate() {
                         if let Some(c_str) = ch.unicode_string() {
                             if let Ok(b) = ch.loose_bounds() {
                                 let c_bbox = transform_rect_coords(
@@ -242,6 +246,7 @@ pub fn extract_page(page: &PdfPage, page_index: usize) -> Result<PdfiumRawPage, 
                                 chars_list.push(CharInfo {
                                     c: c_str,
                                     bbox: c_bbox,
+                                    char_index: ch_idx,
                                 });
                             }
                         }
@@ -249,10 +254,14 @@ pub fn extract_page(page: &PdfPage, page_index: usize) -> Result<PdfiumRawPage, 
                 }
             }
 
+            let char_count = chars_list.len();
             let provenance = ProvenanceSidecar {
                 page_index,
                 pdfium_object_index: obj_idx,
-                character_count: chars_list.len(),
+                character_count: char_count,
+                char_start_index: 0,
+                char_end_index: char_count,
+                char_indices: (0..char_count).collect(),
                 is_derived: false,
                 derived_block: None,
                 derived_line: None,
@@ -553,11 +562,17 @@ mod tests {
             page_index: 0,
             pdfium_object_index: 42,
             character_count: 5,
+            char_start_index: 0,
+            char_end_index: 5,
+            char_indices: vec![0, 1, 2, 3, 4],
             is_derived: false,
             derived_block: None,
             derived_line: None,
         };
         assert_eq!(sidecar.pdfium_object_index, 42);
+        assert_eq!(sidecar.char_start_index, 0);
+        assert_eq!(sidecar.char_end_index, 5);
+        assert_eq!(sidecar.char_indices.len(), 5);
         assert_eq!(sidecar.is_derived, false);
         assert_eq!(sidecar.derived_block, None);
         assert_eq!(sidecar.derived_line, None);
