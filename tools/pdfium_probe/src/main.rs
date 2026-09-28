@@ -211,8 +211,12 @@ fn extract_page(page: &PdfPage, page_index: usize) -> Result<PageInfo, Box<dyn s
             let mut current_pt: Option<[f64; 2]> = None;
             let mut subpath_start: Option<[f64; 2]> = None;
             let mut pts_all: Vec<[f64; 2]> = Vec::new();
+            let segments = match path_obj.matrix() {
+                Ok(m) => path_obj.segments().transform(m),
+                Err(_) => path_obj.segments(),
+            };
 
-            for seg in path_obj.segments().iter() {
+            for seg in segments.iter() {
                 let (pt_x, pt_y) = seg.point();
                 let raw_x = pt_x.value as f64;
                 let raw_y = pt_y.value as f64;

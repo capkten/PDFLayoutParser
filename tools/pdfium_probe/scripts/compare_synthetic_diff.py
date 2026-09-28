@@ -4,9 +4,21 @@ import sys
 import glob
 import argparse
 
-def compare_characters(base_chars, probe_chars):
+def compare_characters(base_chars, probe_chars, h_tol=0.5, v_tol=0.5):
+    """
+    逐字符对比文本内容与 BBox。
+    只有当文本内容完全一致且字符数量匹配时，才计算字符级坐标偏移。
+    """
     if not base_chars and not probe_chars:
-        return {"matched": True, "base_count": 0, "probe_count": 0, "max_h_delta": 0.0, "max_v_delta": 0.0}
+        return {
+            "matched": True,
+            "base_count": 0,
+            "probe_count": 0,
+            "max_h_delta": 0.0,
+            "max_v_delta": 0.0,
+            "h_passed": True,
+            "v_passed": True,
+        }
 
     base_text = "".join(c.get("c", "") for c in base_chars)
     probe_text = "".join(c.get("c", "") for c in probe_chars)
@@ -19,6 +31,8 @@ def compare_characters(base_chars, probe_chars):
             "probe_count": len(probe_chars),
             "max_h_delta": 999.0,
             "max_v_delta": 999.0,
+            "h_passed": False,
+            "v_passed": False,
         }
 
     max_h_delta = 0.0
@@ -33,19 +47,59 @@ def compare_characters(base_chars, probe_chars):
         if v_d > max_v_delta:
             max_v_delta = v_d
 
+    h_passed = max_h_delta <= h_tol
+    v_passed = max_v_delta <= v_tol
+
     return {
         "matched": True,
         "base_count": len(base_chars),
         "probe_count": len(probe_chars),
         "max_h_delta": round(max_h_delta, 4),
         "max_v_delta": round(max_v_delta, 4),
+        "h_passed": h_passed,
+        "v_passed": v_passed,
     }
 
-def compare_drawings(base_drawings, probe_drawings, delta_tol=1.0):
+def match_line_segments(b_pts, p_pts, point_tol=0.5):
+    """
+    比对线段端点，支持线段首尾方向翻转 (A->B 等价于 B->A)。
+    """
+    if len(b_pts) != 2 or len(p_pts) != 2:
+        if len(b_pts) != len(p_pts):
+            return False, 999.0
+        max_d = 0.0
+        for bp, pp in zip(b_pts, p_pts):
+            d = max(abs(bp[0] - pp[0]), abs(bp[1] - pp[1]))
+            if d > max_d:
+                max_d = d
+        return max_d <= point_tol, max_d
+
+    # 正向匹配
+    d_fwd = max(
+        max(abs(b_pts[0][0] - p_pts[0][0]), abs(b_pts[0][1] - p_pts[0][1])),
+        max(abs(b_pts[1][0] - p_pts[1][0]), abs(b_pts[1][1] - p_pts[1][1]))
+    )
+    # 反向匹配
+    d_rev = max(
+        max(abs(b_pts[0][0] - p_pts[1][0]), abs(b_pts[0][1] - p_pts[1][1])),
+        max(abs(b_pts[1][0] - p_pts[0][0]), abs(b_pts[1][1] - p_pts[0][1]))
+    )
+    min_d = min(d_fwd, d_rev)
+    return min_d <= point_tol, min_d
+
+def compare_drawings(base_drawings, probe_drawings, rect_tol=0.5, point_tol=0.5):
+    """
+    严格 1:1 矢量线段与路径拓扑比较。
+    支持：
+    1. 几何包围盒容差比较 (|rect_delta| <= rect_tol)
+    2. 端点容差比较 (|point_delta| <= point_tol，支持端点反向)
+    3. 矩形语义等价判定 (PyMuPDF 're' 指令与 PDFium 4 段 'l' 闭合路径的几何等价)
+    """
     matched_drawings = 0
     used_probe_indices = set()
     drawing_diffs = []
     max_rect_delta = 0.0
+    max_point_delta = 0.0
 
     for b_idx, bd in enumerate(base_drawings):
         b_rect = bd["rect"]
@@ -64,41 +118,65 @@ def compare_drawings(base_drawings, probe_drawings, delta_tol=1.0):
             if best_delta > max_rect_delta:
                 max_rect_delta = best_delta
 
-            # 比较 items
             b_items = bd.get("items", [])
             p_items = best_pd.get("items", [])
-            items_matched = len(b_items) == len(p_items)
+
+            # 语义等价检查：PyMuPDF 're' vs PDFium 4 段 'l' 封闭矩形
+            is_semantic_rect = False
+            if len(b_items) == 1 and b_items[0].get("cmd") == "re" and len(p_items) == 4:
+                if all(it.get("cmd") == "l" for it in p_items):
+                    if best_delta <= rect_tol:
+                        is_semantic_rect = True
+
+            items_matched = False
             item_point_max_delta = 0.0
 
-            if items_matched and b_items:
+            if is_semantic_rect:
+                items_matched = True
+                status = "MATCHED_SEMANTIC_RECT"
+            elif len(b_items) == len(p_items) and b_items:
+                all_segs_ok = True
                 for bi, pi in zip(b_items, p_items):
                     if bi.get("cmd") != pi.get("cmd"):
-                        items_matched = False
+                        all_segs_ok = False
                         break
                     b_pts = bi.get("points", [])
                     p_pts = pi.get("points", [])
-                    if len(b_pts) != len(p_pts):
-                        items_matched = False
+                    seg_ok, seg_d = match_line_segments(b_pts, p_pts, point_tol=point_tol)
+                    if seg_d > item_point_max_delta:
+                        item_point_max_delta = seg_d
+                    if not seg_ok:
+                        all_segs_ok = False
                         break
-                    for bp, pp in zip(b_pts, p_pts):
-                        pt_d = max(abs(bp[0] - pp[0]), abs(bp[1] - pp[1]))
-                        if pt_d > item_point_max_delta:
-                            item_point_max_delta = pt_d
+                items_matched = all_segs_ok
+                if item_point_max_delta > max_point_delta:
+                    max_point_delta = item_point_max_delta
 
-            status = "MATCHED" if best_delta <= delta_tol and items_matched else "DELTA_EXCEEDED"
+                if best_delta <= rect_tol and items_matched:
+                    status = "MATCHED_EXACT"
+                elif best_delta > rect_tol:
+                    status = "RECT_DELTA_EXCEEDED"
+                else:
+                    status = "POINT_DELTA_EXCEEDED"
+            elif not b_items and not p_items:
+                items_matched = True
+                status = "MATCHED_EXACT" if best_delta <= rect_tol else "RECT_DELTA_EXCEEDED"
+            else:
+                status = "TOPOLOGY_MISMATCH"
+
             drawing_diffs.append({
                 "base_index": b_idx,
                 "probe_index": best_p_idx,
                 "status": status,
                 "rect_delta": round(best_delta, 4),
+                "point_delta": round(item_point_max_delta, 4),
                 "base_rect": b_rect,
                 "probe_rect": best_pd["rect"],
                 "base_width": bd.get("width"),
                 "probe_width": best_pd.get("width"),
                 "items_matched": items_matched,
-                "item_point_max_delta": round(item_point_max_delta, 4),
             })
-            if status == "MATCHED":
+            if status in ["MATCHED_EXACT", "MATCHED_SEMANTIC_RECT"]:
                 matched_drawings += 1
         else:
             drawing_diffs.append({
@@ -120,28 +198,52 @@ def compare_drawings(base_drawings, probe_drawings, delta_tol=1.0):
         "probe_drawing_count": len(probe_drawings),
         "matched_count": matched_drawings,
         "max_rect_delta": round(max_rect_delta, 4),
+        "max_point_delta": round(max_point_delta, 4),
         "details": drawing_diffs,
     }
 
-def compare_spans(base_spans, probe_spans):
+def compute_order_inversions(matched_pairs):
+    """
+    计算匹配 Span 的读取顺序逆序对数 (Inversion count)。
+    matched_pairs: [(base_order, probe_order, text), ...] 已经按 base_order 递增排序。
+    """
+    inversions = []
+    n = len(matched_pairs)
+    for i in range(n):
+        for j in range(i + 1, n):
+            if matched_pairs[i][1] > matched_pairs[j][1]:
+                inversions.append({
+                    "span_a": {"base_order": matched_pairs[i][0], "probe_order": matched_pairs[i][1], "text": matched_pairs[i][2]},
+                    "span_b": {"base_order": matched_pairs[j][0], "probe_order": matched_pairs[j][1], "text": matched_pairs[j][2]},
+                })
+    total_possible = (n * (n - 1)) // 2 if n > 1 else 1
+    ratio = len(inversions) / total_possible if n > 1 else 0.0
+    return {
+        "inversion_count": len(inversions),
+        "inversion_ratio": round(ratio, 4),
+        "inversions": inversions[:5], # 最多保留 5 组样本
+    }
+
+def compare_spans(base_spans, probe_spans, bbox_tol=0.5, char_h_tol=0.5, char_v_tol=0.5):
     diff_records = []
     matched_count = 0
     max_bbox_delta = 0.0
     deltas = []
     used_probe_indices = set()
+    matched_order_pairs = []
 
     for b_idx, b_span in enumerate(base_spans):
         b_text = b_span["text"]
         b_bbox = b_span["bbox"]
 
-        # 严格一对一候选匹配
+        # 严格 1:1 文本完全一致候选
         candidate_indices = [
             i for i, p in enumerate(probe_spans)
             if i not in used_probe_indices and p["text"] == b_text
         ]
 
         if candidate_indices:
-            # 选择 bbox 曼哈顿距离最近且未被占用的候选
+            # 找到最近且未使用的 probe span
             best_idx = min(
                 candidate_indices,
                 key=lambda i: sum(abs(probe_spans[i]["bbox"][k] - b_bbox[k]) for k in range(4))
@@ -154,13 +256,29 @@ def compare_spans(base_spans, probe_spans):
             deltas.append(max_d)
             if max_d > max_bbox_delta:
                 max_bbox_delta = max_d
-            matched_count += 1
 
             # 字符级检查
-            char_res = compare_characters(b_span.get("characters", []), best.get("characters", []))
+            char_res = compare_characters(
+                b_span.get("characters", []),
+                best.get("characters", []),
+                h_tol=char_h_tol,
+                v_tol=char_v_tol
+            )
+
+            # 判定状态：若字符序列不匹配，标记为 CHAR_MISMATCH；超差则 DELTA_EXCEEDED
+            if not char_res["matched"]:
+                status = "CHAR_MISMATCH"
+            elif max_d > bbox_tol:
+                status = "DELTA_EXCEEDED"
+            else:
+                status = "MATCHED"
+
+            if status in ["MATCHED", "DELTA_EXCEEDED"]:
+                matched_count += 1
+                matched_order_pairs.append((b_span.get("order", b_idx), best.get("order", best_idx), b_text))
 
             diff_records.append({
-                "status": "MATCHED",
+                "status": status,
                 "base_order": b_span.get("order"),
                 "probe_order": best.get("order"),
                 "text": b_text,
@@ -201,16 +319,21 @@ def compare_spans(base_spans, probe_spans):
         deltas.sort()
         p95_delta = deltas[int(len(deltas) * 0.95)]
 
+    # 排序并计算逆序数
+    matched_order_pairs.sort(key=lambda x: x[0])
+    order_inversion_info = compute_order_inversions(matched_order_pairs)
+
     return {
         "base_span_count": len(base_spans),
         "probe_span_count": len(probe_spans),
         "matched_count": matched_count,
         "max_bbox_delta": round(max_bbox_delta, 4),
         "p95_bbox_delta": round(p95_delta, 4),
+        "order_inversion": order_inversion_info,
         "details": diff_records,
     }
 
-def compare_file(base_path, probe_path):
+def compare_file(base_path, probe_path, bbox_tol=0.5, rect_tol=0.5, point_tol=0.5):
     with open(base_path, "r", encoding="utf-8") as f:
         base = json.load(f)
     with open(probe_path, "r", encoding="utf-8") as f:
@@ -233,11 +356,11 @@ def compare_file(base_path, probe_path):
             "height_match": bp["height"] == pp["height"],
             "rotation_match": bp["rotation"] == pp["rotation"],
             "base_dims": (bp["width"], bp["height"], bp["rotation"]),
-            "probe_dims": (pp["width"], pp["height"], pp["rotation"]),
+            "probe_dims": (pp["width"], pp["height"], bp["rotation"]),
         }
 
-        span_diff = compare_spans(bp.get("spans", []), pp.get("spans", []))
-        drawing_diff = compare_drawings(bp.get("drawings", []), pp.get("drawings", []))
+        span_diff = compare_spans(bp.get("spans", []), pp.get("spans", []), bbox_tol=bbox_tol)
+        drawing_diff = compare_drawings(bp.get("drawings", []), pp.get("drawings", []), rect_tol=rect_tol, point_tol=point_tol)
 
         file_diff["pages"].append({
             "geometry": geo_diff,
@@ -249,8 +372,14 @@ def compare_file(base_path, probe_path):
 
 def main():
     parser = argparse.ArgumentParser(description="Sprint 1 Double-Parser Comparator (PyMuPDF vs PDFium Probe)")
-    parser.add_argument("--max-delta-threshold", type=float, default=0.5,
-                        help="Maximum allowable bbox delta threshold (default 0.5 pt)")
+    parser.add_argument("--bbox-tol", type=float, default=0.5,
+                        help="Maximum allowable span bbox delta threshold (default 0.5 pt)")
+    parser.add_argument("--rect-tol", type=float, default=0.5,
+                        help="Maximum allowable drawing rect delta threshold (default 0.5 pt)")
+    parser.add_argument("--point-tol", type=float, default=0.5,
+                        help="Maximum allowable line endpoint delta threshold (default 0.5 pt)")
+    parser.add_argument("--max-inversions", type=int, default=0,
+                        help="Maximum allowable span order inversion count (default 0)")
     parser.add_argument("--strict-gate", action="store_true", default=True,
                         help="Enforce strict gate and return non-zero exit code if not compliant")
     parser.add_argument("--no-strict-gate", dest="strict_gate", action="store_false",
@@ -267,7 +396,7 @@ def main():
         name = os.path.basename(bf).replace("_pymupdf.json", "")
         pf = os.path.join(probe_dir, f"{name}_pdfium.json")
         if os.path.exists(pf):
-            file_diff = compare_file(bf, pf)
+            file_diff = compare_file(bf, pf, bbox_tol=args.bbox_tol, rect_tol=args.rect_tol, point_tol=args.point_tol)
             report.append(file_diff)
 
     out_report_path = os.path.join(root, "diff_report_synthetic.json")
@@ -291,29 +420,35 @@ def main():
             if not dims_ok:
                 gate_failures.append(f"{r['file']} p{p_idx}: Geometry mismatch (Base={geo['base_dims']} vs Probe={geo['probe_dims']})")
 
+            inversion_info = s.get("order_inversion", {})
+            inv_count = inversion_info.get("inversion_count", 0)
+
             print(f"  Page {p_idx}:")
             print(f"    - Geometry: Dims Match={dims_ok} (Base={geo['base_dims']}, Probe={geo['probe_dims']})")
-            print(f"    - Spans   : Base={s['base_span_count']}, Probe={s['probe_span_count']}, Matched={s['matched_count']}, Max BBox Delta={s['max_bbox_delta']} pt, P95={s['p95_bbox_delta']} pt")
-            print(f"    - Drawings: Base={d['base_drawing_count']}, Probe={d['probe_drawing_count']}, Matched={d['matched_count']}, Max Rect Delta={d['max_rect_delta']} pt")
+            print(f"    - Spans   : Base={s['base_span_count']}, Probe={s['probe_span_count']}, Matched={s['matched_count']}, Max BBox Delta={s['max_bbox_delta']} pt, P95={s['p95_bbox_delta']} pt, Inversions={inv_count}")
+            print(f"    - Drawings: Base={d['base_drawing_count']}, Probe={d['probe_drawing_count']}, Matched={d['matched_count']}, Max Rect Delta={d['max_rect_delta']} pt, Max Point Delta={d['max_point_delta']} pt")
 
-            # 检查缺失与差异
+            # 检查缺失与异常
             for item in s["details"]:
-                if item["status"] != "MATCHED":
-                    print(f"      * [Span {item['status']}]: '{item['text']}'")
-                    # 记录门禁失败：非空白文本缺失
-                    if item["status"] == "PROBE_MISSING" and item["text"].strip():
-                        gate_failures.append(f"{r['file']} p{p_idx}: Non-empty span missing in probe: '{item['text']}'")
-                    elif item["status"] == "PROBE_MISSING" and not item["text"].strip():
-                        gate_failures.append(f"{r['file']} p{p_idx}: Whitespace span missing in probe: '{item['text']}' (Base span count={s['base_span_count']} vs Probe={s['probe_span_count']})")
-                elif item["delta_max"] > args.max_delta_threshold:
-                    # 记录门禁失败：超差
-                    pass # 稍后汇总统计最大超差
+                if item["status"] == "CHAR_MISMATCH":
+                    gate_failures.append(f"{r['file']} p{p_idx}: Character text mismatch in span '{item['text']}'")
+                elif item["status"] == "PROBE_MISSING" and item["text"].strip():
+                    gate_failures.append(f"{r['file']} p{p_idx}: Non-empty span missing in probe: '{item['text']}'")
+                elif item["status"] == "PROBE_MISSING" and not item["text"].strip():
+                    gate_failures.append(f"{r['file']} p{p_idx}: Whitespace span missing in probe: '{item['text']}' (Base span count={s['base_span_count']} vs Probe={s['probe_span_count']})")
+                elif item["status"] == "DELTA_EXCEEDED":
+                    pass # 统一由 s["max_bbox_delta"] 汇总结算
 
-            if s["max_bbox_delta"] > args.max_delta_threshold:
-                gate_failures.append(f"{r['file']} p{p_idx}: Max BBox Delta {s['max_bbox_delta']} pt > threshold {args.max_delta_threshold} pt")
+            if s["max_bbox_delta"] > args.bbox_tol:
+                gate_failures.append(f"{r['file']} p{p_idx}: Max BBox Delta {s['max_bbox_delta']} pt > threshold {args.bbox_tol} pt")
+
+            if inv_count > args.max_inversions:
+                gate_failures.append(f"{r['file']} p{p_idx}: Span order inversion count {inv_count} > threshold {args.max_inversions}")
 
             if d["base_drawing_count"] != d["probe_drawing_count"]:
                 gate_failures.append(f"{r['file']} p{p_idx}: Drawing count mismatch: Base={d['base_drawing_count']} vs Probe={d['probe_drawing_count']}")
+            elif d["matched_count"] != d["base_drawing_count"]:
+                gate_failures.append(f"{r['file']} p{p_idx}: Drawing topology match mismatch: Base={d['base_drawing_count']} vs Matched={d['matched_count']}")
 
     print("\n" + "="*80)
     print("                    Sprint 1 Quality Gate Verdict")

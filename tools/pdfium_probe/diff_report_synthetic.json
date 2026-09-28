@@ -27,9 +27,14 @@
           "matched_count": 3,
           "max_bbox_delta": 4.858,
           "p95_bbox_delta": 4.858,
+          "order_inversion": {
+            "inversion_count": 0,
+            "inversion_ratio": 0.0,
+            "inversions": []
+          },
           "details": [
             {
-              "status": "MATCHED",
+              "status": "DELTA_EXCEEDED",
               "base_order": 0,
               "probe_order": 0,
               "text": "Header in CropBox",
@@ -59,11 +64,13 @@
                 "base_count": 17,
                 "probe_count": 17,
                 "max_h_delta": 0.196,
-                "max_v_delta": 2.38
+                "max_v_delta": 2.38,
+                "h_passed": true,
+                "v_passed": false
               }
             },
             {
-              "status": "MATCHED",
+              "status": "DELTA_EXCEEDED",
               "base_order": 1,
               "probe_order": 1,
               "text": "Normal Body Text",
@@ -93,11 +100,13 @@
                 "base_count": 16,
                 "probe_count": 16,
                 "max_h_delta": 0.168,
-                "max_v_delta": 2.04
+                "max_v_delta": 2.04,
+                "h_passed": true,
+                "v_passed": false
               }
             },
             {
-              "status": "MATCHED",
+              "status": "DELTA_EXCEEDED",
               "base_order": 2,
               "probe_order": 2,
               "text": "Outside of CropBox",
@@ -127,7 +136,9 @@
                 "base_count": 18,
                 "probe_count": 18,
                 "max_h_delta": 0.35,
-                "max_v_delta": 1.7
+                "max_v_delta": 1.7,
+                "h_passed": true,
+                "v_passed": false
               }
             }
           ]
@@ -137,6 +148,7 @@
           "probe_drawing_count": 0,
           "matched_count": 0,
           "max_rect_delta": 0.0,
+          "max_point_delta": 0.0,
           "details": []
         }
       }
@@ -170,9 +182,14 @@
           "matched_count": 4,
           "max_bbox_delta": 5.744,
           "p95_bbox_delta": 5.744,
+          "order_inversion": {
+            "inversion_count": 0,
+            "inversion_ratio": 0.0,
+            "inversions": []
+          },
           "details": [
             {
-              "status": "MATCHED",
+              "status": "DELTA_EXCEEDED",
               "base_order": 0,
               "probe_order": 0,
               "text": "Visible Main Title",
@@ -202,11 +219,13 @@
                 "base_count": 18,
                 "probe_count": 18,
                 "max_h_delta": 0.0,
-                "max_v_delta": 2.72
+                "max_v_delta": 2.72,
+                "h_passed": true,
+                "v_passed": false
               }
             },
             {
-              "status": "MATCHED",
+              "status": "DELTA_EXCEEDED",
               "base_order": 1,
               "probe_order": 1,
               "text": "Invisible OCR Text Layer",
@@ -236,11 +255,13 @@
                 "base_count": 24,
                 "probe_count": 24,
                 "max_h_delta": 0.168,
-                "max_v_delta": 2.04
+                "max_v_delta": 2.04,
+                "h_passed": true,
+                "v_passed": false
               }
             },
             {
-              "status": "MATCHED",
+              "status": "DELTA_EXCEEDED",
               "base_order": 2,
               "probe_order": 2,
               "text": "Overlapped Text Base",
@@ -270,11 +291,13 @@
                 "base_count": 20,
                 "probe_count": 20,
                 "max_h_delta": 0.168,
-                "max_v_delta": 2.04
+                "max_v_delta": 2.04,
+                "h_passed": true,
+                "v_passed": false
               }
             },
             {
-              "status": "MATCHED",
+              "status": "DELTA_EXCEEDED",
               "base_order": 3,
               "probe_order": 3,
               "text": "Overlapped Text Top",
@@ -304,7 +327,9 @@
                 "base_count": 19,
                 "probe_count": 19,
                 "max_h_delta": 0.168,
-                "max_v_delta": 2.04
+                "max_v_delta": 2.04,
+                "h_passed": true,
+                "v_passed": false
               }
             }
           ]
@@ -314,6 +339,7 @@
           "probe_drawing_count": 0,
           "matched_count": 0,
           "max_rect_delta": 0.0,
+          "max_point_delta": 0.0,
           "details": []
         }
       }
@@ -347,9 +373,14 @@
           "matched_count": 4,
           "max_bbox_delta": 5.026,
           "p95_bbox_delta": 5.026,
+          "order_inversion": {
+            "inversion_count": 0,
+            "inversion_ratio": 0.0,
+            "inversions": []
+          },
           "details": [
             {
-              "status": "MATCHED",
+              "status": "DELTA_EXCEEDED",
               "base_order": 0,
               "probe_order": 0,
               "text": "Project Revenue:",
@@ -379,11 +410,13 @@
                 "base_count": 16,
                 "probe_count": 16,
                 "max_h_delta": 0.63,
-                "max_v_delta": 2.38
+                "max_v_delta": 2.38,
+                "h_passed": false,
+                "v_passed": false
               }
             },
             {
-              "status": "MATCHED",
+              "status": "DELTA_EXCEEDED",
               "base_order": 1,
               "probe_order": 1,
               "text": "1",
@@ -413,7 +446,9 @@
                 "base_count": 1,
                 "probe_count": 1,
                 "max_h_delta": 0.0,
-                "max_v_delta": 1.36
+                "max_v_delta": 1.36,
+                "h_passed": true,
+                "v_passed": false
               }
             },
             {
@@ -429,7 +464,7 @@
               "probe_bbox": null
             },
             {
-              "status": "MATCHED",
+              "status": "DELTA_EXCEEDED",
               "base_order": 3,
               "probe_order": 2,
               "text": "主要业务收入",
@@ -459,11 +494,13 @@
                 "base_count": 6,
                 "probe_count": 6,
                 "max_h_delta": 0.0,
-                "max_v_delta": 0.0
+                "max_v_delta": 0.0,
+                "h_passed": true,
+                "v_passed": true
               }
             },
             {
-              "status": "MATCHED",
+              "status": "DELTA_EXCEEDED",
               "base_order": 4,
               "probe_order": 3,
               "text": "( audited )",
@@ -493,7 +530,9 @@
                 "base_count": 11,
                 "probe_count": 11,
                 "max_h_delta": 0.022,
-                "max_v_delta": 1.782
+                "max_v_delta": 1.782,
+                "h_passed": true,
+                "v_passed": false
               }
             }
           ]
@@ -503,6 +542,7 @@
           "probe_drawing_count": 0,
           "matched_count": 0,
           "max_rect_delta": 0.0,
+          "max_point_delta": 0.0,
           "details": []
         }
       }
@@ -536,9 +576,14 @@
           "matched_count": 1,
           "max_bbox_delta": 4.984,
           "p95_bbox_delta": 4.984,
+          "order_inversion": {
+            "inversion_count": 0,
+            "inversion_ratio": 0.0,
+            "inversions": []
+          },
           "details": [
             {
-              "status": "MATCHED",
+              "status": "DELTA_EXCEEDED",
               "base_order": 0,
               "probe_order": 0,
               "text": "Page Rotation 0 Text",
@@ -568,7 +613,9 @@
                 "base_count": 20,
                 "probe_count": 20,
                 "max_h_delta": 0.0,
-                "max_v_delta": 2.38
+                "max_v_delta": 2.38,
+                "h_passed": true,
+                "v_passed": false
               }
             }
           ]
@@ -578,6 +625,7 @@
           "probe_drawing_count": 0,
           "matched_count": 0,
           "max_rect_delta": 0.0,
+          "max_point_delta": 0.0,
           "details": []
         }
       },
@@ -604,9 +652,14 @@
           "matched_count": 1,
           "max_bbox_delta": 4.984,
           "p95_bbox_delta": 4.984,
+          "order_inversion": {
+            "inversion_count": 0,
+            "inversion_ratio": 0.0,
+            "inversions": []
+          },
           "details": [
             {
-              "status": "MATCHED",
+              "status": "DELTA_EXCEEDED",
               "base_order": 0,
               "probe_order": 0,
               "text": "Page Rotation 90 Text",
@@ -636,7 +689,9 @@
                 "base_count": 21,
                 "probe_count": 21,
                 "max_h_delta": 0.0,
-                "max_v_delta": 2.38
+                "max_v_delta": 2.38,
+                "h_passed": true,
+                "v_passed": false
               }
             }
           ]
@@ -646,6 +701,7 @@
           "probe_drawing_count": 0,
           "matched_count": 0,
           "max_rect_delta": 0.0,
+          "max_point_delta": 0.0,
           "details": []
         }
       },
@@ -672,9 +728,14 @@
           "matched_count": 1,
           "max_bbox_delta": 4.984,
           "p95_bbox_delta": 4.984,
+          "order_inversion": {
+            "inversion_count": 0,
+            "inversion_ratio": 0.0,
+            "inversions": []
+          },
           "details": [
             {
-              "status": "MATCHED",
+              "status": "DELTA_EXCEEDED",
               "base_order": 0,
               "probe_order": 0,
               "text": "Page Rotation 180 Text",
@@ -704,7 +765,9 @@
                 "base_count": 22,
                 "probe_count": 22,
                 "max_h_delta": 0.0,
-                "max_v_delta": 2.38
+                "max_v_delta": 2.38,
+                "h_passed": true,
+                "v_passed": false
               }
             }
           ]
@@ -714,6 +777,7 @@
           "probe_drawing_count": 0,
           "matched_count": 0,
           "max_rect_delta": 0.0,
+          "max_point_delta": 0.0,
           "details": []
         }
       },
@@ -740,9 +804,14 @@
           "matched_count": 1,
           "max_bbox_delta": 4.984,
           "p95_bbox_delta": 4.984,
+          "order_inversion": {
+            "inversion_count": 0,
+            "inversion_ratio": 0.0,
+            "inversions": []
+          },
           "details": [
             {
-              "status": "MATCHED",
+              "status": "DELTA_EXCEEDED",
               "base_order": 0,
               "probe_order": 0,
               "text": "Page Rotation 270 Text",
@@ -772,7 +841,9 @@
                 "base_count": 22,
                 "probe_count": 22,
                 "max_h_delta": 0.0,
-                "max_v_delta": 2.38
+                "max_v_delta": 2.38,
+                "h_passed": true,
+                "v_passed": false
               }
             }
           ]
@@ -782,6 +853,7 @@
           "probe_drawing_count": 0,
           "matched_count": 0,
           "max_rect_delta": 0.0,
+          "max_point_delta": 0.0,
           "details": []
         }
       }
@@ -815,9 +887,14 @@
           "matched_count": 2,
           "max_bbox_delta": 4.164,
           "p95_bbox_delta": 4.164,
+          "order_inversion": {
+            "inversion_count": 0,
+            "inversion_ratio": 0.0,
+            "inversions": []
+          },
           "details": [
             {
-              "status": "MATCHED",
+              "status": "DELTA_EXCEEDED",
               "base_order": 0,
               "probe_order": 0,
               "text": "Table Cell 1",
@@ -847,11 +924,13 @@
                 "base_count": 12,
                 "probe_count": 12,
                 "max_h_delta": 0.0,
-                "max_v_delta": 2.04
+                "max_v_delta": 2.04,
+                "h_passed": true,
+                "v_passed": false
               }
             },
             {
-              "status": "MATCHED",
+              "status": "DELTA_EXCEEDED",
               "base_order": 1,
               "probe_order": 1,
               "text": "Table Cell 2",
@@ -881,7 +960,9 @@
                 "base_count": 12,
                 "probe_count": 12,
                 "max_h_delta": 0.0,
-                "max_v_delta": 2.04
+                "max_v_delta": 2.04,
+                "h_passed": true,
+                "v_passed": false
               }
             }
           ]
@@ -891,12 +972,14 @@
           "probe_drawing_count": 6,
           "matched_count": 6,
           "max_rect_delta": 0.0,
+          "max_point_delta": 0.0,
           "details": [
             {
               "base_index": 0,
               "probe_index": 0,
-              "status": "MATCHED",
+              "status": "MATCHED_EXACT",
               "rect_delta": 0.0,
+              "point_delta": 0.0,
               "base_rect": [
                 50.0,
                 80.0,
@@ -911,14 +994,14 @@
               ],
               "base_width": 1.5,
               "probe_width": 1.5,
-              "items_matched": true,
-              "item_point_max_delta": 0.0
+              "items_matched": true
             },
             {
               "base_index": 1,
               "probe_index": 1,
-              "status": "MATCHED",
+              "status": "MATCHED_EXACT",
               "rect_delta": 0.0,
+              "point_delta": 0.0,
               "base_rect": [
                 50.0,
                 180.0,
@@ -933,14 +1016,14 @@
               ],
               "base_width": 1.0,
               "probe_width": 1.0,
-              "items_matched": true,
-              "item_point_max_delta": 0.0
+              "items_matched": true
             },
             {
               "base_index": 2,
               "probe_index": 2,
-              "status": "MATCHED",
+              "status": "MATCHED_EXACT",
               "rect_delta": 0.0,
+              "point_delta": 0.0,
               "base_rect": [
                 180.0,
                 180.0,
@@ -955,14 +1038,14 @@
               ],
               "base_width": 1.0,
               "probe_width": 1.0,
-              "items_matched": true,
-              "item_point_max_delta": 0.0
+              "items_matched": true
             },
             {
               "base_index": 3,
               "probe_index": 3,
-              "status": "MATCHED",
+              "status": "MATCHED_EXACT",
               "rect_delta": 0.0,
+              "point_delta": 0.0,
               "base_rect": [
                 320.0,
                 180.0,
@@ -977,14 +1060,14 @@
               ],
               "base_width": 1.0,
               "probe_width": 1.0,
-              "items_matched": true,
-              "item_point_max_delta": 0.0
+              "items_matched": true
             },
             {
               "base_index": 4,
               "probe_index": 4,
-              "status": "MATCHED",
+              "status": "MATCHED_EXACT",
               "rect_delta": 0.0,
+              "point_delta": 0.0,
               "base_rect": [
                 50.0,
                 80.0,
@@ -999,14 +1082,14 @@
               ],
               "base_width": 1.0,
               "probe_width": 1.0,
-              "items_matched": true,
-              "item_point_max_delta": 0.0
+              "items_matched": true
             },
             {
               "base_index": 5,
               "probe_index": 5,
-              "status": "MATCHED",
+              "status": "MATCHED_EXACT",
               "rect_delta": 0.0,
+              "point_delta": 0.0,
               "base_rect": [
                 450.0,
                 80.0,
@@ -1021,8 +1104,7 @@
               ],
               "base_width": 1.0,
               "probe_width": 1.0,
-              "items_matched": true,
-              "item_point_max_delta": 0.0
+              "items_matched": true
             }
           ]
         }
