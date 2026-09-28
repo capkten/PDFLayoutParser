@@ -789,30 +789,27 @@ class PersonalCreditReportTableExtractor(TableExtractor):
             return self._apply_personal_credit_rules(tables, page)
 
         from hexai_pdf_parser.page_normalizer import normalize_page_rotation
-        from hexai_pdf_parser.pdf_snapshot import capture_page_snapshot
+        import time
 
         if not kwargs.get("page_already_normalized", False):
             normalize_page_rotation(page)
         kwargs["page_already_normalized"] = True
-        snapshot = getattr(page, "_cached_snapshot", None)
-        if snapshot is None:
-            snapshot = capture_page_snapshot(
-                page,
-                page_index=int(getattr(page, "number", 0)),
-            )
-            try:
-                page._cached_snapshot = snapshot
-            except (AttributeError, TypeError):
-                pass
 
+        t0 = time.perf_counter()
         candidates = super().extract(page, *args, **kwargs)
-        input_dto = rust_adapter.personal_credit_snapshot_to_rust_input(
-            snapshot,
-            self._wired_extractor.line_tolerance,
-            candidates,
-            supplement_rust_candidates=mode in {"shadow", "rust"},
+        t_upstream = time.perf_counter() - t0
+
+        t1 = time.perf_counter()
+        input_dto = rust_adapter.personal_credit_to_rust_input(
+            page=page,
+            wired_line_tolerance=self._wired_extractor.line_tolerance,
+            candidate_tables=candidates,
+            supplement_rust_candidates=False,
         )
-        return rust_adapter.run_python_or_rust(
+        t_dto = time.perf_counter() - t1
+
+        t2 = time.perf_counter()
+        result = rust_adapter.run_python_or_rust(
             mode=mode,
             python_fn=lambda: self._apply_personal_credit_rules(candidates, page),
             rust_fn=lambda dto: rust_adapter.personal_credit_tables_to_project(
@@ -821,6 +818,16 @@ class PersonalCreditReportTableExtractor(TableExtractor):
             input_dto=input_dto,
             path="personal-credit.extract_tables",
         )
+        t_rust_or_fn = time.perf_counter() - t2
+        t_total = time.perf_counter() - t0
+
+        self.last_timing = {
+            "upstream_seconds": t_upstream,
+            "dto_seconds": t_dto,
+            "rust_fn_seconds": t_rust_or_fn,
+            "total_seconds": t_total,
+        }
+        return result
 
 
 

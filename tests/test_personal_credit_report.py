@@ -739,7 +739,7 @@ def test_personal_credit_rust_mode_routes_candidates_through_rust_adapter(monkey
         document.close()
 
     assert captured["candidate_tables"][0]["source"] == "line_projection"
-    assert captured["supplement_rust_candidates"] is True
+    assert captured["supplement_rust_candidates"] is False
     assert result == [candidate]
 
 
@@ -788,7 +788,7 @@ def test_personal_credit_default_route_uses_rust_without_changing_generic_defaul
     finally:
         document.close()
 
-    assert captured["supplement_rust_candidates"] is True
+    assert captured["supplement_rust_candidates"] is False
     assert result == [candidate]
 
 

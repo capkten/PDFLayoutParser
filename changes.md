@@ -1,6 +1,44 @@
 # Changes
 
-## 2026-09-28
+## 2026-09-28 (跨语言边界与算法性能瓶颈优化)
+
+- **优化背景与根因定位**：
+  - 个人征信表格提取入口此前在每页调用 `super().extract(page)` 之后，强行触发全量 `capture_page_snapshot(lightweight=False)`，在 Python 层递归冻结整页成千上万个字符、词块、绘图及 bboxlog 对象（单页耗时高达约 3.03s）。
+  - `personal_credit_snapshot_to_rust_input` 将庞大的完整 Snapshot DTO 转为深层嵌套字典（耗时约 1.38s）。
+  - Rust 侧 `native_character_bounds` 对表格中每个 Cell 线性全量遍历全页字符并进行排序与过滤，复杂度为 $O(N_{\text{cells}} \cdot N_{\text{chars}} \log N_{\text{chars}})$，单页算法耗时近 1.0s。
+  - `supplement_rust_candidates=True` 在 `super().extract()` 已完整产出候选表时，仍重复触发全页无线表格扫描。
+- **核心优化实现**：
+  1. **跨语言边界轻量化与 rawdict 直通**：
+     - 在 `PersonalCreditReportTableExtractor.extract()` 中彻底移除冗余的全量快照采集，复用 `page.get_text("rawdict")` 直通机制。
+     - 在 Rust 侧扩展 `PersonalCreditInput`：支持通过 `collect_native_spans_from_rawdict` 在 Rust 内部毫秒级解析 PyMuPDF 原生字典，绕过 Python 侧庞大的嵌套 DTO 序列化。
+     - `rust_adapter.py` 新增 `personal_credit_to_rust_input`，仅传输几何尺寸、`rawdict` 引用与候选表列表，DTO 构造时间从 1380ms 降至 2.6ms ~ 39.8ms（下降 96%+）。
+  2. **候选表充足时跳过全量无线扫描**：
+     - 当上游 `super().extract()` 已经提取出完整候选表时，传入 `supplement_rust_candidates=False`，避免重复每页重跑全页无线候选恢复。
+  3. **字符空间索引 (CharacterSpatialIndex)**：
+     - 在 `rust/personal_credit.rs` 中引入基于 `center_y` 排序的 `CharacterSpatialIndex` 与二分范围定位（`partition_point`）。
+     - 将单 Cell 字符包围盒规整复杂度降至局部切片扫描，Rust 端执行时间从 980ms 降至 1.6ms ~ 3.2ms（提速 300+ 倍）。
+  4. **全链路分段耗时度量**：
+     - 在 `PersonalCreditReportTableExtractor.extract()` 中记录 `last_timing`，包括 `upstream_seconds`、`dto_seconds`、`rust_fn_seconds` 与 `total_seconds`。
+  5. **严格的不回读 words 约束与确定性保真**：
+     - 结构恢复严格消费原生 span/character 与候选表，禁止回退使用 `page.get_text("words")` 进行二次重建。
+     - 经过全量样本比对，保证与 Python oracle 保持 100% 结构一致性（表数、行列数、单元格文字、跨度、坐标精确匹配，0 regression，0 occupancy conflict）。
+- **测试结果**：
+  - Rust 单元测试：`cargo test` 全部 101 个测试通过（`101 passed`）。
+  - Python 个人征信专项测试：`pytest tests/test_pdf_fast_personal_credit.py` 全部 20 个测试通过（`20 passed`）。
+  - 个人征信提取器测试：`pytest tests/test_personal_credit_report.py` 全部 29 个测试通过（`29 passed`）。
+  - E2E 测试：`pytest tests/test_personal_credit_rust_e2e.py` 全部 7 个测试通过（`7 passed`）。
+  - 全量 12 份样本 PDF 批量回归测试：`pytest tests/test_all_personal_credit_reports.py` 全部 37 个测试通过（`37 passed`）。
+- **页面级交付与视觉核对**：
+  - 独立输出目录：`output/personal_credit_verification/`。
+  - 包含 `summary.json` 及全量渲染叠加图 `page-000.png` ~ `page-004.png`。
+  - 视觉检查确认：信息概要 3 个表格各自独立、边界贴合、空槽位精确物化；查询记录明细与续表无截断、无误并；有序段落列表未被误判为表格。
+- **性能加速实测（以《个人信用报告(本人简版).pdf》为例）**：
+  - Page 0 (3 表)：Python 429.3ms -> Rust 150.2ms (加速 2.86x，Rust 核 1.6ms)
+  - Page 1 (1 表)：Python 717.1ms -> Rust 78.7ms (加速 9.11x，Rust 核 2.2ms)
+  - Page 2 (4 表)：Python 2024.6ms -> Rust 506.7ms (加速 4.00x，Rust 核 2.3ms)
+  - Page 3 (6 表)：Python 2246.8ms -> Rust 270.1ms (加速 8.32x，Rust 核 2.4ms)
+  - Page 4 (0 表)：Python 157.9ms -> Rust 47.8ms (加速 3.30x，Rust 核 0.9ms)
+
 
 - 新增个人征信专用 Rust 算法入口：`recover_personal_credit_tables` 以版本化页面快照和候选表 DTO 接收输入，Rust 只替换个人征信的查询表恢复、候选过滤、重复记录拆分及无线单元格几何处理；通用表格阶段仍保持 Python 默认路径。
 - 个人征信路径默认启用 Rust，支持 `PDF_RUST_MODE_PERSONAL_CREDIT=python|shadow|rust` 覆盖；全局 `PDF_RUST_MODE` 仍可显式覆盖，通用路径默认仍为 Python。

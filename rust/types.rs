@@ -2124,17 +2124,73 @@ impl RowBandDto {
 #[derive(Debug, Clone, PartialEq)]
 pub struct PersonalCreditInput {
     pub schema_version: i64,
-    pub snapshot: PageSnapshotDto,
+    pub page: PageDto,
+    pub spans: Vec<NativeSpanDto>,
+    pub words: Vec<WordDto>,
+    pub allowed_regions: Vec<RegionDto>,
+    pub excluded_regions: Vec<RegionDto>,
     pub wired_line_tolerance: f64,
     pub candidate_tables: Option<Vec<TableCandidateDto>>,
     pub supplement_rust_candidates: bool,
+    pub snapshot: Option<PageSnapshotDto>,
 }
 
 impl PersonalCreditInput {
     pub fn from_py(dict: &Bound<'_, PyDict>) -> PyResult<Self> {
         let schema_version = required_i64(dict, "schema_version")?;
         check_schema_version(schema_version)?;
-        let snapshot = PageSnapshotDto::from_py(&required_dict(dict, "snapshot")?)?;
+
+        let (page, spans, words, allowed_regions, excluded_regions, snapshot) =
+            if let Some(snap_val) = get_opt(dict, "snapshot")? {
+                let snap_dict = snap_val.downcast::<PyDict>().map_err(|_| {
+                    PyValueError::new_err("Field 'snapshot' must be an object")
+                })?;
+                let snapshot = PageSnapshotDto::from_py(&snap_dict)?;
+                let page = snapshot.page.clone();
+                let spans = snapshot.spans.iter().map(|s| s.span.clone()).collect();
+                let words = snapshot.words.clone();
+                let allowed = snapshot.allowed_regions.clone();
+                let excluded = snapshot.excluded_regions.clone();
+                (page, spans, words, allowed, excluded, Some(snapshot))
+            } else if let Some(rawdict_val) = get_opt(dict, "rawdict")? {
+                let rawdict = rawdict_val.downcast::<PyDict>().map_err(|_| {
+                    PyValueError::new_err("Field 'rawdict' must be an object")
+                })?;
+                let page_dict = required_dict(dict, "page")?;
+                let page = PageDto::from_py(&page_dict)?;
+                let page_y0 = match dict.get_item("page_y0")? {
+                    Some(v) if !v.is_none() => v.extract::<f64>()?,
+                    _ => 0.0,
+                };
+                let spans_input = crate::snapshot::collect_native_spans_from_rawdict(
+                    &rawdict,
+                    page.height,
+                    page_y0,
+                    None,
+                    None,
+                )?;
+                let spans = spans_input.into_iter().map(|item| item.span).collect();
+                (page, spans, Vec::new(), Vec::new(), Vec::new(), None)
+            } else if let Some(spans_val) = get_opt(dict, "spans")? {
+                let spans_list = spans_val.downcast::<PyList>().map_err(|_| {
+                    PyValueError::new_err("Field 'spans' must be a list")
+                })?;
+                let page_dict = required_dict(dict, "page")?;
+                let page = PageDto::from_py(&page_dict)?;
+                let mut spans = Vec::with_capacity(spans_list.len());
+                for item in spans_list.iter() {
+                    let item_dict = item.downcast::<PyDict>().map_err(|_| {
+                        PyValueError::new_err("Field 'spans' items must be objects")
+                    })?;
+                    spans.push(NativeSpanDto::from_py(&item_dict)?);
+                }
+                (page, spans, Vec::new(), Vec::new(), Vec::new(), None)
+            } else {
+                return Err(PyValueError::new_err(
+                    "Field 'snapshot' is required (or provide 'rawdict' or 'spans')",
+                ));
+            };
+
         let wired_line_tolerance =
             extract_finite_f64(&get_req(dict, "wired_line_tolerance")?, "wired_line_tolerance")?;
         if wired_line_tolerance < 0.0 {
@@ -2142,6 +2198,7 @@ impl PersonalCreditInput {
                 "Field 'wired_line_tolerance' must be non-negative",
             ));
         }
+
         let candidate_tables = match get_opt(dict, "candidate_tables")? {
             Some(value) => {
                 let list = value.downcast::<PyList>().map_err(|_| {
@@ -2168,10 +2225,15 @@ impl PersonalCreditInput {
 
         Ok(Self {
             schema_version,
-            snapshot,
+            page,
+            spans,
+            words,
+            allowed_regions,
+            excluded_regions,
             wired_line_tolerance,
             candidate_tables,
             supplement_rust_candidates,
+            snapshot,
         })
     }
 }

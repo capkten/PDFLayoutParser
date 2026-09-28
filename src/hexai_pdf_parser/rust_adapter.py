@@ -1005,6 +1005,67 @@ def personal_credit_snapshot_to_rust_input(
     }
 
 
+def personal_credit_to_rust_input(
+    *,
+    page: Any = None,
+    rawdict: Optional[Dict[str, Any]] = None,
+    page_width: Optional[float] = None,
+    page_height: Optional[float] = None,
+    rotation: int = 0,
+    page_y0: float = 0.0,
+    wired_line_tolerance: float = 2.2,
+    candidate_tables: Optional[Sequence[Any]] = None,
+    supplement_rust_candidates: bool = False,
+    snapshot: Optional[Any] = None,
+) -> Dict[str, Any]:
+    """Construct minimal fast DTO for personal credit table recovery."""
+    d: Dict[str, Any] = {
+        "schema_version": 1,
+        "wired_line_tolerance": _finite_float(
+            wired_line_tolerance, "wired_line_tolerance"
+        ),
+        "candidate_tables": [
+            _personal_credit_candidate_input(table)
+            for table in (candidate_tables or [])
+        ],
+        "supplement_rust_candidates": bool(supplement_rust_candidates),
+    }
+
+    if snapshot is not None:
+        d["snapshot"] = page_snapshot_to_rust_input(snapshot)
+        return d
+
+    if page is not None:
+        rect = page.rect
+        width = float(rect.width)
+        height = float(rect.height)
+        rot = int(getattr(page, "rotation", 0))
+        y0 = float(rect.y0)
+        rd = page.get_text("rawdict")
+        d["rawdict"] = rd
+        d["page"] = {
+            "schema_version": 1,
+            "width": width,
+            "height": height,
+            "rotation": rot,
+        }
+        d["page_y0"] = y0
+        return d
+
+    if rawdict is not None:
+        d["rawdict"] = rawdict
+        d["page"] = {
+            "schema_version": 1,
+            "width": float(page_width or 595.0),
+            "height": float(page_height or 842.0),
+            "rotation": int(rotation),
+        }
+        d["page_y0"] = float(page_y0)
+        return d
+
+    raise ValueError("Either page, rawdict, or snapshot must be provided")
+
+
 def personal_credit_tables_to_project(
     raw_output: Mapping[str, Any],
 ) -> List[Any]:

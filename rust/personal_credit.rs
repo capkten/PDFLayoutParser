@@ -1,6 +1,6 @@
 use crate::types::{
     CellDto, CharacterDto, DrawingDto, LineDto, NativeSpanDto, OwnedValue, PageDto,
-    PageSnapshotDto, PersonalCreditInput, PersonalCreditOutput, Rect4, RegionDto, StructureConfig,
+    PersonalCreditInput, PersonalCreditOutput, Rect4, RegionDto, StructureConfig,
     TableCandidateDto, WiredRegionInput, WirelessRecoveryInput,
 };
 
@@ -54,9 +54,9 @@ fn flush_character_run(run: &mut Vec<&crate::types::CharacterDto>, output: &mut 
 
 fn query_items(input: &PersonalCreditInput) -> Vec<QueryItem> {
     let mut items = Vec::new();
-    for span in &input.snapshot.spans {
+    for span in &input.spans {
         let mut run = Vec::new();
-        for character in &span.span.characters {
+        for character in &span.characters {
             if character.text.chars().all(char::is_whitespace) {
                 flush_character_run(&mut run, &mut items);
             } else {
@@ -67,7 +67,7 @@ fn query_items(input: &PersonalCreditInput) -> Vec<QueryItem> {
     }
 
     if items.is_empty() {
-        items.extend(input.snapshot.words.iter().filter_map(|word| {
+        items.extend(input.words.iter().filter_map(|word| {
             let text = word.text.trim();
             (!text.is_empty()).then(|| QueryItem {
                 text: text.to_string(),
@@ -506,28 +506,30 @@ fn drawing_lines(
 }
 
 fn wired_candidates(input: &PersonalCreditInput) -> Vec<TableCandidateDto> {
+    let Some(ref snapshot) = input.snapshot else {
+        return Vec::new();
+    };
     let (h_lines, v_lines) = drawing_lines(
-        &input.snapshot.drawings,
-        &input.snapshot.page,
+        &snapshot.drawings,
+        &input.page,
         input.wired_line_tolerance,
     );
     let output = crate::wired::extract_wired_region(WiredRegionInput {
         schema_version: 1,
-        page: input.snapshot.page.clone(),
+        page: input.page.clone(),
         h_lines,
         v_lines,
-        words: input.snapshot.words.clone(),
+        words: input.words.clone(),
         tolerance: input.wired_line_tolerance,
     });
     let characters: Vec<CharacterDto> = input
-        .snapshot
         .spans
         .iter()
-        .flat_map(|span| span.span.characters.iter().cloned())
+        .flat_map(|span| span.characters.iter().cloned())
         .collect();
     let cells = crate::wired::assign_text_to_line_cells(
         output.cells,
-        &input.snapshot.words,
+        &input.words,
         &characters,
         input.wired_line_tolerance,
     );
@@ -574,8 +576,8 @@ fn wired_candidates(input: &PersonalCreditInput) -> Vec<TableCandidateDto> {
 }
 
 fn wireless_candidates(input: &PersonalCreditInput, wired: &[TableCandidateDto]) -> Vec<TableCandidateDto> {
-    let mut regions = input.snapshot.allowed_regions.clone();
-    regions.extend(input.snapshot.excluded_regions.clone());
+    let mut regions = input.allowed_regions.clone();
+    regions.extend(input.excluded_regions.clone());
     let first_added_order = regions.len() as i64;
     regions.extend(
         wired
@@ -588,19 +590,12 @@ fn wireless_candidates(input: &PersonalCreditInput, wired: &[TableCandidateDto])
                 allowed: false,
             }),
     );
-    let spans: Vec<NativeSpanDto> = crate::snapshot::collect_native_spans_from_snapshot(
-        &input.snapshot,
-        None,
-        None,
-    )
-    .into_iter()
-    .map(|span| span.span)
-    .collect();
+    let spans = input.spans.clone();
     let mut config = StructureConfig::default();
     config.line_tolerance = 2.3;
     crate::wireless_structure::recover_wireless_tables(WirelessRecoveryInput {
         schema_version: 1,
-        page: input.snapshot.page.clone(),
+        page: input.page.clone(),
         spans,
         regions,
         config,
@@ -783,28 +778,67 @@ fn without_whitespace(text: &str) -> String {
     text.chars().filter(|character| !character.is_whitespace()).collect()
 }
 
+struct IndexedChar<'a> {
+    character: &'a CharacterDto,
+    center_x: f64,
+    center_y: f64,
+}
+
+struct CharacterSpatialIndex<'a> {
+    by_y: Vec<IndexedChar<'a>>,
+}
+
+impl<'a> CharacterSpatialIndex<'a> {
+    fn new(spans: &'a [NativeSpanDto]) -> Self {
+        let mut by_y = Vec::new();
+        for span in spans {
+            for character in &span.characters {
+                if !character.text.chars().all(char::is_whitespace) {
+                    by_y.push(IndexedChar {
+                        character,
+                        center_x: center_x(&character.rect),
+                        center_y: center_y(&character.rect),
+                    });
+                }
+            }
+        }
+        by_y.sort_by(|a, b| {
+            a.center_y
+                .partial_cmp(&b.center_y)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        Self { by_y }
+    }
+
+    fn find_in_rect(&self, rect: &Rect4) -> Vec<&'a CharacterDto> {
+        let min_y = rect.y0 - 0.5;
+        let max_y = rect.y1 + 0.5;
+        let min_x = rect.x0 - 0.5;
+        let max_x = rect.x1 + 0.5;
+
+        let start_idx = self.by_y.partition_point(|c| c.center_y < min_y);
+        let mut result = Vec::new();
+        for item in &self.by_y[start_idx..] {
+            if item.center_y > max_y {
+                break;
+            }
+            if item.center_x >= min_x && item.center_x <= max_x {
+                result.push(item.character);
+            }
+        }
+        result.sort_by_key(|c| c.order);
+        result
+    }
+}
+
 fn native_character_bounds(
     cell: &CellDto,
-    snapshot: &PageSnapshotDto,
+    index: &CharacterSpatialIndex,
 ) -> Option<Rect4> {
     if cell.text.trim().is_empty() {
         return None;
     }
-    let mut characters: Vec<&CharacterDto> = snapshot
-        .spans
-        .iter()
-        .flat_map(|span| span.span.characters.iter())
-        .filter(|character| {
-            let x = center_x(&character.rect);
-            let y = center_y(&character.rect);
-            cell.rect.x0 - 0.5 <= x
-                && x <= cell.rect.x1 + 0.5
-                && cell.rect.y0 - 0.5 <= y
-                && y <= cell.rect.y1 + 0.5
-                && !character.text.chars().all(char::is_whitespace)
-        })
-        .collect();
-    characters.sort_by_key(|character| character.order);
+    let characters = index.find_in_rect(&cell.rect);
     let text: String = characters
         .iter()
         .map(|character| character.text.as_str())
@@ -829,7 +863,7 @@ fn round_grid_boundary(value: f64) -> f64 {
 
 fn normalize_wireless_cell_geometry(
     mut table: TableCandidateDto,
-    snapshot: &PageSnapshotDto,
+    index: &CharacterSpatialIndex,
 ) -> TableCandidateDto {
     if table.source != "wireless_span_recovery" || table.rows <= 0 || table.cols <= 0 {
         return table;
@@ -837,7 +871,7 @@ fn normalize_wireless_cell_geometry(
     let precise_bounds: Vec<Option<Rect4>> = table
         .cells
         .iter()
-        .map(|cell| native_character_bounds(cell, snapshot))
+        .map(|cell| native_character_bounds(cell, index))
         .collect();
     for (cell, bounds) in table.cells.iter_mut().zip(&precise_bounds) {
         if cell.colspan > 1 {
@@ -950,8 +984,9 @@ fn normalize_wireless_cell_geometry(
 
 fn apply_personal_credit_rules(
     tables: Vec<TableCandidateDto>,
-    snapshot: &PageSnapshotDto,
+    spans: &[NativeSpanDto],
 ) -> Vec<TableCandidateDto> {
+    let char_index = CharacterSpatialIndex::new(spans);
     let mut filtered = Vec::new();
     for table in tables {
         let table = trim_query_table(table);
@@ -965,7 +1000,7 @@ fn apply_personal_credit_rules(
         filtered.extend(
             split_repeated_records(table)
                 .into_iter()
-                .map(|table| normalize_wireless_cell_geometry(table, snapshot)),
+                .map(|table| normalize_wireless_cell_geometry(table, &char_index)),
         );
     }
     filtered
@@ -1359,14 +1394,14 @@ pub fn recover(input: PersonalCreditInput) -> PersonalCreditOutput {
         if first_bound > 0 {
             if let Some(table) = recover_headerless_query_table(
                 &rows[..first_bound],
-                input.snapshot.page.width,
+                input.page.width,
             ) {
                 tables.push(table);
             }
         }
     }
     if header_indices.is_empty() {
-        if let Some(table) = recover_headerless_query_table(&rows, input.snapshot.page.width) {
+        if let Some(table) = recover_headerless_query_table(&rows, input.page.width) {
             tables.push(table);
         }
     }
@@ -1392,7 +1427,7 @@ pub fn recover(input: PersonalCreditInput) -> PersonalCreditOutput {
             header_index,
             end_index,
             section_index,
-            input.snapshot.page.width,
+            input.page.width,
         ) {
             tables.push(table);
         }
@@ -1407,7 +1442,7 @@ pub fn recover(input: PersonalCreditInput) -> PersonalCreditOutput {
         table.source == "personal_query_recovery"
             || !query_tables.iter().any(|query| tables_overlap(table, query))
     });
-    let mut tables = apply_personal_credit_rules(tables, &input.snapshot);
+    let mut tables = apply_personal_credit_rules(tables, &input.spans);
 
     if !has_upstream_candidates {
         tables.sort_by(|left, right| {
@@ -1423,3 +1458,101 @@ pub fn recover(input: PersonalCreditInput) -> PersonalCreditOutput {
         diagnostics: Vec::new(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_test_span(order: i64, characters: Vec<CharacterDto>) -> NativeSpanDto {
+        let text = characters.iter().map(|c| c.text.as_str()).collect();
+        let rect = union_rect(characters.iter().map(|c| &c.rect))
+            .unwrap_or_else(|| rect(0.0, 0.0, 0.0, 0.0));
+        NativeSpanDto {
+            schema_version: 1,
+            text,
+            rect,
+            font: None,
+            size: None,
+            flags: None,
+            order,
+            characters,
+            source_position: crate::types::SourcePositionDto {
+                schema_version: 1,
+                block: 0,
+                line: 0,
+            },
+            block: 0,
+            line: 0,
+        }
+    }
+
+    #[test]
+    fn test_character_spatial_index_empty() {
+        let spans: Vec<NativeSpanDto> = Vec::new();
+        let index = CharacterSpatialIndex::new(&spans);
+        let query_rect = rect(10.0, 10.0, 50.0, 20.0);
+        let found = index.find_in_rect(&query_rect);
+        assert!(found.is_empty());
+    }
+
+    #[test]
+    fn test_character_spatial_index_retrieval_and_ordering() {
+        let spans = vec![
+            make_test_span(
+                0,
+                vec![
+                    CharacterDto {
+                        schema_version: 1,
+                        text: "a".to_string(),
+                        rect: rect(10.0, 10.0, 15.0, 15.0),
+                        order: 2,
+                    },
+                    CharacterDto {
+                        schema_version: 1,
+                        text: " ".to_string(),
+                        rect: rect(15.0, 10.0, 20.0, 15.0),
+                        order: 3,
+                    },
+                    CharacterDto {
+                        schema_version: 1,
+                        text: "b".to_string(),
+                        rect: rect(20.0, 10.0, 25.0, 15.0),
+                        order: 1,
+                    },
+                ],
+            ),
+            make_test_span(
+                1,
+                vec![
+                    CharacterDto {
+                        schema_version: 1,
+                        text: "c".to_string(),
+                        rect: rect(10.0, 50.0, 15.0, 55.0),
+                        order: 0,
+                    },
+                ],
+            ),
+        ];
+
+        let index = CharacterSpatialIndex::new(&spans);
+        // Query around the first span (y: 10..15)
+        let query_rect = rect(8.0, 9.0, 30.0, 16.0);
+        let found = index.find_in_rect(&query_rect);
+        // Space should be ignored, "b" has order 1, "a" has order 2
+        assert_eq!(found.len(), 2);
+        assert_eq!(found[0].text, "b");
+        assert_eq!(found[1].text, "a");
+
+        // Query around the second span (y: 50..55)
+        let query_rect_2 = rect(5.0, 48.0, 20.0, 57.0);
+        let found_2 = index.find_in_rect(&query_rect_2);
+        assert_eq!(found_2.len(), 1);
+        assert_eq!(found_2[0].text, "c");
+
+        // Query outside both
+        let query_rect_miss = rect(100.0, 100.0, 120.0, 120.0);
+        let found_miss = index.find_in_rect(&query_rect_miss);
+        assert!(found_miss.is_empty());
+    }
+}
+
