@@ -241,10 +241,10 @@ def _join_query_items(items: list[tuple[float, float, float, float, str]]) -> st
 
 
 def _is_query_record_row(row: list[tuple[float, float, float, float, str]]) -> bool:
-    """Return True for a row with the four query-record column anchors."""
+    """Return True for a row with distinct query number, date, and reason columns."""
     texts = [item[4].strip() for item in row]
     has_number = any(item[0] < 110 and re.fullmatch(r"\d+", text) for item, text in zip(row, texts))
-    has_date = any(item[0] < 240 and "年" in text for item, text in zip(row, texts))
+    has_date = any(105.0 <= item[0] < 240 and "年" in text for item, text in zip(row, texts))
     has_reason = any(item[0] >= 340 for item in row)
     return has_number and has_date and has_reason
 

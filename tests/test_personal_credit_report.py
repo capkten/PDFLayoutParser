@@ -234,6 +234,57 @@ def test_pdfsam_merge_numbered_prose_not_extracted_as_table():
     assert len(prose_tables) == 0, f"Expected 0 prose tables, got {len(prose_tables)}"
 
 
+def test_personal_report_numbered_prose_is_not_recovered_as_query_continuation():
+    import os
+
+    from hexai_pdf_parser.extractors.personal_credit_report import _make_query_tables
+
+    pdf_path = os.path.join(
+        "D:\\codes\\PDFLayoutParser",
+        "demo_data",
+        "个人信用报告(本人简版).pdf",
+    )
+    assert os.path.exists(pdf_path)
+
+    with fitz.open(pdf_path) as doc:
+        tables = _make_query_tables(doc[1])
+
+    assert tables == []
+
+
+def test_personal_query_continuation_without_local_header_is_recovered():
+    import os
+
+    from hexai_pdf_parser.extractors.personal_credit_report import _make_query_tables
+
+    pdf_path = os.path.join(
+        "D:\\codes\\PDFLayoutParser",
+        "个人信用报告",
+        "test",
+        "test",
+        "3_PDFsam_2ceb8bbe-ca9f-4811-95db-a85df90a1f1b.pdf",
+    )
+    assert os.path.exists(pdf_path)
+
+    with fitz.open(pdf_path) as doc:
+        tables = _make_query_tables(doc[1])
+
+    assert len(tables) == 1
+    assert tables[0].source == "personal_query_recovery"
+    assert (tables[0].rows, tables[0].cols) == (32, 4)
+    first_number = next(
+        cell.text
+        for cell in tables[0].cells
+        if cell.row_index == 0 and cell.col_index == 0
+    )
+    last_number = next(
+        cell.text
+        for cell in tables[0].cells
+        if cell.row_index == 31 and cell.col_index == 0
+    )
+    assert (first_number, last_number) == ("4", "35")
+
+
 def test_trim_query_table_preserves_query_section_title_row():
     """Verify that _trim_query_table preserves query section title as row 0 (custom logic)."""
     from hexai_pdf_parser.core.models import BBox, Cell, Table

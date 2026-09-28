@@ -1,5 +1,13 @@
 # Changes
 
+## 2026-09-28
+
+- 修复个人信用报告页内普通编号正文被误恢复成查询记录续表的问题：
+  - **根因与调用位置**：`PersonalCreditReportTableExtractor.extract()` 和 `_extract_via_text_alignment()` 都会调用 `_make_query_tables()`。当页面没有查询表头时，`_make_query_tables()` 会尝试把页面内匹配 `_is_query_record_row()` 的行作为无表头续表；原判据只要求左侧有数字、中间任意位置出现“年”、右侧有文字。目标 PDF 第 2 页的信用卡、贷款和其他业务描述也满足这些条件，因此被拼成 `19x4` 表格。
+  - **判定与修复**：查询编号仍要求位于左侧编号列；查询日期现在必须位于独立日期列带（`105 <= x < 240`）。普通记录的起始年份位于编号列，不再充当查询日期；真实跨页续表的编号和日期分列，因此仍可恢复。未在恢复流程中增加 `page.get_text("words")` 读取，也未切换到旧的 page-words 重建路径。
+  - **测试与验证**：新增目标 PDF 第 2 页反例，以及真实无表头续页正例（编号 4～35，`32x4`）。新增和既有查询续表相关用例 `6 passed`；`tests/test_personal_credit_report.py` 全部 `27 passed`；`git diff --check` 通过。
+  - **页面级验证**：使用 `demo.py` 全量重跑 5 页 `个人信用报告(本人简版).pdf`。表格总数由 14 降至 12：第 2 页从 `1` 张（误判 `personal_query_recovery 19x4`）变为 `0` 张；第 3 页顶部的编号正文伪候选 `2x4` 也被排除；其余 12 张表的来源、行列数和 bbox 与修复前一致。视觉检查确认两处原候选都是普通编号正文；第 3 页下方 `8x3`、`3x2`、`6x2` 三张实际记录表仍保留。输出目录：`C:\Users\23662\.codex\worktrees\personal-query-prose-guard\PDFLayoutParser\output\fix_personal_query_prose_guard_20260928\`，包含逐页 JSON、页面 PNG 和表格 PNG。
+
 ## 2026-09-24
 
 - 修复个人信用报告查询记录明细中日期等字段包围盒估算偏小、未完整框住“2025年”等前导文字的问题：
