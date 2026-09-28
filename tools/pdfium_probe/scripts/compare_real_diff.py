@@ -1,3 +1,12 @@
+"""
+Sprint 1 真实代表样本双解析器差分与摸底诊断脚本。
+
+定位说明：
+本脚本主要用于真实代表样本的基准摸底与粒度差异诊断（Diagnostic & Baseline Audit），
+量化原子 TextObject 碎裂比率、BBox 偏移分布及矢量线段拓扑匹配状态。
+本脚本输出诊断信息与数据台账，退出码不作为自动化 CI 的阻断门禁（阻断 CI 门禁由 compare_synthetic_diff.py 承担）。
+"""
+
 import json
 import os
 import sys
@@ -25,7 +34,8 @@ def main():
     print(f"Real sample comparison complete! Detailed JSON report written to {out_report_path}")
 
     print("\n" + "="*80)
-    print("      Sprint 1 Real Representative Samples Double-Parser Summary (1-to-1)")
+    print("      Sprint 1 Real Representative Samples Double-Parser Diagnostic Summary")
+    print("      (Note: Diagnostic & Baseline Audit Tool; Exit Code is Non-Blocking for CI)")
     print("="*80)
 
     total_base_spans = 0
@@ -82,19 +92,21 @@ def main():
                     print(f"        [BASE_MISSING] : '{m['text']}'")
 
     print("\n" + "="*80)
-    print("                    Real Samples Aggregate Verdict")
+    print("                    Real Samples Diagnostic Verdict")
     print("="*80)
     print(f"Total Base Spans      : {total_base_spans}")
     print(f"Total Probe Objects   : {total_probe_spans} (Ratio: {total_probe_spans / max(1, total_base_spans):.2f}x)")
     print(f"Candidate Text Matches: {total_candidate_matches} ({total_candidate_matches / max(1, total_base_spans) * 100:.1f}%)")
     print(f"Chars Verified Matches: {total_char_matches}")
     print(f"BBox Gate Passed Spans: {total_bbox_passes} ({total_bbox_passes / max(1, total_base_spans) * 100:.1f}%)")
-    print(f"Fully Accepted Spans  : {total_fully_accepted} ({total_fully_accepted / max(1, total_base_spans) * 100:.1f}% - quality gate FAILED)")
+    print(f"Fully Accepted Spans  : {total_fully_accepted} ({total_fully_accepted / max(1, total_base_spans) * 100:.1f}%)")
     print(f"Missing Base Spans    : {total_missing_spans} ({total_missing_spans / max(1, total_base_spans) * 100:.1f}%)")
     print(f"Total Drawings Match  : {total_matched_drawings} / {total_base_drawings} (100% matched within rect/point/width tol)")
     print("\nScope Limitation Note: 452/452 drawings match is limited to these 4 pages under current comparison model;")
     print("does not imply coverage for all PDF types, Bezier curves, clip paths, or transparency.")
-    print("STATUS: GATE NOT PASSED (Requires Read-Only Span Aggregator Experiment in Sprint 2).")
+    print("\nDIAGNOSTIC STATUS: Text grain fragmentation (8.25x) and LineBox/GlyphBox offset confirm gate NOT PASSED.")
+    print("Script Role: Diagnostic baseline audit script (output written to diff_report_real.json). Non-blocking for CI.")
+    print("Sprint 1 Final Verdict: Probe and diff infrastructure verified. Text Snapshot quality gate NOT PASSED. Strictly forbid connecting to table recovery algorithms. Sprint 2 will conduct read-only aggregation experiments.")
 
 if __name__ == "__main__":
     main()

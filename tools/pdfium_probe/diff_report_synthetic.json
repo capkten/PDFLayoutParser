@@ -29,6 +29,7 @@
           "bbox_pass_count": 0,
           "fully_accepted_count": 0,
           "missing_count": 0,
+          "raw_max_bbox_delta": 4.858000000000004,
           "max_bbox_delta": 4.858,
           "p95_bbox_delta": 4.858,
           "order_inversion": {
@@ -151,8 +152,11 @@
           "base_drawing_count": 0,
           "probe_drawing_count": 0,
           "matched_count": 0,
+          "raw_max_rect_delta": 0.0,
           "max_rect_delta": 0.0,
+          "raw_max_point_delta": 0.0,
           "max_point_delta": 0.0,
+          "raw_max_width_delta": 0.0,
           "max_width_delta": 0.0,
           "details": []
         }
@@ -189,6 +193,7 @@
           "bbox_pass_count": 0,
           "fully_accepted_count": 0,
           "missing_count": 0,
+          "raw_max_bbox_delta": 5.744,
           "max_bbox_delta": 5.744,
           "p95_bbox_delta": 5.744,
           "order_inversion": {
@@ -347,8 +352,11 @@
           "base_drawing_count": 0,
           "probe_drawing_count": 0,
           "matched_count": 0,
+          "raw_max_rect_delta": 0.0,
           "max_rect_delta": 0.0,
+          "raw_max_point_delta": 0.0,
           "max_point_delta": 0.0,
+          "raw_max_width_delta": 0.0,
           "max_width_delta": 0.0,
           "details": []
         }
@@ -385,6 +393,7 @@
           "bbox_pass_count": 0,
           "fully_accepted_count": 0,
           "missing_count": 1,
+          "raw_max_bbox_delta": 5.025999999999996,
           "max_bbox_delta": 5.026,
           "p95_bbox_delta": 5.026,
           "order_inversion": {
@@ -555,8 +564,11 @@
           "base_drawing_count": 0,
           "probe_drawing_count": 0,
           "matched_count": 0,
+          "raw_max_rect_delta": 0.0,
           "max_rect_delta": 0.0,
+          "raw_max_point_delta": 0.0,
           "max_point_delta": 0.0,
+          "raw_max_width_delta": 0.0,
           "max_width_delta": 0.0,
           "details": []
         }
@@ -593,6 +605,7 @@
           "bbox_pass_count": 0,
           "fully_accepted_count": 0,
           "missing_count": 0,
+          "raw_max_bbox_delta": 4.984000000000009,
           "max_bbox_delta": 4.984,
           "p95_bbox_delta": 4.984,
           "order_inversion": {
@@ -643,8 +656,11 @@
           "base_drawing_count": 0,
           "probe_drawing_count": 0,
           "matched_count": 0,
+          "raw_max_rect_delta": 0.0,
           "max_rect_delta": 0.0,
+          "raw_max_point_delta": 0.0,
           "max_point_delta": 0.0,
+          "raw_max_width_delta": 0.0,
           "max_width_delta": 0.0,
           "details": []
         }
@@ -674,6 +690,7 @@
           "bbox_pass_count": 0,
           "fully_accepted_count": 0,
           "missing_count": 0,
+          "raw_max_bbox_delta": 4.984000000000009,
           "max_bbox_delta": 4.984,
           "p95_bbox_delta": 4.984,
           "order_inversion": {
@@ -724,8 +741,11 @@
           "base_drawing_count": 0,
           "probe_drawing_count": 0,
           "matched_count": 0,
+          "raw_max_rect_delta": 0.0,
           "max_rect_delta": 0.0,
+          "raw_max_point_delta": 0.0,
           "max_point_delta": 0.0,
+          "raw_max_width_delta": 0.0,
           "max_width_delta": 0.0,
           "details": []
         }
@@ -755,6 +775,7 @@
           "bbox_pass_count": 0,
           "fully_accepted_count": 0,
           "missing_count": 0,
+          "raw_max_bbox_delta": 4.984000000000009,
           "max_bbox_delta": 4.984,
           "p95_bbox_delta": 4.984,
           "order_inversion": {
@@ -805,8 +826,11 @@
           "base_drawing_count": 0,
           "probe_drawing_count": 0,
           "matched_count": 0,
+          "raw_max_rect_delta": 0.0,
           "max_rect_delta": 0.0,
+          "raw_max_point_delta": 0.0,
           "max_point_delta": 0.0,
+          "raw_max_width_delta": 0.0,
           "max_width_delta": 0.0,
           "details": []
         }
@@ -836,6 +860,7 @@
           "bbox_pass_count": 0,
           "fully_accepted_count": 0,
           "missing_count": 0,
+          "raw_max_bbox_delta": 4.984000000000009,
           "max_bbox_delta": 4.984,
           "p95_bbox_delta": 4.984,
           "order_inversion": {
@@ -886,8 +911,11 @@
           "base_drawing_count": 0,
           "probe_drawing_count": 0,
           "matched_count": 0,
+          "raw_max_rect_delta": 0.0,
           "max_rect_delta": 0.0,
+          "raw_max_point_delta": 0.0,
           "max_point_delta": 0.0,
+          "raw_max_width_delta": 0.0,
           "max_width_delta": 0.0,
           "details": []
         }
@@ -924,6 +952,7 @@
           "bbox_pass_count": 0,
           "fully_accepted_count": 0,
           "missing_count": 0,
+          "raw_max_bbox_delta": 4.1640000000000015,
           "max_bbox_delta": 4.164,
           "p95_bbox_delta": 4.164,
           "order_inversion": {
@@ -1010,8 +1039,11 @@
           "base_drawing_count": 6,
           "probe_drawing_count": 6,
           "matched_count": 6,
+          "raw_max_rect_delta": 0.0,
           "max_rect_delta": 0.0,
+          "raw_max_point_delta": 0.0,
           "max_point_delta": 0.0,
+          "raw_max_width_delta": 0.0,
           "max_width_delta": 0.0,
           "details": [
             {

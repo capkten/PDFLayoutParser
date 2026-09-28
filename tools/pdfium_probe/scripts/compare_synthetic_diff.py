@@ -123,12 +123,15 @@ def compare_drawings(base_drawings, probe_drawings, rect_tol=0.5, point_tol=0.5,
             b_w = bd.get("width")
             p_w = best_pd.get("width")
             width_missing = (b_w is None) ^ (p_w is None)
+            raw_width_delta = None
             width_delta = None
             if b_w is not None and p_w is not None:
-                width_delta = round(abs(b_w - p_w), 4)
-                if width_delta > max_width_delta:
-                    max_width_delta = width_delta
+                raw_width_delta = abs(b_w - p_w)
+                width_delta = round(raw_width_delta, 4)
+                if raw_width_delta > max_width_delta:
+                    max_width_delta = raw_width_delta
             elif b_w is None and p_w is None:
+                raw_width_delta = 0.0
                 width_delta = 0.0
 
             b_items = bd.get("items", [])
@@ -150,7 +153,7 @@ def compare_drawings(base_drawings, probe_drawings, rect_tol=0.5, point_tol=0.5,
                     status = "RECT_DELTA_EXCEEDED"
                 elif width_missing:
                     status = "WIDTH_DATA_MISSING"
-                elif width_delta is not None and width_delta > width_tol:
+                elif raw_width_delta is not None and raw_width_delta > width_tol:
                     status = "WIDTH_DELTA_EXCEEDED"
                 else:
                     status = "MATCHED_SEMANTIC_RECT"
@@ -178,7 +181,7 @@ def compare_drawings(base_drawings, probe_drawings, rect_tol=0.5, point_tol=0.5,
                     status = "POINT_DELTA_EXCEEDED"
                 elif width_missing:
                     status = "WIDTH_DATA_MISSING"
-                elif width_delta is not None and width_delta > width_tol:
+                elif raw_width_delta is not None and raw_width_delta > width_tol:
                     status = "WIDTH_DELTA_EXCEEDED"
                 else:
                     status = "MATCHED_EXACT"
@@ -188,7 +191,7 @@ def compare_drawings(base_drawings, probe_drawings, rect_tol=0.5, point_tol=0.5,
                     status = "RECT_DELTA_EXCEEDED"
                 elif width_missing:
                     status = "WIDTH_DATA_MISSING"
-                elif width_delta is not None and width_delta > width_tol:
+                elif raw_width_delta is not None and raw_width_delta > width_tol:
                     status = "WIDTH_DELTA_EXCEEDED"
                 else:
                     status = "MATCHED_EXACT"
@@ -233,8 +236,11 @@ def compare_drawings(base_drawings, probe_drawings, rect_tol=0.5, point_tol=0.5,
         "base_drawing_count": len(base_drawings),
         "probe_drawing_count": len(probe_drawings),
         "matched_count": matched_drawings,
+        "raw_max_rect_delta": max_rect_delta,
         "max_rect_delta": round(max_rect_delta, 4),
+        "raw_max_point_delta": max_point_delta,
         "max_point_delta": round(max_point_delta, 4),
+        "raw_max_width_delta": max_width_delta,
         "max_width_delta": round(max_width_delta, 4),
         "details": drawing_diffs,
     }
@@ -390,6 +396,7 @@ def compare_spans(base_spans, probe_spans, bbox_tol=0.5, char_h_tol=0.5, char_v_
         "bbox_pass_count": bbox_pass_count,
         "fully_accepted_count": fully_accepted_count,
         "missing_count": missing_count,
+        "raw_max_bbox_delta": max_bbox_delta,
         "max_bbox_delta": round(max_bbox_delta, 4),
         "p95_bbox_delta": round(p95_delta, 4),
         "order_inversion": order_inversion_info,
@@ -516,7 +523,8 @@ def main():
                 elif item["status"] == "PROBE_MISSING" and not item["text"].strip():
                     gate_failures.append(f"{r['file']} p{p_idx}: Whitespace span missing in probe: '{item['text']}' (Base span count={s['base_span_count']} vs Probe={s['probe_span_count']})")
 
-            if s["max_bbox_delta"] > args.bbox_tol:
+            raw_bbox_delta = s.get("raw_max_bbox_delta", s["max_bbox_delta"])
+            if raw_bbox_delta > args.bbox_tol:
                 gate_failures.append(f"{r['file']} p{p_idx}: Max BBox Delta {s['max_bbox_delta']} pt > threshold {args.bbox_tol} pt")
 
             if inv_count > args.max_inversions:

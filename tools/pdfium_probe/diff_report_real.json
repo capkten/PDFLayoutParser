@@ -29,6 +29,7 @@
           "bbox_pass_count": 1,
           "fully_accepted_count": 1,
           "missing_count": 97,
+          "raw_max_bbox_delta": 4.401700000000005,
           "max_bbox_delta": 4.4017,
           "p95_bbox_delta": 4.4017,
           "order_inversion": {
@@ -9619,8 +9620,11 @@
           "base_drawing_count": 429,
           "probe_drawing_count": 429,
           "matched_count": 429,
+          "raw_max_rect_delta": 0.00010000000000331966,
           "max_rect_delta": 0.0001,
+          "raw_max_point_delta": 0.0,
           "max_point_delta": 0.0,
+          "raw_max_width_delta": 0.0,
           "max_width_delta": 0.0,
           "details": [
             {
@@ -19955,6 +19959,7 @@
           "bbox_pass_count": 0,
           "fully_accepted_count": 0,
           "missing_count": 8,
+          "raw_max_bbox_delta": 0.0,
           "max_bbox_delta": 0.0,
           "p95_bbox_delta": 0.0,
           "order_inversion": {
@@ -20821,8 +20826,11 @@
           "base_drawing_count": 1,
           "probe_drawing_count": 1,
           "matched_count": 1,
+          "raw_max_rect_delta": 0.0,
           "max_rect_delta": 0.0,
+          "raw_max_point_delta": 0.0,
           "max_point_delta": 0.0,
+          "raw_max_width_delta": 0.95,
           "max_width_delta": 0.95,
           "details": [
             {
@@ -20885,6 +20893,7 @@
           "bbox_pass_count": 0,
           "fully_accepted_count": 0,
           "missing_count": 30,
+          "raw_max_bbox_delta": 0.7315000000000111,
           "max_bbox_delta": 0.7315,
           "p95_bbox_delta": 0.7315,
           "order_inversion": {
@@ -31387,8 +31396,11 @@
           "base_drawing_count": 1,
           "probe_drawing_count": 1,
           "matched_count": 1,
+          "raw_max_rect_delta": 0.0,
           "max_rect_delta": 0.0,
+          "raw_max_point_delta": 0.0,
           "max_point_delta": 0.0,
+          "raw_max_width_delta": 0.95,
           "max_width_delta": 0.95,
           "details": [
             {
@@ -31451,6 +31463,7 @@
           "bbox_pass_count": 0,
           "fully_accepted_count": 0,
           "missing_count": 75,
+          "raw_max_bbox_delta": 5.106899999999996,
           "max_bbox_delta": 5.1069,
           "p95_bbox_delta": 5.1069,
           "order_inversion": {
@@ -45193,8 +45206,11 @@
           "base_drawing_count": 21,
           "probe_drawing_count": 21,
           "matched_count": 21,
+          "raw_max_rect_delta": 0.0,
           "max_rect_delta": 0.0,
+          "raw_max_point_delta": 0.0,
           "max_point_delta": 0.0,
+          "raw_max_width_delta": 0.95,
           "max_width_delta": 0.95,
           "details": [
             {
