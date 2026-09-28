@@ -576,6 +576,90 @@ def collect_native_spans_from_snapshot(
     return tuple(converted)
 
 
+def collect_native_spans_from_rawdict(
+    rawdict: Dict[str, Any],
+    page_height: float,
+    page_y0: float = 0.0,
+    excluded_regions: Optional[Sequence[Any]] = None,
+    allowed_regions: Optional[Sequence[Any]] = None,
+) -> tuple[Any, ...]:
+    """Extract and spatially filter native spans directly from rawdict using the Rust kernel."""
+    from hexai_pdf_parser.models import BBox
+    from hexai_pdf_parser.tables.wireless_table_recovery import NativeSpan
+
+    def _to_rect_list(regions):
+        if not regions:
+            return None
+        rects = []
+        for r in regions:
+            if isinstance(r, Mapping):
+                rects.append(
+                    {
+                        "schema_version": 1,
+                        "x0": float(r["x0"]),
+                        "y0": float(r["y0"]),
+                        "x1": float(r["x1"]),
+                        "y1": float(r["y1"]),
+                    }
+                )
+            elif hasattr(r, "x0"):
+                rects.append(
+                    {
+                        "schema_version": 1,
+                        "x0": float(r.x0),
+                        "y0": float(r.y0),
+                        "x1": float(r.x1),
+                        "y1": float(r.y1),
+                    }
+                )
+            else:
+                rects.append(
+                    {
+                        "schema_version": 1,
+                        "x0": float(r[0]),
+                        "y0": float(r[1]),
+                        "x1": float(r[2]),
+                        "y1": float(r[3]),
+                    }
+                )
+        return rects
+
+    allowed_dicts = _to_rect_list(allowed_regions)
+    excluded_dicts = _to_rect_list(excluded_regions)
+    raw_spans = _pdf_fast.collect_native_spans_from_rawdict(
+        rawdict, float(page_height), float(page_y0), allowed_dicts, excluded_dicts
+    )
+    converted = []
+    for s in raw_spans:
+        rect = s["rect"]
+        characters = [
+            (
+                c["text"],
+                BBox(c["rect"]["x0"], c["rect"]["y0"], c["rect"]["x1"], c["rect"]["y1"]),
+            )
+            for c in s.get("characters", [])
+        ]
+        raw_pos = s.get("raw_source_position")
+        source_pos = (
+            (int(raw_pos[0]), int(raw_pos[1]), int(raw_pos[2]))
+            if raw_pos and len(raw_pos) >= 3
+            else (int(s.get("block", 0)), int(s.get("line", 0)), 0)
+        )
+        converted.append(
+            NativeSpan(
+                text=s["text"],
+                bbox=BBox(rect["x0"], rect["y0"], rect["x1"], rect["y1"]),
+                font=s.get("font"),
+                size=s.get("size"),
+                order=int(s["order"]),
+                characters=characters,
+                source_position=source_pos,
+            )
+        )
+    return tuple(converted)
+
+
+
 def recover_cells_from_snapshot(
     snapshot: Any,
     region: Any,
@@ -1651,21 +1735,6 @@ def recover_wireless_tables(input_dto: Union[Dict[str, Any], Tuple[Any, ...]]) -
     return _pdf_fast.recover_wireless_tables(d)
 
 
-def collect_native_spans_from_rawdict(
-    rawdict: Dict[str, Any],
-    page_height: float,
-    page_y0: float = 0.0,
-    allowed_regions: Optional[Sequence[Any]] = None,
-    excluded_regions: Optional[Sequence[Any]] = None,
-) -> List[Dict[str, Any]]:
-    """Directly collect native spans from PyMuPDF rawdict via Rust kernel."""
-    return _pdf_fast.collect_native_spans_from_rawdict(
-        rawdict,
-        float(page_height),
-        float(page_y0),
-        list(allowed_regions) if allowed_regions else None,
-        list(excluded_regions) if excluded_regions else None,
-    )
 
 
 def recover_wireless_tables_from_rawdict(

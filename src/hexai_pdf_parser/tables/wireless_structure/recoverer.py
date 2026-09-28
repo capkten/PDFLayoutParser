@@ -459,19 +459,14 @@ class _PreparedNativeRegion:
     header_cutoff: float | None
 
 
-def _prepare_native_region_from_snapshot(
-    snapshot: Any,
+def _prepare_native_region_from_spans(
+    native_spans: Sequence[NativeSpan],
     region_bbox: BBox,
     *,
     validate_spans: bool = False,
 ) -> _PreparedNativeRegion | None:
-    """Build the shared Python-derived input for the next native transition."""
+    """Build the shared Python-derived input from native spans."""
     region_rect = _native_region_rect(region_bbox)
-    if validate_spans:
-        _native_validate_snapshot_span_bboxes(snapshot)
-    native_spans = list(
-        collect_native_spans_from_snapshot(snapshot, allowed_regions=[region_bbox])
-    )
     if validate_spans:
         for span in native_spans:
             _native_validate_span_bbox(span)
@@ -545,6 +540,23 @@ def _prepare_native_region_from_snapshot(
     )
 
 
+def _prepare_native_region_from_snapshot(
+    snapshot: Any,
+    region_bbox: BBox,
+    *,
+    validate_spans: bool = False,
+) -> _PreparedNativeRegion | None:
+    """Build the shared Python-derived input from a PageSnapshot."""
+    if validate_spans:
+        _native_validate_snapshot_span_bboxes(snapshot)
+    native_spans = list(
+        collect_native_spans_from_snapshot(snapshot, allowed_regions=[region_bbox])
+    )
+    return _prepare_native_region_from_spans(
+        native_spans, region_bbox, validate_spans=validate_spans
+    )
+
+
 def _build_native_region_input_from_snapshot(
     snapshot: Any,
     region_bbox: BBox,
@@ -567,14 +579,11 @@ def _recover_native_region_from_snapshot_rust(
     return rust_adapter.recover_native_region(input_dto)
 
 
-def _recover_cells_from_snapshot_python(
-    snapshot: Any,
+def _recover_cells_from_prepared_python(
+    prepared: _PreparedNativeRegion,
     region_bbox: BBox,
 ) -> tuple[int, int, list[Cell]]:
     try:
-        prepared = _prepare_native_region_from_snapshot(snapshot, region_bbox)
-        if prepared is None:
-            return 0, 0, []
         atoms = prepared.python_atoms
         bands = prepared.python_bands
         output_mode = prepared.output_mode
@@ -617,26 +626,47 @@ def _recover_cells_from_snapshot_python(
         return 0, 0, []
 
 
+def _recover_cells_from_snapshot_python(
+    snapshot: Any,
+    region_bbox: BBox,
+) -> tuple[int, int, list[Cell]]:
+    prepared = _prepare_native_region_from_snapshot(snapshot, region_bbox)
+    if prepared is None:
+        return 0, 0, []
+    return _recover_cells_from_prepared_python(prepared, region_bbox)
+
+
 def _recover_cells_from_region_python(
     page: fitz.Page | Any,
     region_bbox: BBox,
 ) -> tuple[int, int, list[Cell]]:
     if hasattr(page, "schema_version") and hasattr(page, "text_blocks"):
         snapshot = page
+        return _recover_cells_from_snapshot_python(snapshot, region_bbox)
     elif hasattr(page, "_cached_snapshot") and page._cached_snapshot is not None:
         snapshot = page._cached_snapshot
-    else:
-        from hexai_pdf_parser.pdf_snapshot import capture_page_snapshot
+        return _recover_cells_from_snapshot_python(snapshot, region_bbox)
 
-        snapshot = capture_page_snapshot(
-            page,
-            page_index=getattr(page, "number", 0),
-            lightweight=True,
-        )
-        try:
-            page._cached_snapshot = snapshot
-        except (AttributeError, TypeError):
-            pass
+    if hasattr(page, "get_text"):
+        from hexai_pdf_parser.tables.wireless_table_recovery import collect_native_spans
+
+        native_spans = collect_native_spans(page, allowed_regions=[region_bbox])
+        prepared = _prepare_native_region_from_spans(native_spans, region_bbox)
+        if prepared is None:
+            return 0, 0, []
+        return _recover_cells_from_prepared_python(prepared, region_bbox)
+
+    from hexai_pdf_parser.pdf_snapshot import capture_page_snapshot
+
+    snapshot = capture_page_snapshot(
+        page,
+        page_index=getattr(page, "number", 0),
+        lightweight=True,
+    )
+    try:
+        page._cached_snapshot = snapshot
+    except (AttributeError, TypeError):
+        pass
     return _recover_cells_from_snapshot_python(snapshot, region_bbox)
 
 
@@ -662,28 +692,10 @@ def _recover_cells_from_rust(
     )
 
 
-def recover_cells_from_region(
-    page: fitz.Page | Any,
+def _recover_cells_from_snapshot_route(
+    snapshot: Any,
     region_bbox: BBox,
 ) -> tuple[int, int, list[Cell]]:
-    """Recover Chinese/mixed wireless cells from one trusted table region."""
-    if hasattr(page, "schema_version") and hasattr(page, "text_blocks"):
-        snapshot = page
-    elif hasattr(page, "_cached_snapshot") and page._cached_snapshot is not None:
-        snapshot = page._cached_snapshot
-    else:
-        from hexai_pdf_parser.pdf_snapshot import capture_page_snapshot
-
-        snapshot = capture_page_snapshot(
-            page,
-            page_index=getattr(page, "number", 0),
-            lightweight=True,
-        )
-        try:
-            page._cached_snapshot = snapshot
-        except (AttributeError, TypeError):
-            pass
-
     mode = rust_adapter.get_rust_mode("wireless_structure")
     if mode in ("rust", "shadow"):
         def _recover_cells_from_region_rust():
@@ -702,3 +714,55 @@ def recover_cells_from_region(
         )
     else:
         return _recover_cells_from_snapshot_python(snapshot, region_bbox)
+
+
+def recover_cells_from_region(
+    page: fitz.Page | Any,
+    region_bbox: BBox,
+) -> tuple[int, int, list[Cell]]:
+    """Recover Chinese/mixed wireless cells from one trusted table region."""
+    if hasattr(page, "schema_version") and hasattr(page, "text_blocks"):
+        snapshot = page
+        return _recover_cells_from_snapshot_route(snapshot, region_bbox)
+    elif hasattr(page, "_cached_snapshot") and page._cached_snapshot is not None:
+        snapshot = page._cached_snapshot
+        return _recover_cells_from_snapshot_route(snapshot, region_bbox)
+
+    # Fast path: direct from fitz.Page without capture_page_snapshot
+    if hasattr(page, "get_text"):
+        from hexai_pdf_parser.tables.wireless_table_recovery import collect_native_spans
+
+        native_spans = collect_native_spans(page, allowed_regions=[region_bbox])
+        prepared = _prepare_native_region_from_spans(native_spans, region_bbox)
+        if prepared is None:
+            return 0, 0, []
+
+        mode = rust_adapter.get_rust_mode("wireless_structure")
+        if mode in ("rust", "shadow"):
+            def _recover_cells_from_spans_rust():
+                native_output = rust_adapter.recover_native_region(prepared.rust_input)
+                if native_output is None:
+                    return 0, 0, []
+                return _recover_cells_from_rust(native_output, region_bbox)
+
+            return rust_adapter.run_python_or_rust(
+                mode=mode,
+                python_fn=lambda: _recover_cells_from_prepared_python(prepared, region_bbox),
+                rust_fn=_recover_cells_from_spans_rust,
+                path="wireless_structure.recover_cells_from_region",
+            )
+        else:
+            return _recover_cells_from_prepared_python(prepared, region_bbox)
+
+    from hexai_pdf_parser.pdf_snapshot import capture_page_snapshot
+
+    snapshot = capture_page_snapshot(
+        page,
+        page_index=getattr(page, "number", 0),
+        lightweight=True,
+    )
+    try:
+        page._cached_snapshot = snapshot
+    except (AttributeError, TypeError):
+        pass
+    return _recover_cells_from_snapshot_route(snapshot, region_bbox)

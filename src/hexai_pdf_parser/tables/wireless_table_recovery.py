@@ -265,22 +265,63 @@ def collect_native_spans(
     """Return native spans in allowed regions and outside excluded regions."""
     if hasattr(page, "schema_version") and hasattr(page, "text_blocks"):
         snapshot = page
+        return list(
+            collect_native_spans_from_snapshot(
+                snapshot,
+                excluded_regions=excluded_regions,
+                allowed_regions=allowed_regions,
+            )
+        )
     elif hasattr(page, "_cached_snapshot") and page._cached_snapshot is not None:
         snapshot = page._cached_snapshot
-    else:
-        from hexai_pdf_parser.pdf_snapshot import capture_page_snapshot
-
-        snapshot = capture_page_snapshot(
-            page,
-            page_index=getattr(page, "number", 0),
-            allowed_regions=allowed_regions or (),
-            excluded_regions=excluded_regions or (),
-            lightweight=True,
+        return list(
+            collect_native_spans_from_snapshot(
+                snapshot,
+                excluded_regions=excluded_regions,
+                allowed_regions=allowed_regions,
+            )
         )
+
+    # Fast path: direct from rawdict via Rust kernel without snapshot overhead
+    if hasattr(page, "get_text"):
         try:
-            page._cached_snapshot = snapshot
-        except (AttributeError, TypeError):
+            from hexai_pdf_parser import rust_adapter
+
+            rawdict = getattr(page, "_cached_rawdict", None)
+            if rawdict is None:
+                rawdict = page.get_text("rawdict")
+                try:
+                    page._cached_rawdict = rawdict
+                except (AttributeError, TypeError):
+                    pass
+            rect = getattr(page, "rect", None)
+            h = float(rect.height) if rect else 842.0
+            y0 = float(rect.y0) if rect else 0.0
+            return list(
+                rust_adapter.collect_native_spans_from_rawdict(
+                    rawdict,
+                    page_height=h,
+                    page_y0=y0,
+                    excluded_regions=excluded_regions,
+                    allowed_regions=allowed_regions,
+                )
+            )
+        except Exception:
             pass
+
+    from hexai_pdf_parser.pdf_snapshot import capture_page_snapshot
+
+    snapshot = capture_page_snapshot(
+        page,
+        page_index=getattr(page, "number", 0),
+        allowed_regions=allowed_regions or (),
+        excluded_regions=excluded_regions or (),
+        lightweight=True,
+    )
+    try:
+        page._cached_snapshot = snapshot
+    except (AttributeError, TypeError):
+        pass
     return list(
         collect_native_spans_from_snapshot(
             snapshot,
@@ -1261,7 +1302,13 @@ def recover_wireless_tables(
             page_h = float(rect.height) if rect else 842.0
             page_y0 = float(rect.y0) if rect else 0.0
             rotation = int(getattr(page, "rotation", 0))
-            rawdict = page.get_text("rawdict")
+            rawdict = getattr(page, "_cached_rawdict", None)
+            if rawdict is None:
+                rawdict = page.get_text("rawdict")
+                try:
+                    page._cached_rawdict = rawdict
+                except (AttributeError, TypeError):
+                    pass
             raw_res = rust_adapter.recover_wireless_tables_from_rawdict(
                 rawdict=rawdict,
                 page_width=page_w,
