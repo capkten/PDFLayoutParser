@@ -277,7 +277,7 @@ def compute_order_inversions(matched_pairs):
         "inversions": inversions[:5], # 最多保留 5 组样本
     }
 
-def compare_spans(base_spans, probe_spans, bbox_tol=0.5, char_h_tol=0.5, char_v_tol=0.5):
+def compare_spans(base_spans, probe_spans, bbox_tol=0.5, char_h_tol=0.5, char_v_tol=0.5, page_index=0):
     """
     分层统计文本比对指标：
     - candidate_match_count: 找到相同文本 1:1 候选的基准 Span 数量
@@ -339,27 +339,77 @@ def compare_spans(base_spans, probe_spans, bbox_tol=0.5, char_h_tol=0.5, char_v_
                 bbox_pass_count += 1
 
             # 隐藏文本与渲染模式核验
-            b_inv = bool(b_span.get("is_invisible", False))
-            p_inv = bool(best.get("is_invisible", False))
-            inv_ok = (b_inv == p_inv)
+            b_inv = b_span.get("is_invisible")
+            p_inv = best.get("is_invisible")
+            if b_inv is not None and p_inv is not None:
+                inv_ok = (b_inv == p_inv)
+                inv_comparable = True
+            else:
+                inv_ok = True
+                inv_comparable = False
 
-            # 来源凭证完整性核验
+            # 真实 render_mode 数值核验
+            b_rm = b_span.get("render_mode")
+            p_rm = best.get("render_mode")
+            if b_rm is not None and p_rm is not None:
+                rm_ok = (b_rm == p_rm)
+                rm_comparable = True
+            else:
+                rm_ok = True
+                rm_comparable = False
+
+            # 来源凭证完整性与数学不变量核验
             prov = best.get("provenance", {})
-            prov_ok = (
-                isinstance(prov, dict) and
-                prov.get("pdfium_object_index") is not None and
-                prov.get("character_count", 0) == len(best.get("characters", [])) and
-                prov.get("is_derived") is False and
-                prov.get("char_start_index") is not None and
-                prov.get("char_end_index") is not None
-            )
+            chars = best.get("characters", [])
+            prov_invariants_ok = True
+            prov_violations = []
+
+            if not isinstance(prov, dict):
+                prov_invariants_ok = False
+                prov_violations.append("provenance_not_a_dict")
+            else:
+                p_obj_idx = prov.get("pdfium_object_index")
+                p_char_cnt = prov.get("character_count")
+                p_start = prov.get("char_start_index")
+                p_end = prov.get("char_end_index")
+                p_indices = prov.get("char_indices")
+                p_page_idx = prov.get("page_index")
+                is_derived = prov.get("is_derived")
+
+                if None in (p_obj_idx, p_char_cnt, p_start, p_end, p_indices, p_page_idx, is_derived):
+                    prov_invariants_ok = False
+                    prov_violations.append("provenance_fields_missing")
+                else:
+                    if p_end < p_start:
+                        prov_invariants_ok = False
+                        prov_violations.append(f"char_end_index({p_end}) < char_start_index({p_start})")
+                    if (p_end - p_start) != p_char_cnt:
+                        prov_invariants_ok = False
+                        prov_violations.append(f"span_length({p_end - p_start}) != character_count({p_char_cnt})")
+                    expected_indices = list(range(p_start, p_end))
+                    if p_indices != expected_indices:
+                        prov_invariants_ok = False
+                        prov_violations.append("char_indices_not_contiguous")
+                    if chars:
+                        extracted_char_indices = [c.get("char_index") for c in chars]
+                        if extracted_char_indices != p_indices:
+                            prov_invariants_ok = False
+                            prov_violations.append("char_indices_mismatch_with_characters")
+                    if p_page_idx != page_index:
+                        prov_invariants_ok = False
+                        prov_violations.append(f"provenance_page_index({p_page_idx}) != current_page({page_index})")
+                    if is_derived is not False:
+                        prov_invariants_ok = False
+                        prov_violations.append("is_derived_must_be_false")
 
             # 判定状态
             if not char_res["matched"]:
                 status = "CHAR_MISMATCH"
             elif not inv_ok:
                 status = "INVISIBLE_MISMATCH"
-            elif not prov_ok:
+            elif not rm_ok:
+                status = "RENDER_MODE_MISMATCH"
+            elif not prov_invariants_ok:
                 status = "PROVENANCE_INVALID"
             elif not bbox_ok:
                 status = "DELTA_EXCEEDED"
@@ -392,6 +442,9 @@ def compare_spans(base_spans, probe_spans, bbox_tol=0.5, char_h_tol=0.5, char_v_
                 "base_render_mode": b_span.get("render_mode"),
                 "probe_render_mode": best.get("render_mode"),
                 "provenance": prov,
+                "prov_violations": prov_violations,
+                "render_mode_comparable": rm_comparable,
+                "invisible_comparable": inv_comparable,
                 "char_verification": char_res,
             })
         else:
@@ -507,7 +560,12 @@ def compare_file(base_path, probe_path, bbox_tol=0.5, rect_tol=0.5, point_tol=0.
             "probe_crop": p_crop,
         }
 
-        span_diff = compare_spans(bp.get("spans", []), pp.get("spans", []), bbox_tol=bbox_tol)
+        span_diff = compare_spans(
+            bp.get("spans", []),
+            pp.get("spans", []),
+            bbox_tol=bbox_tol,
+            page_index=pp.get("page_index", p_idx)
+        )
         drawing_diff = compare_drawings(
             bp.get("drawings", []),
             pp.get("drawings", []),
@@ -665,8 +723,10 @@ def main():
                     gate_failures.append(f"{r['file']} p{p_idx}: Character text mismatch in span '{item['text']}'")
                 elif item["status"] == "INVISIBLE_MISMATCH":
                     gate_failures.append(f"{r['file']} p{p_idx}: Invisible status mismatch in span '{item['text']}' (Base={item.get('base_invisible')} vs Probe={item.get('probe_invisible')})")
+                elif item["status"] == "RENDER_MODE_MISMATCH":
+                    gate_failures.append(f"{r['file']} p{p_idx}: Render mode mismatch in span '{item['text']}' (Base={item.get('base_render_mode')} vs Probe={item.get('probe_render_mode')})")
                 elif item["status"] == "PROVENANCE_INVALID":
-                    gate_failures.append(f"{r['file']} p{p_idx}: Invalid provenance sidecar for '{item['text']}'")
+                    gate_failures.append(f"{r['file']} p{p_idx}: Provenance invariant violation in '{item['text']}': {item.get('prov_violations')}")
                 elif item["status"] == "PROBE_MISSING" and item["text"].strip():
                     gate_failures.append(f"{r['file']} p{p_idx}: Non-empty span missing in probe: '{item['text']}'")
                 elif item["status"] == "PROBE_MISSING" and not item["text"].strip():

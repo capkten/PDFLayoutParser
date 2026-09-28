@@ -21,6 +21,7 @@
         595.3,
         841.9
       ],
+      "has_invisible_text": false,
       "spans": [
         {
           "order": 0,
@@ -34,6 +35,8 @@
           "font": "SimSun",
           "size": 9.0,
           "flags": 4,
+          "render_mode": null,
+          "is_invisible": false,
           "source_position": [
             0,
             0,
@@ -144,6 +147,8 @@
           "font": "Calibri",
           "size": 9.0,
           "flags": 4,
+          "render_mode": null,
+          "is_invisible": false,
           "source_position": [
             0,
             0,
@@ -200,6 +205,8 @@
           "font": "SimSun",
           "size": 9.0,
           "flags": 4,
+          "render_mode": null,
+          "is_invisible": false,
           "source_position": [
             0,
             0,
@@ -265,6 +272,8 @@
           "font": "Calibri",
           "size": 9.0,
           "flags": 4,
+          "render_mode": null,
+          "is_invisible": false,
           "source_position": [
             1,
             0,
@@ -348,6 +357,8 @@
           "font": "SimSun",
           "size": 10.45,
           "flags": 4,
+          "render_mode": null,
+          "is_invisible": false,
           "source_position": [
             2,
             0,
@@ -467,6 +478,8 @@
           "font": "SimSun",
           "size": 10.45,
           "flags": 4,
+          "render_mode": null,
+          "is_invisible": false,
           "source_position": [
             2,
             1,
@@ -568,6 +581,8 @@
           "font": "SimHei",
           "size": 21.95,
           "flags": 4,
+          "render_mode": null,
+          "is_invisible": false,
           "source_position": [
             3,
             0,
@@ -678,6 +693,8 @@
           "font": "SimHei",
           "size": 21.95,
           "flags": 4,
+          "render_mode": null,
+          "is_invisible": false,
           "source_position": [
             4,
             0,

@@ -99,14 +99,23 @@ def main():
                 data = json.load(f)
             run_hashes[run_idx][f"real:{name}"] = normalize_json_sha256(data)
 
-        # 白名单严格核验
+        # 双向严格白名单核验：既不允许缺失，也不允许意外多余文件
         missing_synth = set(expected_synthetic) - set(found_synth)
+        unexpected_synth = set(found_synth) - set(expected_synthetic)
         if missing_synth:
             print(f"Error: Missing expected synthetic samples in run #{run_idx}: {missing_synth}")
             sys.exit(1)
+        if unexpected_synth:
+            print(f"Error: Unexpected synthetic sample files found in run #{run_idx}: {unexpected_synth}")
+            sys.exit(1)
+
         missing_real = set(real_sample_meta.keys()) - set(found_real)
+        unexpected_real = set(found_real) - set(real_sample_meta.keys())
         if missing_real:
             print(f"Error: Missing expected real samples in run #{run_idx}: {missing_real}")
+            sys.exit(1)
+        if unexpected_real:
+            print(f"Error: Unexpected real sample files found in run #{run_idx}: {unexpected_real}")
             sys.exit(1)
 
     # 构建完整的 Hash Ledger
@@ -166,9 +175,11 @@ def main():
             "schema_version": "pdfium_raw_snapshot_v1.0",
             "environment_provenance": {
                 "target_os": "windows-x64",
+                "windows_x64_verified": True,
                 "native_library_path": os.path.relpath(native_lib_path, root).replace("\\", "/"),
                 "native_library_sha256": native_lib_sha,
                 "pdfium_release_tag": "chromium/8066",
+                "linux_macos_status": "metadata_only_unverified (pending validation on native machines)",
             },
             "entries_count": len(ledger),
             "all_runs_deterministic": len(stability_failures) == 0,

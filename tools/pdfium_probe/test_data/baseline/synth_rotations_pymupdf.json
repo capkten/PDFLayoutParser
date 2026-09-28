@@ -20,6 +20,7 @@
         400.0,
         600.0
       ],
+      "has_invisible_text": false,
       "spans": [
         {
           "order": 0,
@@ -33,6 +34,8 @@
           "font": "Helvetica",
           "size": 14.0,
           "flags": 0,
+          "render_mode": null,
+          "is_invisible": false,
           "source_position": [
             0,
             0,
@@ -241,6 +244,7 @@
         400.0,
         600.0
       ],
+      "has_invisible_text": false,
       "spans": [
         {
           "order": 0,
@@ -254,6 +258,8 @@
           "font": "Helvetica",
           "size": 14.0,
           "flags": 0,
+          "render_mode": null,
+          "is_invisible": false,
           "source_position": [
             0,
             0,
@@ -471,6 +477,7 @@
         400.0,
         600.0
       ],
+      "has_invisible_text": false,
       "spans": [
         {
           "order": 0,
@@ -484,6 +491,8 @@
           "font": "Helvetica",
           "size": 14.0,
           "flags": 0,
+          "render_mode": null,
+          "is_invisible": false,
           "source_position": [
             0,
             0,
@@ -710,6 +719,7 @@
         400.0,
         600.0
       ],
+      "has_invisible_text": false,
       "spans": [
         {
           "order": 0,
@@ -723,6 +733,8 @@
           "font": "Helvetica",
           "size": 14.0,
           "flags": 0,
+          "render_mode": null,
+          "is_invisible": false,
           "source_position": [
             0,
             0,

@@ -125,6 +125,9 @@
                   "derived_block": null,
                   "derived_line": null
                 },
+                "prov_violations": [],
+                "render_mode_comparable": false,
+                "invisible_comparable": true,
                 "char_verification": {
                   "matched": true,
                   "base_count": 17,
@@ -193,6 +196,9 @@
                   "derived_block": null,
                   "derived_line": null
                 },
+                "prov_violations": [],
+                "render_mode_comparable": false,
+                "invisible_comparable": true,
                 "char_verification": {
                   "matched": true,
                   "base_count": 16,
@@ -263,6 +269,9 @@
                   "derived_block": null,
                   "derived_line": null
                 },
+                "prov_violations": [],
+                "render_mode_comparable": false,
+                "invisible_comparable": true,
                 "char_verification": {
                   "matched": true,
                   "base_count": 18,
@@ -416,6 +425,9 @@
                   "derived_block": null,
                   "derived_line": null
                 },
+                "prov_violations": [],
+                "render_mode_comparable": false,
+                "invisible_comparable": true,
                 "char_verification": {
                   "matched": true,
                   "base_count": 18,
@@ -492,6 +504,9 @@
                   "derived_block": null,
                   "derived_line": null
                 },
+                "prov_violations": [],
+                "render_mode_comparable": false,
+                "invisible_comparable": true,
                 "char_verification": {
                   "matched": true,
                   "base_count": 24,
@@ -575,6 +590,9 @@
                   "derived_block": null,
                   "derived_line": null
                 },
+                "prov_violations": [],
+                "render_mode_comparable": false,
+                "invisible_comparable": true,
                 "char_verification": {
                   "matched": true,
                   "base_count": 19,
@@ -781,6 +799,9 @@
                   "derived_block": null,
                   "derived_line": null
                 },
+                "prov_violations": [],
+                "render_mode_comparable": false,
+                "invisible_comparable": true,
                 "char_verification": {
                   "matched": true,
                   "base_count": 11,
@@ -972,6 +993,9 @@
                   "derived_block": null,
                   "derived_line": null
                 },
+                "prov_violations": [],
+                "render_mode_comparable": false,
+                "invisible_comparable": true,
                 "char_verification": {
                   "matched": true,
                   "base_count": 20,
@@ -1117,6 +1141,9 @@
                   "derived_block": null,
                   "derived_line": null
                 },
+                "prov_violations": [],
+                "render_mode_comparable": false,
+                "invisible_comparable": true,
                 "char_verification": {
                   "matched": true,
                   "base_count": 21,
@@ -1263,6 +1290,9 @@
                   "derived_block": null,
                   "derived_line": null
                 },
+                "prov_violations": [],
+                "render_mode_comparable": false,
+                "invisible_comparable": true,
                 "char_verification": {
                   "matched": true,
                   "base_count": 22,
@@ -1409,6 +1439,9 @@
                   "derived_block": null,
                   "derived_line": null
                 },
+                "prov_violations": [],
+                "render_mode_comparable": false,
+                "invisible_comparable": true,
                 "char_verification": {
                   "matched": true,
                   "base_count": 22,
@@ -1568,6 +1601,9 @@
                   "derived_block": null,
                   "derived_line": null
                 },
+                "prov_violations": [],
+                "render_mode_comparable": false,
+                "invisible_comparable": true,
                 "char_verification": {
                   "matched": true,
                   "base_count": 12,
@@ -1759,7 +1795,7 @@
       "pdf_file": "D:\\codes\\PDFLayoutParser\\.worktrees\\feat-pdfium-probe-sprint1\\tools\\pdfium_probe\\test_data\\synthetic\\synth_crop_offset.pdf",
       "pdf_sha256": "4b3c9ea17edbe14077a641f3ea436c560f0b68a1857066698399a4884aef9ef1",
       "baseline_json": "D:\\codes\\PDFLayoutParser\\.worktrees\\feat-pdfium-probe-sprint1\\tools\\pdfium_probe\\test_data\\baseline\\synth_crop_offset_pymupdf.json",
-      "baseline_sha256": "6cae736232939ec6aad67ad42418351e131e1306c4e774bfecfa8b27ad05f3f4",
+      "baseline_sha256": "2896e92866e97e8391fd7881445fc1cb665e63a2128e09c344c28db361c2c1f2",
       "probe_json": "D:\\codes\\PDFLayoutParser\\.worktrees\\feat-pdfium-probe-sprint1\\tools\\pdfium_probe\\test_data\\pdfium_output\\synth_crop_offset_pdfium.json",
       "probe_sha256": "a24649e8299d994554c0da9a343d9b0b07449f200c42ac6b645b7b4c54ffd49f"
     },
@@ -1768,7 +1804,7 @@
       "pdf_file": "D:\\codes\\PDFLayoutParser\\.worktrees\\feat-pdfium-probe-sprint1\\tools\\pdfium_probe\\test_data\\synthetic\\synth_invisible_text.pdf",
       "pdf_sha256": "26df94ae3eef27fffa24ae4263f8675f6fdb4715895cc3b0b35c3dded661ec9a",
       "baseline_json": "D:\\codes\\PDFLayoutParser\\.worktrees\\feat-pdfium-probe-sprint1\\tools\\pdfium_probe\\test_data\\baseline\\synth_invisible_text_pymupdf.json",
-      "baseline_sha256": "0e1f62f0e77982fa3452dc2772eb6ddecd44f997edf304137752b01f004ad6ab",
+      "baseline_sha256": "dd7326ce6dcecc236982990420a94e69d0aa90c149b4c302b0e19b57d670420a",
       "probe_json": "D:\\codes\\PDFLayoutParser\\.worktrees\\feat-pdfium-probe-sprint1\\tools\\pdfium_probe\\test_data\\pdfium_output\\synth_invisible_text_pdfium.json",
       "probe_sha256": "0dd786d055bbd4dc92bbfdc009c2a1d152e838c88a6a77e7e4ceb124f763a2af"
     },
@@ -1777,7 +1813,7 @@
       "pdf_file": "D:\\codes\\PDFLayoutParser\\.worktrees\\feat-pdfium-probe-sprint1\\tools\\pdfium_probe\\test_data\\synthetic\\synth_mixed_fonts.pdf",
       "pdf_sha256": "6f87cdab87ccc5b42c1ba8a640fdd679fa40d356be3ddb04f78770b206e38814",
       "baseline_json": "D:\\codes\\PDFLayoutParser\\.worktrees\\feat-pdfium-probe-sprint1\\tools\\pdfium_probe\\test_data\\baseline\\synth_mixed_fonts_pymupdf.json",
-      "baseline_sha256": "9b622916e6a9b6ecdf2380d138d484acbea656b7dc6488d7c2a4dd4957841c1d",
+      "baseline_sha256": "2ce7cc8a277cf7d393e93865654de36412487eaa0418c8a15754d0406f6e5398",
       "probe_json": "D:\\codes\\PDFLayoutParser\\.worktrees\\feat-pdfium-probe-sprint1\\tools\\pdfium_probe\\test_data\\pdfium_output\\synth_mixed_fonts_pdfium.json",
       "probe_sha256": "d42bf205532dfb17ce93c2c70e87cbe152cf59fa2384a6d95df87c94cf1a63d5"
     },
@@ -1786,7 +1822,7 @@
       "pdf_file": "D:\\codes\\PDFLayoutParser\\.worktrees\\feat-pdfium-probe-sprint1\\tools\\pdfium_probe\\test_data\\synthetic\\synth_rotations.pdf",
       "pdf_sha256": "a55204bd060386454d4eef4250af81604fe4070eb859f1af4646154fef23636b",
       "baseline_json": "D:\\codes\\PDFLayoutParser\\.worktrees\\feat-pdfium-probe-sprint1\\tools\\pdfium_probe\\test_data\\baseline\\synth_rotations_pymupdf.json",
-      "baseline_sha256": "969b95beff3aef01a2ab8aa496f73230aa9afd1a3b538f337b7a5d8378e50f38",
+      "baseline_sha256": "0017873f0293fca23b795f9ddfc2ed21a0d8aebc1b9d9529ac0774defb74f155",
       "probe_json": "D:\\codes\\PDFLayoutParser\\.worktrees\\feat-pdfium-probe-sprint1\\tools\\pdfium_probe\\test_data\\pdfium_output\\synth_rotations_pdfium.json",
       "probe_sha256": "69e37aaeffc7487299724a742fbbd171b5be972ba3a07e39f1a91dd0c914ec30"
     },
@@ -1795,7 +1831,7 @@
       "pdf_file": "D:\\codes\\PDFLayoutParser\\.worktrees\\feat-pdfium-probe-sprint1\\tools\\pdfium_probe\\test_data\\synthetic\\synth_segmented_lines.pdf",
       "pdf_sha256": "1d8cab5eb1a74408a58c3ab5752fcefcc1ccfb0a813da847c82c76c85a01efff",
       "baseline_json": "D:\\codes\\PDFLayoutParser\\.worktrees\\feat-pdfium-probe-sprint1\\tools\\pdfium_probe\\test_data\\baseline\\synth_segmented_lines_pymupdf.json",
-      "baseline_sha256": "40d3899c05504d8599bd29b6dabda83245639d2485ba97c61fab4094c8dbffd1",
+      "baseline_sha256": "833ead64c9c5e20ab9cf73d363533ef50ddcf8879e25700156a8a49a4b894904",
       "probe_json": "D:\\codes\\PDFLayoutParser\\.worktrees\\feat-pdfium-probe-sprint1\\tools\\pdfium_probe\\test_data\\pdfium_output\\synth_segmented_lines_pdfium.json",
       "probe_sha256": "b50555ac9f4354bbc9117dd290b0390b2790f25a556f551922ae762524bd5d5b"
     }

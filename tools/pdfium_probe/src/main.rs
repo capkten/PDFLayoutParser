@@ -230,38 +230,43 @@ pub fn extract_page(page: &PdfPage, page_index: usize) -> Result<PdfiumRawPage, 
             let flags: Option<i64> = None; // 严禁伪造 PyMuPDF 的 64 位 flags，诚实标记为 None
  
             let mut chars_list = Vec::new();
+            let mut total_chars_in_obj = text.chars().count();
             if let Some(ref pt) = page_text {
                 if let Ok(chars) = text_obj.chars(pt) {
+                    let chars_count_from_pdfium = chars.len();
+                    if chars_count_from_pdfium > 0 {
+                        total_chars_in_obj = chars_count_from_pdfium;
+                    }
                     for (ch_idx, ch) in chars.iter().enumerate() {
-                        if let Some(c_str) = ch.unicode_string() {
-                            if let Ok(b) = ch.loose_bounds() {
-                                let c_bbox = transform_rect_coords(
-                                    b.left().value as f64,
-                                    b.bottom().value as f64,
-                                    b.right().value as f64,
-                                    b.top().value as f64,
-                                    crop_x0,
-                                    crop_y1,
-                                );
-                                chars_list.push(CharInfo {
-                                    c: c_str,
-                                    bbox: c_bbox,
-                                    char_index: ch_idx,
-                                });
-                            }
-                        }
+                        let c_str = ch.unicode_string().unwrap_or_default();
+                        let c_bbox = if let Ok(b) = ch.loose_bounds() {
+                            transform_rect_coords(
+                                b.left().value as f64,
+                                b.bottom().value as f64,
+                                b.right().value as f64,
+                                b.top().value as f64,
+                                crop_x0,
+                                crop_y1,
+                            )
+                        } else {
+                            [0.0, 0.0, 0.0, 0.0]
+                        };
+                        chars_list.push(CharInfo {
+                            c: c_str,
+                            bbox: c_bbox,
+                            char_index: ch_idx,
+                        });
                     }
                 }
             }
 
-            let char_count = chars_list.len();
             let provenance = ProvenanceSidecar {
                 page_index,
                 pdfium_object_index: obj_idx,
-                character_count: char_count,
+                character_count: total_chars_in_obj,
                 char_start_index: 0,
-                char_end_index: char_count,
-                char_indices: (0..char_count).collect(),
+                char_end_index: total_chars_in_obj,
+                char_indices: (0..total_chars_in_obj).collect(),
                 is_derived: false,
                 derived_block: None,
                 derived_line: None,

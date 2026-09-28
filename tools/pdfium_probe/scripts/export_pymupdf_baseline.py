@@ -26,13 +26,17 @@ def export_page_baseline(page: fitz.Page, page_index: int) -> dict:
                     for c in item.get("chars", [])
                     if c.get("c", "")
                 ]
+                flags = item.get("flags")
+                is_invisible = bool(flags & 64) if flags is not None else False
                 spans.append({
                     "order": order,
                     "text": text,
                     "bbox": [round(v, 4) for v in item["bbox"]],
                     "font": item.get("font"),
                     "size": round(item.get("size", 0.0), 4) if item.get("size") is not None else None,
-                    "flags": item.get("flags"),
+                    "flags": flags,
+                    "render_mode": None, # PyMuPDF rawdict has no native render_mode
+                    "is_invisible": is_invisible,
                     "source_position": [block_index, line_index, span_index],
                     "characters": chars,
                 })
@@ -56,6 +60,8 @@ def export_page_baseline(page: fitz.Page, page_index: int) -> dict:
             "items": items,
         })
 
+    has_invisible_text = any(s.get("is_invisible", False) for s in spans)
+
     return {
         "page_index": page_index,
         "width": round(rect.width, 4),
@@ -63,6 +69,7 @@ def export_page_baseline(page: fitz.Page, page_index: int) -> dict:
         "rotation": rotation,
         "crop_box": [round(crop.x0, 4), round(crop.y0, 4), round(crop.x1, 4), round(crop.y1, 4)],
         "media_box": [round(media.x0, 4), round(media.y0, 4), round(media.x1, 4), round(media.y1, 4)],
+        "has_invisible_text": has_invisible_text,
         "spans": spans,
         "drawings": drawings,
     }

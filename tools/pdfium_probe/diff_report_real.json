@@ -260,6 +260,9 @@
                 "derived_block": null,
                 "derived_line": null
               },
+              "prov_violations": [],
+              "render_mode_comparable": false,
+              "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
                 "base_count": 8,
@@ -367,6 +370,9 @@
                 "derived_block": null,
                 "derived_line": null
               },
+              "prov_violations": [],
+              "render_mode_comparable": false,
+              "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
                 "base_count": 19,
@@ -461,6 +467,9 @@
                 "derived_block": null,
                 "derived_line": null
               },
+              "prov_violations": [],
+              "render_mode_comparable": false,
+              "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
                 "base_count": 18,
@@ -543,6 +552,9 @@
                 "derived_block": null,
                 "derived_line": null
               },
+              "prov_violations": [],
+              "render_mode_comparable": false,
+              "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
                 "base_count": 18,
@@ -625,6 +637,9 @@
                 "derived_block": null,
                 "derived_line": null
               },
+              "prov_violations": [],
+              "render_mode_comparable": false,
+              "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
                 "base_count": 18,
@@ -698,6 +713,9 @@
                 "derived_block": null,
                 "derived_line": null
               },
+              "prov_violations": [],
+              "render_mode_comparable": false,
+              "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
                 "base_count": 9,
@@ -778,6 +796,9 @@
                 "derived_block": null,
                 "derived_line": null
               },
+              "prov_violations": [],
+              "render_mode_comparable": false,
+              "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
                 "base_count": 16,
@@ -915,6 +936,9 @@
                 "derived_block": null,
                 "derived_line": null
               },
+              "prov_violations": [],
+              "render_mode_comparable": false,
+              "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
                 "base_count": 1,
@@ -968,6 +992,9 @@
                 "derived_block": null,
                 "derived_line": null
               },
+              "prov_violations": [],
+              "render_mode_comparable": false,
+              "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
                 "base_count": 1,
@@ -1057,6 +1084,9 @@
                 "derived_block": null,
                 "derived_line": null
               },
+              "prov_violations": [],
+              "render_mode_comparable": false,
+              "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
                 "base_count": 1,
@@ -1122,6 +1152,9 @@
                 "derived_block": null,
                 "derived_line": null
               },
+              "prov_violations": [],
+              "render_mode_comparable": false,
+              "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
                 "base_count": 1,
@@ -1187,6 +1220,9 @@
                 "derived_block": null,
                 "derived_line": null
               },
+              "prov_violations": [],
+              "render_mode_comparable": false,
+              "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
                 "base_count": 1,
@@ -1252,6 +1288,9 @@
                 "derived_block": null,
                 "derived_line": null
               },
+              "prov_violations": [],
+              "render_mode_comparable": false,
+              "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
                 "base_count": 1,
@@ -1317,6 +1356,9 @@
                 "derived_block": null,
                 "derived_line": null
               },
+              "prov_violations": [],
+              "render_mode_comparable": false,
+              "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
                 "base_count": 1,
@@ -1382,6 +1424,9 @@
                 "derived_block": null,
                 "derived_line": null
               },
+              "prov_violations": [],
+              "render_mode_comparable": false,
+              "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
                 "base_count": 1,
@@ -1447,6 +1492,9 @@
                 "derived_block": null,
                 "derived_line": null
               },
+              "prov_violations": [],
+              "render_mode_comparable": false,
+              "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
                 "base_count": 1,
@@ -1849,6 +1897,9 @@
                 "derived_block": null,
                 "derived_line": null
               },
+              "prov_violations": [],
+              "render_mode_comparable": false,
+              "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
                 "base_count": 2,
@@ -1927,6 +1978,9 @@
                 "derived_block": null,
                 "derived_line": null
               },
+              "prov_violations": [],
+              "render_mode_comparable": false,
+              "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
                 "base_count": 2,
@@ -2196,6 +2250,9 @@
                 "derived_block": null,
                 "derived_line": null
               },
+              "prov_violations": [],
+              "render_mode_comparable": false,
+              "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
                 "base_count": 1,
@@ -2406,6 +2463,9 @@
                 "derived_block": null,
                 "derived_line": null
               },
+              "prov_violations": [],
+              "render_mode_comparable": false,
+              "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
                 "base_count": 2,
@@ -2555,6 +2615,9 @@
                 "derived_block": null,
                 "derived_line": null
               },
+              "prov_violations": [],
+              "render_mode_comparable": false,
+              "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
                 "base_count": 1,
@@ -2657,6 +2720,9 @@
                 "derived_block": null,
                 "derived_line": null
               },
+              "prov_violations": [],
+              "render_mode_comparable": false,
+              "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
                 "base_count": 2,
@@ -2879,6 +2945,9 @@
                 "derived_block": null,
                 "derived_line": null
               },
+              "prov_violations": [],
+              "render_mode_comparable": false,
+              "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
                 "base_count": 2,
@@ -2957,6 +3026,9 @@
                 "derived_block": null,
                 "derived_line": null
               },
+              "prov_violations": [],
+              "render_mode_comparable": false,
+              "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
                 "base_count": 2,
@@ -20076,6 +20148,9 @@
                 "derived_block": null,
                 "derived_line": null
               },
+              "prov_violations": [],
+              "render_mode_comparable": false,
+              "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
                 "base_count": 1,
@@ -20129,6 +20204,9 @@
                 "derived_block": null,
                 "derived_line": null
               },
+              "prov_violations": [],
+              "render_mode_comparable": false,
+              "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
                 "base_count": 1,
@@ -20182,6 +20260,9 @@
                 "derived_block": null,
                 "derived_line": null
               },
+              "prov_violations": [],
+              "render_mode_comparable": false,
+              "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
                 "base_count": 1,
@@ -20235,6 +20316,9 @@
                 "derived_block": null,
                 "derived_line": null
               },
+              "prov_violations": [],
+              "render_mode_comparable": false,
+              "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
                 "base_count": 1,
@@ -20288,6 +20372,9 @@
                 "derived_block": null,
                 "derived_line": null
               },
+              "prov_violations": [],
+              "render_mode_comparable": false,
+              "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
                 "base_count": 1,
@@ -20341,6 +20428,9 @@
                 "derived_block": null,
                 "derived_line": null
               },
+              "prov_violations": [],
+              "render_mode_comparable": false,
+              "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
                 "base_count": 1,
@@ -20394,6 +20484,9 @@
                 "derived_block": null,
                 "derived_line": null
               },
+              "prov_violations": [],
+              "render_mode_comparable": false,
+              "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
                 "base_count": 1,
@@ -20447,6 +20540,9 @@
                 "derived_block": null,
                 "derived_line": null
               },
+              "prov_violations": [],
+              "render_mode_comparable": false,
+              "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
                 "base_count": 1,
@@ -20536,6 +20632,9 @@
                 "derived_block": null,
                 "derived_line": null
               },
+              "prov_violations": [],
+              "render_mode_comparable": false,
+              "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
                 "base_count": 1,
@@ -20589,6 +20688,9 @@
                 "derived_block": null,
                 "derived_line": null
               },
+              "prov_violations": [],
+              "render_mode_comparable": false,
+              "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
                 "base_count": 1,
@@ -20642,6 +20744,9 @@
                 "derived_block": null,
                 "derived_line": null
               },
+              "prov_violations": [],
+              "render_mode_comparable": false,
+              "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
                 "base_count": 1,
@@ -20899,6 +21004,9 @@
                 "derived_block": null,
                 "derived_line": null
               },
+              "prov_violations": [],
+              "render_mode_comparable": false,
+              "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
                 "base_count": 1,
@@ -22069,6 +22177,9 @@
                 "derived_block": null,
                 "derived_line": null
               },
+              "prov_violations": [],
+              "render_mode_comparable": false,
+              "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
                 "base_count": 2,
@@ -22164,6 +22275,9 @@
                 "derived_block": null,
                 "derived_line": null
               },
+              "prov_violations": [],
+              "render_mode_comparable": false,
+              "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
                 "base_count": 7,
@@ -22262,6 +22376,9 @@
                 "derived_block": null,
                 "derived_line": null
               },
+              "prov_violations": [],
+              "render_mode_comparable": false,
+              "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
                 "base_count": 10,
@@ -22349,6 +22466,9 @@
                 "derived_block": null,
                 "derived_line": null
               },
+              "prov_violations": [],
+              "render_mode_comparable": false,
+              "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
                 "base_count": 23,
@@ -22436,6 +22556,9 @@
                 "derived_block": null,
                 "derived_line": null
               },
+              "prov_violations": [],
+              "render_mode_comparable": false,
+              "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
                 "base_count": 23,
@@ -22502,6 +22625,9 @@
                 "derived_block": null,
                 "derived_line": null
               },
+              "prov_violations": [],
+              "render_mode_comparable": false,
+              "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
                 "base_count": 2,
@@ -22609,6 +22735,9 @@
                 "derived_block": null,
                 "derived_line": null
               },
+              "prov_violations": [],
+              "render_mode_comparable": false,
+              "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
                 "base_count": 19,
@@ -22772,6 +22901,9 @@
                 "derived_block": null,
                 "derived_line": null
               },
+              "prov_violations": [],
+              "render_mode_comparable": false,
+              "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
                 "base_count": 3,
@@ -22878,6 +23010,9 @@
                 "derived_block": null,
                 "derived_line": null
               },
+              "prov_violations": [],
+              "render_mode_comparable": false,
+              "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
                 "base_count": 18,
@@ -22933,6 +23068,9 @@
                 "derived_block": null,
                 "derived_line": null
               },
+              "prov_violations": [],
+              "render_mode_comparable": false,
+              "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
                 "base_count": 3,
@@ -23000,6 +23138,9 @@
                 "derived_block": null,
                 "derived_line": null
               },
+              "prov_violations": [],
+              "render_mode_comparable": false,
+              "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
                 "base_count": 15,
@@ -23238,6 +23379,9 @@
                 "derived_block": null,
                 "derived_line": null
               },
+              "prov_violations": [],
+              "render_mode_comparable": false,
+              "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
                 "base_count": 18,
@@ -23305,6 +23449,9 @@
                 "derived_block": null,
                 "derived_line": null
               },
+              "prov_violations": [],
+              "render_mode_comparable": false,
+              "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
                 "base_count": 15,
@@ -23487,6 +23634,9 @@
                 "derived_block": null,
                 "derived_line": null
               },
+              "prov_violations": [],
+              "render_mode_comparable": false,
+              "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
                 "base_count": 10,
@@ -23585,6 +23735,9 @@
                 "derived_block": null,
                 "derived_line": null
               },
+              "prov_violations": [],
+              "render_mode_comparable": false,
+              "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
                 "base_count": 10,
@@ -23714,6 +23867,9 @@
                 "derived_block": null,
                 "derived_line": null
               },
+              "prov_violations": [],
+              "render_mode_comparable": false,
+              "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
                 "base_count": 5,
@@ -39945,6 +40101,9 @@
                 "derived_block": null,
                 "derived_line": null
               },
+              "prov_violations": [],
+              "render_mode_comparable": false,
+              "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
                 "base_count": 1,
@@ -50427,6 +50586,9 @@
                 "derived_block": null,
                 "derived_line": null
               },
+              "prov_violations": [],
+              "render_mode_comparable": false,
+              "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
                 "base_count": 1,
@@ -50612,6 +50774,9 @@
                 "derived_block": null,
                 "derived_line": null
               },
+              "prov_violations": [],
+              "render_mode_comparable": false,
+              "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
                 "base_count": 1,
@@ -50689,6 +50854,9 @@
                 "derived_block": null,
                 "derived_line": null
               },
+              "prov_violations": [],
+              "render_mode_comparable": false,
+              "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
                 "base_count": 1,
@@ -50754,6 +50922,9 @@
                 "derived_block": null,
                 "derived_line": null
               },
+              "prov_violations": [],
+              "render_mode_comparable": false,
+              "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
                 "base_count": 1,
@@ -50843,6 +51014,9 @@
                 "derived_block": null,
                 "derived_line": null
               },
+              "prov_violations": [],
+              "render_mode_comparable": false,
+              "invisible_comparable": true,
               "char_verification": {
                 "matched": true,
                 "base_count": 1,
