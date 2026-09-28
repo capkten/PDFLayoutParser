@@ -234,6 +234,57 @@ def test_pdfsam_merge_numbered_prose_not_extracted_as_table():
     assert len(prose_tables) == 0, f"Expected 0 prose tables, got {len(prose_tables)}"
 
 
+def test_personal_report_numbered_prose_is_not_recovered_as_query_continuation():
+    import os
+
+    from hexai_pdf_parser.extractors.personal_credit_report import _make_query_tables
+
+    pdf_path = os.path.join(
+        "D:\\codes\\PDFLayoutParser",
+        "demo_data",
+        "个人信用报告(本人简版).pdf",
+    )
+    assert os.path.exists(pdf_path)
+
+    with fitz.open(pdf_path) as doc:
+        tables = _make_query_tables(doc[1])
+
+    assert tables == []
+
+
+def test_personal_query_continuation_without_local_header_is_recovered():
+    import os
+
+    from hexai_pdf_parser.extractors.personal_credit_report import _make_query_tables
+
+    pdf_path = os.path.join(
+        "D:\\codes\\PDFLayoutParser",
+        "个人信用报告",
+        "test",
+        "test",
+        "3_PDFsam_2ceb8bbe-ca9f-4811-95db-a85df90a1f1b.pdf",
+    )
+    assert os.path.exists(pdf_path)
+
+    with fitz.open(pdf_path) as doc:
+        tables = _make_query_tables(doc[1])
+
+    assert len(tables) == 1
+    assert tables[0].source == "personal_query_recovery"
+    assert (tables[0].rows, tables[0].cols) == (32, 4)
+    first_number = next(
+        cell.text
+        for cell in tables[0].cells
+        if cell.row_index == 0 and cell.col_index == 0
+    )
+    last_number = next(
+        cell.text
+        for cell in tables[0].cells
+        if cell.row_index == 31 and cell.col_index == 0
+    )
+    assert (first_number, last_number) == ("4", "35")
+
+
 def test_trim_query_table_preserves_query_section_title_row():
     """Verify that _trim_query_table preserves query section title as row 0 (custom logic)."""
     from hexai_pdf_parser.core.models import BBox, Cell, Table
@@ -826,6 +877,51 @@ def test_personal_credit_rust_mode_uses_native_kernel(monkeypatch):
 
     assert result == [candidate]
     assert rust_adapter.get_diagnostics() == []
+
+
+def test_personal_credit_rust_failure_does_not_fallback_to_python(monkeypatch):
+    from hexai_pdf_parser import rust_adapter
+    from hexai_pdf_parser.core.models import BBox, Cell, Table
+    from hexai_pdf_parser.extractors.personal_credit_report import (
+        PersonalCreditReportTableExtractor,
+    )
+    from hexai_pdf_parser.tables.table_extractor import TableExtractor
+
+    candidate = Table(
+        bbox=BBox(20.0, 20.0, 180.0, 60.0),
+        rows=1,
+        cols=1,
+        cells=[Cell("A", 0, 0, BBox(20.0, 20.0, 180.0, 60.0))],
+        source="wireless_span_recovery",
+    )
+    monkeypatch.setenv("PDF_RUST_MODE_PERSONAL_CREDIT", "rust")
+    monkeypatch.setattr(
+        TableExtractor,
+        "extract",
+        lambda self, page, *args, **kwargs: [candidate],
+    )
+    monkeypatch.setattr(
+        rust_adapter,
+        "recover_personal_credit_tables",
+        lambda input_dto: (_ for _ in ()).throw(RuntimeError("rust failed")),
+    )
+    monkeypatch.setattr(
+        PersonalCreditReportTableExtractor,
+        "_apply_personal_credit_rules",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("unexpected Python fallback")
+        ),
+    )
+
+    document = fitz.open()
+    page = document.new_page(width=300, height=160)
+    try:
+        with pytest.raises(RuntimeError, match="rust failed"):
+            PersonalCreditReportTableExtractor(
+                use_ml_table_detector=False
+            ).extract(page)
+    finally:
+        document.close()
 
 
 def test_personal_credit_rust_normalizes_sparse_wireless_cell_geometry(monkeypatch):

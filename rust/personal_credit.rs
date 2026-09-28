@@ -141,7 +141,7 @@ fn is_query_record(row: &[QueryItem]) -> bool {
         .any(|item| item.rect.x0 < 110.0 && digits_only(item.text.trim()));
     let has_date = row
         .iter()
-        .any(|item| item.rect.x0 < 240.0 && item.text.contains('年'));
+        .any(|item| item.rect.x0 >= 105.0 && item.rect.x0 < 240.0 && item.text.contains('年'));
     let has_reason = row.iter().any(|item| item.rect.x0 >= 340.0);
     has_number && has_date && has_reason
 }
@@ -1553,6 +1553,36 @@ mod tests {
         let query_rect_miss = rect(100.0, 100.0, 120.0, 120.0);
         let found_miss = index.find_in_rect(&query_rect_miss);
         assert!(found_miss.is_empty());
+    }
+
+    fn query_item(text: &str, x0: f64) -> QueryItem {
+        QueryItem {
+            text: text.to_string(),
+            rect: rect(x0, 10.0, x0 + 20.0, 20.0),
+            order: 0,
+        }
+    }
+
+    #[test]
+    fn test_query_record_rejects_year_text_in_number_column() {
+        let row = vec![
+            query_item("1", 50.0),
+            query_item("编号2024年", 80.0),
+            query_item("信用卡审批", 340.0),
+        ];
+
+        assert!(!is_query_record(&row));
+    }
+
+    #[test]
+    fn test_query_record_accepts_date_column_at_or_after_x105() {
+        let row = vec![
+            query_item("1", 50.0),
+            query_item("2024年09月02日", 105.0),
+            query_item("信用卡审批", 340.0),
+        ];
+
+        assert!(is_query_record(&row));
     }
 }
 

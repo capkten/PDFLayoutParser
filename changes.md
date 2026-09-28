@@ -2,6 +2,9 @@
 
 ## 2026-09-28 (跨语言边界与算法性能瓶颈优化)
 
+- **同步个人查询续表判定**：将 `feature-dev` 的日期列约束同步到 Python 调试路径与 Rust `is_query_record`：日期文本必须位于独立日期列带（`105 <= x < 240`），避免编号列中带“年”的普通编号正文被误恢复为 `personal_query_recovery`；新增 Python 与 Rust 正反例回归测试。
+- **固定 Rust 主路径**：个人信用报告默认 Rust 路径直接调用 Rust kernel，Rust 异常不再通过 `run_python_or_rust` 回退到慢速 Python 规则；显式 `PDF_RUST_MODE_PERSONAL_CREDIT=python` 仍可用于调试。针对性 Python 测试 `32 passed`，Rust fast 测试 `20 passed`，Rust 单元测试 `103 passed`。
+
 - **优化背景与根因定位**：
   - 个人征信表格提取入口此前在每页调用 `super().extract(page)` 之后，强行触发全量 `capture_page_snapshot(lightweight=False)`，在 Python 层递归冻结整页成千上万个字符、词块、绘图及 bboxlog 对象（单页耗时高达约 3.03s）。
   - `personal_credit_snapshot_to_rust_input` 将庞大的完整 Snapshot DTO 转为深层嵌套字典（耗时约 1.38s）。
