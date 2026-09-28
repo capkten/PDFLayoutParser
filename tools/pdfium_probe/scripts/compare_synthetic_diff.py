@@ -122,11 +122,14 @@ def compare_drawings(base_drawings, probe_drawings, rect_tol=0.5, point_tol=0.5,
 
             b_w = bd.get("width")
             p_w = best_pd.get("width")
-            width_delta = 0.0
+            width_missing = (b_w is None) ^ (p_w is None)
+            width_delta = None
             if b_w is not None and p_w is not None:
-                width_delta = abs(b_w - p_w)
+                width_delta = round(abs(b_w - p_w), 4)
                 if width_delta > max_width_delta:
                     max_width_delta = width_delta
+            elif b_w is None and p_w is None:
+                width_delta = 0.0
 
             b_items = bd.get("items", [])
             p_items = best_pd.get("items", [])
@@ -143,7 +146,14 @@ def compare_drawings(base_drawings, probe_drawings, rect_tol=0.5, point_tol=0.5,
 
             if is_semantic_rect:
                 items_matched = True
-                status = "MATCHED_SEMANTIC_RECT"
+                if best_delta > rect_tol:
+                    status = "RECT_DELTA_EXCEEDED"
+                elif width_missing:
+                    status = "WIDTH_DATA_MISSING"
+                elif width_delta is not None and width_delta > width_tol:
+                    status = "WIDTH_DELTA_EXCEEDED"
+                else:
+                    status = "MATCHED_SEMANTIC_RECT"
             elif len(b_items) == len(p_items) and b_items:
                 all_segs_ok = True
                 for bi, pi in zip(b_items, p_items):
@@ -162,21 +172,26 @@ def compare_drawings(base_drawings, probe_drawings, rect_tol=0.5, point_tol=0.5,
                 if item_point_max_delta > max_point_delta:
                     max_point_delta = item_point_max_delta
 
-                if best_delta <= rect_tol and items_matched:
-                    if width_delta <= width_tol:
-                        status = "MATCHED_EXACT"
-                    else:
-                        status = "WIDTH_DELTA_EXCEEDED"
-                elif best_delta > rect_tol:
+                if best_delta > rect_tol:
                     status = "RECT_DELTA_EXCEEDED"
-                else:
+                elif not items_matched:
                     status = "POINT_DELTA_EXCEEDED"
+                elif width_missing:
+                    status = "WIDTH_DATA_MISSING"
+                elif width_delta is not None and width_delta > width_tol:
+                    status = "WIDTH_DELTA_EXCEEDED"
+                else:
+                    status = "MATCHED_EXACT"
             elif not b_items and not p_items:
                 items_matched = True
-                if best_delta <= rect_tol:
-                    status = "MATCHED_EXACT" if width_delta <= width_tol else "WIDTH_DELTA_EXCEEDED"
-                else:
+                if best_delta > rect_tol:
                     status = "RECT_DELTA_EXCEEDED"
+                elif width_missing:
+                    status = "WIDTH_DATA_MISSING"
+                elif width_delta is not None and width_delta > width_tol:
+                    status = "WIDTH_DELTA_EXCEEDED"
+                else:
+                    status = "MATCHED_EXACT"
             else:
                 status = "TOPOLOGY_MISMATCH"
 
@@ -191,7 +206,8 @@ def compare_drawings(base_drawings, probe_drawings, rect_tol=0.5, point_tol=0.5,
                 "status": status,
                 "rect_delta": round(best_delta, 4),
                 "point_delta": round(item_point_max_delta, 4),
-                "width_delta": round(width_delta, 4),
+                "width_delta": width_delta,
+                "width_missing": width_missing,
                 "base_rect": b_rect,
                 "probe_rect": best_pd["rect"],
                 "base_width": b_w,

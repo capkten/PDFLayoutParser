@@ -1021,6 +1021,7 @@
               "rect_delta": 0.0,
               "point_delta": 0.0,
               "width_delta": 0.0,
+              "width_missing": false,
               "base_rect": [
                 50.0,
                 80.0,
@@ -1044,6 +1045,7 @@
               "rect_delta": 0.0,
               "point_delta": 0.0,
               "width_delta": 0.0,
+              "width_missing": false,
               "base_rect": [
                 50.0,
                 180.0,
@@ -1067,6 +1069,7 @@
               "rect_delta": 0.0,
               "point_delta": 0.0,
               "width_delta": 0.0,
+              "width_missing": false,
               "base_rect": [
                 180.0,
                 180.0,
@@ -1090,6 +1093,7 @@
               "rect_delta": 0.0,
               "point_delta": 0.0,
               "width_delta": 0.0,
+              "width_missing": false,
               "base_rect": [
                 320.0,
                 180.0,
@@ -1113,6 +1117,7 @@
               "rect_delta": 0.0,
               "point_delta": 0.0,
               "width_delta": 0.0,
+              "width_missing": false,
               "base_rect": [
                 50.0,
                 80.0,
@@ -1136,6 +1141,7 @@
               "rect_delta": 0.0,
               "point_delta": 0.0,
               "width_delta": 0.0,
+              "width_missing": false,
               "base_rect": [
                 450.0,
                 80.0,
