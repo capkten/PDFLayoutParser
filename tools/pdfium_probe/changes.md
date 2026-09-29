@@ -132,3 +132,63 @@
   - Main Rust: **103 passed**
   - Core Python 回归: **77 passed, 1 skipped**
   - 生产代码（`src/`、`rust/`、根 `Cargo.toml`）严格保持零修改。
+
+---
+
+## 5. 纯 Rust 页面渲染与剔除 pypdfium2 依赖（Pure Rust Page Rendering & pypdfium2 Elimination）
+
+### 5.1 背景与根因定位
+
+在前期实现端到端表格检测与 MLTableDetector 接入时，为提供图像底图光栅化功能，适配层曾在 Python 侧引入了第三方库 `pypdfium2`。然而，该方案带来了显著的架构隐患与依赖割裂：
+1. **双重底层绑定与环境脆弱性**：Rust 侧已通过 `pdfium-render` 静态/动态绑定了经过严格哈希锁定的官方 `chromium/8066` 原生库，而 Python 侧再引入 `pypdfium2`（基于 ctypes/CFFI 重新绑定或分发其内置动态库），导致双重运行时绑定，易发生 DLL 符号冲突、版本不一致或多平台分发缺陷。
+2. **零外部 Python PDF 库规范约束**：根据项目架构演进规范，Python 侧探针和适配器必须保持轻量与独立，不依赖任何第三方 Python PDF 抽取库（如 `pypdfium2`），所有的页面底层解析、图元抽取以及位图光栅化职责必须收敛于纯 Rust 引擎实现。
+
+### 5.2 Rust 原生光栅化实现细节
+
+在 `tools/pdfium_probe/src/main.rs` 中实现了纯 Rust 的页面位图光栅化能力：
+1. **CLI 扩展与参数契约**：
+   - 增加 `--render-page <PAGE_INDEX>`：指定光栅化目标页码（0-indexed）；
+   - 增加 `--render-dpi <DPI>`：指定光栅化分辨率（默认 72 DPI）；
+   - 增加 `--render-output <OUTPUT_PNG_PATH>`：指定输出 PNG 文件绝对/相对路径。
+2. **光栅化与编码管道 (`render_page_to_png`)**：
+   - 几何尺度换算：按照 `width = (page.width() * dpi / 72.0).round() as i32` 和 `height = (page.height() * dpi / 72.0).round() as i32` 换算目标像素尺寸；
+   - 配置与渲染：构建 `PdfBitmapConfig`（指定 `PdfBitmapFormat::BGRx` 及缩放变换矩阵），调用 `page.render_with_config(&config)` 生成内存位图；
+   - 格式对齐与无损导出：将 BGRx/BGRA 像素通道对齐为 RGBA，使用 `image::codecs::png::PngEncoder` 无损压缩并保存为 PNG；
+   - 单元测试：新增 `test_render_page_to_png_contract`，验证渲染宽高几何比例与 PNG 文件头完整性。
+
+### 5.3 Python 适配器改造与零外部库调用约束
+
+在 `tools/pdfium_probe/scripts/pdfium_page_adapter.py` 中彻底剔除了 `pypdfium2`：
+1. **全面移除第三方库引用**：删除所有 `import pypdfium2` 代码与相关分支；
+2. **纯 Rust 子进程光栅化对接**：
+   - `get_pixmap(matrix=None, dpi=72, alpha=False)`：定位 `pdfium_probe` 编译二进制（支持 `CARGO_TARGET_DIR`、`debug`、`release` 以及 `REPO_ROOT` 回退定位）；
+   - 调用 `pdfium_probe --render-page <page> --render-dpi <dpi> --render-output <tmp.png>` 进行跨进程高效渲染；
+   - 增加 30 秒安全超时限制（`timeout=30`），避免子进程死锁；
+   - 使用标准库 `PIL.Image.open()` 读取临时 PNG，装配为下游兼容的 `PdfiumPixmap`（包含 `width`、`height`、`samples`、`n`、`stride` 与 `tobytes()`）；
+   - 仅保留 PyMuPDF 作为基准对照降级备选，彻底消除了对 `pypdfium2` 的依赖。
+3. **结构恢复不回读 words 约束**：
+   - 页面文本抽取与表格结构恢复完全基于 native span、atom、列带和物理/逻辑 Cell 展开，严禁回退调用 `page.get_text("words")`，保证了端到端纯净与无损。
+
+### 5.4 验收与测试验证结果
+
+全量测试套件与端到端可视化流水线验证均 100% 通过：
+1. **Probe Python 自动化测试**：
+   - 执行命令：`$env:PYTHONPATH = "src;tools/pdfium_probe/scripts"; $env:REPO_ROOT = "D:\codes\PDFLayoutParser"; python -m pytest -q tools/pdfium_probe/tests`
+   - 结果：**86 passed in 3.56s**（包含新增的子进程光栅化契约与超时治理用例）。
+2. **Probe Rust 全量测试**：
+   - 执行命令：`cargo test --manifest-path tools/pdfium_probe/Cargo.toml`
+   - 结果：**12 passed; 0 failed; finished in 0.14s**（包含 `test_render_page_to_png_contract`）。
+3. **主 Rust 库测试**：
+   - 执行命令：`cargo test`
+   - 结果：**103 passed; 0 failed; finished in 0.07s**。
+4. **核心 Python 回归测试**：
+   - 执行命令：`$env:PYTHONPATH = "src;tools/pdfium_probe/scripts"; $env:REPO_ROOT = "D:\codes\PDFLayoutParser"; python -m pytest -q tests/test_classify_pdf_page.py tests/test_extract_table_region.py tests/test_financial_header_normalizer.py tests/test_header_upward_merge.py tests/test_wireless_structure_merges.py tests/test_wireless_structure_grid.py`
+   - 结果：**77 passed, 1 skipped in 1.83s**。
+5. **端到端流水线可视化验证**：
+   - 执行命令：`python tools/pdfium_probe/scripts/visualize_pipeline_steps.py --sample test_p27_table --sample credit_p1_detail`
+   - 输出路径：`tools/pdfium_probe/test_data/behavioral_output/pipeline_visualization/`
+   - `test_p27_table`：端到端自动恢复 9×9 完整横版表格（46 个单元格），阅读流 6 节点，与 PyMuPDF 基线完全一致；
+   - `credit_p1_detail`：端到端自动检出全页全部 6 个明细表格（11×11, 6×4, 4×5, 4×4, 3×4, 2×7），阅读流 17 节点，拓扑结构完全一致。
+6. **代码侵入性与约束检查**：
+   - 核心生产代码（`src/`、`rust/`、根 `Cargo.toml`）严格零修改；
+   - 既有未暂存 PDF 文件（`synth_crop_offset.pdf`、`synth_mixed_fonts.pdf`）完好保留。
