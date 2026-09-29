@@ -952,6 +952,13 @@ def main() -> None:
         default=180,
         help="Rasterization DPI (default: 180).",
     )
+    parser.add_argument(
+        "--sample",
+        action="append",
+        dest="samples",
+        default=[],
+        help="Optional sample name(s) to process. Can be specified multiple times.",
+    )
     args = parser.parse_args()
 
     repo_root = _REPO_ROOT
@@ -999,6 +1006,9 @@ def main() -> None:
             description="合成视口裁剪样本：观察 CropBox 视口偏移量重映射、全局未旋转坐标系转换以及越界图元几何过滤过程。",
         ),
     ]
+
+    if args.samples:
+        samples = [s for s in samples if s.name in args.samples]
 
     out_dir = Path(args.output)
     out_dir.mkdir(parents=True, exist_ok=True)
