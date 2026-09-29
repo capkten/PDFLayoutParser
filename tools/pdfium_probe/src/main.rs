@@ -503,6 +503,134 @@ pub fn extract_page(page: &PdfPage, page_index: usize) -> Result<PdfiumRawPage, 
     })
 }
 
+fn crc32(data: &[u8]) -> u32 {
+    let mut crc = 0xFFFF_FFFFu32;
+    for &byte in data {
+        crc ^= byte as u32;
+        for _ in 0..8 {
+            if crc & 1 != 0 {
+                crc = (crc >> 1) ^ 0xEDB8_8320;
+            } else {
+                crc >>= 1;
+            }
+        }
+    }
+    !crc
+}
+
+fn adler32(data: &[u8]) -> u32 {
+    let mut s1 = 1u32;
+    let mut s2 = 0u32;
+    for &b in data {
+        s1 = (s1 + b as u32) % 65521;
+        s2 = (s2 + s1) % 65521;
+    }
+    (s2 << 16) | s1
+}
+
+fn write_png_chunk(out: &mut Vec<u8>, chunk_type: &[u8; 4], data: &[u8]) {
+    out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+    let crc_start = out.len();
+    out.extend_from_slice(chunk_type);
+    out.extend_from_slice(data);
+    let crc = crc32(&out[crc_start..]);
+    out.extend_from_slice(&crc.to_be_bytes());
+}
+
+pub fn save_rgba_as_png(
+    width: u32,
+    height: u32,
+    rgba_data: &[u8],
+    out_path: &Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(parent) = out_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    let mut raw_scanlines = Vec::with_capacity((height as usize) * (1 + (width as usize) * 4));
+    let stride = (width as usize) * 4;
+    for y in 0..(height as usize) {
+        raw_scanlines.push(0u8); // Filter: None
+        let start = y * stride;
+        let end = (start + stride).min(rgba_data.len());
+        if start < rgba_data.len() {
+            raw_scanlines.extend_from_slice(&rgba_data[start..end]);
+        }
+    }
+
+    let adler = adler32(&raw_scanlines);
+
+    // Build zlib / deflate stream using uncompressed blocks (RFC 1950 + RFC 1951)
+    let mut zlib_data = Vec::new();
+    zlib_data.push(0x78); // CMF: Deflate, 32K window
+    zlib_data.push(0x01); // FLG: No preset dict, check bits
+
+    const CHUNK_SIZE: usize = 65535;
+    let chunks: Vec<&[u8]> = raw_scanlines.chunks(CHUNK_SIZE).collect();
+    if chunks.is_empty() {
+        // Empty block
+        zlib_data.push(0x01); // bfinal = 1, btype = 00
+        zlib_data.extend_from_slice(&0u16.to_le_bytes());
+        zlib_data.extend_from_slice(&(!0u16).to_le_bytes());
+    } else {
+        for (idx, chunk) in chunks.iter().enumerate() {
+            let is_last = idx + 1 == chunks.len();
+            let bfinal_btype: u8 = if is_last { 0x01 } else { 0x00 };
+            zlib_data.push(bfinal_btype);
+            let len = chunk.len() as u16;
+            let nlen = !len;
+            zlib_data.extend_from_slice(&len.to_le_bytes());
+            zlib_data.extend_from_slice(&nlen.to_le_bytes());
+            zlib_data.extend_from_slice(chunk);
+        }
+    }
+    zlib_data.extend_from_slice(&adler.to_be_bytes());
+
+    let mut png_bytes = Vec::new();
+    // 1. PNG Header
+    png_bytes.extend_from_slice(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+
+    // 2. IHDR Chunk
+    let mut ihdr = Vec::with_capacity(13);
+    ihdr.extend_from_slice(&width.to_be_bytes());
+    ihdr.extend_from_slice(&height.to_be_bytes());
+    ihdr.push(8); // Bit depth: 8
+    ihdr.push(6); // Color type: 6 (RGBA)
+    ihdr.push(0); // Compression method: 0 (deflate)
+    ihdr.push(0); // Filter method: 0 (standard)
+    ihdr.push(0); // Interlace method: 0 (no interlace)
+    write_png_chunk(&mut png_bytes, b"IHDR", &ihdr);
+
+    // 3. IDAT Chunk
+    write_png_chunk(&mut png_bytes, b"IDAT", &zlib_data);
+
+    // 4. IEND Chunk
+    write_png_chunk(&mut png_bytes, b"IEND", &[]);
+
+    fs::write(out_path, png_bytes)?;
+    Ok(())
+}
+
+pub fn render_page_to_png(
+    page: &PdfPage,
+    dpi: f32,
+    out_path: &Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let scale = (dpi / 72.0).max(0.1);
+    let target_w = (page.width().value * scale).round() as i32;
+    let target_h = (page.height().value * scale).round() as i32;
+
+    let render_config = PdfRenderConfig::new()
+        .set_target_width(target_w)
+        .set_target_height(target_h);
+
+    let bitmap = page.render_with_config(&render_config)?;
+    let dyn_img = bitmap.as_image();
+    let rgba = dyn_img.to_rgba8();
+    save_rgba_as_png(rgba.width(), rgba.height(), rgba.as_raw(), out_path)?;
+    Ok(())
+}
+
 pub fn process_pdf_file(
     pdfium: &Pdfium,
     pdf_path: &Path,
@@ -520,6 +648,12 @@ pub fn process_pdf_file(
     for i in 0..page_count {
         let page = doc.pages().get(i)?;
         pages.push(extract_page(&page, i as usize)?);
+
+        // 同步渲染 72 DPI 与 180 DPI 底图供下游模型使用
+        let dpi72_out = out_dir.join(format!("{}_page_{}_dpi72.png", base_name, i));
+        let dpi180_out = out_dir.join(format!("{}_page_{}_dpi180.png", base_name, i));
+        let _ = render_page_to_png(&page, 72.0, &dpi72_out);
+        let _ = render_page_to_png(&page, 180.0, &dpi180_out);
     }
 
     let snapshot = PdfiumRawSnapshot {
@@ -571,6 +705,28 @@ pub fn get_platform_native_lib(manifest_dir: &Path) -> Result<(PathBuf, &'static
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() >= 2 && args[1] == "render" {
+        if args.len() < 6 {
+            eprintln!("Usage: pdfium_probe render <pdf_path> <page_index> <dpi> <out_png>");
+            return Err("Invalid arguments for render command".into());
+        }
+        let pdf_file = Path::new(&args[2]);
+        let page_idx: usize = args[3].parse()?;
+        let dpi: f32 = args[4].parse()?;
+        let out_png = Path::new(&args[5]);
+
+        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let (lib_path, _) = get_platform_native_lib(&manifest_dir)?;
+        let bindings = Pdfium::bind_to_library(lib_path)?;
+        let pdfium = Pdfium::new(bindings);
+        let doc = pdfium.load_pdf_from_file(pdf_file, None)?;
+        let page = doc.pages().get(page_idx as u16)?;
+        render_page_to_png(&page, dpi, out_png)?;
+        println!("[pdfium_probe] Rendered page {} to {:?}", page_idx, out_png);
+        return Ok(());
+    }
+
     println!("[pdfium_probe] Starting extraction on synthetic PDFs...");
 
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -853,5 +1009,36 @@ mod tests {
         assert!(json.contains("\"path_type\":\"stroked_filled\""));
         let deserialized: DrawingInfo = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.path_type, "stroked_filled");
+    }
+
+    #[test]
+    fn test_render_page_to_png_contract() {
+        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let (lib_path, _) = get_platform_native_lib(&manifest_dir).unwrap();
+        let bindings = Pdfium::bind_to_library(lib_path).unwrap();
+        let pdfium = Pdfium::new(bindings);
+        let sample_pdf = manifest_dir.join("test_data/synthetic/synth_basic_table.pdf");
+        let sample_pdf = if sample_pdf.is_file() {
+            sample_pdf
+        } else {
+            manifest_dir.join("test_data/synthetic/synth_rotations.pdf")
+        };
+        if !sample_pdf.is_file() {
+            return;
+        }
+        let doc = pdfium.load_pdf_from_file(&sample_pdf, None).unwrap();
+        let page = doc.pages().get(0).unwrap();
+        let out_dir = manifest_dir.join("target/test_render");
+        std::fs::create_dir_all(&out_dir).unwrap();
+        let out_png = out_dir.join("test_synth_page_0.png");
+
+        render_page_to_png(&page, 72.0, &out_png).unwrap();
+        assert!(out_png.is_file());
+        let meta = std::fs::metadata(&out_png).unwrap();
+        assert!(meta.len() > 100); // 确保非空有效 PNG
+        let mut header = [0u8; 8];
+        let mut f = std::fs::File::open(&out_png).unwrap();
+        f.read_exact(&mut header).unwrap();
+        assert_eq!(&header[1..4], b"PNG"); // 校验 PNG 魔法头
     }
 }
