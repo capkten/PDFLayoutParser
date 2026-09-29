@@ -1,0 +1,128 @@
+[
+  {
+    "name": "synth_crop_offset",
+    "pdf_root": "probe",
+    "pdf_path": "test_data/synthetic/synth_crop_offset.pdf",
+    "pdfium_raw_snapshot": "pdfium_output/synth_crop_offset_pdfium.json",
+    "pymupdf_baseline": "baseline/synth_crop_offset_pymupdf.json",
+    "page_index": 0,
+    "expected_page_type": "vector",
+    "table_regions": []
+  },
+  {
+    "name": "synth_rotations_0",
+    "pdf_root": "probe",
+    "pdf_path": "test_data/synthetic/synth_rotations.pdf",
+    "pdfium_raw_snapshot": "pdfium_output/synth_rotations_pdfium.json",
+    "pymupdf_baseline": "baseline/synth_rotations_pymupdf.json",
+    "page_index": 0,
+    "expected_page_type": "vector",
+    "table_regions": []
+  },
+  {
+    "name": "synth_rotations_90",
+    "pdf_root": "probe",
+    "pdf_path": "test_data/synthetic/synth_rotations.pdf",
+    "pdfium_raw_snapshot": "pdfium_output/synth_rotations_pdfium.json",
+    "pymupdf_baseline": "baseline/synth_rotations_pymupdf.json",
+    "page_index": 1,
+    "expected_page_type": "vector",
+    "table_regions": []
+  },
+  {
+    "name": "synth_rotations_180",
+    "pdf_root": "probe",
+    "pdf_path": "test_data/synthetic/synth_rotations.pdf",
+    "pdfium_raw_snapshot": "pdfium_output/synth_rotations_pdfium.json",
+    "pymupdf_baseline": "baseline/synth_rotations_pymupdf.json",
+    "page_index": 2,
+    "expected_page_type": "vector",
+    "table_regions": []
+  },
+  {
+    "name": "synth_rotations_270",
+    "pdf_root": "probe",
+    "pdf_path": "test_data/synthetic/synth_rotations.pdf",
+    "pdfium_raw_snapshot": "pdfium_output/synth_rotations_pdfium.json",
+    "pymupdf_baseline": "baseline/synth_rotations_pymupdf.json",
+    "page_index": 3,
+    "expected_page_type": "vector",
+    "table_regions": []
+  },
+  {
+    "name": "synth_invisible_text",
+    "pdf_root": "probe",
+    "pdf_path": "test_data/synthetic/synth_invisible_text.pdf",
+    "pdfium_raw_snapshot": "pdfium_output/synth_invisible_text_pdfium.json",
+    "pymupdf_baseline": "baseline/synth_invisible_text_pymupdf.json",
+    "page_index": 0,
+    "expected_page_type": "vector",
+    "table_regions": []
+  },
+  {
+    "name": "synth_mixed_fonts",
+    "pdf_root": "probe",
+    "pdf_path": "test_data/synthetic/synth_mixed_fonts.pdf",
+    "pdfium_raw_snapshot": "pdfium_output/synth_mixed_fonts_pdfium.json",
+    "pymupdf_baseline": "baseline/synth_mixed_fonts_pymupdf.json",
+    "page_index": 0,
+    "expected_page_type": "vector",
+    "table_regions": []
+  },
+  {
+    "name": "synth_segmented_lines",
+    "pdf_root": "probe",
+    "pdf_path": "test_data/synthetic/synth_segmented_lines.pdf",
+    "pdfium_raw_snapshot": "pdfium_output/synth_segmented_lines_pdfium.json",
+    "pymupdf_baseline": "baseline/synth_segmented_lines_pymupdf.json",
+    "page_index": 0,
+    "expected_page_type": "vector",
+    "table_regions": []
+  },
+  {
+    "name": "test_p27_table",
+    "pdf_root": "repo",
+    "pdf_path": "test.pdf",
+    "pdfium_raw_snapshot": "real_pdfium_output/test_p27_table_pdfium.json",
+    "pymupdf_baseline": "real_baseline/test_p27_table_pymupdf.json",
+    "page_index": 27,
+    "expected_page_type": "vector",
+    "table_regions": [
+      {
+        "kind": "wireless",
+        "x0": 20.0,
+        "y0": 100.0,
+        "x1": 575.0,
+        "y1": 450.0
+      }
+    ]
+  },
+  {
+    "name": "credit_p0_header",
+    "pdf_root": "repo",
+    "pdf_path": "征信解析样例.pdf",
+    "pdfium_raw_snapshot": "real_pdfium_output/credit_p0_header_pdfium.json",
+    "pymupdf_baseline": "real_baseline/credit_p0_header_pymupdf.json",
+    "page_index": 0,
+    "expected_page_type": "vector",
+    "table_regions": []
+  },
+  {
+    "name": "credit_p1_detail",
+    "pdf_root": "repo",
+    "pdf_path": "征信解析样例.pdf",
+    "pdfium_raw_snapshot": "real_pdfium_output/credit_p1_detail_pdfium.json",
+    "pymupdf_baseline": "real_baseline/credit_p1_detail_pymupdf.json",
+    "page_index": 1,
+    "expected_page_type": "vector",
+    "table_regions": [
+      {
+        "kind": "wired",
+        "x0": 28.0,
+        "y0": 32.0,
+        "x1": 565.0,
+        "y1": 153.0
+      }
+    ]
+  }
+]

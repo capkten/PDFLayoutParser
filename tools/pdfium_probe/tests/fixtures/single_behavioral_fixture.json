@@ -1,0 +1,12 @@
+[
+  {
+    "name": "synth_mixed_fonts",
+    "pdf_root": "probe",
+    "pdf_path": "test_data/synthetic/synth_mixed_fonts.pdf",
+    "pdfium_raw_snapshot": "pdfium_output/synth_mixed_fonts_pdfium.json",
+    "pymupdf_baseline": "baseline/synth_mixed_fonts_pymupdf.json",
+    "page_index": 0,
+    "expected_page_type": "vector",
+    "table_regions": []
+  }
+]

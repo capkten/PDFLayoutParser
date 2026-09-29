@@ -1,7 +1,24 @@
+import glob
+import hashlib
 import json
 import os
-import glob
+from typing import Any, Dict, List, Optional, Tuple
+
 import pymupdf as fitz
+
+
+def compute_file_sha256(path: str) -> Optional[str]:
+    if not path or not os.path.exists(path):
+        return None
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        while True:
+            chunk = f.read(8192)
+            if not chunk:
+                break
+            h.update(chunk)
+    return h.hexdigest()
+
 
 def export_page_baseline(page: fitz.Page, page_index: int) -> dict:
     rect = page.rect
@@ -85,6 +102,7 @@ def process_file(pdf_path: str, out_dir: str):
     result = {
         "generator": f"PyMuPDF_{fitz.__version__}",
         "source_file": os.path.basename(pdf_path),
+        "source_file_sha256": compute_file_sha256(pdf_path),
         "page_count": len(pages_data),
         "pages": pages_data,
     }
@@ -127,6 +145,7 @@ def export_real_samples(real_baseline_dir: str):
             result = {
                 "generator": f"PyMuPDF_{fitz.__version__}",
                 "source_file": os.path.basename(pdf_path),
+                "source_file_sha256": compute_file_sha256(pdf_path),
                 "sample_name": sname,
                 "page_count": 1,
                 "pages": [page_data],
@@ -139,10 +158,17 @@ def export_real_samples(real_baseline_dir: str):
 
 def main():
     root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    if "PDFIUM_OUTPUT_ROOT" in os.environ:
+        out_root = os.environ["PDFIUM_OUTPUT_ROOT"]
+        baseline_dir = os.path.join(out_root, "baseline")
+        real_baseline_dir = os.path.join(out_root, "real_baseline")
+    else:
+        baseline_dir = os.path.join(root, "test_data", "baseline")
+        real_baseline_dir = os.path.join(root, "test_data", "real_baseline")
+
     synthetic_dir = os.path.join(root, "test_data", "synthetic")
-    baseline_dir = os.path.join(root, "test_data", "baseline")
-    real_baseline_dir = os.path.join(root, "test_data", "real_baseline")
     os.makedirs(baseline_dir, exist_ok=True)
+    os.makedirs(real_baseline_dir, exist_ok=True)
 
     pdf_files = glob.glob(os.path.join(synthetic_dir, "*.pdf"))
     for pdf in pdf_files:
