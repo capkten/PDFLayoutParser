@@ -77,3 +77,58 @@
    - `git diff --check 4d01c48..HEAD`: 退出码 0，无任何空白或冲突警告。
    - 生产代码（`src/`、`rust/`、根 `Cargo.toml`）零修改。
    - 既有未暂存 PDF (`synth_crop_offset.pdf`, `synth_mixed_fonts.pdf`) 完好保留。
+
+---
+
+## 4. 端到端表格解析与模型检测接入（End-to-End Table Extraction & ML Detector Integration）
+
+### 4.1 背景与需求
+
+用户指出流水线不应依赖人工硬编码表格配置，而是需要完整的**端到端 PDF 解析（End-to-End PDF Parsing）**，包含完整的**模型调用（Model Calling）**。架构需与生产级流水线保持一致：
+1. 执行规则预筛（`_detect_rule_candidates`）；
+2. 检测到候选表格信号时调用 ML 表格检测模型（`MLTableDetector` / YOLO ONNX）定位候选框；
+3. 执行表格结构恢复（有线物理网格 / 无线 span 恢复）；
+4. 扣除检出表格后组装正文与表格穿插的自然阅读顺序流。
+
+### 4.2 根因定位与治理措施
+
+- **根因 1（矢量图元结构不兼容导致有线提取器失效）**:
+  - `WiredTableExtractor` 消费 `get_drawings()` 时，期望元素为 `('l', p1, p2)` 且 `p1.x, p1.y` 拥有点属性；同时若 `color is None and fill is None` 会直接判定为不可见图元。此前 `PdfiumPageAdapter` 仅返回原始 JSON 字典，导致提取器无法获取有效线条。
+  - **治理**: 在 `PdfiumPageAdapter.get_drawings()` 中实现与 PyMuPDF 完全同构的转换逻辑，生成包含 `type`、`rect` (`fitz.Rect`)、默认前景色 `color=(0,0,0)`、以及具备 `.x`, `.y` 属性的 `fitz.Point` 点元组，使有线提取器自发识别所有网格线。
+- **根因 2（缺少底图光栅化接口导致 ML 检测模型抛异常）**:
+  - `MLTableDetector` 依赖 `page.get_pixmap()` 进行页面渲染送入 YOLO 模型；此前适配器缺少此方法，导致模型调用报错并静默降级为 0 表格。
+  - **治理**: 在 `PdfiumPageAdapter` 中实现 `get_pixmap(matrix=None, dpi=72, alpha=False)`，调用 `pypdfium2` 原生引擎光栅化为 RGB 缓冲区，并封装 `PdfiumPixmap` 包装类（提供 `width`, `height`, `samples`, `n`, `stride`, `tobytes()`）。
+- **根因 3（硬编码表格配置导致裁切与表格丢失）**:
+  - 用户此前质疑的 `test_p27_table` 异常选框，根因是旧配置硬编码了 `x1: 575.0`，而实际横版表格全宽 `841.9`，导致右侧 4 列被物理截断并产生散落绿色碎片；`credit_p1_detail` 旧配置仅人工指定了顶部 1 个表格，导致整页其余 5 个明细表格全部丢失。
+  - **治理**: 移除人工硬编码依赖，全面启用端到端全自动检测提取模式。
+
+### 4.3 主要改动文件
+
+1. **`tools/pdfium_probe/scripts/pdfium_page_adapter.py`**:
+   - 新增 `PdfiumPixmap` 类，适配下游图像消费协议。
+   - 新增 `get_pixmap()` 方法，支持 `pypdfium2` 原生渲染及 PyMuPDF 降级。
+   - 重构 `get_drawings()`，完全对齐 PyMuPDF 绘图指令格式与点线拓扑。
+   - 构造函数增加 `pdf_path` 参数与源文件定位推断。
+2. **`tools/pdfium_probe/scripts/pdfium_shadow_runner.py`**:
+   - 新增 `auto_detect_tables` 与 `pdf_path` 参数。
+   - 在自动模式下调用 `TableExtractor.extract(pdfium_adapter)`，全链路打通规则预筛 -> YOLO 模型检测 -> 结构恢复。
+3. **`tools/pdfium_probe/scripts/visualize_pipeline_steps.py`**:
+   - Stage 3 升级为端到端全自动表格检测与结构恢复可视化，动态获取实测表格区域与单元格。
+   - Stage 4 动态扣除实测检出表格，组装真实穿插阅读顺序。
+4. **`tools/pdfium_probe/tests/test_pdfium_page_adapter.py`**:
+   - 增补 `test_pdfium_pixmap_wrapper`、`test_pdfium_page_adapter_get_pixmap`、`test_pdfium_page_adapter_get_drawings_compatibility`、`test_pdfium_page_adapter_end_to_end_wired_extraction` 等 10 项测试。
+
+### 4.4 验收与对比结果
+
+- **`test_p27_table`**:
+  - 端到端自动检出全宽 9×9 表格（覆盖 `66.4..771.2pt`，共 46 个单元格），两端检测框与单元格 100% 吻合。
+  - 彻底消除了右侧 4 列截断与散落绿色文字碎片；Stage 4 正常输出为单一穿插表格节点。
+- **`credit_p1_detail`**:
+  - 端到端自动检出并恢复全页全部 6 个明细表格（11×11, 6×4, 4×5, 4×4, 3×4, 2×7）。
+  - 两端表格数量、维度及单元格结构完全一致；Stage 4 呈现完美的正文与 6 个表格穿插阅读顺序（17 个流节点）。
+- **自动化测试**:
+  - Probe Python: **85 passed**
+  - Probe Rust: **11 passed**
+  - Main Rust: **103 passed**
+  - Core Python 回归: **77 passed, 1 skipped**
+  - 生产代码（`src/`、`rust/`、根 `Cargo.toml`）严格保持零修改。
