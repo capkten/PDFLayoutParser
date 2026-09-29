@@ -81,7 +81,9 @@ def test_adapter_drawings_and_snapshot_dto():
     norm_page.page_snapshot["drawings"] = [drawing_item]
 
     adapter = PdfiumPageAdapter(norm_page)
-    assert adapter.get_drawings() == [drawing_item]
+    assert adapter.get_drawings(raw=True) == [drawing_item]
+    assert len(adapter.get_drawings()) == 1
+    assert adapter.get_drawings()[0]["type"] == "f"
     assert adapter.snapshot_dto() is norm_page.page_snapshot
 
     # Test drawings fallback from sidecar
@@ -94,7 +96,8 @@ def test_adapter_drawings_and_snapshot_dto():
         diagnostics={},
     )
     adapter_sidecar = PdfiumPageAdapter(norm_page_sidecar)
-    assert adapter_sidecar.get_drawings() == [drawing_item]
+    assert adapter_sidecar.get_drawings(raw=True) == [drawing_item]
+    assert len(adapter_sidecar.get_drawings()) == 1
 
     # Test scanned page drawings default
     scanned_norm = normalize_raw_page(make_raw_page([make_span("坏\ufffd字", 0, 10, 30, 20)]))
@@ -130,3 +133,86 @@ def test_get_text_flags_and_kwargs_support():
     assert dict_result["blocks"]
     words_result = adapter.get_text("words", flags=0)
     assert len(words_result) == 1
+
+
+def test_adapter_get_pixmap():
+    raw = make_raw_page([make_span("Hello", 0, 10, 50, 20)])
+    raw["width"] = 100.0
+    raw["height"] = 200.0
+    adapter = PdfiumPageAdapter(normalize_raw_page(raw))
+
+    # Test blank fallback pixmap when no file attached
+    pix = adapter.get_pixmap(dpi=72)
+    assert pix.width == 100
+    assert pix.height == 200
+    assert pix.n == 3
+    assert len(pix.samples) == 100 * 200 * 3
+    assert hasattr(pix, "stride")
+    assert pix.stride == 100 * 3
+    assert pix.tobytes() == pix.samples
+
+    # Test matrix scaling
+    try:
+        import fitz
+        mat = fitz.Matrix(2.0, 2.0)
+        pix2 = adapter.get_pixmap(matrix=mat)
+        assert pix2.width == 200
+        assert pix2.height == 400
+    except ImportError:
+        pass
+
+
+def test_adapter_adapted_drawings():
+    drawing_raw = {
+        "drawing_index": 0,
+        "path_type": "filled",
+        "rect": {"x0": 10.0, "y0": 20.0, "x1": 50.0, "y1": 60.0},
+        "width": 1.0,
+        "color": None,
+        "fill": None,
+        "items": [
+            {"cmd": "l", "points": [[10.0, 20.0], [50.0, 20.0]]},
+            {"cmd": "l", "points": [[50.0, 20.0], [50.0, 60.0]]},
+        ],
+    }
+    raw = make_raw_page([make_span("Hello", 0, 10, 50, 20)])
+    norm_page = normalize_raw_page(raw)
+    norm_page.page_snapshot["drawings"] = [drawing_raw]
+    adapter = PdfiumPageAdapter(norm_page)
+
+    # raw=True returns original snapshot items
+    assert adapter.get_drawings(raw=True) == [drawing_raw]
+
+    # default returns PyMuPDF-compatible dictionaries
+    drawings = adapter.get_drawings()
+    assert len(drawings) == 1
+    d = drawings[0]
+    assert d["type"] == "f"
+    assert d["fill"] == (0.0, 0.0, 0.0)
+    assert hasattr(d["rect"], "x0")
+    assert d["rect"].x0 == 10.0
+    assert len(d["items"]) == 2
+    assert d["items"][0][0] == "l"
+    p1 = d["items"][0][1]
+    assert hasattr(p1, "x")
+    assert p1.x == 10.0
+
+
+def test_adapter_extracts_wired_tables_on_real_credit_report():
+    import json
+    from hexai_pdf_parser.tables.table_extractor import TableExtractor
+
+    snapshot_path = _TEST_DIR.parent / "test_data/real_pdfium_output/credit_p1_detail_pdfium.json"
+    if not snapshot_path.is_file():
+        pytest.skip("credit_p1_detail_pdfium.json not present")
+
+    raw_snap = json.loads(snapshot_path.read_text(encoding="utf-8"))
+    raw_page = raw_snap["pages"][0]
+    norm_page = normalize_raw_page(raw_page)
+    adapter = PdfiumPageAdapter(norm_page)
+
+    extractor = TableExtractor()
+    tables = extractor.extract(adapter)
+    # credit_p1 has 6 tables
+    assert len(tables) == 6
+    assert all(t.rows > 1 and t.cols > 1 for t in tables)
