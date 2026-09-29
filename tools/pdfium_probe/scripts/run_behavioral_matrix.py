@@ -95,6 +95,9 @@ def get_repo_root() -> Path:
     worktree_parent = direct.parents[1]
     if (worktree_parent / "test.pdf").exists():
         return worktree_parent
+    fallback_d = Path("D:/codes/PDFLayoutParser")
+    if (fallback_d / "test.pdf").exists():
+        return fallback_d
     return direct
 
 
@@ -711,6 +714,7 @@ def main() -> None:
         summary["blocked_input"] > 0
         or summary["failed"] > 0
         or summary["unclassified"] > 0
+        or summary["unsupported"] > 0
         or not summary["deterministic"]["all_equal"]
     ):
         sys.exit(1)

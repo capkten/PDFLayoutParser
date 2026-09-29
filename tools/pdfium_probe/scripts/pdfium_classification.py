@@ -127,10 +127,12 @@ def classify_raw_page(raw_page: Mapping[str, Any]) -> Dict[str, Any]:
     if isinstance(mapping_diag, Mapping):
         v_count = mapping_diag.get("visible_text_scalar_count")
         e_count = mapping_diag.get("extracted_char_scalar_count")
-        if v_count is not None and e_count is not None and v_count != e_count:
+        s_count = mapping_diag.get("synthetic_space_count", 0)
+        if v_count is not None and e_count is not None and v_count != (e_count + s_count):
             has_mapping_mismatch = True
             mismatch_evidence["visible_text_scalar_count"] = v_count
             mismatch_evidence["extracted_char_scalar_count"] = e_count
+            mismatch_evidence["synthetic_space_count"] = s_count
         if mapping_diag.get("classification_reason") == "invalid_unicode_mapping":
             has_mapping_mismatch = True
 
@@ -142,14 +144,15 @@ def classify_raw_page(raw_page: Mapping[str, Any]) -> Dict[str, Any]:
         char_text = "".join(
             c_info.get("c", "") for c_info in chars if isinstance(c_info, Mapping)
         )
-        if char_text != text or len(chars) != len(text):
-            has_mapping_mismatch = True
-            mismatch_evidence["span_order"] = span.get("order")
-            mismatch_evidence["expected_text"] = text
-            mismatch_evidence["extracted_char_text"] = char_text
-            mismatch_evidence["text_length"] = len(text)
-            mismatch_evidence["char_count"] = len(chars)
-            break
+        if char_text == text or char_text == text.rstrip(" "):
+            continue
+        has_mapping_mismatch = True
+        mismatch_evidence["span_order"] = span.get("order")
+        mismatch_evidence["expected_text"] = text
+        mismatch_evidence["extracted_char_text"] = char_text
+        mismatch_evidence["text_length"] = len(text)
+        mismatch_evidence["char_count"] = len(chars)
+        break
 
     if has_mapping_mismatch:
         return {

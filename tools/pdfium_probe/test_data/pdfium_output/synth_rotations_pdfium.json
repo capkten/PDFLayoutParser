@@ -1,7 +1,10 @@
 {
-  "schema_version": "pdfium_raw_snapshot_v1.0",
+  "schema_version": "pdfium_raw_snapshot_v1.1",
   "generator": "pdfium_probe_0.1.0",
   "source_file": "synth_rotations.pdf",
+  "source_file_sha256": "a55204bd060386454d4eef4250af81604fe4070eb859f1af4646154fef23636b",
+  "native_library_sha256": "d42c452a4cf8ca19a87e9c659d4e05035be742c21696ac13431cf73ac1bbf14b",
+  "native_library_expected_sha256": "d42c452a4cf8ca19a87e9c659d4e05035be742c21696ac13431cf73ac1bbf14b",
   "page_count": 4,
   "pages": [
     {
@@ -274,7 +277,16 @@
           ]
         }
       ],
-      "drawings": []
+      "drawings": [],
+      "mapping_diagnostics": {
+        "visible_text_scalar_count": 20,
+        "extracted_char_scalar_count": 20,
+        "synthetic_space_count": 0,
+        "replacement_char_count": 0,
+        "control_char_count": 0,
+        "mapping_status": "valid",
+        "classification_reason": null
+      }
     },
     {
       "schema_version": "pdfium_raw_page_v1.0",
@@ -557,7 +569,16 @@
           ]
         }
       ],
-      "drawings": []
+      "drawings": [],
+      "mapping_diagnostics": {
+        "visible_text_scalar_count": 21,
+        "extracted_char_scalar_count": 21,
+        "synthetic_space_count": 0,
+        "replacement_char_count": 0,
+        "control_char_count": 0,
+        "mapping_status": "valid",
+        "classification_reason": null
+      }
     },
     {
       "schema_version": "pdfium_raw_page_v1.0",
@@ -851,7 +872,16 @@
           ]
         }
       ],
-      "drawings": []
+      "drawings": [],
+      "mapping_diagnostics": {
+        "visible_text_scalar_count": 22,
+        "extracted_char_scalar_count": 22,
+        "synthetic_space_count": 0,
+        "replacement_char_count": 0,
+        "control_char_count": 0,
+        "mapping_status": "valid",
+        "classification_reason": null
+      }
     },
     {
       "schema_version": "pdfium_raw_page_v1.0",
@@ -1145,7 +1175,16 @@
           ]
         }
       ],
-      "drawings": []
+      "drawings": [],
+      "mapping_diagnostics": {
+        "visible_text_scalar_count": 22,
+        "extracted_char_scalar_count": 22,
+        "synthetic_space_count": 0,
+        "replacement_char_count": 0,
+        "control_char_count": 0,
+        "mapping_status": "valid",
+        "classification_reason": null
+      }
     }
   ]
 }

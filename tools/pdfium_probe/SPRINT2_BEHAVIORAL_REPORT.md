@@ -2,7 +2,7 @@
 
 ## 1. 报告综述与执行概况
 
-本报告基于 PDFium 探针与 PyMuPDF 双引擎的影子执行矩阵（Behavioral Shadow Matrix），针对 Sprint 2 的原子 TextObject 规范化、矢量图元标准化、Unicode 映射门禁及表格恢复链路进行全样本验证与跨运行确定性审计。
+本报告基于 PDFium 探针与 PyMuPDF 双引擎的影子执行矩阵（Behavioral Shadow Matrix），针对 Sprint 2 的原子 TextObject 规范化、矢量图元标准化、Unicode 映射门禁及表格恢复链路进行全样本验证与跨运行确定性审计。在收到行为验收评审反馈后，已进一步落实 5 项关键治理：修复退出码门禁缺陷、重新归因合成分隔空格以解除误杀、激活真实表格与阅读流比对、消除代码格式警告并统一锁定依赖版本。
 
 ### 1.1 执行环境与运行参数
 
@@ -12,13 +12,14 @@
 - **PyMuPDF 运行时版本**: PyMuPDF 1.28.2 (MuPDF 1.28.2)
 - **PDFium 原生库供应链信息**:
   - `release_tag`: `chromium/8066`
+  - 选型依据: `bblanchon/pdfium-binaries` 官方发布的 `chromium/8066` 具备各主流操作系统架构（Windows x64、Linux x64、macOS arm64/x64）完整的官方 SHA-256 校验链，各平台发布哈希均记录于 `manifest.json`。
   - 目标平台: `win-x64`
   - 官方压缩包 SHA-256: `739a57d597d864297909cc40a2411eba728490c76a0fa25e3ea299c7f6b07020`
   - 动态库路径: `native/win-x64/pdfium.dll`
   - 预期动态库 SHA-256: `d42c452a4cf8ca19a87e9c659d4e05035be742c21696ac13431cf73ac1bbf14b`
   - 运行时实际动态库 SHA-256: `d42c452a4cf8ca19a87e9c659d4e05035be742c21696ac13431cf73ac1bbf14b` (强校验一致: `verified`)
 - **运行轮次**: 3 次独立原生抽取与基准比对 (`native-run-1`, `native-run-2`, `native-run-3`)
-- **输出目录**: `tools/pdfium_probe/test_data/behavioral_output/matrix-001`
+- **输出目录**: `tools/pdfium_probe/test_data/behavioral_output/final-run`
 
 ### 1.2 确定性与比对判定总结
 
@@ -27,9 +28,9 @@
 | **样本总数 (Fixtures)** | 11 | 覆盖合成样本 (8 项) 与真实样本 (3 项) |
 | **执行轮次 (Runs)** | 3 | 三次独立执行，输出至独立根目录 |
 | **确定性判定 (Deterministic)** | **100% 吻合 (`all_equal: true`)** | 11 个样本在 3 次运行中的规范化 Canonical SHA-256 完全相同 |
-| **通过数量 (Passed)** | 5 | 合成旋转及裁切偏移样本两引擎行为完全等价 |
-| **不支持/分歧 (Unsupported)** | 6 | 因 Unicode 映射门禁及 CJK 未完全映射触发安全阻断 |
-| **失败 (Failed)** | 0 | 无逻辑异常崩溃或未捕获错误 |
+| **通过数量 (Passed)** | 7 | 合成旋转、裁切偏移、混合字体及重叠不可见文本样本两引擎行为完全等价 |
+| **不支持/分歧 (Unsupported)** | 3 | 真实样本未建模水印/印章 (`unsupported_element_kind`) 与断续线无闭合网格 (`no_valid_grid`) |
+| **失败 (Failed)** | 1 | `test_p27_table` 无线表格两端分别恢复出 9 行与 27 行，比对器如实检出结构与阅读顺序差异 |
 | **未分类 (Unclassified)** | 0 | 所有样本均明确判定分类 |
 | **阻断输入 (Blocked Input)** | 0 | 所有 PDF 来源及 SHA 校验均完好，无过期/缺失输入 |
 
@@ -48,7 +49,7 @@
 | `synth_rotations_270` | `probe` | `test_data/synthetic/synth_rotations.pdf` | 3 | `vector` | `[]` (全页阅读流) |
 | `synth_invisible_text` | `probe` | `test_data/synthetic/synth_invisible_text.pdf` | 0 | `vector` | `[]` (全页阅读流) |
 | `synth_mixed_fonts` | `probe` | `test_data/synthetic/synth_mixed_fonts.pdf` | 0 | `vector` | `[]` (全页阅读流) |
-| `synth_segmented_lines`| `probe` | `test_data/synthetic/synth_segmented_lines.pdf` | 0 | `vector` | `[]` (全页阅读流) |
+| `synth_segmented_lines`| `probe` | `test_data/synthetic/synth_segmented_lines.pdf` | 0 | `vector` | `[{"kind": "wired", "x0": 50.0, "y0": 80.0, "x1": 450.0, "y1": 180.0}]` |
 | `test_p27_table` | `repo` | `test.pdf` | 27 | `vector` | `[{"kind": "wireless", "x0": 20.0, "y0": 100.0, "x1": 575.0, "y1": 450.0}]` |
 | `credit_p0_header` | `repo` | `征信解析样例.pdf` | 0 | `vector` | `[]` (全页阅读流) |
 | `credit_p1_detail` | `repo` | `征信解析样例.pdf` | 1 | `vector` | `[{"kind": "wired", "x0": 28.0, "y0": 32.0, "x1": 565.0, "y1": 153.0}]` |
@@ -57,54 +58,52 @@
 
 ## 3. 页面分类判定与根因分析
 
-根据 Sprint 2 设计，PDFium 在进入 Normalizer 之前必须经过 `pdfium_classification.py` 的 Unicode 映射与几何校验门禁。若 PDFium 与 PyMuPDF 对页面分类（`vector` vs `scanned`）产生分歧，影子运行器判定为 `unsupported` 并阻断后续不可靠提取。
+根据 Sprint 2 设计，PDFium 在进入 Normalizer 之前必须经过 `pdfium_classification.py` 的 Unicode 映射与几何校验门禁。
 
-### 3.1 样本逐页分类与判定证据
+### 3.1 空格差异与合成分隔空格归因
+
+在 Sprint 2 早期实现中，PDFium 的 TextPage 分析器在 TextObject 边界处自动注入的末尾空格（`' '`）未被单独识别，导致 `visible_text_scalar_count` 与实际字形字符数 `extracted_char_scalar_count` 不相等，被机械判定为 `invalid_unicode_mapping` 并降级为 `scanned`，造成 6 个有效矢量样本被误杀。
+
+在本轮整改中：
+1. 底层探针 `main.rs` 与分类器 `pdfium_classification.py` 严格比对非空白 Unicode 字符序列；若 `text.trim_end_matches(' ') == extracted_text`，累加 `synthetic_space_count` 并放行；
+2. 只有当剔除合成分隔空格后字符序列实质不匹配、存在非法控制字符或 `\ufffd` 时，才归入映射异常；
+3. 调整后，所有 11 个有效矢量样本在两端均一致判定为 `vector` / `valid`，真实激活了后续正文与表格抽取。
+
+### 3.2 样本逐页分类与比对判定
 
 1. **`synth_crop_offset`**:
-   - PDFium 探针分类: `vector` (`valid`)
-   - PyMuPDF 分类: `vector`
+   - PDFium 探针分类: `vector` (`valid`)，PyMuPDF 分类: `vector`
    - 判定: **Passed**。CropBox 偏移转换经几何重映射后正确恢复自然阅读流。
 2. **`synth_rotations` (0° / 90° / 180° / 270°)**:
-   - PDFium 探针分类: 全部为 `vector` (`valid`)
-   - PyMuPDF 分类: 全部为 `vector`
+   - PDFium 探针分类: 全部为 `vector` (`valid`)，PyMuPDF 分类: 全部为 `vector`
    - 判定: **Passed**。四个视口旋转角度在两个引擎下均实现坐标体系对齐与阅读顺序一致。
 3. **`synth_invisible_text`**:
-   - PDFium 探针分类: `scanned` (`invalid_unicode_mapping`)
-     - 判定证据: `visible_text_scalar_count` (82) 与 `extracted_char_scalar_count` (81) 存在尾部合成空格计数差异 (`Overlapped Text Base ` vs `Overlapped Text Base`)。
-   - PyMuPDF 分类: `vector`
-   - 判定: **Unsupported** (分类分歧: scanned vs vector)。
+   - PDFium 探针分类: `vector` (`valid`)，PyMuPDF 分类: `vector`
+   - 判定: **Passed**。针对重叠文本（`Overlapped Text Base` 与 `Overlapped Text Top`）优化了行内水平重叠判定（水平重叠超过 30% 不得合并到同一行），成功分离为独立行并排布至正确自然阅读流。
 4. **`synth_mixed_fonts`**:
-   - PDFium 探针分类: `scanned` (`invalid_unicode_mapping`)
-     - 判定证据: 标量计数 37 与字符标量计数 34 不一致，且包含未嵌入中文字体占位。
-   - PyMuPDF 分类: `vector`
-   - 判定: **Unsupported** (分类分歧: scanned vs vector)。
+   - PDFium 探针分类: `vector` (`valid`)，PyMuPDF 分类: `vector`
+   - 判定: **Passed**。放行 3 处合成分隔空格，实质字符序列 100% 匹配。
 5. **`synth_segmented_lines`**:
-   - PDFium 探针分类: `scanned` (`invalid_unicode_mapping`)
-     - 判定证据: 标量计数 25 与字符标量计数 24 存在尾部空格合成差异 (`Table Cell 1 ` vs `Table Cell 1`)。
-   - PyMuPDF 分类: `vector`
-   - 判定: **Unsupported** (分类分歧: scanned vs vector)。
+   - PDFium 探针分类: `vector` (`valid`)，PyMuPDF 分类: `vector`
+   - 表格恢复判定: 两端均调用 `extract_wired_region` 处理断续线表格区域；由于底层线条为断续不闭合线段，双端均无法形成有效封闭表格网格，一致归因于 `no_valid_grid: empty grids or regions`。
+   - 判定: **Unsupported**。
 6. **`test_p27_table` (真实代表样本)**:
-   - PDFium 探针分类: `scanned` (`invalid_unicode_mapping`)
-     - 判定证据: 真实样本中部分 CJK 字符集缺少标准 ToUnicode CMap，PDFium 提取的可见字符标量计数为 1078，字符对象计数为 1049；由于 **CJK unknown 未继续解析**，探针严格遵守门禁规范将其判定为非安全矢量文本，降级为 `scanned`。
-   - PyMuPDF 分类: `vector`
-   - 判定: **Unsupported** (分类分歧: scanned vs vector)。
+   - PDFium 探针分类: `vector` (`valid`)，PyMuPDF 分类: `vector`
+   - 表格恢复判定: 两端均调用 `recover_cells_from_snapshot` 处理无线表格区域。PDFium 恢复出 27 行 2 列表格，PyMuPDF 恢复出 9 行 2 列表格。
+   - 判定: **Failed**。由于无线表格在 Native Span 聚类为逻辑行时的启发式策略存在差异，比对器如实检出并报告了 `reading_order`、`table_structure`、`table_text` 与 `body_text` 差异，并输出了带有单元格选框的叠加对比图。
 7. **`credit_p0_header` (真实代表样本)**:
-   - PDFium 探针分类: `scanned` (`invalid_unicode_mapping`)
-     - 判定证据: 可见字符标量计数 889 与字符对象计数 769 不一致。
-   - PyMuPDF 分类: `vector`
-   - 判定: **Unsupported** (分类分歧: scanned vs vector)。
+   - PDFium 探针分类: `vector` (`valid`)，PyMuPDF 分类: `vector`
+   - 判定: **Unsupported**。两端均进入正文阅读流组装；由于 PyMuPDF 页面包含未建模的水印/印章图元，依据规范标记为 `unsupported_element_kind`。
 8. **`credit_p1_detail` (真实代表样本)**:
-   - PDFium 探针分类: `scanned` (`invalid_unicode_mapping`)
-     - 判定证据: 可见字符标量计数 1037 与字符对象计数 869 不一致。
-   - PyMuPDF 分类: `vector`
-   - 判定: **Unsupported** (分类分歧: scanned vs vector)。
+   - PDFium 探针分类: `vector` (`valid`)，PyMuPDF 分类: `vector`
+   - 表格恢复判定: 两端均调用 `extract_wired_region` 处理顶部信贷明细有线表格，**两端均恢复出 11 行 11 列（共 121 个单元格）的有线表格，`table_structure_equal: true` 拓扑结构完全吻合**！
+   - 判定: **Unsupported**。由于该页同样包含未建模印章/水印图元，标记为 `unsupported_element_kind`。
 
 ---
 
 ## 4. Markdown 输出与阅读顺序对齐
 
-对于成功通过分类对齐的 5 个页面，两侧解析器生成的最终 Markdown、阅读顺序与布局结构完全一致：
+对于成功通过比对的 7 个页面，两侧解析器生成的最终 Markdown、阅读顺序与布局结构完全一致：
 
 ```markdown
 <!-- synth_crop_offset.md -->
@@ -127,7 +126,7 @@ Page Rotation 270 Text
 ```
 
 - **内部空格与换行约束**: Markdown 文本未做 trim，内部空格未做不可逆折叠。
-- **无回读 words 约束**: 全流程严格基于 Native Span、Line 与 Block 的逻辑拓扑构建，未再次调用 `page.get_text("words")` 进行破坏性重构。
+- **无回读 words 约束**: 全流程严格基于 Native Span、Line 与 Block 的逻辑拓扑构建，未再次调用 `page.get_text("words")` 进行二次重构。
 
 ---
 
@@ -135,22 +134,23 @@ Page Rotation 270 Text
 
 - **BBox / 图元对象数量仅为诊断**:
   PDFium 原生 TextObject 的碎片化（拆分为逐字或逐片段存储）导致两引擎的对象绝对数量不同，且两引擎的字体测量/曲线逼近存在细微浮点差异。这些指标在 `diagnostics.json` 与 `diff.json` 中仅作追踪记录，不计入阻断门禁。
-- **CJK Unknown 阻断机制**:
-  当遇到非标准 CID 编码且缺乏 ToUnicode 映射的复杂中文字符时，引擎直接触发门禁，绝不盲目产生带乱码（`\ufffd`）的假阳性 Markdown。
+- **门禁阻断与退出码联动**:
+  当矩阵中存在任何 `unsupported > 0`、`failed > 0`、`blocked_input > 0` 或 `unclassified > 0` 时，`run_behavioral_matrix.py` 严格返回退出码 1，阻断 CI 假绿。
 
 ---
 
 ## 6. 表格可视化 Overlay PNG 人工核对结论
 
-针对配置有 `table_regions` 的真实代表样本，`run_behavioral_matrix` 通过 `render_table_overlays()` 分别调用底层 `hexai_pdf_parser.debug.table_visualizer.render_table_visualization()` 生成了 200 DPI 的页面级叠加示意图：
+针对配置有 `table_regions` 的代表样本，`run_behavioral_matrix` 通过 `render_table_overlays()` 分别调用底层 `hexai_pdf_parser.debug.table_visualizer.render_table_visualization()` 生成了 200 DPI 的页面级叠加示意图：
 
 | 样本名称 | 检验项 | 人工核对结论 |
 | :--- | :--- | :--- |
-| `test_p27_table` | 表格区域与页面光栅化 | **底图核对合格**。因 Unicode 映射门禁触发分类分歧（PDFium 判定为 `scanned/invalid_unicode_mapping`，PyMuPDF 为 `vector`），两引擎表格抽取均安全阻断（`tables=[]`）。Overlay 呈现无选框的裸页光栅化底图，页面未被视口截断，版面完整（宽 841.9pt，高 595.3pt）。 |
-| `credit_p1_detail` | 表格区域与页面光栅化 | **底图核对合格**。同样因门禁安全阻断（`tables=[]`），Overlay 呈现清晰的页面底图。信贷记录明细顶部表格与主体文字印刷边界完整。 |
+| `test_p27_table` | 表格选框与页面光栅化 | **选框核验完成**。两引擎均调用无线表格恢复算法，并在 Overlay PNG 中真实绘制了表格边界与单元格选框。直观反映出 PDFium 侧行切分较细（27 行）与 PyMuPDF 侧行合并较粗（9 行）的结构差异。页面光栅化底图完整（宽 841.9pt，高 595.3pt）。 |
+| `credit_p1_detail` | 表格选框与页面光栅化 | **选框核验合格**。两引擎均调用有线表格恢复算法，并在 Overlay PNG 中真实绘制了 11 行 11 列的网格选框。两端单元格矩形选框与印刷实线 100% 严密贴合，文字填充边界完全吻合。 |
+| `synth_segmented_lines` | 断续线表格区域 | **核验完成**。由于断续线段未闭合，两端均未识别出有效网格，Overlay 显示为裸底图视图，符合 `no_valid_grid` 预期。 |
 | 两引擎图片比对 | 输入 PDF 完整性 | **合格**。渲染器在独立内存副本中绘制，源 PDF 文件 SHA-256 完全保持不变。两引擎生成的底图位图大小与内容完全一致。 |
 
-*注：生成图片路径位于各 run 子目录下的 `pdfium_overlay.png` 与 `pymupdf_overlay.png`。由于分类门禁阻断，当前两真实样本的 Overlay 仅核验了页面底图光栅化完整性与边界，算法提取出的单元格选框叠加核查需待后续 Sprint 解决 CJK 映射门禁后执行。*
+*注：生成图片路径位于各 run 子目录下的 `pdfium_overlay.png` 与 `pymupdf_overlay.png`。*
 
 ---
 
@@ -165,12 +165,12 @@ Page Rotation 270 Text
 | `synth_rotations_90` | `bf38f026663d2d8ea9e129b451d9974c56c310a8e183b1920866253edcafcd1c` | `bf38f026663d2d8ea9e129b451d9974c56c310a8e183b1920866253edcafcd1c` | `bf38f026663d2d8ea9e129b451d9974c56c310a8e183b1920866253edcafcd1c` | **PASS** |
 | `synth_rotations_180`| `eb203b1c7a7260a585bf2815deb3b05934d16efabbc0ef74827fb023825a81ea` | `eb203b1c7a7260a585bf2815deb3b05934d16efabbc0ef74827fb023825a81ea` | `eb203b1c7a7260a585bf2815deb3b05934d16efabbc0ef74827fb023825a81ea` | **PASS** |
 | `synth_rotations_270`| `6e53b2c04854e37438c8913517e004d5e4cf7426c906ca1e916a2fce8e307831` | `6e53b2c04854e37438c8913517e004d5e4cf7426c906ca1e916a2fce8e307831` | `6e53b2c04854e37438c8913517e004d5e4cf7426c906ca1e916a2fce8e307831` | **PASS** |
-| `synth_invisible_text`| `42c8389bb4b2707a962152e6c39e9182697649f2a433dd2c67ff11f2fbc68d82` | `42c8389bb4b2707a962152e6c39e9182697649f2a433dd2c67ff11f2fbc68d82` | `42c8389bb4b2707a962152e6c39e9182697649f2a433dd2c67ff11f2fbc68d82` | **PASS** |
-| `synth_mixed_fonts` | `6e23b6b7fba65b96df08c7e64cd1a94760eaa6ddb681662a0eca83ae3df8eb7f` | `6e23b6b7fba65b96df08c7e64cd1a94760eaa6ddb681662a0eca83ae3df8eb7f` | `6e23b6b7fba65b96df08c7e64cd1a94760eaa6ddb681662a0eca83ae3df8eb7f` | **PASS** |
-| `synth_segmented_lines`| `6d18d2d108f714af594d065eeec9638c79c7bc23ba1adaeb755abca63564761b` | `6d18d2d108f714af594d065eeec9638c79c7bc23ba1adaeb755abca63564761b` | `6d18d2d108f714af594d065eeec9638c79c7bc23ba1adaeb755abca63564761b` | **PASS** |
-| `test_p27_table` | `bd71a652a753ec2a9c40a6a3f9e7bde472b40f2cf52082f5a68bd7f9a06b62c8` | `bd71a652a753ec2a9c40a6a3f9e7bde472b40f2cf52082f5a68bd7f9a06b62c8` | `bd71a652a753ec2a9c40a6a3f9e7bde472b40f2cf52082f5a68bd7f9a06b62c8` | **PASS** |
-| `credit_p0_header` | `52bffe6ab08fdc4af0a6be404f3d0ec8168234152631b98727eae5092fd2a195` | `52bffe6ab08fdc4af0a6be404f3d0ec8168234152631b98727eae5092fd2a195` | `52bffe6ab08fdc4af0a6be404f3d0ec8168234152631b98727eae5092fd2a195` | **PASS** |
-| `credit_p1_detail` | `ef7f73052a17d60a6a3c61c12b18089dd9873045a5fa9e40c5ae0c8418c2ef8e` | `ef7f73052a17d60a6a3c61c12b18089dd9873045a5fa9e40c5ae0c8418c2ef8e` | `ef7f73052a17d60a6a3c61c12b18089dd9873045a5fa9e40c5ae0c8418c2ef8e` | **PASS** |
+| `synth_invisible_text`| `6695d7e622af171a39dbf7597043cef14adb8b2df9d64ba98c4cdfc25e3e5dc0` | `6695d7e622af171a39dbf7597043cef14adb8b2df9d64ba98c4cdfc25e3e5dc0` | `6695d7e622af171a39dbf7597043cef14adb8b2df9d64ba98c4cdfc25e3e5dc0` | **PASS** |
+| `synth_mixed_fonts` | `494d9ad1bb03d72187e042c3454fa4c141a694e3a6df3f4645c3d48dcc666d2d` | `494d9ad1bb03d72187e042c3454fa4c141a694e3a6df3f4645c3d48dcc666d2d` | `494d9ad1bb03d72187e042c3454fa4c141a694e3a6df3f4645c3d48dcc666d2d` | **PASS** |
+| `synth_segmented_lines`| `c0bc73fb04607ab4427c4d162e78dcdc2a4f4afcfa62632e21f85bda940533f2` | `c0bc73fb04607ab4427c4d162e78dcdc2a4f4afcfa62632e21f85bda940533f2` | `c0bc73fb04607ab4427c4d162e78dcdc2a4f4afcfa62632e21f85bda940533f2` | **PASS** |
+| `test_p27_table` | `7c9b0204e3c278b782694d982da979cb9f09d14c92ec0389c9e869dad18ff49e` | `7c9b0204e3c278b782694d982da979cb9f09d14c92ec0389c9e869dad18ff49e` | `7c9b0204e3c278b782694d982da979cb9f09d14c92ec0389c9e869dad18ff49e` | **PASS** |
+| `credit_p0_header` | `dd5a0c77fc94fb8cdaaafb3192032c9609acac7f5e9c09463e1ac01681e7adda` | `dd5a0c77fc94fb8cdaaafb3192032c9609acac7f5e9c09463e1ac01681e7adda` | `dd5a0c77fc94fb8cdaaafb3192032c9609acac7f5e9c09463e1ac01681e7adda` | **PASS** |
+| `credit_p1_detail` | `f8e03dcc09ee45704d99d404890851a1f91dd26ec5e102796c4420dd2b782094` | `f8e03dcc09ee45704d99d404890851a1f91dd26ec5e102796c4420dd2b782094` | `f8e03dcc09ee45704d99d404890851a1f91dd26ec5e102796c4420dd2b782094` | **PASS** |
 
 ### 输入文件 SHA-256 溯源存证
 
@@ -186,8 +186,11 @@ Page Rotation 270 Text
 
 ## 8. 验收结论
 
-1. **确定性达标**: PDFium 原生提取链路、PageSnapshotDto 转换与影子比对在 3 次重复执行中达到 100% 确定性哈希一致。
-2. **安全门禁有效**: 对于真实样本存在的非标 CID / Identity-H 缺失 CMap 场景，探针能有效识别并诚实报告 `invalid_unicode_mapping`，阻断不可靠的下游解析，杜绝脏数据流入。
-3. **交付物完备**: 矩阵运行脚本、自动化测试用例、单体与批量基准配置、确定性哈希台账及可视化 PNG 均已就绪。
-4. **Sprint 规范通过约束**: 依据计划规范约束（“任何 required fixture 为 unsupported/blocked/unclassified 都不能宣告 Sprint 2 通过”），由于真实样本触发门禁阻断归类为 `unsupported`，因此当前 Sprint 2 **不能宣告全量样本业务通过**。本阶段已达成的目标为：基础设施改造与影子对比机制全部完成并验证确定性；真实业务样本的全量通过依赖后续 Sprint 解决底层 CJK 映射差异。
-
+1. **确定性达标**: PDFium 原生提取链路、PageSnapshotDto 转换与影子比对在 3 次重复执行中达到 100% 确定性哈希一致（`all_equal: true`）。
+2. **门禁机制完备且退出码有效阻断**: 矩阵脚本与分类门禁已将 `unsupported` 和 `failed` 均纳入退出码阻断（返回 1），杜绝了 CI 假绿。
+3. **表格与正文恢复真实激活**:
+   - `credit_p1_detail` 有线表格双端恢复出的 11x11 网格结构完全吻合（`table_structure_equal: true`）；
+   - `test_p27_table` 无线表格真实运行两端算法，暴露了行切分启发式算法差异；
+   - `synth_invisible_text` 成功实现阅读顺序与 Markdown 完全对齐。
+4. **交付规范严格达标**: 代码严格局限在 `tools/pdfium_probe/` 目录，生产库 `src/` 与 `rust/` 零污染；`git diff --check 4d01c48..HEAD` 无空白警告；未提交的两个既有合成 PDF 原样保留。
+5. **Sprint 行为验收结论**: 依据行为验收严格标准，由于真实样本存在无线表格算法差异（Failed: 1）与未建模印章图元（Unsupported: 3），当前 Sprint 2 **不能标记为行为验收全量通过**；但已成功完成隔离原型建设、双引擎影子比对、100% 确定性验证与关键门禁治理，为后续 Sprint 调优表格行聚类与印章建模奠定了可量化比对基础。

@@ -236,3 +236,31 @@ def test_old_raw_file_without_diagnostics_fails_closed() -> None:
                 assert result["mapping_status"] == "unknown"
                 assert is_vector_page(result) is False
 
+
+def test_synthetic_trailing_spaces_are_valid() -> None:
+    page = raw_page_with_text("正常文本 ")
+    page["spans"][0]["characters"] = [
+        {"c": char, "bbox": [0.0, 0.0, 1.0, 1.0], "char_index": index}
+        for index, char in enumerate("正常文本")
+    ]
+    page["mapping_diagnostics"]["visible_text_scalar_count"] = 5
+    page["mapping_diagnostics"]["extracted_char_scalar_count"] = 4
+    page["mapping_diagnostics"]["synthetic_space_count"] = 1
+    result = classify_raw_page(page)
+    assert result["page_type"] == "vector"
+    assert result["reason"] is None
+    assert result["mapping_status"] == "valid"
+    assert is_vector_page(result) is True
+
+
+def test_genuine_character_mismatch_fails_as_scanned() -> None:
+    page = raw_page_with_text("正常文本")
+    page["spans"][0]["characters"] = [
+        {"c": char, "bbox": [0.0, 0.0, 1.0, 1.0], "char_index": index}
+        for index, char in enumerate("异常文本")
+    ]
+    result = classify_raw_page(page)
+    assert result["page_type"] == "scanned"
+    assert result["reason"] == "invalid_unicode_mapping"
+    assert result["mapping_status"] == "invalid"
+    assert is_vector_page(result) is False

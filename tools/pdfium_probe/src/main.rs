@@ -60,6 +60,8 @@ pub struct DrawingInfo {
 pub struct MappingDiagnostics {
     pub visible_text_scalar_count: usize,
     pub extracted_char_scalar_count: usize,
+    #[serde(default)]
+    pub synthetic_space_count: usize,
     pub replacement_char_count: usize,
     pub control_char_count: usize,
     pub mapping_status: String,
@@ -217,6 +219,7 @@ pub fn extract_page(page: &PdfPage, page_index: usize) -> Result<PdfiumRawPage, 
 
     let mut visible_text_scalar_count = 0usize;
     let mut extracted_char_scalar_count = 0usize;
+    let mut synthetic_space_count = 0usize;
     let mut replacement_char_count = 0usize;
     let mut control_char_count = 0usize;
     let mut has_char_mismatch = false;
@@ -322,7 +325,12 @@ pub fn extract_page(page: &PdfPage, page_index: usize) -> Result<PdfiumRawPage, 
             for ci in &chars_list {
                 extracted_text.push_str(&ci.c);
             }
-            if extracted_text != text {
+            if extracted_text == text {
+                // 完全一致
+            } else if text.trim_end_matches(' ') == extracted_text {
+                // TextPage 在对象边界合成的末尾空格，不视为字符映射缺失
+                synthetic_space_count += text.chars().count().saturating_sub(extracted_text.chars().count());
+            } else {
                 has_char_mismatch = true;
             }
 
@@ -462,7 +470,7 @@ pub fn extract_page(page: &PdfPage, page_index: usize) -> Result<PdfiumRawPage, 
         ("unknown".to_string(), Some("unknown_unicode_mapping".to_string()))
     } else if replacement_char_count > 0 || control_char_count > 0 {
         ("invalid".to_string(), Some("invalid_unicode".to_string()))
-    } else if visible_text_scalar_count != extracted_char_scalar_count || has_char_mismatch {
+    } else if visible_text_scalar_count != (extracted_char_scalar_count + synthetic_space_count) || has_char_mismatch {
         ("invalid".to_string(), Some("invalid_unicode_mapping".to_string()))
     } else if has_invalid_geometry {
         ("invalid".to_string(), Some("invalid_geometry".to_string()))
@@ -473,6 +481,7 @@ pub fn extract_page(page: &PdfPage, page_index: usize) -> Result<PdfiumRawPage, 
     let mapping_diagnostics = MappingDiagnostics {
         visible_text_scalar_count,
         extracted_char_scalar_count,
+        synthetic_space_count,
         replacement_char_count,
         control_char_count,
         mapping_status,
@@ -784,7 +793,8 @@ mod tests {
     fn test_mapping_diagnostics_contract() {
         let diag = MappingDiagnostics {
             visible_text_scalar_count: 5,
-            extracted_char_scalar_count: 5,
+            extracted_char_scalar_count: 4,
+            synthetic_space_count: 1,
             replacement_char_count: 0,
             control_char_count: 0,
             mapping_status: "valid".to_string(),
@@ -793,12 +803,20 @@ mod tests {
         let json = serde_json::to_string(&diag).unwrap();
         assert!(json.contains("\"mapping_status\":\"valid\""));
         assert!(json.contains("\"visible_text_scalar_count\":5"));
-        assert!(json.contains("\"extracted_char_scalar_count\":5"));
+        assert!(json.contains("\"extracted_char_scalar_count\":4"));
+        assert!(json.contains("\"synthetic_space_count\":1"));
         assert!(json.contains("\"replacement_char_count\":0"));
         assert!(json.contains("\"control_char_count\":0"));
 
         let deserialized: MappingDiagnostics = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized, diag);
+    }
+
+    #[test]
+    fn test_mapping_diagnostics_backward_compatibility() {
+        let json = r#"{"visible_text_scalar_count":5,"extracted_char_scalar_count":5,"replacement_char_count":0,"control_char_count":0,"mapping_status":"valid","classification_reason":null}"#;
+        let deserialized: MappingDiagnostics = serde_json::from_str(json).unwrap();
+        assert_eq!(deserialized.synthetic_space_count, 0);
     }
 
     #[test]

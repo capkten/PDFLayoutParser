@@ -1,7 +1,10 @@
 {
-  "schema_version": "pdfium_raw_snapshot_v1.0",
+  "schema_version": "pdfium_raw_snapshot_v1.1",
   "generator": "pdfium_probe_0.1.0",
   "source_file": "synth_mixed_fonts.pdf",
+  "source_file_sha256": "c52c51c441a7fc29029e0458fbc63b962069cc66a4f9fd38c32acfd7c97932cb",
+  "native_library_sha256": "d42c452a4cf8ca19a87e9c659d4e05035be742c21696ac13431cf73ac1bbf14b",
+  "native_library_expected_sha256": "d42c452a4cf8ca19a87e9c659d4e05035be742c21696ac13431cf73ac1bbf14b",
   "page_count": 1,
   "pages": [
     {
@@ -41,9 +44,9 @@
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 0,
-            "character_count": 17,
+            "character_count": 16,
             "char_start_index": 0,
-            "char_end_index": 17,
+            "char_end_index": 16,
             "char_indices": [
               0,
               1,
@@ -60,8 +63,7 @@
               12,
               13,
               14,
-              15,
-              16
+              15
             ],
             "is_derived": false,
             "derived_block": null,
@@ -227,16 +229,6 @@
                 102.954
               ],
               "char_index": 15
-            },
-            {
-              "c": " ",
-              "bbox": [
-                157.38,
-                87.33,
-                160.88,
-                102.954
-              ],
-              "char_index": 16
             }
           ]
         },
@@ -257,12 +249,11 @@
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 1,
-            "character_count": 2,
+            "character_count": 1,
             "char_start_index": 0,
-            "char_end_index": 2,
+            "char_end_index": 1,
             "char_indices": [
-              0,
-              1
+              0
             ],
             "is_derived": false,
             "derived_block": null,
@@ -278,16 +269,6 @@
                 96.688
               ],
               "char_index": 0
-            },
-            {
-              "c": " ",
-              "bbox": [
-                174.448,
-                87.76,
-                176.448,
-                96.688
-              ],
-              "char_index": 1
             }
           ]
         },
@@ -308,17 +289,16 @@
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 2,
-            "character_count": 7,
+            "character_count": 6,
             "char_start_index": 0,
-            "char_end_index": 7,
+            "char_end_index": 6,
             "char_indices": [
               0,
               1,
               2,
               3,
               4,
-              5,
-              6
+              5
             ],
             "is_derived": false,
             "derived_block": null,
@@ -384,16 +364,6 @@
                 102.8
               ],
               "char_index": 5
-            },
-            {
-              "c": " ",
-              "bbox": [
-                264.0,
-                86.0,
-                267.5,
-                102.8
-              ],
-              "char_index": 6
             }
           ]
         },
@@ -548,7 +518,16 @@
           ]
         }
       ],
-      "drawings": []
+      "drawings": [],
+      "mapping_diagnostics": {
+        "visible_text_scalar_count": 37,
+        "extracted_char_scalar_count": 34,
+        "synthetic_space_count": 3,
+        "replacement_char_count": 0,
+        "control_char_count": 0,
+        "mapping_status": "valid",
+        "classification_reason": null
+      }
     }
   ]
 }

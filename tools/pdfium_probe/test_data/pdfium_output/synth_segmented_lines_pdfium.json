@@ -1,7 +1,10 @@
 {
-  "schema_version": "pdfium_raw_snapshot_v1.0",
+  "schema_version": "pdfium_raw_snapshot_v1.1",
   "generator": "pdfium_probe_0.1.0",
   "source_file": "synth_segmented_lines.pdf",
+  "source_file_sha256": "1d8cab5eb1a74408a58c3ab5752fcefcc1ccfb0a813da847c82c76c85a01efff",
+  "native_library_sha256": "d42c452a4cf8ca19a87e9c659d4e05035be742c21696ac13431cf73ac1bbf14b",
+  "native_library_expected_sha256": "d42c452a4cf8ca19a87e9c659d4e05035be742c21696ac13431cf73ac1bbf14b",
   "page_count": 1,
   "pages": [
     {
@@ -41,9 +44,9 @@
           "provenance": {
             "page_index": 0,
             "pdfium_object_index": 6,
-            "character_count": 13,
+            "character_count": 12,
             "char_start_index": 0,
-            "char_end_index": 13,
+            "char_end_index": 12,
             "char_indices": [
               0,
               1,
@@ -56,8 +59,7 @@
               8,
               9,
               10,
-              11,
-              12
+              11
             ],
             "is_derived": false,
             "derived_block": null,
@@ -183,16 +185,6 @@
                 132.532
               ],
               "char_index": 11
-            },
-            {
-              "c": " ",
-              "bbox": [
-                124.02,
-                119.14,
-                127.02,
-                132.532
-              ],
-              "char_index": 12
             }
           ]
         },
@@ -361,6 +353,7 @@
       "drawings": [
         {
           "drawing_index": 0,
+          "path_type": "stroked",
           "rect": [
             50.0,
             80.0,
@@ -401,6 +394,7 @@
         },
         {
           "drawing_index": 1,
+          "path_type": "stroked",
           "rect": [
             50.0,
             180.0,
@@ -441,6 +435,7 @@
         },
         {
           "drawing_index": 2,
+          "path_type": "stroked",
           "rect": [
             180.0,
             180.0,
@@ -481,6 +476,7 @@
         },
         {
           "drawing_index": 3,
+          "path_type": "stroked",
           "rect": [
             320.0,
             180.0,
@@ -521,6 +517,7 @@
         },
         {
           "drawing_index": 4,
+          "path_type": "stroked",
           "rect": [
             50.0,
             80.0,
@@ -561,6 +558,7 @@
         },
         {
           "drawing_index": 5,
+          "path_type": "stroked",
           "rect": [
             450.0,
             80.0,
@@ -599,7 +597,16 @@
             }
           ]
         }
-      ]
+      ],
+      "mapping_diagnostics": {
+        "visible_text_scalar_count": 25,
+        "extracted_char_scalar_count": 24,
+        "synthetic_space_count": 1,
+        "replacement_char_count": 0,
+        "control_char_count": 0,
+        "mapping_status": "valid",
+        "classification_reason": null
+      }
     }
   ]
 }

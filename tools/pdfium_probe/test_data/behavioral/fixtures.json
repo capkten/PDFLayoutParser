@@ -77,7 +77,15 @@
     "pymupdf_baseline": "baseline/synth_segmented_lines_pymupdf.json",
     "page_index": 0,
     "expected_page_type": "vector",
-    "table_regions": []
+    "table_regions": [
+      {
+        "kind": "wired",
+        "x0": 50.0,
+        "y0": 80.0,
+        "x1": 450.0,
+        "y1": 180.0
+      }
+    ]
   },
   {
     "name": "test_p27_table",

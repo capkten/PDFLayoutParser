@@ -1,7 +1,10 @@
 {
-  "schema_version": "pdfium_raw_snapshot_v1.0",
+  "schema_version": "pdfium_raw_snapshot_v1.1",
   "generator": "pdfium_probe_0.1.0",
   "source_file": "synth_crop_offset.pdf",
+  "source_file_sha256": "ec79342983afad18f6ecd80b56f85c50dd3164283585590e300aa2185b3f9639",
+  "native_library_sha256": "d42c452a4cf8ca19a87e9c659d4e05035be742c21696ac13431cf73ac1bbf14b",
+  "native_library_expected_sha256": "d42c452a4cf8ca19a87e9c659d4e05035be742c21696ac13431cf73ac1bbf14b",
   "page_count": 1,
   "pages": [
     {
@@ -673,7 +676,16 @@
           ]
         }
       ],
-      "drawings": []
+      "drawings": [],
+      "mapping_diagnostics": {
+        "visible_text_scalar_count": 51,
+        "extracted_char_scalar_count": 51,
+        "synthetic_space_count": 0,
+        "replacement_char_count": 0,
+        "control_char_count": 0,
+        "mapping_status": "valid",
+        "classification_reason": null
+      }
     }
   ]
 }

@@ -129,12 +129,20 @@ def _ensure_mapping_diagnostics_if_missing(raw_page: Mapping[str, Any]) -> Dict[
     control_count = 0
     has_geom_err = False
 
+    synthetic_spaces = 0
     for s in spans:
         if not isinstance(s, Mapping):
             continue
         chars = s.get("characters") or []
         extracted_chars += len(chars)
-        for ch in s.get("text", ""):
+        s_text = str(s.get("text", ""))
+        c_text = "".join(
+            c_info.get("c", "") for c_info in chars if isinstance(c_info, Mapping)
+        )
+        if s_text.rstrip(" ") == c_text:
+            synthetic_spaces += len(s_text) - len(c_text)
+
+        for ch in s_text:
             if ch == "\ufffd":
                 replacement_count += 1
             elif ord(ch) < 32 and ch not in ("\n", "\r", "\t"):
@@ -151,11 +159,18 @@ def _ensure_mapping_diagnostics_if_missing(raw_page: Mapping[str, Any]) -> Dict[
                 elif cb[0] > cb[2] or cb[1] > cb[3]:
                     has_geom_err = True
 
-    is_valid = bool(clean_text) and (len(all_text) == extracted_chars) and (replacement_count == 0) and (control_count == 0) and not has_geom_err
+    is_valid = (
+        bool(clean_text)
+        and (len(all_text) == extracted_chars + synthetic_spaces)
+        and (replacement_count == 0)
+        and (control_count == 0)
+        and not has_geom_err
+    )
 
     page_dict["mapping_diagnostics"] = {
         "visible_text_scalar_count": len(all_text),
         "extracted_char_scalar_count": extracted_chars,
+        "synthetic_space_count": synthetic_spaces,
         "replacement_char_count": replacement_count,
         "control_char_count": control_count,
         "mapping_status": "valid" if is_valid else "unknown",
@@ -224,8 +239,8 @@ class _VisualSpan:
             return False
         char_h = min(self.height, other.height)
         gap = other.x0 - self.x1
-        if gap < 0:
-            return True
+        if gap < -0.2 * char_h:
+            return False
         return gap <= SPAN_MERGE_MAX_GAP_FACTOR * char_h
 
     def merge(self, other: "_VisualSpan") -> None:
@@ -251,6 +266,13 @@ class _VisualLine:
         self.height: float = initial_span.height
 
     def matches_span(self, span: _VisualSpan) -> bool:
+        # Spans on the same line cannot overlap significantly horizontally
+        for existing in self.spans:
+            h_overlap = max(0.0, min(existing.x1, span.x1) - max(existing.x0, span.x0))
+            min_w = min(max(0.1, existing.x1 - existing.x0), max(0.1, span.x1 - span.x0))
+            if h_overlap > 0.3 * min_w:
+                return False
+
         v_overlap = max(0.0, min(self.y1, span.y1) - max(self.y0, span.y0))
         min_h = min(self.height, span.height)
         overlap_ratio = v_overlap / min_h
