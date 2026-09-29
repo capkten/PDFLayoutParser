@@ -78,3 +78,46 @@
 3. **输出页面与数据路径**:
    - 矩阵汇总: `tools/pdfium_probe/test_data/behavioral_output/matrix-001/summary.json`
    - 各样本执行产物位于 `tools/pdfium_probe/test_data/behavioral_output/matrix-001/run-01/` 到 `run-03/`，包含 `result.json`、`ledger.json`、`pdfium.md`、`pymupdf.md`、`diff.json`、`layout_signature.json`、`table_signature.json`、`diagnostics.json`、`errors.json` 以及 `pdfium_overlay.png` / `pymupdf_overlay.png`。
+
+---
+
+## 4. Task 7 最终系统验证与环境回归记录 (Task 7 Steps 1-4)
+
+### 4.1 生产代码与构建零污染检查 (Step 1)
+- `git diff --name-only 4d01c48..HEAD` 验证：所有已提交变动完全局限于 `tools/pdfium_probe/` 与 `docs/superpowers/`，根目录 `Cargo.toml`、`src/` 以及 `rust/` 保持完全零改动。
+- `git status --porcelain` 验证：原样保留两个预先存在的非本 Sprint 提交的 PDF 变更 (`synth_crop_offset.pdf`, `synth_mixed_fonts.pdf`)，未被污染提交。
+
+### 4.2 根工程回归与 Wheel 构建验证 (Step 2)
+- `cargo check`: 成功通过 (dev profile，未引入任何编译错误)。
+- `cargo test --lib`: 成功通过，**103 passed; 0 failed; 0 ignored**。
+- `maturin build --release --out tools/pdfium_probe/test_data/behavioral_output/wheel`:
+  - 成功生成 `hexai_pdf_parser-1.1.4-cp37-abi3-win_amd64.whl`。
+  - 解包检验确认：包含 `_pdf_fast` 原生扩展模块，且**不包含**任何 `pdfium.dll`、`libpdfium.so` 或 `libpdfium.dylib` 动态库，确保生产分发包零依赖污染。
+- 根测试用例回归：
+  - 执行命令: `$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD = "1"; $env:PYTHONPATH = "src"; python -m pytest -q tests/test_page_classifier.py tests/test_pdf_snapshot.py tests/test_markdown_writer.py tests/test_reading_order.py`
+  - 结果: **105 passed in 37.04s**。
+
+### 4.3 Probe 与 Shadow 测试套件验证 (Step 3)
+- 原生探针单元测试: `cargo test --manifest-path tools/pdfium_probe/Cargo.toml`
+  - 结果: **10 passed; 0 failed; finished in 0.00s**。
+- 影子对比与探针 Python 测试: `$env:PYTHONPATH = "src;tools/pdfium_probe/scripts"; python -m pytest -q tools/pdfium_probe/tests`
+  - 结果: **76 passed in 1.42s**。
+
+### 4.4 行为矩阵与跨运行确定性校验 (Step 4)
+- 执行命令:
+  `$env:PYTHONPATH = "src;tools/pdfium_probe/scripts"; $env:REPO_ROOT = "D:\codes\PDFLayoutParser"; python tools/pdfium_probe/scripts/run_behavioral_matrix.py --manifest tools/pdfium_probe/test_data/behavioral/fixtures.json --pdfium-root tools/pdfium_probe/test_data/behavioral_output/native-run-1 --pdfium-root tools/pdfium_probe/test_data/behavioral_output/native-run-2 --pdfium-root tools/pdfium_probe/test_data/behavioral_output/native-run-3 --output tools/pdfium_probe/test_data/behavioral_output/final-run`
+- 结果:
+  - Fixtures: 11
+  - Runs: 3
+  - **Deterministic: True** (`all_equal: true`，3 次运行全样本 Canonical SHA-256 100% 一致)
+  - Passed: 5
+  - Failed: 0
+  - Scanned: 0
+  - Unsupported: 6 (明确归类为 `page_classification` 门禁分歧)
+  - Blocked Input: 0
+  - Unclassified: 0
+- `git diff --check`: 退出码 0，无任何空白或冲突标记残留。
+- 表格 Overlay PNG 人工核验：
+  - `test_p27_table`: `pdfium_overlay.png` 与 `pymupdf_overlay.png` 均为完整页面光栅化视图，门禁有效阻断空表格进入推断。
+  - `credit_p1_detail`: `pdfium_overlay.png` 与 `pymupdf_overlay.png` 结构清晰完整，源 PDF 保持零变更。
+
