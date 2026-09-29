@@ -184,3 +184,105 @@ def test_normalize_raw_snapshot_multiple_pages() -> None:
     assert len(normalized) == 2
     assert normalized[0].page_snapshot["page_index"] == 0
     assert normalized[1].page_snapshot["page_index"] == 1
+
+
+def test_numeric_continuity_negative_and_thousands() -> None:
+    page = normalize_raw_page(
+        make_raw_page(
+            [
+                make_span("-12.34", 0, 10, 50, 20, order=0),
+                make_span("1,000", 60, 10, 100, 20, order=1),
+                make_span("1,000.50", 110, 10, 160, 20, order=2),
+                make_span("-50%", 170, 10, 200, 20, order=3),
+            ]
+        )
+    )
+    words = [w[4] for w in page.words]
+    assert words == ["-12.34", "1,000", "1,000.50", "-50%"]
+
+
+def test_merged_span_preserves_character_provenance() -> None:
+    span_a = make_span("A", 0, 10, 8, 20, order=10)
+    span_a["provenance"] = {
+        "pdfium_object_index": 10,
+        "char_start_index": 0,
+        "char_end_index": 1,
+    }
+    span_b = make_span("B", 9, 10, 17, 20, order=20)
+    span_b["provenance"] = {
+        "pdfium_object_index": 20,
+        "char_start_index": 0,
+        "char_end_index": 1,
+    }
+
+    page = normalize_raw_page(make_raw_page([span_a, span_b]))
+    assert page.page_snapshot is not None
+    spans = page.page_snapshot["text_blocks"][0]["lines"][0]["spans"]
+    assert len(spans) == 1
+    merged = spans[0]
+    assert merged["text"] == "AB"
+    assert len(merged["characters"]) == 2
+
+    # Character 0 must retain original object index 10
+    char_0 = merged["characters"][0]
+    assert char_0["text"] == "A"
+    assert char_0["raw_source_position"] == [0, 10, 0, 0]
+
+    # Character 1 must retain original object index 20
+    char_1 = merged["characters"][1]
+    assert char_1["text"] == "B"
+    assert char_1["raw_source_position"] == [0, 20, 0, 0]
+
+    # Word must also span the characters
+    assert len(page.page_snapshot["words"]) == 1
+    word_0 = page.page_snapshot["words"][0]
+    assert word_0["text"] == "AB"
+    assert word_0["raw_source_position"] == [0, 10, 0, 0]
+
+
+def test_rawdict_bbox_tuples_and_rust_rawdict_collector() -> None:
+    page = normalize_raw_page(make_raw_page([make_span("Hello", 10, 20, 50, 30)]))
+    rawdict = page.rawdict
+    assert rawdict is not None
+
+    block = rawdict["blocks"][0]
+    assert isinstance(block["bbox"], tuple)
+    assert len(block["bbox"]) == 4
+
+    line = block["lines"][0]
+    assert isinstance(line["bbox"], tuple)
+    assert len(line["bbox"]) == 4
+
+    span = line["spans"][0]
+    assert isinstance(span["bbox"], tuple)
+    assert len(span["bbox"]) == 4
+
+    char = span["chars"][0]
+    assert isinstance(char["bbox"], tuple)
+    assert len(char["bbox"]) == 4
+
+    # Test that rust_adapter.collect_native_spans_from_rawdict succeeds and extracts spans
+    rust_spans = rust_adapter.collect_native_spans_from_rawdict(rawdict, 100.0, 0.0)
+    assert len(rust_spans) == 1
+    assert rust_spans[0].text == "Hello"
+
+
+def test_dto_block_and_line_order_and_source_order() -> None:
+    page = normalize_raw_page(
+        make_raw_page(
+            [
+                make_span("L1", 0, 10, 20, 20),
+                make_span("L2", 0, 30, 20, 40),
+            ]
+        )
+    )
+    assert page.page_snapshot is not None
+    block = page.page_snapshot["text_blocks"][0]
+    assert block["order"] == 0
+    assert block["source_order"] == 0
+
+    lines = block["lines"]
+    assert lines[0]["order"] == 0
+    assert lines[0]["source_order"] == 0
+    assert lines[1]["order"] == 1
+    assert lines[1]["source_order"] == 1

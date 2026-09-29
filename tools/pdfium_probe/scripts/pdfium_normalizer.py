@@ -61,6 +61,16 @@ def _make_rect4(x0: float, y0: float, x1: float, y1: float) -> Dict[str, Any]:
     }
 
 
+def _is_buffer_numeric(buf: Sequence[Mapping[str, Any]]) -> bool:
+    if not buf:
+        return False
+    text = "".join(c["c"] for c in buf)
+    if text in ("+", "-", "+.", "-.", "."):
+        return True
+    stripped = text.lstrip("+-")
+    return bool(stripped) and any(ch.isdigit() for ch in stripped)
+
+
 def _ensure_mapping_diagnostics_if_missing(raw_page: Mapping[str, Any]) -> Dict[str, Any]:
     page_dict = dict(raw_page)
     if "mapping_diagnostics" in page_dict and isinstance(page_dict["mapping_diagnostics"], Mapping):
@@ -113,7 +123,7 @@ class _VisualSpan:
     def __init__(
         self,
         text: str,
-        bbox: List[float],
+        bbox: Sequence[float],
         font: Optional[str],
         size: Optional[float],
         flags: Optional[int],
@@ -181,6 +191,7 @@ class _VisualSpan:
             max(self.x1, other.x1),
             max(self.y1, other.y1),
         ]
+        # Preserve original characters intact with their individual pdfium_object_index
         self.characters.extend(other.characters)
         end_idx = other.provenance.get("char_end_index", len(other.characters))
         self.provenance["char_end_index"] = end_idx
@@ -301,22 +312,16 @@ def _derive_words(
 
     for block_idx, block in enumerate(blocks):
         for line_idx, line in enumerate(block.lines):
-            # Collect all characters on this line in horizontal order
             line_chars: List[Dict[str, Any]] = []
             for span in line.spans:
-                p_obj_idx = span.provenance.get(
-                    "pdfium_object_index", span.provenance.get("order", 0)
-                )
-                for c_idx, ch in enumerate(span.characters):
-                    c_str = ch.get("c", "")
-                    c_bbox = ch.get("bbox", span.bbox)
-                    char_idx = ch.get("char_index", c_idx)
+                for ch in span.characters:
                     line_chars.append(
                         {
-                            "c": c_str,
-                            "bbox": [float(b) for b in c_bbox],
-                            "char_index": char_idx,
-                            "obj_idx": p_obj_idx,
+                            "c": ch["c"],
+                            "bbox": ch["bbox"],
+                            "char_index": ch["char_index"],
+                            "obj_idx": ch["pdfium_object_index"],
+                            "page_index": ch["page_index"],
                             "font": span.font,
                             "size": span.size,
                         }
@@ -325,7 +330,7 @@ def _derive_words(
             if not line_chars:
                 continue
 
-            # Sort characters by x0
+            # Sort characters by horizontal x0
             line_chars.sort(key=lambda c: c["bbox"][0])
 
             current_buf: List[Dict[str, Any]] = []
@@ -336,6 +341,9 @@ def _derive_words(
                 if not current_buf:
                     return
                 w_text = "".join(c["c"] for c in current_buf)
+                if w_text in ("+", "-", "+.", "-.", "."):
+                    current_buf = []
+                    return
                 w_x0 = min(c["bbox"][0] for c in current_buf)
                 w_y0 = min(c["bbox"][1] for c in current_buf)
                 w_x1 = max(c["bbox"][2] for c in current_buf)
@@ -343,7 +351,7 @@ def _derive_words(
                 first_c = current_buf[0]
                 last_c = current_buf[-1]
                 raw_pos = [
-                    int(page_index),
+                    int(first_c["page_index"]),
                     int(first_c["obj_idx"]),
                     int(first_c["char_index"]),
                     int(last_c["char_index"]),
@@ -378,41 +386,109 @@ def _derive_words(
                 line_word_idx += 1
                 current_buf = []
 
-            for i, ch_item in enumerate(line_chars):
+            i = 0
+            while i < len(line_chars):
+                ch_item = line_chars[i]
                 c_str = ch_item["c"]
+
                 if c_str.isspace():
                     flush_buf()
+                    i += 1
                     continue
 
                 if current_buf:
                     prev_c = current_buf[-1]
-                    prev_char = prev_c["c"]
                     char_h = min(
                         prev_c["bbox"][3] - prev_c["bbox"][1],
                         ch_item["bbox"][3] - ch_item["bbox"][1],
                     )
                     char_gap = ch_item["bbox"][0] - prev_c["bbox"][2]
-
-                    # Check spacing gap
                     if char_gap > WORD_CHAR_GAP_FACTOR * char_h:
                         flush_buf()
-                    elif _is_punctuation(c_str):
-                        # Punctuation check: decimal or thousand separator in numbers
-                        is_numeric_punct = (
-                            c_str in ".,"
-                            and prev_char.isdigit()
-                            and (i + 1 < len(line_chars) and line_chars[i + 1]["c"].isdigit())
-                        )
-                        if not is_numeric_punct:
-                            flush_buf()
-                    elif _is_punctuation(prev_char):
-                        flush_buf()
-                    elif _is_cjk(c_str) and not _is_cjk(prev_char):
-                        flush_buf()
-                    elif not _is_cjk(c_str) and _is_cjk(prev_char):
-                        flush_buf()
 
-                current_buf.append(ch_item)
+                # If current_buf is still non-empty, test whether c_str continues it
+                if current_buf:
+                    prev_c = current_buf[-1]
+                    prev_char = prev_c["c"]
+
+                    if _is_buffer_numeric(current_buf):
+                        if c_str.isdigit():
+                            current_buf.append(ch_item)
+                            i += 1
+                            continue
+                        elif c_str in ".,":
+                            next_is_digit = (
+                                i + 1 < len(line_chars) and line_chars[i + 1]["c"].isdigit()
+                            )
+                            if prev_char.isdigit() and next_is_digit:
+                                if c_str == "." and any(c["c"] == "." for c in current_buf):
+                                    flush_buf()
+                                else:
+                                    current_buf.append(ch_item)
+                                    i += 1
+                                    continue
+                            else:
+                                flush_buf()
+                        elif c_str == "%" and prev_char.isdigit():
+                            current_buf.append(ch_item)
+                            flush_buf()
+                            i += 1
+                            continue
+                        else:
+                            flush_buf()
+
+                    elif _is_cjk(prev_char):
+                        if _is_cjk(c_str):
+                            current_buf.append(ch_item)
+                            i += 1
+                            continue
+                        else:
+                            flush_buf()
+
+                    else:
+                        # Latin / Alphanumeric word
+                        if (c_str.isalnum() and not _is_cjk(c_str)) or (
+                            c_str == "'"
+                            and i + 1 < len(line_chars)
+                            and line_chars[i + 1]["c"].isalpha()
+                        ):
+                            current_buf.append(ch_item)
+                            i += 1
+                            continue
+                        else:
+                            flush_buf()
+
+                # current_buf is empty (either initially or just flushed). Start new token if applicable:
+                if c_str.isdigit():
+                    current_buf.append(ch_item)
+                    i += 1
+                elif c_str in "+-":
+                    next_is_digit = (
+                        i + 1 < len(line_chars)
+                        and (
+                            line_chars[i + 1]["c"].isdigit()
+                            or (
+                                line_chars[i + 1]["c"] == "."
+                                and i + 2 < len(line_chars)
+                                and line_chars[i + 2]["c"].isdigit()
+                            )
+                        )
+                    )
+                    if next_is_digit:
+                        current_buf.append(ch_item)
+                        i += 1
+                    else:
+                        # standalone operator / delimiter
+                        i += 1
+                elif _is_cjk(c_str):
+                    current_buf.append(ch_item)
+                    i += 1
+                elif c_str.isalnum() and not _is_cjk(c_str):
+                    current_buf.append(ch_item)
+                    i += 1
+                else:
+                    # delimiter punctuation
+                    i += 1
 
             flush_buf()
 
@@ -441,24 +517,37 @@ def normalize_raw_page(raw_page: Mapping[str, Any]) -> NormalizedPage:
 
     raw_spans = checked_page.get("spans") or []
 
-    # Step 1: Construct visual span objects
+    # Step 1: Construct visual span objects with rich character metadata
     visual_spans: List[_VisualSpan] = []
     for s_idx, r_span in enumerate(raw_spans):
         if not isinstance(r_span, Mapping):
             continue
         text = str(r_span.get("text", ""))
-        bbox = r_span.get("bbox") or [0.0, 0.0, 0.0, 0.0]
+        bbox = list(r_span.get("bbox") or [0.0, 0.0, 0.0, 0.0])
         font = r_span.get("font")
         size = r_span.get("size")
         flags = r_span.get("flags")
         render_mode = int(r_span.get("render_mode", 0))
         is_invisible = bool(r_span.get("is_invisible", False))
-        prov = r_span.get("provenance") or {
-            "pdfium_object_index": r_span.get("order", s_idx),
-            "char_start_index": 0,
-            "char_end_index": len(text),
-        }
-        chars = r_span.get("characters") or []
+        prov = dict(r_span.get("provenance") or {})
+        p_obj_idx = prov.get("pdfium_object_index", r_span.get("order", s_idx))
+        raw_chars = r_span.get("characters") or []
+
+        char_records: List[Dict[str, Any]] = []
+        for c_idx, ch in enumerate(raw_chars):
+            c_text = ch.get("c", "") if isinstance(ch, Mapping) else ""
+            c_bbox = list(ch.get("bbox", bbox)) if isinstance(ch, Mapping) else list(bbox)
+            c_char_idx = ch.get("char_index", c_idx) if isinstance(ch, Mapping) else c_idx
+            char_records.append(
+                {
+                    "c": c_text,
+                    "bbox": [float(b) for b in c_bbox],
+                    "char_index": int(c_char_idx),
+                    "pdfium_object_index": int(p_obj_idx),
+                    "page_index": int(page_index),
+                }
+            )
+
         visual_spans.append(
             _VisualSpan(
                 text=text,
@@ -469,7 +558,7 @@ def normalize_raw_page(raw_page: Mapping[str, Any]) -> NormalizedPage:
                 render_mode=render_mode,
                 is_invisible=is_invisible,
                 provenance=prov,
-                characters=chars,
+                characters=char_records,
                 page_index=page_index,
             )
         )
@@ -526,22 +615,21 @@ def normalize_raw_page(raw_page: Mapping[str, Any]) -> NormalizedPage:
             rawdict_line_spans: List[Dict[str, Any]] = []
 
             for span in line.spans:
-                p_obj_idx = span.provenance.get(
-                    "pdfium_object_index", span.provenance.get("order", 0)
-                )
-
                 wire_chars: List[Dict[str, Any]] = []
                 rawdict_chars: List[Dict[str, Any]] = []
 
-                for c_idx, ch in enumerate(span.characters):
-                    c_text = ch.get("c", "")
-                    c_bbox = ch.get("bbox", span.bbox)
-                    char_idx = ch.get("char_index", c_idx)
+                for ch in span.characters:
+                    c_text = ch["c"]
+                    c_bbox = ch["bbox"]
+                    c_obj_idx = ch["pdfium_object_index"]
+                    c_char_idx = ch["char_index"]
+                    c_page_idx = ch["page_index"]
+
                     char_raw_pos = [
-                        int(page_index),
-                        int(p_obj_idx),
-                        int(char_idx),
-                        int(char_idx),
+                        int(c_page_idx),
+                        int(c_obj_idx),
+                        int(c_char_idx),
+                        int(c_char_idx),
                     ]
 
                     wire_chars.append(
@@ -556,23 +644,32 @@ def normalize_raw_page(raw_page: Mapping[str, Any]) -> NormalizedPage:
                     rawdict_chars.append(
                         {
                             "c": c_text,
-                            "bbox": [float(b) for b in c_bbox],
+                            "bbox": (
+                                float(c_bbox[0]),
+                                float(c_bbox[1]),
+                                float(c_bbox[2]),
+                                float(c_bbox[3]),
+                            ),
                         }
                     )
                     global_char_order += 1
 
-                first_char_idx = (
-                    span.characters[0].get("char_index", 0) if span.characters else 0
-                )
-                last_char_idx = (
-                    span.characters[-1].get("char_index", 0) if span.characters else 0
-                )
-                span_raw_pos = [
-                    int(page_index),
-                    int(p_obj_idx),
-                    int(first_char_idx),
-                    int(last_char_idx),
-                ]
+                first_char = span.characters[0] if span.characters else None
+                last_char = span.characters[-1] if span.characters else None
+                if first_char and last_char:
+                    span_raw_pos = [
+                        int(first_char["page_index"]),
+                        int(first_char["pdfium_object_index"]),
+                        int(first_char["char_index"]),
+                        int(last_char["char_index"]),
+                    ]
+                else:
+                    span_raw_pos = [
+                        int(page_index),
+                        int(span.provenance.get("pdfium_object_index", 0)),
+                        0,
+                        0,
+                    ]
 
                 span_dict = {
                     "schema_version": 1,
@@ -598,7 +695,12 @@ def normalize_raw_page(raw_page: Mapping[str, Any]) -> NormalizedPage:
 
                 rawdict_line_spans.append(
                     {
-                        "bbox": [span.x0, span.y0, span.x1, span.y1],
+                        "bbox": (
+                            float(span.x0),
+                            float(span.y0),
+                            float(span.x1),
+                            float(span.y1),
+                        ),
                         "text": span.text,
                         "font": span.font or "",
                         "size": span.size,
@@ -614,6 +716,7 @@ def normalize_raw_page(raw_page: Mapping[str, Any]) -> NormalizedPage:
                     "schema_version": 1,
                     "rect": _make_rect4(line.x0, line.y0, line.x1, line.y1),
                     "spans": wire_line_spans,
+                    "order": int(line_idx),
                     "source_position": [int(block_idx), int(line_idx)],
                     "source_order": int(line_idx),
                 }
@@ -621,7 +724,12 @@ def normalize_raw_page(raw_page: Mapping[str, Any]) -> NormalizedPage:
 
             rawdict_lines.append(
                 {
-                    "bbox": [line.x0, line.y0, line.x1, line.y1],
+                    "bbox": (
+                        float(line.x0),
+                        float(line.y0),
+                        float(line.x1),
+                        float(line.y1),
+                    ),
                     "spans": rawdict_line_spans,
                 }
             )
@@ -632,6 +740,7 @@ def normalize_raw_page(raw_page: Mapping[str, Any]) -> NormalizedPage:
                 "type": 0,
                 "rect": _make_rect4(block.x0, block.y0, block.x1, block.y1),
                 "lines": wire_lines,
+                "order": int(block_idx),
                 "source_position": [int(block_idx)],
                 "source_order": int(block_idx),
             }
@@ -640,7 +749,12 @@ def normalize_raw_page(raw_page: Mapping[str, Any]) -> NormalizedPage:
         rawdict_blocks.append(
             {
                 "type": 0,
-                "bbox": [block.x0, block.y0, block.x1, block.y1],
+                "bbox": (
+                    float(block.x0),
+                    float(block.y0),
+                    float(block.x1),
+                    float(block.y1),
+                ),
                 "lines": rawdict_lines,
             }
         )
