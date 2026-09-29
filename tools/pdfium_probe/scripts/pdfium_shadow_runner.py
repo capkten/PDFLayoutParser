@@ -243,6 +243,8 @@ def run_shadow_page(
     page_index: int,
     table_regions: Sequence[Mapping[str, Any]] = (),
     output_dir: Path,
+    pdf_path: Optional[Path] = None,
+    auto_detect_tables: bool = False,
 ) -> Dict[str, Any]:
     """Run shadow extraction comparison between PDFium and PyMuPDF."""
     out_path = Path(output_dir)
@@ -364,63 +366,73 @@ def run_shadow_page(
     _ = rust_adapter.collect_native_spans_from_snapshot(pdfium_dto)
     _ = rust_adapter.collect_native_spans_from_snapshot(py_dto)
 
+    pdfium_adapter = PdfiumPageAdapter(norm_pdfium, pdf_path=pdf_path)
+
     # 4 & 5. Table recovery
     pdfium_tables: List[Table] = []
     py_tables: List[Table] = []
     unsupported_table_evidence: List[Dict[str, Any]] = []
 
-    for reg in table_regions:
-        kind = reg.get("kind", "wireless")
-        rx0 = float(reg.get("x0", 0.0))
-        ry0 = float(reg.get("y0", 0.0))
-        rx1 = float(reg.get("x1", 0.0))
-        ry1 = float(reg.get("y1", 0.0))
-        region_bbox = BBox(rx0, ry0, rx1, ry1)
+    if auto_detect_tables:
+        from hexai_pdf_parser.tables.table_extractor import TableExtractor
+        table_extractor = TableExtractor()
+        pdfium_tables = table_extractor.extract(pdfium_adapter)
+        if pymupdf_page is not None and hasattr(pymupdf_page, "get_text"):
+            py_tables = table_extractor.extract(pymupdf_page)
+        else:
+            py_tables = list(pdfium_tables)
+    else:
+        for reg in table_regions:
+            kind = reg.get("kind", "wireless")
+            rx0 = float(reg.get("x0", 0.0))
+            ry0 = float(reg.get("y0", 0.0))
+            rx1 = float(reg.get("x1", 0.0))
+            ry1 = float(reg.get("y1", 0.0))
+            region_bbox = BBox(rx0, ry0, rx1, ry1)
 
-        if kind == "wireless":
-            p_rows, p_cols, p_cells = rust_adapter.recover_cells_from_snapshot(
-                pdfium_dto, reg
-            )
-            if p_rows > 0 and p_cols > 0 and p_cells:
-                pdfium_tables.append(
-                    Table(
-                        bbox=region_bbox,
-                        rows=p_rows,
-                        cols=p_cols,
-                        cells=p_cells,
-                        source="wireless",
-                    )
+            if kind == "wireless":
+                p_rows, p_cols, p_cells = rust_adapter.recover_cells_from_snapshot(
+                    pdfium_dto, reg
                 )
-
-            m_rows, m_cols, m_cells = rust_adapter.recover_cells_from_snapshot(
-                py_dto, reg
-            )
-            if m_rows > 0 and m_cols > 0 and m_cells:
-                py_tables.append(
-                    Table(
-                        bbox=region_bbox,
-                        rows=m_rows,
-                        cols=m_cols,
-                        cells=m_cells,
-                        source="wireless",
+                if p_rows > 0 and p_cols > 0 and p_cells:
+                    pdfium_tables.append(
+                        Table(
+                            bbox=region_bbox,
+                            rows=p_rows,
+                            cols=p_cols,
+                            cells=p_cells,
+                            source="wireless",
+                        )
                     )
+
+                m_rows, m_cols, m_cells = rust_adapter.recover_cells_from_snapshot(
+                    py_dto, reg
                 )
+                if m_rows > 0 and m_cols > 0 and m_cells:
+                    py_tables.append(
+                        Table(
+                            bbox=region_bbox,
+                            rows=m_rows,
+                            cols=m_cols,
+                            cells=m_cells,
+                            source="wireless",
+                        )
+                    )
 
-        elif kind == "wired":
-            p_tbls, p_unsupported = _extract_wired_table(pdfium_dto, reg, is_pdfium=True)
-            if p_unsupported:
-                unsupported_table_evidence.extend(p_unsupported)
-            else:
-                pdfium_tables.extend(p_tbls)
+            elif kind == "wired":
+                p_tbls, p_unsupported = _extract_wired_table(pdfium_dto, reg, is_pdfium=True)
+                if p_unsupported:
+                    unsupported_table_evidence.extend(p_unsupported)
+                else:
+                    pdfium_tables.extend(p_tbls)
 
-            m_tbls, m_unsupported = _extract_wired_table(py_dto, reg, is_pdfium=False)
-            if m_unsupported:
-                unsupported_table_evidence.extend(m_unsupported)
-            else:
-                py_tables.extend(m_tbls)
+                m_tbls, m_unsupported = _extract_wired_table(py_dto, reg, is_pdfium=False)
+                if m_unsupported:
+                    unsupported_table_evidence.extend(m_unsupported)
+                else:
+                    py_tables.extend(m_tbls)
 
     # 6. Layout assembly & markdown generation
-    pdfium_adapter = PdfiumPageAdapter(norm_pdfium)
     text_extractor = TextExtractor()
     layout_mapper = LayoutMapper()
     layout_builder = LayoutBuilder()

@@ -264,3 +264,19 @@ def test_page_rect_tuple_argument_and_copy() -> None:
     assert c2 == r1
     assert isinstance(c2, PageRect)
     assert c2.y1 == 200.0
+
+
+def test_run_shadow_page_with_auto_detect_tables(tmp_path: Path) -> None:
+    raw = make_raw_page([make_span("Hello PDFium", 10, 10, 80, 25, order=0)])
+    py_page = _MockPyMuPDFPage(raw)
+
+    result = run_shadow_page(
+        pdfium_raw_page=raw,
+        pymupdf_page=py_page,
+        page_index=0,
+        output_dir=tmp_path,
+        auto_detect_tables=True,
+    )
+    assert result["status"] == "compared"
+    assert result["pdfium_page_type"] == "vector"
+    assert "Hello PDFium" in result["pdfium_markdown"]
