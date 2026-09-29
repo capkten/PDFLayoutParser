@@ -617,8 +617,10 @@ pub fn render_page_to_png(
     out_path: &Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let scale = (dpi / 72.0).max(0.1);
-    let target_w = (page.width().value * scale).round() as i32;
-    let target_h = (page.height().value * scale).round() as i32;
+    let mut target_w = (page.width().value * scale).round() as i32;
+    let mut target_h = (page.height().value * scale).round() as i32;
+    target_w = target_w.max(1);
+    target_h = target_h.max(1);
 
     let render_config = PdfRenderConfig::new()
         .set_target_width(target_w)
@@ -652,8 +654,12 @@ pub fn process_pdf_file(
         // 同步渲染 72 DPI 与 180 DPI 底图供下游模型使用
         let dpi72_out = out_dir.join(format!("{}_page_{}_dpi72.png", base_name, i));
         let dpi180_out = out_dir.join(format!("{}_page_{}_dpi180.png", base_name, i));
-        let _ = render_page_to_png(&page, 72.0, &dpi72_out);
-        let _ = render_page_to_png(&page, 180.0, &dpi180_out);
+        if let Err(e) = render_page_to_png(&page, 72.0, &dpi72_out) {
+            eprintln!("[pdfium_probe] Warning: failed to render page: {}", e);
+        }
+        if let Err(e) = render_page_to_png(&page, 180.0, &dpi180_out) {
+            eprintln!("[pdfium_probe] Warning: failed to render page: {}", e);
+        }
     }
 
     let snapshot = PdfiumRawSnapshot {
@@ -721,7 +727,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let bindings = Pdfium::bind_to_library(lib_path)?;
         let pdfium = Pdfium::new(bindings);
         let doc = pdfium.load_pdf_from_file(pdf_file, None)?;
-        let page = doc.pages().get(page_idx as u16)?;
+        let page_idx_u16 = u16::try_from(page_idx)
+            .map_err(|e| format!("Page index {} exceeds u16 range: {}", page_idx, e))?;
+        let page = doc.pages().get(page_idx_u16)?;
         render_page_to_png(&page, dpi, out_png)?;
         println!("[pdfium_probe] Rendered page {} to {:?}", page_idx, out_png);
         return Ok(());

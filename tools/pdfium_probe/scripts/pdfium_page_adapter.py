@@ -95,14 +95,23 @@ def _find_pdfium_probe_bin() -> Optional[Path]:
         else ["pdfium_probe", "pdfium_probe.exe"]
     )
 
-    candidate_dirs = [
+    candidate_dirs: List[Path] = []
+    cargo_target_dir = os.environ.get("CARGO_TARGET_DIR")
+    if cargo_target_dir:
+        c_target = Path(cargo_target_dir)
+        candidate_dirs.extend([
+            c_target / "release",
+            c_target / "debug",
+        ])
+
+    candidate_dirs.extend([
         probe_root / "target" / "release",
         probe_root / "target" / "debug",
         fallback_repo / "tools" / "pdfium_probe" / "target" / "release",
         fallback_repo / "tools" / "pdfium_probe" / "target" / "debug",
         repo_root / "tools" / "pdfium_probe" / "target" / "release",
         repo_root / "tools" / "pdfium_probe" / "target" / "debug",
-    ]
+    ])
 
     for cdir in candidate_dirs:
         for bname in bin_names:

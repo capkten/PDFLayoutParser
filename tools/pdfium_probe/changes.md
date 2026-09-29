@@ -146,24 +146,25 @@
 ### 5.2 Rust 原生光栅化实现细节
 
 在 `tools/pdfium_probe/src/main.rs` 中实现了纯 Rust 的页面位图光栅化能力：
-1. **CLI 扩展与参数契约**：
-   - 增加 `--render-page <PAGE_INDEX>`：指定光栅化目标页码（0-indexed）；
-   - 增加 `--render-dpi <DPI>`：指定光栅化分辨率（默认 72 DPI）；
-   - 增加 `--render-output <OUTPUT_PNG_PATH>`：指定输出 PNG 文件绝对/相对路径。
-2. **光栅化与编码管道 (`render_page_to_png`)**：
-   - 几何尺度换算：按照 `width = (page.width() * dpi / 72.0).round() as i32` 和 `height = (page.height() * dpi / 72.0).round() as i32` 换算目标像素尺寸；
-   - 配置与渲染：构建 `PdfBitmapConfig`（指定 `PdfBitmapFormat::BGRx` 及缩放变换矩阵），调用 `page.render_with_config(&config)` 生成内存位图；
-   - 格式对齐与无损导出：将 BGRx/BGRA 像素通道对齐为 RGBA，使用 `image::codecs::png::PngEncoder` 无损压缩并保存为 PNG；
-   - 单元测试：新增 `test_render_page_to_png_contract`，验证渲染宽高几何比例与 PNG 文件头完整性。
+1. **CLI 命令与位置参数契约**：
+   - 增加渲染命令：`pdfium_probe render <pdf_path> <page_index> <dpi> <out_png>`；
+   - 参数校验：校验位置参数数量，对 `<page_index>` 使用 `u16::try_from(page_idx)` 防止溢出回绕，并打印输出路径存证。
+2. **光栅化与零依赖编码管道 (`render_page_to_png`)**：
+   - 几何尺度换算：按照 `scale = (dpi / 72.0).max(0.1)` 换算目标像素尺寸，并确保 `target_w = target_w.max(1); target_h = target_h.max(1);` 防御 0 或负尺寸异常；
+   - 配置与渲染：构建 `PdfRenderConfig::new().set_target_width(target_w).set_target_height(target_h)`，调用 `page.render_with_config(&render_config)` 生成内存位图；
+   - 零依赖无损 PNG 编码 (`save_rgba_as_png`)：将 RGBA 像素流通过标准 RFC 1950 (zlib wrapper) 与 RFC 1951 (Deflate uncompressed blocks `btype=00`) 规范装配，结合 Adler32 与 CRC32 校验码，手工流式组装 `IHDR`、`IDAT`、`IEND` Chunk 写入 PNG 文件，彻底避免引入外部 `image::codecs::png::PngEncoder` 或庞大图形编解码 crate；
+   - 渲染容错与告警：在 `process_pdf_file` 同步渲染 72/180 DPI 底图时，增加失败告警日志 `eprintln!("[pdfium_probe] Warning: failed to render page: {}", e)` 代替静默丢弃；
+   - 单元测试：`test_render_page_to_png_contract`，验证渲染宽高几何比例与 PNG 文件头完整性。
 
 ### 5.3 Python 适配器改造与零外部库调用约束
 
 在 `tools/pdfium_probe/scripts/pdfium_page_adapter.py` 中彻底剔除了 `pypdfium2`：
 1. **全面移除第三方库引用**：删除所有 `import pypdfium2` 代码与相关分支；
 2. **纯 Rust 子进程光栅化对接**：
-   - `get_pixmap(matrix=None, dpi=72, alpha=False)`：定位 `pdfium_probe` 编译二进制（支持 `CARGO_TARGET_DIR`、`debug`、`release` 以及 `REPO_ROOT` 回退定位）；
-   - 调用 `pdfium_probe --render-page <page> --render-dpi <dpi> --render-output <tmp.png>` 进行跨进程高效渲染；
-   - 增加 30 秒安全超时限制（`timeout=30`），避免子进程死锁；
+   - `get_pixmap(matrix=None, dpi=72, alpha=False)`：定位 `pdfium_probe` 编译二进制（支持 `CARGO_TARGET_DIR` 环境变量、`probe_root/target`、`repo_root/tools/pdfium_probe/target` 之 `release`/`debug` 及 `PATH` 系统路径）；
+   - 优先复用 Rust 探针批量生成的预渲染底图（`${base_name}_page_${page_num}_dpi${dpi}.png`）；
+   - 若预渲染底图不存在，动态调用子进程 `pdfium_probe render <pdf_path> <page_index> <dpi> <out_png>` 进行跨进程即时渲染；
+   - 增加 30 秒安全超时限制（`timeout=30`），避免子进程死锁并具备超时优雅降级能力；
    - 使用标准库 `PIL.Image.open()` 读取临时 PNG，装配为下游兼容的 `PdfiumPixmap`（包含 `width`、`height`、`samples`、`n`、`stride` 与 `tobytes()`）；
    - 仅保留 PyMuPDF 作为基准对照降级备选，彻底消除了对 `pypdfium2` 的依赖。
 3. **结构恢复不回读 words 约束**：
@@ -174,7 +175,7 @@
 全量测试套件与端到端可视化流水线验证均 100% 通过：
 1. **Probe Python 自动化测试**：
    - 执行命令：`$env:PYTHONPATH = "src;tools/pdfium_probe/scripts"; $env:REPO_ROOT = "D:\codes\PDFLayoutParser"; python -m pytest -q tools/pdfium_probe/tests`
-   - 结果：**86 passed in 3.56s**（包含新增的子进程光栅化契约与超时治理用例）。
+   - 结果：全部通过（包含 `test_dynamic_subprocess_render_and_timeout` 动态子进程光栅化与超时治理用例，以及 `test_find_pdfium_probe_bin_with_cargo_target_dir` 环境变量定位用例）。
 2. **Probe Rust 全量测试**：
    - 执行命令：`cargo test --manifest-path tools/pdfium_probe/Cargo.toml`
    - 结果：**12 passed; 0 failed; finished in 0.14s**（包含 `test_render_page_to_png_contract`）。

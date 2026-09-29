@@ -250,3 +250,72 @@ def test_no_pypdfium2_dependency_in_page_adapter(tmp_path: Path):
         pix_pdf.save(pdf_png)
         assert pdf_png.is_file()
         assert pdf_png.stat().st_size > 0
+
+
+def test_dynamic_subprocess_render_and_timeout(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    import subprocess
+    import pdfium_page_adapter
+    from pdfium_page_adapter import PdfiumPixmap, _find_pdfium_probe_bin
+
+    pdf_file = _TEST_DIR.parent / "test_data/synthetic/synth_crop_offset.pdf"
+    if not pdf_file.is_file():
+        pytest.skip(f"Test pdf {pdf_file} not found")
+
+    probe_bin = _find_pdfium_probe_bin()
+    if probe_bin is None or not probe_bin.is_file():
+        pytest.skip("pdfium_probe binary not compiled/found")
+
+    raw = make_raw_page([make_span("Hello", 0, 10, 50, 20)])
+    adapter = PdfiumPageAdapter(normalize_raw_page(raw), pdf_path=pdf_file)
+
+    # 1. Force dynamic subprocess rendering by mocking _find_prerendered_png to return None
+    monkeypatch.setattr(pdfium_page_adapter, "_find_prerendered_png", lambda *args, **kwargs: None)
+
+    real_run = subprocess.run
+    captured_commands = []
+
+    def tracking_run(cmd, *args, **kwargs):
+        captured_commands.append(cmd)
+        return real_run(cmd, *args, **kwargs)
+
+    monkeypatch.setattr(pdfium_page_adapter.subprocess, "run", tracking_run)
+
+    pix = adapter.get_pixmap(dpi=72)
+    assert len(captured_commands) == 1
+    cmd = captured_commands[0]
+    assert cmd[1] == "render"
+    assert cmd[2] == str(pdf_file)
+    assert cmd[3] == "0"
+    assert cmd[4] == "72"
+
+    assert isinstance(pix, PdfiumPixmap)
+    assert pix.width > 0
+    assert pix.height > 0
+    assert pix.n == 3
+    assert len(pix.samples) == pix.width * pix.height * 3
+
+    # 2. Test timeout handling
+    def timing_out_run(cmd, *args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=cmd, timeout=30)
+
+    monkeypatch.setattr(pdfium_page_adapter.subprocess, "run", timing_out_run)
+
+    # get_pixmap should catch TimeoutExpired and gracefully fall back without raising
+    pix_timeout = adapter.get_pixmap(dpi=72)
+    assert isinstance(pix_timeout, PdfiumPixmap)
+    assert pix_timeout.width > 0
+    assert pix_timeout.height > 0
+
+
+def test_find_pdfium_probe_bin_with_cargo_target_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    from pdfium_page_adapter import _find_pdfium_probe_bin
+
+    fake_target = tmp_path / "custom_cargo_target"
+    fake_release = fake_target / "release"
+    fake_release.mkdir(parents=True)
+    fake_bin = fake_release / ("pdfium_probe.exe" if os.name == "nt" else "pdfium_probe")
+    fake_bin.write_bytes(b"mock_bin")
+
+    monkeypatch.setenv("CARGO_TARGET_DIR", str(fake_target))
+    found = _find_pdfium_probe_bin()
+    assert found == fake_bin
