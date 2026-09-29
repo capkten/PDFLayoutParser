@@ -87,7 +87,8 @@ def _pixmap_from_png_path(png_path: Path) -> PdfiumPixmap:
 def _find_pdfium_probe_bin() -> Optional[Path]:
     """Locate compiled pdfium_probe binary (debug or release)."""
     probe_root = Path(__file__).resolve().parents[1]
-    repo_root = Path(os.environ.get("REPO_ROOT", "D:/codes/PDFLayoutParser"))
+    fallback_repo = probe_root.parents[1] if len(probe_root.parents) > 1 else probe_root.parent.parent
+    repo_root = Path(os.environ.get("REPO_ROOT", str(fallback_repo)))
     bin_names = (
         ["pdfium_probe.exe", "pdfium_probe"]
         if os.name == "nt"
@@ -97,6 +98,8 @@ def _find_pdfium_probe_bin() -> Optional[Path]:
     candidate_dirs = [
         probe_root / "target" / "release",
         probe_root / "target" / "debug",
+        fallback_repo / "tools" / "pdfium_probe" / "target" / "release",
+        fallback_repo / "tools" / "pdfium_probe" / "target" / "debug",
         repo_root / "tools" / "pdfium_probe" / "target" / "release",
         repo_root / "tools" / "pdfium_probe" / "target" / "debug",
     ]
@@ -121,7 +124,8 @@ def _find_prerendered_png(pdf_path: Path, page_num: int, dpi: int) -> Optional[P
     """Look for pre-rendered PNG from Rust probe output directories."""
     filename = f"{pdf_path.stem}_page_{page_num}_dpi{dpi}.png"
     probe_root = Path(__file__).resolve().parents[1]
-    repo_root = Path(os.environ.get("REPO_ROOT", "D:/codes/PDFLayoutParser"))
+    fallback_repo = probe_root.parents[1] if len(probe_root.parents) > 1 else probe_root.parent.parent
+    repo_root = Path(os.environ.get("REPO_ROOT", str(fallback_repo)))
 
     candidate_dirs: List[Path] = []
     if "PDFIUM_OUTPUT_ROOT" in os.environ:
@@ -139,6 +143,8 @@ def _find_prerendered_png(pdf_path: Path, page_num: int, dpi: int) -> Optional[P
         pdf_path.parent / "pdfium_output",
         pdf_path.parent / "real_pdfium_output",
         pdf_path.parent,
+        fallback_repo / "test_data" / "pdfium_output",
+        fallback_repo / "test_data" / "real_pdfium_output",
         repo_root / "test_data" / "pdfium_output",
         repo_root / "test_data" / "real_pdfium_output",
     ])
@@ -289,13 +295,14 @@ class PdfiumPageAdapter:
             raise ValueError(f"unsupported text mode: {kind}")
 
     def _resolve_pdf_path(self) -> Optional[Path]:
-        repo_root = Path(os.environ.get("REPO_ROOT", "D:/codes/PDFLayoutParser"))
         probe_root = Path(__file__).resolve().parents[1]
+        fallback_repo = probe_root.parents[1] if len(probe_root.parents) > 1 else probe_root.parent.parent
+        repo_root = Path(os.environ.get("REPO_ROOT", str(fallback_repo)))
 
         if self._pdf_path is not None:
             if self._pdf_path.is_file():
                 return self._pdf_path
-            for base in (probe_root, repo_root):
+            for base in (probe_root, fallback_repo, repo_root):
                 target = base / self._pdf_path
                 if target.is_file():
                     return target
@@ -318,6 +325,7 @@ class PdfiumPageAdapter:
                 probe_root / "test_data",
                 probe_root / "test_data" / "synthetic",
                 probe_root / "test_data" / "real",
+                fallback_repo,
                 repo_root,
             ):
                 target = base / cand_p.name
@@ -374,7 +382,13 @@ class PdfiumPageAdapter:
                             str(effective_dpi),
                             str(temp_png),
                         ]
-                        proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+                        proc = subprocess.run(
+                            cmd,
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE,
+                            check=False,
+                            timeout=30,
+                        )
                         if proc.returncode == 0 and temp_png.is_file():
                             return _pixmap_from_png_path(temp_png)
                 except Exception:

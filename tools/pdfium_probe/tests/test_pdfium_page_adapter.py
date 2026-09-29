@@ -218,7 +218,7 @@ def test_adapter_extracts_wired_tables_on_real_credit_report():
     assert all(t.rows > 1 and t.cols > 1 for t in tables)
 
 
-def test_no_pypdfium2_dependency_in_page_adapter():
+def test_no_pypdfium2_dependency_in_page_adapter(tmp_path: Path):
     adapter_path = Path("tools/pdfium_probe/scripts/pdfium_page_adapter.py")
     if not adapter_path.is_file():
         adapter_path = _SCRIPTS_DIR / "pdfium_page_adapter.py"
@@ -231,6 +231,11 @@ def test_no_pypdfium2_dependency_in_page_adapter():
     assert pix is not None
     assert pix.n == 3
 
+    blank_png = tmp_path / "test_blank.png"
+    pix.save(blank_png)
+    assert blank_png.is_file()
+    assert blank_png.stat().st_size > 0
+
     pdf_file = _TEST_DIR.parent / "test_data/synthetic/synth_crop_offset.pdf"
     if pdf_file.is_file():
         adapter_pdf = PdfiumPageAdapter(normalize_raw_page(raw), pdf_path=pdf_file)
@@ -240,3 +245,8 @@ def test_no_pypdfium2_dependency_in_page_adapter():
         assert pix_pdf.height > 0
         assert pix_pdf.n == 3
         assert len(pix_pdf.samples) == pix_pdf.width * pix_pdf.height * 3
+
+        pdf_png = tmp_path / "test_pdf.png"
+        pix_pdf.save(pdf_png)
+        assert pdf_png.is_file()
+        assert pdf_png.stat().st_size > 0
