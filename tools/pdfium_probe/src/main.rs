@@ -48,11 +48,22 @@ pub struct DrawingItem {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct DrawingInfo {
     pub drawing_index: usize,
+    pub path_type: String,
     pub rect: [f64; 4],
     pub width: f64,
     pub color: Option<Vec<f64>>,
     pub fill: Option<Vec<f64>>,
     pub items: Vec<DrawingItem>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct MappingDiagnostics {
+    pub visible_text_scalar_count: usize,
+    pub extracted_char_scalar_count: usize,
+    pub replacement_char_count: usize,
+    pub control_char_count: usize,
+    pub mapping_status: String,
+    pub classification_reason: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -67,6 +78,7 @@ pub struct PdfiumRawPage {
     pub has_invisible_text: bool,
     pub spans: Vec<SpanInfo>,
     pub drawings: Vec<DrawingInfo>,
+    pub mapping_diagnostics: MappingDiagnostics,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -74,11 +86,18 @@ pub struct PdfiumRawSnapshot {
     pub schema_version: String,
     pub generator: String,
     pub source_file: String,
+    pub source_file_sha256: String,
+    pub native_library_sha256: String,
+    pub native_library_expected_sha256: String,
     pub page_count: usize,
     pub pages: Vec<PdfiumRawPage>,
 }
 
-pub fn verify_file_sha256(path: &Path, expected_sha256: &str) -> Result<(), String> {
+pub fn is_illegal_control_char(c: char) -> bool {
+    (c < ' ' && c != '\n' && c != '\r' && c != '\t') || c == '\0' || ('\u{007F}'..='\u{009F}').contains(&c)
+}
+
+pub fn compute_file_sha256(path: &Path) -> Result<String, String> {
     let mut file = File::open(path).map_err(|e| format!("Failed to open {:?}: {}", path, e))?;
     let mut hasher = Sha256::new();
     let mut buffer = [0u8; 8192];
@@ -89,14 +108,18 @@ pub fn verify_file_sha256(path: &Path, expected_sha256: &str) -> Result<(), Stri
         }
         hasher.update(&buffer[..bytes_read]);
     }
-    let actual_sha256 = format!("{:x}", hasher.finalize());
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+pub fn verify_file_sha256(path: &Path, expected_sha256: &str) -> Result<String, String> {
+    let actual_sha256 = compute_file_sha256(path)?;
     if actual_sha256.to_lowercase() != expected_sha256.to_lowercase() {
         return Err(format!(
             "SHA256 mismatch for {:?}:\n  expected: {}\n  actual:   {}",
             path, expected_sha256, actual_sha256
         ));
     }
-    Ok(())
+    Ok(actual_sha256)
 }
 
 pub fn round4(v: f64) -> f64 {
@@ -192,6 +215,13 @@ pub fn extract_page(page: &PdfPage, page_index: usize) -> Result<PdfiumRawPage, 
     let mut order = 0i64;
     let mut has_invisible_text = false;
 
+    let mut visible_text_scalar_count = 0usize;
+    let mut extracted_char_scalar_count = 0usize;
+    let mut replacement_char_count = 0usize;
+    let mut control_char_count = 0usize;
+    let mut has_char_mismatch = false;
+    let mut has_invalid_geometry = false;
+
     for (obj_idx, obj) in page.objects().iter().enumerate() {
         if let Some(text_obj) = obj.as_text_object() {
             // 禁止使用 .trim() 盲目丢弃独立空格！保留原始字符串
@@ -208,6 +238,24 @@ pub fn extract_page(page: &PdfPage, page_index: usize) -> Result<PdfiumRawPage, 
                 crop_x0,
                 crop_y1,
             );
+            if !bbox[0].is_finite()
+                || !bbox[1].is_finite()
+                || !bbox[2].is_finite()
+                || !bbox[3].is_finite()
+                || bbox[0] > bbox[2]
+                || bbox[1] > bbox[3]
+            {
+                has_invalid_geometry = true;
+            }
+
+            for ch in text.chars() {
+                visible_text_scalar_count += 1;
+                if ch == '\u{FFFD}' {
+                    replacement_char_count += 1;
+                } else if is_illegal_control_char(ch) {
+                    control_char_count += 1;
+                }
+            }
 
             let font_name = Some(text_obj.font().name());
             let font_size = Some(round4(text_obj.unscaled_font_size().value as f64));
@@ -228,7 +276,7 @@ pub fn extract_page(page: &PdfPage, page_index: usize) -> Result<PdfiumRawPage, 
             }
 
             let flags: Option<i64> = None; // 严禁伪造 PyMuPDF 的 64 位 flags，诚实标记为 None
- 
+
             let mut chars_list = Vec::new();
             if let Some(ref pt) = page_text {
                 if let Ok(chars) = text_obj.chars(pt) {
@@ -246,37 +294,36 @@ pub fn extract_page(page: &PdfPage, page_index: usize) -> Result<PdfiumRawPage, 
                         } else {
                             [0.0, 0.0, 0.0, 0.0]
                         };
+                        if !c_bbox[0].is_finite()
+                            || !c_bbox[1].is_finite()
+                            || !c_bbox[2].is_finite()
+                            || !c_bbox[3].is_finite()
+                            || c_bbox[0] > c_bbox[2]
+                            || c_bbox[1] > c_bbox[3]
+                        {
+                            has_invalid_geometry = true;
+                        }
+                        extracted_char_scalar_count += c_str.chars().count();
                         chars_list.push(CharInfo {
                             c: c_str,
                             bbox: c_bbox,
                             char_index: ch_idx,
                         });
                     }
+                } else {
+                    has_char_mismatch = true;
                 }
+            } else {
+                has_char_mismatch = true;
             }
 
-            // 处理尾部空格或缺失字形，确保 chars_list 与 text 严格 1:1 一致
+            // 映射不完整只保留诊断，不再合成估算尾部字符
             let mut extracted_text = String::new();
             for ci in &chars_list {
                 extracted_text.push_str(&ci.c);
             }
-
-            let full_text = text.clone();
-            if extracted_text.len() < full_text.len() && full_text.starts_with(&extracted_text) {
-                let suffix = &full_text[extracted_text.len()..];
-                let last_bbox = chars_list.last().map(|c| c.bbox).unwrap_or(bbox);
-                for (tail_offset, ch) in suffix.chars().enumerate() {
-                    let ch_idx = chars_list.len();
-                    let estimated_w = (font_size.unwrap_or(10.0) * 0.25).max(1.0);
-                    let x0 = last_bbox[2] + (tail_offset as f64) * estimated_w;
-                    let x1 = x0 + estimated_w;
-                    let c_bbox = [round4(x0), last_bbox[1], round4(x1), last_bbox[3]];
-                    chars_list.push(CharInfo {
-                        c: ch.to_string(),
-                        bbox: c_bbox,
-                        char_index: ch_idx,
-                    });
-                }
+            if extracted_text != text {
+                has_char_mismatch = true;
             }
 
             let total_chars_count = chars_list.len();
@@ -322,6 +369,20 @@ pub fn extract_page(page: &PdfPage, page_index: usize) -> Result<PdfiumRawPage, 
                 crop_x0,
                 crop_y1,
             );
+
+            let path_type = match (path_obj.is_stroked(), path_obj.fill_mode()) {
+                (Ok(is_stroked), Ok(fill_mode)) => {
+                    let is_filled = fill_mode != PdfPathFillMode::None;
+                    match (is_stroked, is_filled) {
+                        (true, true) => "stroked_filled",
+                        (true, false) => "stroked",
+                        (false, true) => "filled",
+                        (false, false) => "unknown",
+                    }
+                }
+                _ => "unknown",
+            }
+            .to_string();
 
             let mut items = Vec::new();
             let mut current_pt: Option<[f64; 2]> = None;
@@ -386,6 +447,7 @@ pub fn extract_page(page: &PdfPage, page_index: usize) -> Result<PdfiumRawPage, 
 
             drawings.push(DrawingInfo {
                 drawing_index: drawing_idx,
+                path_type,
                 rect,
                 width: width_val,
                 color: None,
@@ -395,6 +457,27 @@ pub fn extract_page(page: &PdfPage, page_index: usize) -> Result<PdfiumRawPage, 
             drawing_idx += 1;
         }
     }
+
+    let (mapping_status, classification_reason) = if page_text.is_none() {
+        ("unknown".to_string(), Some("unknown_unicode_mapping".to_string()))
+    } else if replacement_char_count > 0 || control_char_count > 0 {
+        ("invalid".to_string(), Some("invalid_unicode".to_string()))
+    } else if visible_text_scalar_count != extracted_char_scalar_count || has_char_mismatch {
+        ("invalid".to_string(), Some("invalid_unicode_mapping".to_string()))
+    } else if has_invalid_geometry {
+        ("invalid".to_string(), Some("invalid_geometry".to_string()))
+    } else {
+        ("valid".to_string(), None)
+    };
+
+    let mapping_diagnostics = MappingDiagnostics {
+        visible_text_scalar_count,
+        extracted_char_scalar_count,
+        replacement_char_count,
+        control_char_count,
+        mapping_status,
+        classification_reason,
+    };
 
     Ok(PdfiumRawPage {
         schema_version: "pdfium_raw_page_v1.0".to_string(),
@@ -407,6 +490,7 @@ pub fn extract_page(page: &PdfPage, page_index: usize) -> Result<PdfiumRawPage, 
         has_invisible_text,
         spans,
         drawings,
+        mapping_diagnostics,
     })
 }
 
@@ -414,9 +498,12 @@ pub fn process_pdf_file(
     pdfium: &Pdfium,
     pdf_path: &Path,
     out_dir: &Path,
+    native_sha: &str,
+    expected_sha: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let file_name = pdf_path.file_name().unwrap().to_str().unwrap();
     let base_name = pdf_path.file_stem().unwrap().to_str().unwrap();
+    let source_file_sha256 = compute_file_sha256(pdf_path)?;
     let doc = pdfium.load_pdf_from_file(pdf_path, None)?;
     let page_count = doc.pages().len();
     let mut pages = Vec::new();
@@ -427,9 +514,12 @@ pub fn process_pdf_file(
     }
 
     let snapshot = PdfiumRawSnapshot {
-        schema_version: "pdfium_raw_snapshot_v1.0".to_string(),
+        schema_version: "pdfium_raw_snapshot_v1.1".to_string(),
         generator: "pdfium_probe_0.1.0".to_string(),
         source_file: file_name.to_string(),
+        source_file_sha256,
+        native_library_sha256: native_sha.to_string(),
+        native_library_expected_sha256: expected_sha.to_string(),
         page_count: pages.len(),
         pages,
     };
@@ -477,13 +567,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let (lib_path, expected_sha) = get_platform_native_lib(&manifest_dir)?;
     println!("[pdfium_probe] Loading native library from {:?} (target OS: {})", lib_path, std::env::consts::OS);
-    verify_file_sha256(&lib_path, expected_sha)?;
+    let actual_native_sha = verify_file_sha256(&lib_path, expected_sha)?;
 
     let bindings = Pdfium::bind_to_library(lib_path)?;
     let pdfium = Pdfium::new(bindings);
 
+    let (out_dir, real_out_dir) = if let Ok(root) = std::env::var("PDFIUM_OUTPUT_ROOT") {
+        let root_path = PathBuf::from(root);
+        (
+            root_path.join("pdfium_output"),
+            root_path.join("real_pdfium_output"),
+        )
+    } else {
+        (
+            manifest_dir.join("test_data/pdfium_output"),
+            manifest_dir.join("test_data/real_pdfium_output"),
+        )
+    };
+
     let synthetic_dir = manifest_dir.join("test_data/synthetic");
-    let out_dir = manifest_dir.join("test_data/pdfium_output");
     fs::create_dir_all(&out_dir)?;
 
     let mut synthetic_count = 0;
@@ -492,12 +594,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let path = entry.path();
         if path.extension().and_then(|s| s.to_str()) == Some("pdf") {
             println!("[pdfium_probe] Processing synthetic {:?}", path.file_name().unwrap());
-            process_pdf_file(&pdfium, &path, &out_dir)?;
+            process_pdf_file(&pdfium, &path, &out_dir, &actual_native_sha, expected_sha)?;
             synthetic_count += 1;
         }
     }
 
-    let real_out_dir = manifest_dir.join("test_data/real_pdfium_output");
     fs::create_dir_all(&real_out_dir)?;
 
     let repo_root = std::env::var("REPO_ROOT")
@@ -509,16 +610,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .map(PathBuf::from)
                 .unwrap_or_else(|| manifest_dir.clone());
             if direct.join("test.pdf").exists() {
-                direct
-            } else if let Some(parent) = direct.parent().and_then(|p| p.parent()) {
-                if parent.join("test.pdf").exists() {
-                    parent.to_path_buf()
-                } else {
-                    direct
-                }
-            } else {
-                direct
+                return direct;
             }
+            if let Ok(git_content) = fs::read_to_string(direct.join(".git")) {
+                if let Some(line) = git_content.lines().find(|l| l.starts_with("gitdir:")) {
+                    let gitdir = line.trim_start_matches("gitdir:").trim();
+                    let gitdir_path = PathBuf::from(gitdir);
+                    for ancestor in gitdir_path.ancestors() {
+                        if ancestor.join("test.pdf").exists() {
+                            return ancestor.to_path_buf();
+                        }
+                    }
+                }
+            }
+            if let Some(parent) = direct.parent().and_then(|p| p.parent()) {
+                if parent.join("test.pdf").exists() {
+                    return parent.to_path_buf();
+                }
+            }
+            direct
         });
 
     let test_pdf_path = repo_root.join("test.pdf");
@@ -534,25 +644,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut real_count = 0;
     for (pdf_path, page_idx, sample_name) in real_samples {
-        if pdf_path.exists() {
-            println!("[pdfium_probe] Processing real sample: {} (page {})", sample_name, page_idx);
-            let doc = pdfium.load_pdf_from_file(&pdf_path, None)?;
-            if let Ok(page) = doc.pages().get(page_idx) {
-                let page_data = extract_page(&page, page_idx as usize)?;
-                let snapshot = PdfiumRawSnapshot {
-                    schema_version: "pdfium_raw_snapshot_v1.0".to_string(),
-                    generator: "pdfium_probe_0.1.0".to_string(),
-                    source_file: pdf_path.file_name().unwrap().to_str().unwrap().to_string(),
-                    page_count: 1,
-                    pages: vec![page_data],
-                };
-                let out_file = real_out_dir.join(format!("{}_pdfium.json", sample_name));
-                let json_str = serde_json::to_string_pretty(&snapshot)?;
-                fs::write(&out_file, json_str)?;
-                println!("[pdfium_probe] Wrote real raw snapshot to {:?}", out_file);
-                real_count += 1;
-            }
+        if !pdf_path.exists() {
+            let abs_path = std::fs::canonicalize(&pdf_path).unwrap_or(pdf_path.clone());
+            return Err(format!(
+                "Required real PDF input file does not exist: {:?}",
+                abs_path
+            )
+            .into());
         }
+        println!("[pdfium_probe] Processing real sample: {} (page {})", sample_name, page_idx);
+        let doc = pdfium.load_pdf_from_file(&pdf_path, None)?;
+        let page = doc.pages().get(page_idx)?;
+        let page_data = extract_page(&page, page_idx as usize)?;
+        let source_file_sha256 = compute_file_sha256(&pdf_path)?;
+        let snapshot = PdfiumRawSnapshot {
+            schema_version: "pdfium_raw_snapshot_v1.1".to_string(),
+            generator: "pdfium_probe_0.1.0".to_string(),
+            source_file: pdf_path.file_name().unwrap().to_str().unwrap().to_string(),
+            source_file_sha256,
+            native_library_sha256: actual_native_sha.clone(),
+            native_library_expected_sha256: expected_sha.to_string(),
+            page_count: 1,
+            pages: vec![page_data],
+        };
+        let out_file = real_out_dir.join(format!("{}_pdfium.json", sample_name));
+        let json_str = serde_json::to_string_pretty(&snapshot)?;
+        fs::write(&out_file, json_str)?;
+        println!("[pdfium_probe] Wrote real raw snapshot to {:?}", out_file);
+        real_count += 1;
     }
 
     println!(
@@ -635,5 +754,86 @@ mod tests {
         assert!(!sha.is_empty());
         #[cfg(target_os = "windows")]
         assert!(path.to_string_lossy().ends_with("pdfium.dll"));
+    }
+
+    #[test]
+    fn test_is_illegal_control_char() {
+        assert!(is_illegal_control_char('\0'));
+        assert!(is_illegal_control_char('\x01'));
+        assert!(is_illegal_control_char('\x1f'));
+        assert!(is_illegal_control_char('\x7f'));
+        assert!(is_illegal_control_char('\u{0085}'));
+
+        assert!(!is_illegal_control_char('\t'));
+        assert!(!is_illegal_control_char('\n'));
+        assert!(!is_illegal_control_char('\r'));
+        assert!(!is_illegal_control_char('A'));
+        assert!(!is_illegal_control_char('中'));
+    }
+
+    #[test]
+    fn test_unicode_scalar_count_contract() {
+        let text = "中文测试";
+        // String::len() returns byte count (12 for 4 Chinese characters in UTF-8)
+        assert_eq!(text.len(), 12);
+        // chars().count() returns Unicode scalar count (4)
+        assert_eq!(text.chars().count(), 4);
+    }
+
+    #[test]
+    fn test_mapping_diagnostics_contract() {
+        let diag = MappingDiagnostics {
+            visible_text_scalar_count: 5,
+            extracted_char_scalar_count: 5,
+            replacement_char_count: 0,
+            control_char_count: 0,
+            mapping_status: "valid".to_string(),
+            classification_reason: None,
+        };
+        let json = serde_json::to_string(&diag).unwrap();
+        assert!(json.contains("\"mapping_status\":\"valid\""));
+        assert!(json.contains("\"visible_text_scalar_count\":5"));
+        assert!(json.contains("\"extracted_char_scalar_count\":5"));
+        assert!(json.contains("\"replacement_char_count\":0"));
+        assert!(json.contains("\"control_char_count\":0"));
+
+        let deserialized: MappingDiagnostics = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, diag);
+    }
+
+    #[test]
+    fn test_raw_snapshot_v1_1_contract() {
+        let snapshot = PdfiumRawSnapshot {
+            schema_version: "pdfium_raw_snapshot_v1.1".to_string(),
+            generator: "pdfium_probe_0.1.0".to_string(),
+            source_file: "test.pdf".to_string(),
+            source_file_sha256: "abc123sha".to_string(),
+            native_library_sha256: "def456sha".to_string(),
+            native_library_expected_sha256: "def456sha".to_string(),
+            page_count: 0,
+            pages: vec![],
+        };
+        let json = serde_json::to_string(&snapshot).unwrap();
+        assert!(json.contains("\"schema_version\":\"pdfium_raw_snapshot_v1.1\""));
+        assert!(json.contains("\"source_file_sha256\":\"abc123sha\""));
+        assert!(json.contains("\"native_library_sha256\":\"def456sha\""));
+        assert!(json.contains("\"native_library_expected_sha256\":\"def456sha\""));
+    }
+
+    #[test]
+    fn test_drawing_path_type_contract() {
+        let d = DrawingInfo {
+            drawing_index: 0,
+            path_type: "stroked_filled".to_string(),
+            rect: [0.0, 0.0, 10.0, 10.0],
+            width: 1.0,
+            color: None,
+            fill: None,
+            items: vec![],
+        };
+        let json = serde_json::to_string(&d).unwrap();
+        assert!(json.contains("\"path_type\":\"stroked_filled\""));
+        let deserialized: DrawingInfo = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.path_type, "stroked_filled");
     }
 }
