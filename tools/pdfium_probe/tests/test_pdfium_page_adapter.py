@@ -216,3 +216,27 @@ def test_adapter_extracts_wired_tables_on_real_credit_report():
     # credit_p1 has 6 tables
     assert len(tables) == 6
     assert all(t.rows > 1 and t.cols > 1 for t in tables)
+
+
+def test_no_pypdfium2_dependency_in_page_adapter():
+    adapter_path = Path("tools/pdfium_probe/scripts/pdfium_page_adapter.py")
+    if not adapter_path.is_file():
+        adapter_path = _SCRIPTS_DIR / "pdfium_page_adapter.py"
+    adapter_src = adapter_path.read_text(encoding="utf-8")
+    assert "pypdfium2" not in adapter_src, "Found pypdfium2 reference in pdfium_page_adapter.py!"
+
+    raw = make_raw_page([make_span("Hello", 0, 10, 50, 20)])
+    adapter = PdfiumPageAdapter(normalize_raw_page(raw))
+    pix = adapter.get_pixmap(dpi=72)
+    assert pix is not None
+    assert pix.n == 3
+
+    pdf_file = _TEST_DIR.parent / "test_data/synthetic/synth_crop_offset.pdf"
+    if pdf_file.is_file():
+        adapter_pdf = PdfiumPageAdapter(normalize_raw_page(raw), pdf_path=pdf_file)
+        pix_pdf = adapter_pdf.get_pixmap(dpi=72)
+        assert pix_pdf is not None
+        assert pix_pdf.width > 0
+        assert pix_pdf.height > 0
+        assert pix_pdf.n == 3
+        assert len(pix_pdf.samples) == pix_pdf.width * pix_pdf.height * 3

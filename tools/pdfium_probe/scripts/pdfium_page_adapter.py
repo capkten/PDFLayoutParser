@@ -1,6 +1,11 @@
 import os
+import shutil
+import subprocess
+import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Tuple, Union
+
+from PIL import Image
 
 from pdfium_normalizer import NormalizedPage
 
@@ -17,6 +22,12 @@ class PdfiumPixmap:
 
     def tobytes(self) -> bytes:
         return self.samples
+
+    def save(self, filename: Union[str, Path]) -> None:
+        """Save pixmap to an image file (e.g. PNG)."""
+        img = Image.frombytes("RGB", (self.width, self.height), self.samples)
+        img.save(str(filename))
+
 
 
 class PageRect(Tuple[float, float, float, float]):
@@ -62,6 +73,81 @@ class PageRect(Tuple[float, float, float, float]):
 
     def __repr__(self) -> str:
         return f"PageRect({self[0]}, {self[1]}, {self[2]}, {self[3]})"
+
+
+def _pixmap_from_png_path(png_path: Path) -> PdfiumPixmap:
+    """Load a PNG image file into a PdfiumPixmap."""
+    with Image.open(png_path) as img:
+        rgb_img = img.convert("RGB")
+        samples = rgb_img.tobytes()
+        w, h = rgb_img.width, rgb_img.height
+    return PdfiumPixmap(samples, w, h, n=3)
+
+
+def _find_pdfium_probe_bin() -> Optional[Path]:
+    """Locate compiled pdfium_probe binary (debug or release)."""
+    probe_root = Path(__file__).resolve().parents[1]
+    repo_root = Path(os.environ.get("REPO_ROOT", "D:/codes/PDFLayoutParser"))
+    bin_names = (
+        ["pdfium_probe.exe", "pdfium_probe"]
+        if os.name == "nt"
+        else ["pdfium_probe", "pdfium_probe.exe"]
+    )
+
+    candidate_dirs = [
+        probe_root / "target" / "release",
+        probe_root / "target" / "debug",
+        repo_root / "tools" / "pdfium_probe" / "target" / "release",
+        repo_root / "tools" / "pdfium_probe" / "target" / "debug",
+    ]
+
+    for cdir in candidate_dirs:
+        for bname in bin_names:
+            cand = cdir / bname
+            if cand.is_file():
+                return cand
+
+    for bname in bin_names:
+        which_path = shutil.which(bname)
+        if which_path:
+            p = Path(which_path)
+            if p.is_file():
+                return p
+
+    return None
+
+
+def _find_prerendered_png(pdf_path: Path, page_num: int, dpi: int) -> Optional[Path]:
+    """Look for pre-rendered PNG from Rust probe output directories."""
+    filename = f"{pdf_path.stem}_page_{page_num}_dpi{dpi}.png"
+    probe_root = Path(__file__).resolve().parents[1]
+    repo_root = Path(os.environ.get("REPO_ROOT", "D:/codes/PDFLayoutParser"))
+
+    candidate_dirs: List[Path] = []
+    if "PDFIUM_OUTPUT_ROOT" in os.environ:
+        out_root = Path(os.environ["PDFIUM_OUTPUT_ROOT"])
+        candidate_dirs.extend([
+            out_root / "pdfium_output",
+            out_root / "real_pdfium_output",
+            out_root,
+        ])
+
+    candidate_dirs.extend([
+        probe_root / "test_data" / "pdfium_output",
+        probe_root / "test_data" / "real_pdfium_output",
+        probe_root / "test_data",
+        pdf_path.parent / "pdfium_output",
+        pdf_path.parent / "real_pdfium_output",
+        pdf_path.parent,
+        repo_root / "test_data" / "pdfium_output",
+        repo_root / "test_data" / "real_pdfium_output",
+    ])
+
+    for cdir in candidate_dirs:
+        cand = cdir / filename
+        if cand.is_file():
+            return cand
+    return None
 
 
 class PdfiumPageAdapter:
@@ -203,8 +289,16 @@ class PdfiumPageAdapter:
             raise ValueError(f"unsupported text mode: {kind}")
 
     def _resolve_pdf_path(self) -> Optional[Path]:
-        if self._pdf_path is not None and self._pdf_path.is_file():
-            return self._pdf_path
+        repo_root = Path(os.environ.get("REPO_ROOT", "D:/codes/PDFLayoutParser"))
+        probe_root = Path(__file__).resolve().parents[1]
+
+        if self._pdf_path is not None:
+            if self._pdf_path.is_file():
+                return self._pdf_path
+            for base in (probe_root, repo_root):
+                target = base / self._pdf_path
+                if target.is_file():
+                    return target
 
         candidates: List[str] = []
         snapshot = self._normalized_page.page_snapshot
@@ -215,9 +309,6 @@ class PdfiumPageAdapter:
             if isinstance(container, dict) and container.get("source_file"):
                 candidates.append(str(container["source_file"]))
 
-        repo_root = Path(os.environ.get("REPO_ROOT", "D:/codes/PDFLayoutParser"))
-        probe_root = Path(__file__).resolve().parents[1]
-
         for cand in candidates:
             cand_p = Path(cand)
             if cand_p.is_file():
@@ -226,6 +317,7 @@ class PdfiumPageAdapter:
                 probe_root,
                 probe_root / "test_data",
                 probe_root / "test_data" / "synthetic",
+                probe_root / "test_data" / "real",
                 repo_root,
             ):
                 target = base / cand_p.name
@@ -244,28 +336,51 @@ class PdfiumPageAdapter:
     ) -> PdfiumPixmap:
         """Render page to a PyMuPDF-compatible PdfiumPixmap.
 
-        Uses native PDFium (via pypdfium2) if available and source PDF is found,
-        with PyMuPDF fallback or blank canvas fallback for synthetic tests.
+        Consumes pre-rendered PNGs from Rust probe or calls pdfium_probe CLI
+        via pure Rust rendering.
+        Falls back to PyMuPDF or blank canvas for synthetic tests.
         """
         scale = 1.0
         if matrix is not None:
             scale = float(getattr(matrix, "a", 1.0))
+            effective_dpi = max(1, int(round(scale * 72.0)))
         elif dpi is not None:
-            scale = float(dpi) / 72.0
+            effective_dpi = max(1, int(round(float(dpi))))
+            scale = effective_dpi / 72.0
+        else:
+            effective_dpi = 72
 
         pdf_path = self._resolve_pdf_path()
         if pdf_path is not None:
-            try:
-                import pypdfium2 as pdfium
-                doc = pdfium.PdfDocument(str(pdf_path))
-                page_idx = min(self.number, len(doc) - 1)
-                page = doc[page_idx]
-                bitmap = page.render(scale=scale)
-                pil_img = bitmap.to_pil().convert("RGB")
-                return PdfiumPixmap(pil_img.tobytes(), pil_img.width, pil_img.height, n=3)
-            except Exception:
-                pass
+            # 1. Look for pre-rendered PNG from probe output
+            prerendered = _find_prerendered_png(pdf_path, self.number, effective_dpi)
+            if prerendered is not None:
+                try:
+                    return _pixmap_from_png_path(prerendered)
+                except Exception:
+                    pass
 
+            # 2. Invoke Rust pdfium_probe binary to render page
+            probe_bin = _find_pdfium_probe_bin()
+            if probe_bin is not None:
+                try:
+                    with tempfile.TemporaryDirectory() as tmp_dir:
+                        temp_png = Path(tmp_dir) / f"{pdf_path.stem}_p{self.number}_dpi{effective_dpi}.png"
+                        cmd = [
+                            str(probe_bin),
+                            "render",
+                            str(pdf_path),
+                            str(self.number),
+                            str(effective_dpi),
+                            str(temp_png),
+                        ]
+                        proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+                        if proc.returncode == 0 and temp_png.is_file():
+                            return _pixmap_from_png_path(temp_png)
+                except Exception:
+                    pass
+
+            # 3. Fallback to PyMuPDF if installed
             try:
                 import fitz
                 doc = fitz.open(str(pdf_path))
