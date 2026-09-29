@@ -30,6 +30,51 @@ class NormalizedPage(NamedTuple):
     diagnostics: Dict[str, Any]
 
 
+class PageRect(Tuple[float, float, float, float]):
+    """A 4-tuple rectangle (x0, y0, x1, y1) with fitz.Rect compatibility properties."""
+
+    def __new__(cls, *args: Any) -> "PageRect":
+        if len(args) == 1 and isinstance(args[0], (tuple, list)):
+            vals = args[0]
+            if len(vals) != 4:
+                raise TypeError(f"PageRect expects 4 values, got {len(vals)}")
+            x0, y0, x1, y1 = vals
+        elif len(args) == 4:
+            x0, y0, x1, y1 = args
+        else:
+            raise TypeError(f"PageRect expects 4 coordinates or a 4-tuple, got {args}")
+        return super(PageRect, cls).__new__(
+            cls, (float(x0), float(y0), float(x1), float(y1))
+        )
+
+    @property
+    def x0(self) -> float:
+        return self[0]
+
+    @property
+    def y0(self) -> float:
+        return self[1]
+
+    @property
+    def x1(self) -> float:
+        return self[2]
+
+    @property
+    def y1(self) -> float:
+        return self[3]
+
+    @property
+    def width(self) -> float:
+        return self[2] - self[0]
+
+    @property
+    def height(self) -> float:
+        return self[3] - self[1]
+
+    def __repr__(self) -> str:
+        return f"PageRect({self[0]}, {self[1]}, {self[2]}, {self[3]})"
+
+
 def _is_cjk(ch: str) -> bool:
     code = ord(ch)
     return (
@@ -495,6 +540,208 @@ def _derive_words(
     return word_tuples, wire_words
 
 
+def normalize_drawings(raw_page: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    """Normalize raw drawings from PDFium probe into PyMuPDF / rust_adapter compatible drawing dicts.
+
+    Path types:
+      - 'stroked' -> 's'
+      - 'filled' -> 'f'
+      - 'stroked_filled' -> 'fs'
+      - other -> 'unknown'
+    """
+    raw_drawings = raw_page.get("drawings") or []
+    normalized: List[Dict[str, Any]] = []
+
+    for idx, raw_d in enumerate(raw_drawings):
+        if not isinstance(raw_d, Mapping):
+            continue
+
+        raw_path_type = raw_d.get("path_type") or raw_d.get("type", "unknown")
+        if raw_path_type == "stroked":
+            norm_type = "s"
+        elif raw_path_type == "filled":
+            norm_type = "f"
+        elif raw_path_type == "stroked_filled":
+            norm_type = "fs"
+        else:
+            norm_type = "unknown"
+
+        raw_rect = raw_d.get("rect")
+        if isinstance(raw_rect, (list, tuple)) and len(raw_rect) == 4:
+            norm_rect = [
+                float(raw_rect[0]),
+                float(raw_rect[1]),
+                float(raw_rect[2]),
+                float(raw_rect[3]),
+            ]
+        elif isinstance(raw_rect, Mapping):
+            norm_rect = [
+                float(raw_rect.get("x0", 0.0)),
+                float(raw_rect.get("y0", 0.0)),
+                float(raw_rect.get("x1", 0.0)),
+                float(raw_rect.get("y1", 0.0)),
+            ]
+        else:
+            norm_rect = [0.0, 0.0, 0.0, 0.0]
+        norm_rect = PageRect(norm_rect[0], norm_rect[1], norm_rect[2], norm_rect[3])
+
+        source_order = int(raw_d.get("source_order", raw_d.get("drawing_index", idx)))
+        raw_pos = raw_d.get("raw_source_position")
+        if isinstance(raw_pos, (list, tuple)) and len(raw_pos) >= 1:
+            raw_source_position = [int(v) for v in raw_pos]
+        else:
+            raw_source_position = [source_order]
+
+        width_val = raw_d.get("width")
+        width: Optional[float] = float(width_val) if width_val is not None else None
+
+        items: List[List[Any]] = []
+        lines: List[Dict[str, Any]] = []
+
+        raw_items = raw_d.get("items") or []
+        for item_idx, raw_item in enumerate(raw_items):
+            if isinstance(raw_item, Mapping):
+                cmd = str(raw_item.get("cmd", ""))
+                if cmd == "l":
+                    pts = raw_item.get("points") or []
+                    if len(pts) >= 2:
+                        p0 = [float(pts[0][0]), float(pts[0][1])]
+                        p1 = [float(pts[1][0]), float(pts[1][1])]
+                        items.append(["l", p0, p1])
+                        min_x, max_x = min(p0[0], p1[0]), max(p0[0], p1[0])
+                        min_y, max_y = min(p0[1], p1[1]), max(p0[1], p1[1])
+                        lines.append(
+                            {
+                                "rect": {"x0": min_x, "y0": min_y, "x1": max_x, "y1": max_y},
+                                "width": width,
+                                "color": raw_d.get("color"),
+                                "source_order": item_idx,
+                            }
+                        )
+                elif cmd == "re":
+                    rect_val = raw_item.get("rect")
+                    if isinstance(rect_val, (list, tuple)) and len(rect_val) == 4:
+                        rx0, ry0, rx1, ry1 = (
+                            float(rect_val[0]),
+                            float(rect_val[1]),
+                            float(rect_val[2]),
+                            float(rect_val[3]),
+                        )
+                    elif isinstance(rect_val, Mapping):
+                        rx0 = float(rect_val.get("x0", 0.0))
+                        ry0 = float(rect_val.get("y0", 0.0))
+                        rx1 = float(rect_val.get("x1", 0.0))
+                        ry1 = float(rect_val.get("y1", 0.0))
+                    elif "points" in raw_item and len(raw_item["points"]) >= 2:
+                        pts = raw_item["points"]
+                        rx0 = min(float(p[0]) for p in pts)
+                        ry0 = min(float(p[1]) for p in pts)
+                        rx1 = max(float(p[0]) for p in pts)
+                        ry1 = max(float(p[1]) for p in pts)
+                    else:
+                        rx0, ry0, rx1, ry1 = norm_rect
+                    items.append(["re", [rx0, ry0, rx1, ry1]])
+                    lines.append(
+                        {
+                            "rect": {"x0": rx0, "y0": ry0, "x1": rx1, "y1": ry1},
+                            "width": width,
+                            "color": raw_d.get("color"),
+                            "source_order": item_idx,
+                        }
+                    )
+                elif cmd == "c":
+                    pts = raw_item.get("points") or []
+                    norm_pts = [[float(p[0]), float(p[1])] for p in pts]
+                    items.append(["c"] + norm_pts)
+            elif isinstance(raw_item, (list, tuple)) and raw_item:
+                cmd = str(raw_item[0])
+                if cmd == "l" and len(raw_item) >= 3:
+                    p0 = [float(raw_item[1][0]), float(raw_item[1][1])]
+                    p1 = [float(raw_item[2][0]), float(raw_item[2][1])]
+                    items.append(["l", p0, p1])
+                    min_x, max_x = min(p0[0], p1[0]), max(p0[0], p1[0])
+                    min_y, max_y = min(p0[1], p1[1]), max(p0[1], p1[1])
+                    lines.append(
+                        {
+                            "rect": {"x0": min_x, "y0": min_y, "x1": max_x, "y1": max_y},
+                            "width": width,
+                            "color": raw_d.get("color"),
+                            "source_order": item_idx,
+                        }
+                    )
+                elif cmd == "re" and len(raw_item) >= 2:
+                    r_val = raw_item[1]
+                    if isinstance(r_val, (list, tuple)) and len(r_val) == 4:
+                        rx0, ry0, rx1, ry1 = (
+                            float(r_val[0]),
+                            float(r_val[1]),
+                            float(r_val[2]),
+                            float(r_val[3]),
+                        )
+                    elif hasattr(r_val, "x0"):
+                        rx0, ry0, rx1, ry1 = (
+                            float(r_val.x0),
+                            float(r_val.y0),
+                            float(r_val.x1),
+                            float(r_val.y1),
+                        )
+                    else:
+                        rx0, ry0, rx1, ry1 = norm_rect
+                    items.append(["re", [rx0, ry0, rx1, ry1]])
+                    lines.append(
+                        {
+                            "rect": {"x0": rx0, "y0": ry0, "x1": rx1, "y1": ry1},
+                            "width": width,
+                            "color": raw_d.get("color"),
+                            "source_order": item_idx,
+                        }
+                    )
+                elif cmd == "c":
+                    items.append(list(raw_item))
+
+        if not lines and "lines" in raw_d and isinstance(raw_d["lines"], Sequence):
+            for l_idx, raw_l in enumerate(raw_d["lines"]):
+                if isinstance(raw_l, Mapping):
+                    l_r = raw_l.get("rect", {})
+                    if isinstance(l_r, Mapping):
+                        lines.append(
+                            {
+                                "rect": {
+                                    "x0": float(l_r.get("x0", 0.0)),
+                                    "y0": float(l_r.get("y0", 0.0)),
+                                    "x1": float(l_r.get("x1", 0.0)),
+                                    "y1": float(l_r.get("y1", 0.0)),
+                                },
+                                "width": (
+                                    float(raw_l["width"])
+                                    if raw_l.get("width") is not None
+                                    else width
+                                ),
+                                "color": raw_l.get("color"),
+                                "source_order": int(raw_l.get("source_order", l_idx)),
+                            }
+                        )
+
+        norm_entry: Dict[str, Any] = {
+            "type": norm_type,
+            "path_type": raw_path_type,
+            "rect": norm_rect,
+            "items": items,
+            "lines": lines,
+            "source_order": source_order,
+            "raw_source_position": raw_source_position,
+        }
+        if width is not None:
+            norm_entry["width"] = width
+        for key in ("color", "fill", "stroke", "clip", "opacity", "fill_opacity"):
+            if key in raw_d and raw_d[key] is not None:
+                norm_entry[key] = raw_d[key]
+
+        normalized.append(norm_entry)
+
+    return normalized
+
+
 def normalize_raw_page(raw_page: Mapping[str, Any]) -> NormalizedPage:
     """Normalize a PDFium raw page extraction into NormalizedPage contract."""
     checked_page = _ensure_mapping_diagnostics_if_missing(raw_page)
@@ -759,6 +1006,66 @@ def normalize_raw_page(raw_page: Mapping[str, Any]) -> NormalizedPage:
             }
         )
 
+    norm_drawings = normalize_drawings(checked_page)
+    wire_drawings: List[Dict[str, Any]] = []
+    drawings_diagnostics: List[Dict[str, Any]] = []
+
+    for d_idx, nd in enumerate(norm_drawings):
+        if nd.get("path_type") == "unknown" or nd.get("type") == "unknown":
+            drawings_diagnostics.append(
+                {
+                    "type": "unknown_path_type",
+                    "drawing_index": nd.get("source_order", d_idx),
+                    "path_type": nd.get("path_type"),
+                }
+            )
+        for it in nd.get("items", []):
+            if it and it[0] == "c":
+                drawings_diagnostics.append(
+                    {
+                        "type": "curve_item_ignored",
+                        "drawing_index": nd.get("source_order", d_idx),
+                    }
+                )
+
+        wire_lines: List[Dict[str, Any]] = []
+        for l_idx, l in enumerate(nd.get("lines", [])):
+            l_r = l["rect"]
+            wire_lines.append(
+                {
+                    "schema_version": 1,
+                    "rect": _make_rect4(l_r["x0"], l_r["y0"], l_r["x1"], l_r["y1"]),
+                    "width": float(l["width"]) if l.get("width") is not None else None,
+                    "color": float(l["color"]) if isinstance(l.get("color"), (int, float)) else None,
+                    "source_order": int(l.get("source_order", l_idx)),
+                }
+            )
+
+        rect_list = nd["rect"]
+        wire_rect = _make_rect4(rect_list[0], rect_list[1], rect_list[2], rect_list[3])
+        wire_d: Dict[str, Any] = {
+            "schema_version": 1,
+            "kind": str(nd["type"]),
+            "path_type": str(nd.get("path_type", nd["type"])),
+            "lines": wire_lines,
+            "rect": wire_rect,
+            "fill": nd.get("fill"),
+            "stroke": nd.get("stroke"),
+            "clip": (
+                _make_rect4(nd["clip"][0], nd["clip"][1], nd["clip"][2], nd["clip"][3])
+                if nd.get("clip")
+                and isinstance(nd["clip"], (list, tuple))
+                and len(nd["clip"]) == 4
+                else None
+            ),
+            "source_order": int(nd["source_order"]),
+            "raw_source_position": list(nd["raw_source_position"]),
+            "color": nd.get("color"),
+            "width": float(nd["width"]) if nd.get("width") is not None else None,
+            "items": nd.get("items"),
+        }
+        wire_drawings.append(wire_d)
+
     page_snapshot: Dict[str, Any] = {
         "schema_version": 1,
         "page_index": int(page_index),
@@ -771,7 +1078,7 @@ def normalize_raw_page(raw_page: Mapping[str, Any]) -> NormalizedPage:
         "text_blocks": wire_blocks,
         "spans": flat_wire_spans,
         "words": wire_words,
-        "drawings": [],
+        "drawings": wire_drawings,
         "allowed_regions": [],
         "excluded_regions": [],
         "extraction_options": {
@@ -786,14 +1093,20 @@ def normalize_raw_page(raw_page: Mapping[str, Any]) -> NormalizedPage:
         "blocks": rawdict_blocks,
     }
 
+    if drawings_diagnostics:
+        classification["drawings_diagnostics"] = drawings_diagnostics
+
     sidecar = {
         "classification": classification,
         "raw_provenance": {
             "source_file": checked_page.get("source_file"),
             "generator": checked_page.get("generator"),
             "spans_count": len(raw_spans),
+            "drawings_count": len(checked_page.get("drawings") or []),
         },
     }
+    if drawings_diagnostics:
+        sidecar["drawings_diagnostics"] = drawings_diagnostics
 
     return NormalizedPage(
         page_type="vector",

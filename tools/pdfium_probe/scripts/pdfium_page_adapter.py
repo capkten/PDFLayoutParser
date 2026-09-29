@@ -1,6 +1,6 @@
 """PyMuPDF-compatible read-only page adapter for NormalizedPage."""
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Tuple, Union
 
 from pdfium_normalizer import NormalizedPage
 
@@ -8,7 +8,16 @@ from pdfium_normalizer import NormalizedPage
 class PageRect(Tuple[float, float, float, float]):
     """A 4-tuple rectangle (x0, y0, x1, y1) with fitz.Rect compatibility properties."""
 
-    def __new__(cls, x0: float, y0: float, x1: float, y1: float) -> "PageRect":
+    def __new__(cls, *args: Any) -> "PageRect":
+        if len(args) == 1 and isinstance(args[0], (tuple, list)):
+            vals = args[0]
+            if len(vals) != 4:
+                raise TypeError(f"PageRect expects 4 values, got {len(vals)}")
+            x0, y0, x1, y1 = vals
+        elif len(args) == 4:
+            x0, y0, x1, y1 = args
+        else:
+            raise TypeError(f"PageRect expects 4 coordinates or a 4-tuple, got {args}")
         return super(PageRect, cls).__new__(
             cls, (float(x0), float(y0), float(x1), float(y1))
         )
@@ -49,8 +58,12 @@ class PdfiumPageAdapter:
     the underlying normalized data.
     """
 
-    def __init__(self, normalized_page: NormalizedPage) -> None:
-        self._normalized_page = normalized_page
+    def __init__(self, normalized_page: Union[NormalizedPage, Mapping[str, Any]]) -> None:
+        if isinstance(normalized_page, Mapping):
+            from pdfium_normalizer import normalize_raw_page
+            self._normalized_page = normalize_raw_page(normalized_page)
+        else:
+            self._normalized_page = normalized_page
 
     @property
     def normalized_page(self) -> NormalizedPage:
@@ -163,6 +176,10 @@ class PdfiumPageAdapter:
                 if self._normalized_page.words is not None
                 else []
             )
+        elif kind == "text":
+            if self._normalized_page.words:
+                return " ".join(w[4] for w in self._normalized_page.words)
+            return ""
         else:
             raise ValueError(f"unsupported text mode: {kind}")
 
