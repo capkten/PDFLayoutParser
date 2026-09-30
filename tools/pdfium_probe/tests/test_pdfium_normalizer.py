@@ -1,4 +1,6 @@
+import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -15,7 +17,13 @@ import pytest
 
 from hexai_pdf_parser import rust_adapter
 from fixtures_normalizer import make_raw_page, make_span
-from pdfium_normalizer import NormalizedPage, normalize_raw_page, normalize_raw_snapshot
+from pdfium_normalizer import (
+    NormalizedPage,
+    normalize_from_rust_dto,
+    normalize_raw_page,
+    normalize_raw_snapshot,
+    normalize_with_rust_probe,
+)
 
 
 def test_one_object_becomes_one_block_line_span() -> None:
@@ -286,3 +294,88 @@ def test_dto_block_and_line_order_and_source_order() -> None:
     assert lines[0]["source_order"] == 0
     assert lines[1]["order"] == 1
     assert lines[1]["source_order"] == 1
+
+
+def test_rust_probe_normalize_cli_and_dto_parity(tmp_path: Path) -> None:
+    bin_names = (
+        ["pdfium_probe.exe", "pdfium_probe"]
+        if os.name == "nt"
+        else ["pdfium_probe", "pdfium_probe.exe"]
+    )
+    probe_root = _TEST_DIR.parent
+    candidate_bins = [
+        probe_root / "target" / "release" / bin_names[0],
+        probe_root / "target" / "debug" / bin_names[0],
+    ]
+    probe_bin = next((b for b in candidate_bins if b.is_file()), None)
+    assert probe_bin is not None, f"pdfium_probe binary not found in candidate paths: {candidate_bins}"
+
+    synth_pdf = probe_root / "test_data" / "synthetic" / "synth_crop_offset.pdf"
+    assert synth_pdf.is_file(), f"Synthetic test PDF not found: {synth_pdf}"
+
+    out_json = tmp_path / "synth_crop_offset_norm.json"
+    cmd = [
+        str(probe_bin),
+        "normalize",
+        str(synth_pdf),
+        "0",
+        str(out_json),
+    ]
+    res = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    assert res.returncode == 0, f"CLI normalize failed: {res.stderr}"
+    assert out_json.is_file()
+
+    with open(out_json, "r", encoding="utf-8") as f:
+        rust_dto = json.load(f)
+
+    norm_page = normalize_from_rust_dto(rust_dto)
+    assert norm_page.page_type == "vector"
+    assert norm_page.page_snapshot is not None
+    assert norm_page.rawdict is not None
+    assert len(norm_page.words) > 0
+
+    digest = rust_adapter.page_snapshot_digest(norm_page.page_snapshot)
+    assert isinstance(digest, str)
+    assert len(digest) == 64
+
+    snap_spans = rust_adapter.collect_native_spans_from_snapshot(norm_page.page_snapshot)
+    assert len(snap_spans) == 3
+    assert [s.text for s in snap_spans] == [
+        "Outside of CropBox",
+        "Header in CropBox",
+        "Normal Body Text",
+    ]
+
+    raw_spans = rust_adapter.collect_native_spans_from_rawdict(norm_page.rawdict, 100.0, 0.0)
+    assert len(raw_spans) == 3
+    assert [s.text for s in raw_spans] == [
+        "Outside of CropBox",
+        "Header in CropBox",
+        "Normal Body Text",
+    ]
+
+    raw_snapshot_path = probe_root / "test_data" / "pdfium_output" / "synth_crop_offset_pdfium.json"
+    assert raw_snapshot_path.is_file(), f"Raw snapshot file not found: {raw_snapshot_path}"
+    with open(raw_snapshot_path, "r", encoding="utf-8") as f:
+        raw_page = json.load(f)["pages"][0]
+
+    py_norm = normalize_raw_page(raw_page)
+    assert py_norm.page_type == norm_page.page_type
+    assert py_norm.words == norm_page.words
+    assert len(py_norm.page_snapshot["text_blocks"]) == len(norm_page.page_snapshot["text_blocks"])
+    assert len(py_norm.page_snapshot["spans"]) == len(norm_page.page_snapshot["spans"])
+    assert len(py_norm.page_snapshot["words"]) == len(norm_page.page_snapshot["words"])
+    assert len(py_norm.rawdict["blocks"]) == len(norm_page.rawdict["blocks"])
+
+    py_digest = rust_adapter.page_snapshot_digest(py_norm.page_snapshot)
+    assert py_digest == digest, f"Digest mismatch: py={py_digest} vs rust={digest}"
+
+    py_snap_spans = rust_adapter.collect_native_spans_from_snapshot(py_norm.page_snapshot)
+    assert [s.text for s in py_snap_spans] == [s.text for s in snap_spans]
+
+    py_raw_spans = rust_adapter.collect_native_spans_from_rawdict(py_norm.rawdict, 100.0, 0.0)
+    assert [s.text for s in py_raw_spans] == [s.text for s in raw_spans]
+
+    probe_norm = normalize_with_rust_probe(raw_page, pdf_path=str(synth_pdf))
+    assert probe_norm is not None
+    assert rust_adapter.page_snapshot_digest(probe_norm.page_snapshot) == digest

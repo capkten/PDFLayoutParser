@@ -193,3 +193,84 @@
 6. **代码侵入性与约束检查**：
    - 核心生产代码（`src/`、`rust/`、根 `Cargo.toml`）严格零修改；
    - 既有未暂存 PDF 文件（`synth_crop_offset.pdf`、`synth_mixed_fonts.pdf`）完好保留。
+
+---
+
+## 6. Section 6: PDFium 聚类规范化 (Normalizer) 迁移至纯 Rust 原生实现
+
+### 6.1 架构分层与核心模块
+
+本阶段完成了将 Python 侧原有的字符、Span、Line、Block 聚类以及矢量图元规范化逻辑全面迁移至纯 Rust 原生实现，消除跨语言循环开销，提供高性能的端到端页面规范化能力：
+
+1. **`classifier.rs`（页面分类器）**：
+   - 依据字符几何有效性、Unicode 标量计数与控制字符判定规则，对原生页面进行 `vector` 或 `scanned` 分类；
+   - 完整支持合成分隔空格与实际字形缺失的区分逻辑，与 Python `pdfium_classification.py` 严格对齐。
+2. **`clustering.rs`（视觉几何与拓扑聚类引擎）**：
+   - **Span 合并**：依据字体、字号、渲染模式及水平间距（`gap <= 0.4 * char_h`）合并同一行内的连续 Span，并完整保留字符级原始 Provenance 元数据；
+   - **Line 聚类**：依据垂直重叠率（`overlap_ratio >= 0.5`）与中心距公差（`center_dist <= 0.4 * min_h`）聚集行，并增加行内水平重叠度判定（水平重叠超过 30% 严格分行，防止图层重叠文本误并）；
+   - **Block 聚类**：依据行垂直间距（`line_gap <= 1.5 * ref_h`）与栏间距（`h_gutter <= 2.0 * ref_h`）划分段落块；
+   - **Word 推导 (`derive_words`)**：实现对英文单词、连续数字（包括负号前缀、千分位逗号、浮点小数点、百分号后缀）及 CJK 连续文本的流式切词，同时输出 8 元组和具备 `raw_source_position` 的 Wire Word DTO。
+3. **`drawings.rs`（矢量图元规范化）**：
+   - 将原始线段 `l`、矩形 `re`、曲线 `c` 解析归一化为标准路径类型 `s`（描边）、`f`（填充）与 `fs`（描边填充）；
+   - 提取各线段几何外框与图元属性，构造与主库 `rust_adapter` 兼容的 `WireDrawingDto`。
+4. **`normalizer.rs`（聚合规范化器与 DTO 组装）**：
+   - 串联分类、聚类与图元规范化，输出标准的 `NormalizedPageDto`；
+   - 同步输出用于 Rust 高速恢复链路的 `PageSnapshotWireDto` 与 PyMuPDF 兼容的 `RawdictWireDto`。
+
+### 6.2 CLI 命令扩展
+
+在 `main.rs` 中提供规范化命令行指令：
+```bash
+pdfium_probe normalize <pdf_path> <page_index> <out_json>
+```
+- **参数控制**：接收 PDF 路径、指定页面序号（通过 `u16::try_from` 防溢出校验）和目标输出 JSON 路径；
+- **原生提取与规范化**：自动加载对应操作系统架构的 PDFium 动态库（`pdfium.dll` / `libpdfium.so` / `libpdfium.dylib`），执行页面提取与全套聚类规范化；
+- **输出格式**：将规范化后的 `NormalizedPageDto` 结构序列化为 Pretty JSON 写入目标文件。
+
+### 6.3 Python 适配层接入与类型契约兼容
+
+在 `tools/pdfium_probe/scripts/pdfium_normalizer.py` 中实现了对 Rust 规范化产物的消费与桥接：
+
+1. **`normalize_from_rust_dto(rust_dto: Mapping[str, Any]) -> NormalizedPage`**：
+   - 将 Rust 导出的 `NormalizedPageDto` 反序列化为标准 `NormalizedPage` namedtuple；
+   - **`rawdict` 4 元组强类型转换**：遍历 block、line、span、char 各层级，将所有 `bbox` 强转为 4 元组 `(float(x0), float(y0), float(x1), float(y1))`。彻底解决 PyO3 `b.extract::<(f64, f64, f64, f64)>()` 对 Python `list` 类型静默忽略导致 `collect_native_spans_from_rawdict` 提取为 0 的问题；
+   - **`words` 8 元组转换**：将 `rust_dto["words"]` 转换为标准的 `(x0, y0, x1, y1, text, block, line, word)` 8 元组列表；
+   - **Wire Snapshot 保持**：完整保留 `page_snapshot` 字典结构供下游 `rust_adapter` 消费。
+2. **`normalize_with_rust_probe(raw_page: Mapping[str, Any], pdf_path: Optional[str] = None) -> Optional[NormalizedPage]`**：
+   - 定位已编译的 `pdfium_probe` 探针二进制，通过子进程执行 `pdfium_probe normalize <pdf_path> <page_index> <tmp_json>`；
+   - 附带 30 秒超时保护（`timeout=30`），成功执行后通过 `normalize_from_rust_dto` 构造 `NormalizedPage`；
+   - 当探测失败或超时时安全返回 `None`。
+3. **`normalize_raw_page` 与 `normalize_raw_snapshot`**：
+   - 自动检测并消费传入的预规范化 Rust DTO 字典（无需重复聚类）；
+   - 支持显式指定 `pdf_path` 时委托给 Rust 探针原生加速；
+   - 保留纯 Python 聚类与图元规范化完整实现作为离线无编译二进制环境下的可靠回退。
+4. **语言兼容性约束**：
+   - 严格遵循 Python 3.7+ 兼容性，所有类型标注均使用 `typing` 模块（如 `Optional`、`Union`、`Tuple` 等），杜绝 PEP 604 `|` 联合类型语法。
+
+### 6.4 4 级全量测试与回归验证
+
+全量 4 级回归与自动化测试 100% 通过：
+
+1. **Probe Rust 全量测试**：
+   - 执行命令：`cargo test --manifest-path tools/pdfium_probe/Cargo.toml`
+   - 结果：**40 passed; 0 failed; finished in 0.30s**（包含分类器矩阵、baselines 聚类、切词推导、Drawing 规范化、快照序列化与 JSON 往返测试）。
+2. **Probe Python 自动化测试**：
+   - 执行命令：`$env:PYTHONPATH = "src;tools/pdfium_probe/scripts"; $env:REPO_ROOT = "D:\codes\PDFLayoutParser"; python -m pytest -q tools/pdfium_probe/tests/`
+   - 结果：**89 passed in 4.64s**（新增并通过 `test_rust_probe_normalize_cli_and_dto_parity`）。
+3. **主 Rust 库全量测试**：
+   - 执行命令：`cargo test`
+   - 结果：**103 passed; 0 failed; finished in 0.07s**。
+4. **核心 Python 业务回归**：
+   - 执行命令：`$env:PYTHONPATH = "src;tools/pdfium_probe/scripts"; $env:REPO_ROOT = "D:\codes\PDFLayoutParser"; python -m pytest -q tests/test_classify_pdf_page.py tests/test_extract_table_region.py tests/test_financial_header_normalizer.py tests/test_header_upward_merge.py tests/test_wireless_structure_merges.py tests/test_wireless_structure_grid.py`
+   - 结果：**77 passed, 1 skipped in 2.40s**。
+5. **端到端流水线可视化验证**：
+   - 执行命令：`python tools/pdfium_probe/scripts/visualize_pipeline_steps.py --sample test_p27_table --sample credit_p1_detail`
+   - 结果：两例样本全部 4 个流水线阶段图均成功生成，可视化图元和拓扑布局完全正常。
+6. **双端对齐与强类型校验**：
+   - 合成样本 `synth_crop_offset.pdf` 与 `synth_rotations.pdf` 的 Rust Wire Snapshot 与 Python Normalizer Snapshot 在 SHA-256 Digest 上达到 100% 字节级一致；
+   - `rust_adapter.page_snapshot_digest(dto)` 计算出有效 64 字符 SHA256 哈希；
+   - `rust_adapter.collect_native_spans_from_snapshot(dto)` 成功提取完整 Span 文本与坐标；
+   - `rust_adapter.collect_native_spans_from_rawdict(rawdict, 100.0, 0.0)` 成功提取对应 Span，证实 4 元组 `bbox` 兼容性无误。
+7. **代码约束与零侵入性**：
+   - 核心生产代码（`src/`、`rust/`、根 `Cargo.toml`）严格保持零修改；
+   - 既有工作区未暂存的合成测试 PDF 完好保留。

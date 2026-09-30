@@ -6,7 +6,13 @@ Transforms PDFium raw page extraction into:
 3. PyMuPDF-compatible words list (8-tuples).
 """
 
+import json
 import math
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import tempfile
 from typing import Any, Dict, List, Mapping, NamedTuple, Optional, Sequence, Tuple, Union
 
 from pdfium_classification import classify_raw_page, is_vector_page
@@ -764,8 +770,245 @@ def normalize_drawings(raw_page: Mapping[str, Any]) -> List[Dict[str, Any]]:
     return normalized
 
 
-def normalize_raw_page(raw_page: Mapping[str, Any]) -> NormalizedPage:
-    """Normalize a PDFium raw page extraction into NormalizedPage contract."""
+def _find_pdfium_probe_bin() -> Optional[Path]:
+    """Locate compiled pdfium_probe binary (debug or release)."""
+    probe_root = Path(__file__).resolve().parents[1]
+    fallback_repo = probe_root.parents[1] if len(probe_root.parents) > 1 else probe_root.parent.parent
+    repo_root = Path(os.environ.get("REPO_ROOT", str(fallback_repo)))
+    bin_names = (
+        ["pdfium_probe.exe", "pdfium_probe"]
+        if os.name == "nt"
+        else ["pdfium_probe", "pdfium_probe.exe"]
+    )
+
+    candidate_dirs: List[Path] = []
+    cargo_target_dir = os.environ.get("CARGO_TARGET_DIR")
+    if cargo_target_dir:
+        c_target = Path(cargo_target_dir)
+        candidate_dirs.extend([
+            c_target / "release",
+            c_target / "debug",
+        ])
+
+    candidate_dirs.extend([
+        probe_root / "target" / "release",
+        probe_root / "target" / "debug",
+        fallback_repo / "tools" / "pdfium_probe" / "target" / "release",
+        fallback_repo / "tools" / "pdfium_probe" / "target" / "debug",
+        repo_root / "tools" / "pdfium_probe" / "target" / "release",
+        repo_root / "tools" / "pdfium_probe" / "target" / "debug",
+    ])
+
+    for cdir in candidate_dirs:
+        for bname in bin_names:
+            cand = cdir / bname
+            if cand.is_file():
+                return cand
+
+    for bname in bin_names:
+        which_path = shutil.which(bname)
+        if which_path:
+            p = Path(which_path)
+            if p.is_file():
+                return p
+
+    return None
+
+
+def _to_bbox_tuple(b: Any) -> Tuple[float, float, float, float]:
+    if isinstance(b, (list, tuple)) and len(b) >= 4:
+        return (float(b[0]), float(b[1]), float(b[2]), float(b[3]))
+    return (0.0, 0.0, 0.0, 0.0)
+
+
+def normalize_from_rust_dto(rust_dto: Mapping[str, Any]) -> NormalizedPage:
+    """Construct NormalizedPage from Rust NormalizedPageDto mapping."""
+    page_type = str(rust_dto.get("page_type", "scanned"))
+    page_snapshot_val = rust_dto.get("page_snapshot")
+    page_snapshot: Optional[Dict[str, Any]] = (
+        dict(page_snapshot_val)
+        if page_snapshot_val is not None and isinstance(page_snapshot_val, Mapping)
+        else None
+    )
+
+    rawdict_raw = rust_dto.get("rawdict")
+    rawdict: Optional[Dict[str, Any]] = None
+    if rawdict_raw is not None and isinstance(rawdict_raw, Mapping):
+        blocks_norm: List[Dict[str, Any]] = []
+        for b in rawdict_raw.get("blocks") or []:
+            if not isinstance(b, Mapping):
+                continue
+            lines_norm: List[Dict[str, Any]] = []
+            for l in b.get("lines") or []:
+                if not isinstance(l, Mapping):
+                    continue
+                spans_norm: List[Dict[str, Any]] = []
+                for s in l.get("spans") or []:
+                    if not isinstance(s, Mapping):
+                        continue
+                    chars_norm: List[Dict[str, Any]] = []
+                    for c in s.get("chars") or []:
+                        if not isinstance(c, Mapping):
+                            continue
+                        chars_norm.append(
+                            {
+                                "c": str(c.get("c", "")),
+                                "bbox": _to_bbox_tuple(c.get("bbox")),
+                            }
+                        )
+                    spans_norm.append(
+                        {
+                            "bbox": _to_bbox_tuple(s.get("bbox")),
+                            "text": str(s.get("text", "")),
+                            "font": str(s.get("font", "")),
+                            "size": float(s.get("size", 10.0)),
+                            "flags": int(s.get("flags", 0)),
+                            "chars": chars_norm,
+                        }
+                    )
+                lines_norm.append(
+                    {
+                        "bbox": _to_bbox_tuple(l.get("bbox")),
+                        "spans": spans_norm,
+                    }
+                )
+            blocks_norm.append(
+                {
+                    "type": int(b.get("type", 0)),
+                    "bbox": _to_bbox_tuple(b.get("bbox")),
+                    "lines": lines_norm,
+                }
+            )
+        rawdict = {
+            "width": float(rawdict_raw.get("width", 0.0)),
+            "height": float(rawdict_raw.get("height", 0.0)),
+            "blocks": blocks_norm,
+        }
+
+    words_norm: List[Tuple[float, float, float, float, str, int, int, int]] = []
+    for w in rust_dto.get("words") or []:
+        if isinstance(w, (list, tuple)) and len(w) >= 8:
+            words_norm.append(
+                (
+                    float(w[0]),
+                    float(w[1]),
+                    float(w[2]),
+                    float(w[3]),
+                    str(w[4]),
+                    int(w[5]),
+                    int(w[6]),
+                    int(w[7]),
+                )
+            )
+
+    sidecar_val = rust_dto.get("sidecar")
+    sidecar: Dict[str, Any] = dict(sidecar_val) if isinstance(sidecar_val, Mapping) else {}
+
+    diag_val = rust_dto.get("diagnostics")
+    diagnostics: Dict[str, Any] = dict(diag_val) if isinstance(diag_val, Mapping) else {}
+
+    return NormalizedPage(
+        page_type=page_type,
+        page_snapshot=page_snapshot,
+        rawdict=rawdict,
+        words=words_norm,
+        sidecar=sidecar,
+        diagnostics=diagnostics,
+    )
+
+
+def normalize_with_rust_probe(
+    raw_page: Mapping[str, Any],
+    pdf_path: Optional[str] = None,
+) -> Optional[NormalizedPage]:
+    """Execute pdfium_probe normalize CLI and construct NormalizedPage with timeout=30."""
+    target_pdf: Optional[Path] = None
+    if pdf_path is not None:
+        p = Path(pdf_path)
+        if p.is_file():
+            target_pdf = p
+    if target_pdf is None:
+        src = raw_page.get("source_file") or raw_page.get("pdf_path")
+        if src and isinstance(src, str):
+            p = Path(src)
+            if p.is_file():
+                target_pdf = p
+            else:
+                probe_root = Path(__file__).resolve().parents[1]
+                synth_candidate = probe_root / "test_data" / "synthetic" / p.name
+                if synth_candidate.is_file():
+                    target_pdf = synth_candidate
+
+    if target_pdf is None:
+        return None
+
+    probe_bin = _find_pdfium_probe_bin()
+    if probe_bin is None or not probe_bin.is_file():
+        return None
+
+    page_index = int(raw_page.get("page_index", 0))
+
+    tmp_file = tempfile.NamedTemporaryFile(suffix=".json", delete=False)
+    tmp_path = Path(tmp_file.name)
+    tmp_file.close()
+
+    try:
+        cmd = [
+            str(probe_bin),
+            "normalize",
+            str(target_pdf),
+            str(page_index),
+            str(tmp_path),
+        ]
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        if res.returncode != 0:
+            return None
+        if not tmp_path.is_file() or tmp_path.stat().st_size == 0:
+            return None
+        with open(tmp_path, "r", encoding="utf-8") as f:
+            dto = json.load(f)
+        return normalize_from_rust_dto(dto)
+    except (subprocess.TimeoutExpired, subprocess.SubprocessError, OSError, json.JSONDecodeError):
+        return None
+    finally:
+        try:
+            if tmp_path.is_file():
+                tmp_path.unlink()
+        except OSError:
+            pass
+
+
+def normalize_raw_page(
+    raw_page: Mapping[str, Any],
+    pdf_path: Optional[str] = None,
+) -> NormalizedPage:
+    """Normalize a PDFium raw page extraction into NormalizedPage contract.
+
+    Supports:
+    1. Pre-normalized Rust DTO mappings directly (detected by presence of 'page_type'
+       and 'page_snapshot' / 'rawdict' without raw 'spans').
+    2. Delegating to native Rust `pdfium_probe normalize` if `pdf_path` is provided,
+       falling back to pure Python implementation if unavailable.
+    3. Pure Python normalization of in-memory raw page dicts.
+    """
+    if isinstance(raw_page, NormalizedPage):
+        return raw_page
+
+    # Support pre-normalized Rust DTO directly
+    if (
+        "page_type" in raw_page
+        and ("page_snapshot" in raw_page or "rawdict" in raw_page)
+        and "crop_box" not in raw_page
+        and "media_box" not in raw_page
+    ):
+        return normalize_from_rust_dto(raw_page)
+
+    # Support delegating to Rust probe when appropriate
+    if pdf_path is not None:
+        rust_norm = normalize_with_rust_probe(raw_page, pdf_path=pdf_path)
+        if rust_norm is not None:
+            return rust_norm
+
     checked_page = _ensure_mapping_diagnostics_if_missing(raw_page)
     classification = classify_raw_page(checked_page)
 
@@ -1140,8 +1383,15 @@ def normalize_raw_page(raw_page: Mapping[str, Any]) -> NormalizedPage:
     )
 
 
-def normalize_raw_snapshot(raw_snapshot: Mapping[str, Any]) -> List[NormalizedPage]:
-    """Normalize a multi-page raw snapshot or a single raw page mapping."""
-    if "pages" in raw_snapshot and isinstance(raw_snapshot["pages"], Sequence):
-        return [normalize_raw_page(page) for page in raw_snapshot["pages"]]
-    return [normalize_raw_page(raw_snapshot)]
+def normalize_raw_snapshot(
+    raw_snapshot: Union[Mapping[str, Any], Sequence[Any]],
+    pdf_path: Optional[str] = None,
+) -> List[NormalizedPage]:
+    """Normalize a multi-page raw snapshot, page list, or single raw page mapping."""
+    if isinstance(raw_snapshot, Sequence) and not isinstance(raw_snapshot, (str, bytes)):
+        return [normalize_raw_page(page, pdf_path=pdf_path) for page in raw_snapshot]
+    if isinstance(raw_snapshot, Mapping):
+        if "pages" in raw_snapshot and isinstance(raw_snapshot["pages"], Sequence):
+            return [normalize_raw_page(page, pdf_path=pdf_path) for page in raw_snapshot["pages"]]
+        return [normalize_raw_page(raw_snapshot, pdf_path=pdf_path)]
+    return []
