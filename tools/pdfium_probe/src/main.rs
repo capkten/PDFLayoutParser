@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 pub mod classifier;
 pub mod clustering;
 pub mod drawings;
+pub mod normalizer;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct CharInfo {
@@ -681,6 +682,18 @@ pub fn process_pdf_file(
     let json_str = serde_json::to_string_pretty(&snapshot)?;
     fs::write(&out_file, json_str)?;
     println!("[pdfium_probe] Wrote raw snapshot to {:?}", out_file);
+
+    let normalized = normalizer::normalize_raw_snapshot(&snapshot);
+    let norm_file = out_dir.join(format!("{}_normalized.json", base_name));
+    let norm_json_str = serde_json::to_string_pretty(&normalized)?;
+    fs::write(&norm_file, &norm_json_str)?;
+    println!("[pdfium_probe] Wrote normalized snapshot to {:?}", norm_file);
+
+    for (i, norm_page) in normalized.iter().enumerate() {
+        let page_norm_file = out_dir.join(format!("{}_page_{}_normalized.json", base_name, i));
+        let page_norm_json = serde_json::to_string_pretty(norm_page)?;
+        fs::write(&page_norm_file, page_norm_json)?;
+    }
     Ok(())
 }
 
@@ -736,6 +749,35 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let page = doc.pages().get(page_idx_u16)?;
         render_page_to_png(&page, dpi, out_png)?;
         println!("[pdfium_probe] Rendered page {} to {:?}", page_idx, out_png);
+        return Ok(());
+    }
+
+    if args.len() >= 2 && args[1] == "normalize" {
+        if args.len() < 5 {
+            eprintln!("Usage: pdfium_probe normalize <pdf_path> <page_index> <out_json>");
+            return Err("Invalid arguments for normalize command".into());
+        }
+        let pdf_file = Path::new(&args[2]);
+        let page_idx: usize = args[3].parse()?;
+        let out_json = Path::new(&args[4]);
+
+        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let (lib_path, _) = get_platform_native_lib(&manifest_dir)?;
+        let bindings = Pdfium::bind_to_library(lib_path)?;
+        let pdfium = Pdfium::new(bindings);
+        let doc = pdfium.load_pdf_from_file(pdf_file, None)?;
+        let page_idx_u16 = u16::try_from(page_idx)
+            .map_err(|e| format!("Page index {} exceeds u16 range: {}", page_idx, e))?;
+        let page = doc.pages().get(page_idx_u16)?;
+        let raw_page = extract_page(&page, page_idx)?;
+        let normalized = normalizer::normalize_raw_page(&raw_page);
+
+        if let Some(parent) = out_json.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let json_str = serde_json::to_string_pretty(&normalized)?;
+        fs::write(out_json, json_str)?;
+        println!("[pdfium_probe] Normalized page {} to {:?}", page_idx, out_json);
         return Ok(());
     }
 
@@ -848,6 +890,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let json_str = serde_json::to_string_pretty(&snapshot)?;
         fs::write(&out_file, json_str)?;
         println!("[pdfium_probe] Wrote real raw snapshot to {:?}", out_file);
+
+        let normalized = normalizer::normalize_raw_snapshot(&snapshot);
+        let norm_file = real_out_dir.join(format!("{}_normalized.json", sample_name));
+        let norm_json_str = serde_json::to_string_pretty(&normalized)?;
+        fs::write(&norm_file, norm_json_str)?;
+        println!("[pdfium_probe] Wrote real normalized snapshot to {:?}", norm_file);
         real_count += 1;
     }
 
@@ -1052,5 +1100,40 @@ mod tests {
         let mut f = std::fs::File::open(&out_png).unwrap();
         f.read_exact(&mut header).unwrap();
         assert_eq!(&header[1..4], b"PNG"); // 校验 PNG 魔法头
+    }
+
+    #[test]
+    fn test_normalize_synthetic_page_contract() {
+        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let (lib_path, _) = get_platform_native_lib(&manifest_dir).unwrap();
+        let bindings = Pdfium::bind_to_library(lib_path).unwrap();
+        let pdfium = Pdfium::new(bindings);
+        let sample_pdf = manifest_dir.join("test_data/synthetic/synth_basic_table.pdf");
+        let sample_pdf = if sample_pdf.is_file() {
+            sample_pdf
+        } else {
+            manifest_dir.join("test_data/synthetic/synth_rotations.pdf")
+        };
+        if !sample_pdf.is_file() {
+            return;
+        }
+        let doc = pdfium.load_pdf_from_file(&sample_pdf, None).unwrap();
+        let page = doc.pages().get(0).unwrap();
+        let raw_page = extract_page(&page, 0).unwrap();
+        let norm = normalizer::normalize_raw_page(&raw_page);
+        assert_eq!(norm.page_type, "vector");
+        assert!(norm.page_snapshot.is_some());
+        assert!(norm.rawdict.is_some());
+        assert!(!norm.words.is_empty());
+
+        let snapshot = norm.page_snapshot.as_ref().unwrap();
+        assert_eq!(snapshot.schema_version, 1);
+        assert_eq!(snapshot.page_index, 0);
+        assert!(!snapshot.text_blocks.is_empty());
+        assert!(!snapshot.spans.is_empty());
+
+        let json = serde_json::to_string_pretty(&norm).unwrap();
+        let back: normalizer::NormalizedPageDto = serde_json::from_str(&json).unwrap();
+        assert_eq!(norm, back);
     }
 }
