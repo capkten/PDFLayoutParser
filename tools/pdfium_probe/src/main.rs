@@ -728,6 +728,68 @@ pub fn get_platform_native_lib(manifest_dir: &Path) -> Result<(PathBuf, &'static
     }
 }
 
+pub fn parse_tables_json(tables_arg: &str) -> Result<Vec<layout::TableRegionInput>, Box<dyn std::error::Error>> {
+    let trimmed = tables_arg.trim();
+    if trimmed.is_empty() || trimmed == "[]" {
+        return Ok(Vec::new());
+    }
+
+    let json_content = if Path::new(tables_arg).is_file() {
+        fs::read_to_string(tables_arg)?
+    } else {
+        tables_arg.to_string()
+    };
+
+    let trimmed_content = json_content.trim();
+    if trimmed_content.is_empty() || trimmed_content == "[]" {
+        return Ok(Vec::new());
+    }
+
+    #[derive(Deserialize)]
+    struct FlexibleTableItem {
+        bbox: [f64; 4],
+        #[serde(default)]
+        table_id: Option<usize>,
+        #[serde(default)]
+        table_index: Option<usize>,
+    }
+
+    // Try parsing as array of flexible table items
+    if let Ok(items) = serde_json::from_str::<Vec<FlexibleTableItem>>(trimmed_content) {
+        let tables = items
+            .into_iter()
+            .enumerate()
+            .map(|(idx, item)| layout::TableRegionInput {
+                bbox: item.bbox,
+                table_id: item.table_id.or(item.table_index).unwrap_or(idx),
+            })
+            .collect();
+        return Ok(tables);
+    }
+
+    // Also try parsing if wrapped in an object with a "tables" key
+    #[derive(Deserialize)]
+    struct TablesWrapper {
+        tables: Vec<FlexibleTableItem>,
+    }
+    if let Ok(wrapper) = serde_json::from_str::<TablesWrapper>(trimmed_content) {
+        let tables = wrapper
+            .tables
+            .into_iter()
+            .enumerate()
+            .map(|(idx, item)| layout::TableRegionInput {
+                bbox: item.bbox,
+                table_id: item.table_id.or(item.table_index).unwrap_or(idx),
+            })
+            .collect();
+        return Ok(tables);
+    }
+
+    // Fallback: standard parse to provide meaningful error if invalid
+    let tables: Vec<layout::TableRegionInput> = serde_json::from_str(trimmed_content)?;
+    Ok(tables)
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
     if args.len() >= 2 && args[1] == "render" {
@@ -784,6 +846,49 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let json_str = serde_json::to_string_pretty(&normalized)?;
         fs::write(out_json, json_str)?;
         println!("[pdfium_probe] Normalized page {} to {:?}", page_idx, out_json);
+        return Ok(());
+    }
+
+    if args.len() >= 2 && args[1] == "layout" {
+        if args.iter().any(|a| a == "--help" || a == "-h") {
+            println!("Usage: pdfium_probe layout <pdf_path> <page_index> <tables_json> <out_json>");
+            return Ok(());
+        }
+        if args.len() < 6 {
+            eprintln!("Usage: pdfium_probe layout <pdf_path> <page_index> <tables_json> <out_json>");
+            return Err("Invalid arguments for layout command".into());
+        }
+        let pdf_file = Path::new(&args[2]);
+        let page_idx: usize = args[3].parse()?;
+        let tables_arg = &args[4];
+        let out_json = Path::new(&args[5]);
+
+        let tables = parse_tables_json(tables_arg)?;
+
+        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let (lib_path, _) = get_platform_native_lib(&manifest_dir)?;
+        let bindings = Pdfium::bind_to_library(lib_path)?;
+        let pdfium = Pdfium::new(bindings);
+        let doc = pdfium.load_pdf_from_file(pdf_file, None)?;
+        let page_idx_u16 = u16::try_from(page_idx)
+            .map_err(|e| format!("Page index {} exceeds u16 range: {}", page_idx, e))?;
+        let page = doc.pages().get(page_idx_u16)?;
+        let raw_page = extract_page(&page, page_idx)?;
+        let source_file_name = pdf_file.file_name().and_then(|s| s.to_str()).unwrap_or("");
+        let normalized = normalizer::normalize_raw_page_with_meta(
+            &raw_page,
+            Some(source_file_name),
+            Some("pdfium_probe layout"),
+        );
+
+        let layout_elements = layout::build_page_layout(&normalized, &tables, &[]);
+
+        if let Some(parent) = out_json.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let json_str = serde_json::to_string_pretty(&layout_elements)?;
+        fs::write(out_json, json_str)?;
+        println!("[pdfium_probe] Layout for page {} written to {:?}", page_idx, out_json);
         return Ok(());
     }
 
@@ -1141,5 +1246,42 @@ mod tests {
         let json = serde_json::to_string_pretty(&norm).unwrap();
         let back: normalizer::NormalizedPageDto = serde_json::from_str(&json).unwrap();
         assert_eq!(norm, back);
+    }
+
+    #[test]
+    fn test_parse_tables_json_variations() {
+        // Empty inputs
+        assert!(parse_tables_json("").unwrap().is_empty());
+        assert!(parse_tables_json("   ").unwrap().is_empty());
+        assert!(parse_tables_json("[]").unwrap().is_empty());
+        assert!(parse_tables_json(" [ ] ").unwrap().is_empty());
+
+        // Array with table_id
+        let input1 = r#"[{"bbox": [10.0, 20.0, 100.0, 200.0], "table_id": 5}]"#;
+        let tables1 = parse_tables_json(input1).unwrap();
+        assert_eq!(tables1.len(), 1);
+        assert_eq!(tables1[0].bbox, [10.0, 20.0, 100.0, 200.0]);
+        assert_eq!(tables1[0].table_id, 5);
+
+        // Array with table_index
+        let input2 = r#"[{"bbox": [15.0, 25.0, 105.0, 205.0], "table_index": 7}]"#;
+        let tables2 = parse_tables_json(input2).unwrap();
+        assert_eq!(tables2.len(), 1);
+        assert_eq!(tables2[0].bbox, [15.0, 25.0, 105.0, 205.0]);
+        assert_eq!(tables2[0].table_id, 7);
+
+        // Array with missing id (defaults to index)
+        let input3 = r#"[{"bbox": [0.0, 0.0, 50.0, 50.0]}, {"bbox": [60.0, 60.0, 100.0, 100.0]}]"#;
+        let tables3 = parse_tables_json(input3).unwrap();
+        assert_eq!(tables3.len(), 2);
+        assert_eq!(tables3[0].table_id, 0);
+        assert_eq!(tables3[1].table_id, 1);
+
+        // Object with "tables" wrapper
+        let input4 = r#"{"tables": [{"bbox": [1.0, 2.0, 3.0, 4.0], "table_id": 42}]}"#;
+        let tables4 = parse_tables_json(input4).unwrap();
+        assert_eq!(tables4.len(), 1);
+        assert_eq!(tables4[0].bbox, [1.0, 2.0, 3.0, 4.0]);
+        assert_eq!(tables4[0].table_id, 42);
     }
 }

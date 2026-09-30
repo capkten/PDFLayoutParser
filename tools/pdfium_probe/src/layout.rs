@@ -11,6 +11,33 @@ pub struct TableRegionInput {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct ImageRegionInput {
+    pub bbox: [f64; 4],
+    pub image_id: usize,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct LayoutElementDto {
+    pub element_type: String, // "text" | "table" | "image"
+    pub bbox: [f64; 4],
+    pub order: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub table_index: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_index: Option<usize>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lines: Vec<LayoutTextLine>,
+}
+
+impl HasBBox for LayoutElementDto {
+    fn bbox(&self) -> [f64; 4] {
+        self.bbox
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct LayoutWordInfo {
     pub text: String,
     pub bbox: [f64; 4],
@@ -511,6 +538,159 @@ pub fn recursive_xy_cut<T: HasBBox + Clone>(items: &[T], min_y_gap: f64, min_x_g
     sort_items_by_row_reading_order(items)
 }
 
+pub fn is_inside_any_table(bbox: &[f64; 4], tables: &[TableRegionInput]) -> bool {
+    let bbox_area = (bbox[2] - bbox[0]).max(0.0) * (bbox[3] - bbox[1]).max(0.0);
+    if bbox_area <= 0.0 {
+        return false;
+    }
+
+    for t in tables {
+        let tb = &t.bbox;
+        let intersection_width = (bbox[2].min(tb[2]) - bbox[0].max(tb[0])).max(0.0);
+        let intersection_height = (bbox[3].min(tb[3]) - bbox[1].max(tb[1])).max(0.0);
+        let intersection_area = intersection_width * intersection_height;
+        let table_area = (tb[2] - tb[0]).max(0.0) * (tb[3] - tb[1]).max(0.0);
+        let union_area = bbox_area + table_area - intersection_area;
+
+        if bbox[0] >= tb[0] && bbox[1] >= tb[1] && bbox[2] <= tb[2] && bbox[3] <= tb[3] {
+            return true;
+        }
+
+        if union_area > 0.0 && (intersection_area / union_area) > 0.5 {
+            return true;
+        }
+    }
+
+    false
+}
+
+pub fn is_background_image(img: &LayoutElementDto, all_elements: &[LayoutElementDto]) -> bool {
+    if img.element_type != "image" {
+        return false;
+    }
+
+    let h = img.bbox[3] - img.bbox[1];
+    if h < 150.0 {
+        return false;
+    }
+
+    if all_elements.is_empty() {
+        return false;
+    }
+
+    let min_y0 = all_elements
+        .iter()
+        .map(|e| e.bbox[1])
+        .fold(f64::INFINITY, f64::min);
+    let max_y1 = all_elements
+        .iter()
+        .map(|e| e.bbox[3])
+        .fold(f64::NEG_INFINITY, f64::max);
+    let total_h = max_y1 - min_y0;
+    if total_h <= 0.0 || (h / total_h) < 0.4 {
+        return false;
+    }
+
+    let mut overlapping_texts = 0;
+    for other in all_elements {
+        if other.element_type == "text" {
+            let ob = &other.bbox;
+            let other_h = ob[3] - ob[1];
+            if other_h > 0.0 {
+                let overlap_y = img.bbox[3].min(ob[3]) - img.bbox[1].max(ob[1]);
+                if overlap_y >= 0.5 * other_h {
+                    overlapping_texts += 1;
+                }
+            }
+        }
+    }
+
+    overlapping_texts >= 4
+}
+
+pub fn sort_layout_elements(elements: Vec<LayoutElementDto>) -> Vec<LayoutElementDto> {
+    let mut bg_elements = Vec::new();
+    let mut flow_elements = Vec::new();
+
+    for element in &elements {
+        if is_background_image(element, &elements) {
+            bg_elements.push(element.clone());
+        } else {
+            flow_elements.push(element.clone());
+        }
+    }
+
+    let sorted_flow = recursive_xy_cut(&flow_elements, 0.0, 5.0);
+
+    bg_elements.sort_by(|a, b| {
+        a.bbox[1]
+            .partial_cmp(&b.bbox[1])
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| {
+                a.bbox[0]
+                    .partial_cmp(&b.bbox[0])
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+    });
+
+    let mut all_sorted = bg_elements;
+    all_sorted.extend(sorted_flow);
+
+    for (order, element) in all_sorted.iter_mut().enumerate() {
+        element.order = order;
+    }
+
+    all_sorted
+}
+
+pub fn build_page_layout(
+    norm: &NormalizedPageDto,
+    tables: &[TableRegionInput],
+    images: &[ImageRegionInput],
+) -> Vec<LayoutElementDto> {
+    let lines = deduct_tables_from_normalized_page(norm, tables);
+
+    let mut all_elements: Vec<LayoutElementDto> = lines
+        .into_iter()
+        .filter(|line| !is_inside_any_table(&line.bbox, tables))
+        .map(|line| LayoutElementDto {
+            element_type: "text".to_string(),
+            bbox: line.bbox,
+            order: 0,
+            text: Some(line.text.clone()),
+            table_index: None,
+            image_index: None,
+            lines: vec![line],
+        })
+        .collect();
+
+    for table in tables {
+        all_elements.push(LayoutElementDto {
+            element_type: "table".to_string(),
+            bbox: table.bbox,
+            order: 0,
+            text: None,
+            table_index: Some(table.table_id),
+            image_index: None,
+            lines: Vec::new(),
+        });
+    }
+
+    for img in images {
+        all_elements.push(LayoutElementDto {
+            element_type: "image".to_string(),
+            bbox: img.bbox,
+            order: 0,
+            text: None,
+            table_index: None,
+            image_index: Some(img.image_id),
+            lines: Vec::new(),
+        });
+    }
+
+    sort_layout_elements(all_elements)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -986,5 +1166,265 @@ mod tests {
         assert_eq!(merged.len(), 1);
         assert_eq!(merged[0].text, "Hello World");
         assert_eq!(merged[0].bbox, [10.0, 50.0, 95.0, 65.0]);
+    }
+
+    #[test]
+    fn test_layout_builder_is_inside_any_table() {
+        let tables = vec![TableRegionInput {
+            bbox: [100.0, 100.0, 300.0, 300.0],
+            table_id: 0,
+        }];
+
+        // Case A: wholly inside table
+        let wholly_inside = [120.0, 120.0, 180.0, 140.0];
+        assert!(is_inside_any_table(&wholly_inside, &tables));
+
+        // Case B: empty bbox
+        let empty_bbox = [120.0, 120.0, 120.0, 140.0];
+        assert!(!is_inside_any_table(&empty_bbox, &tables));
+
+        // Case C: completely outside
+        let outside = [10.0, 10.0, 50.0, 50.0];
+        assert!(!is_inside_any_table(&outside, &tables));
+
+        // Case D: intersection / union > 0.5 (IoU > 0.5)
+        // Table: [0, 0, 100, 100] (area 10000)
+        // BBox: [0, 0, 120, 100] (area 12000, inter 10000, union 12000, IoU = 0.833)
+        let tables_d = vec![TableRegionInput {
+            bbox: [0.0, 0.0, 100.0, 100.0],
+            table_id: 1,
+        }];
+        let high_iou = [0.0, 0.0, 120.0, 100.0];
+        assert!(is_inside_any_table(&high_iou, &tables_d));
+
+        // Case E: partial overlap but IoU <= 0.5 and not wholly inside
+        // BBox: [50, 0, 200, 100] (area 15000, inter 5000, union 20000, IoU = 0.25)
+        let low_iou = [50.0, 0.0, 200.0, 100.0];
+        assert!(!is_inside_any_table(&low_iou, &tables_d));
+    }
+
+    #[test]
+    fn test_is_inside_any_table() {
+        test_layout_builder_is_inside_any_table();
+    }
+
+    #[test]
+    fn test_layout_builder_is_background_image() {
+        // 1. Not an image element
+        let text_elem = LayoutElementDto {
+            element_type: "text".to_string(),
+            bbox: [0.0, 0.0, 400.0, 500.0],
+            order: 0,
+            text: Some("Text".to_string()),
+            table_index: None,
+            image_index: None,
+            lines: Vec::new(),
+        };
+        assert!(!is_background_image(&text_elem, &[text_elem.clone()]));
+
+        // 2. Small image (height < 150.0)
+        let small_img = LayoutElementDto {
+            element_type: "image".to_string(),
+            bbox: [50.0, 50.0, 100.0, 100.0], // h = 50.0
+            order: 0,
+            text: None,
+            table_index: None,
+            image_index: Some(0),
+            lines: Vec::new(),
+        };
+        assert!(!is_background_image(&small_img, &[small_img.clone()]));
+
+        // 3. Large image but < 4 overlapping texts
+        let large_img = LayoutElementDto {
+            element_type: "image".to_string(),
+            bbox: [0.0, 0.0, 400.0, 500.0], // h = 500.0
+            order: 0,
+            text: None,
+            table_index: None,
+            image_index: Some(1),
+            lines: Vec::new(),
+        };
+        let t1 = LayoutElementDto {
+            element_type: "text".to_string(),
+            bbox: [50.0, 50.0, 200.0, 70.0],
+            order: 1,
+            text: Some("L1".to_string()),
+            table_index: None,
+            image_index: None,
+            lines: Vec::new(),
+        };
+        let t2 = LayoutElementDto {
+            element_type: "text".to_string(),
+            bbox: [50.0, 100.0, 200.0, 120.0],
+            order: 2,
+            text: Some("L2".to_string()),
+            table_index: None,
+            image_index: None,
+            lines: Vec::new(),
+        };
+        assert!(!is_background_image(
+            &large_img,
+            &[large_img.clone(), t1.clone(), t2.clone()]
+        ));
+
+        // 4. Large image overlapping >= 4 text lines (background image)
+        let t3 = LayoutElementDto {
+            element_type: "text".to_string(),
+            bbox: [50.0, 150.0, 200.0, 170.0],
+            order: 3,
+            text: Some("L3".to_string()),
+            table_index: None,
+            image_index: None,
+            lines: Vec::new(),
+        };
+        let t4 = LayoutElementDto {
+            element_type: "text".to_string(),
+            bbox: [50.0, 200.0, 200.0, 220.0],
+            order: 4,
+            text: Some("L4".to_string()),
+            table_index: None,
+            image_index: None,
+            lines: Vec::new(),
+        };
+        let all_elems = vec![large_img.clone(), t1, t2, t3, t4];
+        assert!(is_background_image(&large_img, &all_elems));
+    }
+
+    #[test]
+    fn test_is_background_image() {
+        test_layout_builder_is_background_image();
+    }
+
+    #[test]
+    fn test_layout_builder_sort_layout_elements() {
+        let bg_img = LayoutElementDto {
+            element_type: "image".to_string(),
+            bbox: [0.0, 0.0, 500.0, 600.0],
+            order: 99,
+            text: None,
+            table_index: None,
+            image_index: Some(99),
+            lines: Vec::new(),
+        };
+        let t1 = LayoutElementDto {
+            element_type: "text".to_string(),
+            bbox: [50.0, 50.0, 200.0, 70.0],
+            order: 99,
+            text: Some("Line 1".to_string()),
+            table_index: None,
+            image_index: None,
+            lines: Vec::new(),
+        };
+        let t2 = LayoutElementDto {
+            element_type: "text".to_string(),
+            bbox: [50.0, 100.0, 200.0, 120.0],
+            order: 99,
+            text: Some("Line 2".to_string()),
+            table_index: None,
+            image_index: None,
+            lines: Vec::new(),
+        };
+        let t3 = LayoutElementDto {
+            element_type: "text".to_string(),
+            bbox: [50.0, 150.0, 200.0, 170.0],
+            order: 99,
+            text: Some("Line 3".to_string()),
+            table_index: None,
+            image_index: None,
+            lines: Vec::new(),
+        };
+        let t4 = LayoutElementDto {
+            element_type: "text".to_string(),
+            bbox: [50.0, 200.0, 200.0, 220.0],
+            order: 99,
+            text: Some("Line 4".to_string()),
+            table_index: None,
+            image_index: None,
+            lines: Vec::new(),
+        };
+        let normal_table = LayoutElementDto {
+            element_type: "table".to_string(),
+            bbox: [50.0, 250.0, 450.0, 350.0],
+            order: 99,
+            text: None,
+            table_index: Some(0),
+            image_index: None,
+            lines: Vec::new(),
+        };
+
+        let elements = vec![
+            t3.clone(),
+            normal_table.clone(),
+            t1.clone(),
+            bg_img.clone(),
+            t4.clone(),
+            t2.clone(),
+        ];
+        let sorted = sort_layout_elements(elements);
+
+        assert_eq!(sorted.len(), 6);
+        // Background image prepended at order 0
+        assert_eq!(sorted[0].element_type, "image");
+        assert_eq!(sorted[0].image_index, Some(99));
+        assert_eq!(sorted[0].order, 0);
+
+        // Body elements sorted by reading order (XY-cut)
+        assert_eq!(sorted[1].text.as_deref(), Some("Line 1"));
+        assert_eq!(sorted[1].order, 1);
+        assert_eq!(sorted[2].text.as_deref(), Some("Line 2"));
+        assert_eq!(sorted[2].order, 2);
+        assert_eq!(sorted[3].text.as_deref(), Some("Line 3"));
+        assert_eq!(sorted[3].order, 3);
+        assert_eq!(sorted[4].text.as_deref(), Some("Line 4"));
+        assert_eq!(sorted[4].order, 4);
+        assert_eq!(sorted[5].element_type, "table");
+        assert_eq!(sorted[5].table_index, Some(0));
+        assert_eq!(sorted[5].order, 5);
+    }
+
+    #[test]
+    fn test_sort_layout_elements() {
+        test_layout_builder_sort_layout_elements();
+    }
+
+    #[test]
+    fn test_layout_builder_integration() {
+        let words = vec![
+            make_word(50.0, 10.0, 150.0, 25.0, "PageHeader", 0, 0, 0),
+            make_word(60.0, 60.0, 120.0, 75.0, "CellText", 1, 0, 0),
+            make_word(50.0, 120.0, 200.0, 140.0, "BodyParagraph", 2, 0, 0),
+        ];
+        let norm = dummy_norm_page(words);
+        let tables = vec![TableRegionInput {
+            bbox: [40.0, 50.0, 400.0, 100.0],
+            table_id: 10,
+        }];
+        let images = vec![ImageRegionInput {
+            bbox: [50.0, 160.0, 150.0, 190.0],
+            image_id: 20,
+        }];
+
+        let layout = build_page_layout(&norm, &tables, &images);
+        assert_eq!(layout.len(), 4);
+        assert_eq!(layout[0].element_type, "text");
+        assert_eq!(layout[0].text.as_deref(), Some("PageHeader"));
+        assert_eq!(layout[0].order, 0);
+
+        assert_eq!(layout[1].element_type, "table");
+        assert_eq!(layout[1].table_index, Some(10));
+        assert_eq!(layout[1].order, 1);
+
+        assert_eq!(layout[2].element_type, "text");
+        assert_eq!(layout[2].text.as_deref(), Some("BodyParagraph"));
+        assert_eq!(layout[2].order, 2);
+
+        assert_eq!(layout[3].element_type, "image");
+        assert_eq!(layout[3].image_index, Some(20));
+        assert_eq!(layout[3].order, 3);
+    }
+
+    #[test]
+    fn test_build_page_layout_integration() {
+        test_layout_builder_integration();
     }
 }
