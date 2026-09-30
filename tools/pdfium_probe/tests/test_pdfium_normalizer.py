@@ -297,19 +297,12 @@ def test_dto_block_and_line_order_and_source_order() -> None:
 
 
 def test_rust_probe_normalize_cli_and_dto_parity(tmp_path: Path) -> None:
-    bin_names = (
-        ["pdfium_probe.exe", "pdfium_probe"]
-        if os.name == "nt"
-        else ["pdfium_probe", "pdfium_probe.exe"]
-    )
-    probe_root = _TEST_DIR.parent
-    candidate_bins = [
-        probe_root / "target" / "release" / bin_names[0],
-        probe_root / "target" / "debug" / bin_names[0],
-    ]
-    probe_bin = next((b for b in candidate_bins if b.is_file()), None)
-    assert probe_bin is not None, f"pdfium_probe binary not found in candidate paths: {candidate_bins}"
+    from pdfium_normalizer import _find_pdfium_probe_bin
+    probe_bin_str = _find_pdfium_probe_bin()
+    assert probe_bin_str is not None, "pdfium_probe binary not found"
+    probe_bin = Path(probe_bin_str)
 
+    probe_root = _TEST_DIR.parent
     synth_pdf = probe_root / "test_data" / "synthetic" / "synth_crop_offset.pdf"
     assert synth_pdf.is_file(), f"Synthetic test PDF not found: {synth_pdf}"
 

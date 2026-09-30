@@ -45,10 +45,10 @@ pub fn classify_raw_page(raw_page: &crate::PdfiumRawPage) -> PageClassification 
     // 2. 替换或控制字符 -> invalid_unicode
     let mut replacement_count = raw_page.mapping_diagnostics.replacement_char_count;
     let mut control_count = raw_page.mapping_diagnostics.control_char_count;
-    if raw_page.mapping_diagnostics.classification_reason.as_deref() == Some("invalid_unicode") {
-        if replacement_count == 0 {
-            replacement_count = 1;
-        }
+    if raw_page.mapping_diagnostics.classification_reason.as_deref() == Some("invalid_unicode")
+        && replacement_count == 0
+    {
+        replacement_count = 1;
     }
 
     for span in &raw_page.spans {

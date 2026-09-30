@@ -770,7 +770,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .map_err(|e| format!("Page index {} exceeds u16 range: {}", page_idx, e))?;
         let page = doc.pages().get(page_idx_u16)?;
         let raw_page = extract_page(&page, page_idx)?;
-        let normalized = normalizer::normalize_raw_page(&raw_page);
+        let source_file_name = pdf_file.file_name().and_then(|s| s.to_str()).unwrap_or("");
+        let normalized = normalizer::normalize_raw_page_with_meta(
+            &raw_page,
+            Some(source_file_name),
+            Some("pdfium_probe normalize"),
+        );
 
         if let Some(parent) = out_json.parent() {
             fs::create_dir_all(parent)?;
