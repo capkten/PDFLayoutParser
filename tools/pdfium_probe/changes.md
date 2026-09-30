@@ -274,3 +274,85 @@ pdfium_probe normalize <pdf_path> <page_index> <out_json>
 7. **代码约束与零侵入性**：
    - 核心生产代码（`src/`、`rust/`、根 `Cargo.toml`）严格保持零修改；
    - 既有工作区未暂存的合成测试 PDF 完好保留。
+
+---
+
+## 7. Section 7: PDFium 页面版面分析与自然阅读流 (Layout & Reading Order) 迁移至纯 Rust 原生实现
+
+### 7.1 架构分层与核心算法 (Phase 2 全链路)
+
+本阶段完成了将 Python 侧原有的表格区域扣除、行内文本重切合并、自然阅读顺序推断（Recursive XY-Cut）以及版面元素聚合（LayoutBuilder）全面迁移至纯 Rust 原生实现（`tools/pdfium_probe/src/layout.rs` 与 `main.rs`）：
+
+1. **表格区域扣除与视觉行合并 (`deduct_tables_from_normalized_page`, `merge_same_visual_lines`)**：
+   - **表格碰撞与行切断**：遍历规范化词元，按 `(block_idx, line_idx)` 聚组并按 `word_idx` 排序；当词元中心位于候选表格区域时实施行截断切分，仅保留外部词元并生成新的行候选段；
+   - **视觉行合并**：对候选行按 `(y0, x0)` 排序，依据垂直重叠率（`overlap_y / min_h >= 0.5`）与水平间隙（`-2.0 <= gap_x <= 40.0`）平滑合并同一水平线上的离散分段；
+   - **词间空格与跨距推导**：基于 `join_layout_words`，对于两词间距大于 1.0pt 且非中西文空白边界时自动补齐空格，保持与 Python 原生逻辑严格一致。
+2. **递归 XY-Cut 自然阅读流算法 (`recursive_xy_cut`)**：
+   - **投影切分 (`find_projection_cuts`)**：在区间合并后寻找无元素覆盖的投影空隙（Y 轴最小间隙 `min_y_gap = 0.0`，X 轴最小间隙 `min_x_gap = 5.0`）；
+   - **跨列元素判定 (`has_spanning_element`)**：当任一元素宽度占版面总宽度 65% 以上时，禁止直接进行纵向 X-Cut 分栏，防止跨栏标题被切断；
+   - **分栏有效性校验 (`is_valid_column_partition`)**：校验分栏结果，要求各栏非空且宽度在合理范围；
+   - **自然行回退聚类 (`sort_items_by_row_reading_order`)**：在无法继续切分时，按垂直高度重叠聚类为行，各行内从左到右自然排序。
+3. **版面构建与背景图检测 (`build_page_layout`, `sort_layout_elements`)**：
+   - **表格重叠过滤 (`is_inside_any_table`)**：对扣除后的行再次执行严格几何校验（包含与 IoU > 0.5 过滤）；
+   - **背景图/水印检测 (`is_background_image`)**：高度超过页面总高 40% 且绝对高度 > 150pt，并与至少 4 个文本行垂直重叠的图片识别为背景水印，在阅读流中优先排在最前列；
+   - **统一编号与 DTO 组装**：按阅读流顺序为所有元素（文本、表格、图片）分配单调递增的 `order` 字段（0, 1, 2...）。
+4. **CLI 命令行契约 (`pdfium_probe layout`)**：
+   - 命令行接口：`pdfium_probe layout <pdf_path> <page_index> <tables_json> <out_json>`；
+   - 表格参数解析（`parse_tables_json`）：同时支持内联 JSON 字符串及本地 JSON 文件路径，兼容 `[{"bbox": [...], "table_id": ...}]` 数组及包含 `tables` 键的对象包装。
+
+### 7.2 Python 适配层接入与类型契约 (`pdfium_layout_adapter.py`)
+
+在 `tools/pdfium_probe/scripts/pdfium_layout_adapter.py` 中实现了 Python 对 Rust 版面分析引擎的高性能调用与无缝桥接：
+
+1. **`_find_pdfium_probe_bin() -> Optional[str]`**：
+   - 支持环境变量 `PDFIUM_PROBE_BIN` 显式指定；
+   - 支持环境变量 `CARGO_TARGET_DIR` 自定义构建目录；
+   - 遍历 `probe_root` 与 `repo_root` 之 `target/release`、`target/debug` 路径；
+   - 回退至系统 `shutil.which("pdfium_probe.exe" / "pdfium_probe")`。
+2. **`normalize_tables_for_probe` 与 `serialize_tables_to_json`**：
+   - 兼容多种输入对象：PDFLayoutParser 核心 `Table` dataclass、含 `bbox` 字段的字典、含 `x0, y0, x1, y1` 的字典以及 4 元组列表；
+   - 序列化为 Rust 探针所需的规范 JSON 结构。
+3. **`extract_layout_with_rust_probe(pdf_path, page_index, tables)`**：
+   - 临时文件传输：在 Windows 平台采用安全模式（写出临时文件后立即关闭文件句柄，供子进程独占读取）；
+   - 超时与错误保护：`subprocess.run(..., timeout=30)`，并包含优雅降级逻辑；
+   - 强类型模型装配：将 Rust 导出的 `LayoutElementDto` 完整反序列化并构造为标准的 `LayoutElement` 对象，包含：
+     - `bbox`: `BBox(x0, y0, x1, y1)`
+     - `lines`: `Line(text, bbox, words)`
+     - `words`: `Word(text, bbox)`
+     - `type`: `"text"` / `"table"` / `"image"`
+     - `order`: `int`
+     - `content`: 对于表格元素自动关联输入列表中的原始 `Table` 对象，并设置 `elem.table` 属性以完全兼容下游消费习惯。
+4. **语言兼容性约束**：
+   - 严格兼容 Python 3.7+，所有类型注解均使用 `typing` 模块标准类，杜绝 PEP 604 语法。
+
+### 7.3 可视化流水线接入与对齐 (`visualize_pipeline_steps.py`)
+
+在 `tools/pdfium_probe/scripts/visualize_pipeline_steps.py` 中，将 Stage 4（最终版面与阅读流全景）的 PDFium 分支全面升级为调用原生 Rust 引擎：
+- 引入 `from pdfium_layout_adapter import extract_layout_with_rust_probe`；
+- 在 Stage 4 中直接通过 `extract_layout_with_rust_probe(sample.pdf_path, sample.page_index, pdfium_tables)` 获取最终版面元素；
+- 端到端自动生成 04_final_reading_order.png，验证了正文徽标、表格徽标与阅读流连线轨迹的完整绘制。
+
+### 7.4 4 级全量测试与双端 Parity 验收
+
+全量 4 级回归与自动化测试 100% 通过：
+
+1. **Probe Rust 全量测试**：
+   - 执行命令：`cargo test --manifest-path tools/pdfium_probe/Cargo.toml`
+   - 结果：**68 passed; 0 failed; finished in 0.17s**（涵盖 XY-Cut 单/双栏/跨栏测试、投影切割、表格扣除、视觉行合并、版面构建与 CLI 契约测试）。
+2. **Probe Python 自动化测试**：
+   - 执行命令：`$env:PYTHONPATH = "src;tools/pdfium_probe/scripts"; $env:REPO_ROOT = "D:\codes\PDFLayoutParser"; python -m pytest -q tools/pdfium_probe/tests/`
+   - 结果：**92 passed in 7.91s**（新增并通过 `test_rust_layout_cli_invocation`、`test_rust_layout_adapter_with_tables`、`test_rust_and_python_layout_parity`）。
+3. **主 Rust 库全量测试**：
+   - 执行命令：`cargo test`
+   - 结果：**103 passed; 0 failed; finished in 0.06s**。
+4. **核心 Python 业务回归**：
+   - 执行命令：`$env:PYTHONPATH = "src;tools/pdfium_probe/scripts"; $env:REPO_ROOT = "D:\codes\PDFLayoutParser"; python -m pytest -q tests/test_classify_pdf_page.py tests/test_extract_table_region.py tests/test_financial_header_normalizer.py tests/test_header_upward_merge.py tests/test_wireless_structure_merges.py tests/test_wireless_structure_grid.py`
+   - 结果：**77 passed, 1 skipped in 2.17s**。
+5. **端到端流水线可视化验证**：
+   - 执行命令：`python tools/pdfium_probe/scripts/visualize_pipeline_steps.py --sample test_p27_table --sample credit_p1_detail`
+   - 结果：`test_p27_table` 与 `credit_p1_detail` 全部 4 阶段图像与 README 成功生成，Stage 4 完美展示了 Rust 引擎驱动的自然阅读顺序流。
+6. **双端对齐 (Parity)**：
+   - 在 `synth_crop_offset.pdf`（含表格与不含表格）及 `synth_invisible_text.pdf` 上，Rust 原生探针输出与 Python 基线（`TextExtractor + LayoutMapper + LayoutBuilder`）在元素数量、元素类型（`text` / `table`）、阅读顺序 `order` 以及几何包围盒 `BBox` 上达到完全等价对齐。
+7. **代码约束与零侵入性**：
+   - 核心生产代码（`src/`、`rust/`、根 `Cargo.toml`）严格保持零修改；
+   - 既有工作区未暂存的合成测试 PDF 完好保留。

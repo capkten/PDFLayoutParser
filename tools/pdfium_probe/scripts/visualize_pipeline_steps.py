@@ -67,6 +67,7 @@ from hexai_pdf_parser.extractors.layout_mapper import LayoutMapper
 from hexai_pdf_parser.extractors.text_extractor import TextExtractor
 from hexai_pdf_parser.pdf_snapshot import capture_page_snapshot
 from pdfium_classification import classify_raw_page
+from pdfium_layout_adapter import extract_layout_with_rust_probe
 from pdfium_normalizer import normalize_raw_page
 from pdfium_page_adapter import PdfiumPageAdapter
 from pdfium_shadow_runner import _extract_wired_table
@@ -778,10 +779,12 @@ def run_pipeline_for_sample(
     layout_mapper = LayoutMapper()
     layout_builder = LayoutBuilder()
 
-    # PDFium reading order
-    p_layout_blocks = text_extractor.extract_layout_blocks(pdfium_adapter, pdfium_tables)
-    p_mapped = layout_mapper.map_blocks(p_layout_blocks)
-    pdfium_layout = layout_builder.build(p_mapped, pdfium_tables, [])
+    # PDFium reading order (native Rust layout engine)
+    pdfium_layout = extract_layout_with_rust_probe(sample.pdf_path, sample.page_index, pdfium_tables)
+    if not pdfium_layout:
+        p_layout_blocks = text_extractor.extract_layout_blocks(pdfium_adapter, pdfium_tables)
+        p_mapped = layout_mapper.map_blocks(p_layout_blocks)
+        pdfium_layout = layout_builder.build(p_mapped, pdfium_tables, [])
 
     # PyMuPDF reading order
     m_layout_blocks = text_extractor.extract_layout_blocks(py_page, py_tables)
