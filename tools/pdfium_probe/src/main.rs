@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 pub mod classifier;
 pub mod clustering;
+pub mod drawings;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct CharInfo {
