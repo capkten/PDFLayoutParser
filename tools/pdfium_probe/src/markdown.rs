@@ -80,9 +80,7 @@ pub fn clean_number_text(text: &str) -> String {
             let preceded = i > 0 && is_num_char(chars[i - 1]);
             let followed = j < n && is_num_char(chars[j]);
             if !(preceded && followed) {
-                for k in i..j {
-                    out.push(chars[k]);
-                }
+                out.extend(&chars[i..j]);
             }
             i = j;
         } else {

@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 pub mod classifier;
 pub mod clustering;
 pub mod drawings;
+pub mod json_export;
 pub mod layout;
 pub mod markdown;
 pub mod normalizer;
