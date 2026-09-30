@@ -15,4 +15,6 @@ __pycache__/
 # Test outputs
 test_data/behavioral_output/
 test_data/pdfium_output/*.png
+test_data/pdfium_output/*_normalized.json
+test_data/real_pdfium_output/*_normalized.json
 
