@@ -5,6 +5,8 @@ use std::fs::{self, File};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
+pub mod classifier;
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct CharInfo {
     pub c: String,
