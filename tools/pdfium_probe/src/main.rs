@@ -9,6 +9,7 @@ pub mod classifier;
 pub mod clustering;
 pub mod drawings;
 pub mod layout;
+pub mod markdown;
 pub mod normalizer;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
