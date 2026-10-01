@@ -792,9 +792,179 @@ pub fn parse_tables_json(tables_arg: &str) -> Result<Vec<layout::TableRegionInpu
     Ok(tables)
 }
 
+#[derive(Deserialize, Debug, Clone)]
+#[serde(untagged)]
+enum FlexibleBBox {
+    Array([f64; 4]),
+    Dict { x0: f64, y0: f64, x1: f64, y1: f64 },
+}
+
+impl FlexibleBBox {
+    fn to_array(&self) -> [f64; 4] {
+        match *self {
+            FlexibleBBox::Array(arr) => arr,
+            FlexibleBBox::Dict { x0, y0, x1, y1 } => [x0, y0, x1, y1],
+        }
+    }
+}
+
+#[derive(Deserialize, Debug, Clone)]
+struct FlexibleCellItem {
+    #[serde(default)]
+    pub text: String,
+    #[serde(default)]
+    pub row_index: usize,
+    #[serde(default)]
+    pub col_index: usize,
+    #[serde(default = "markdown::default_span_one")]
+    pub rowspan: usize,
+    #[serde(default = "markdown::default_span_one")]
+    pub colspan: usize,
+    #[serde(default)]
+    pub bbox: Option<FlexibleBBox>,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+struct FlexibleFullTableItem {
+    #[serde(default)]
+    pub table_id: Option<usize>,
+    #[serde(default)]
+    pub table_index: Option<usize>,
+    #[serde(default)]
+    pub bbox: Option<FlexibleBBox>,
+    #[serde(default)]
+    pub rows: Option<usize>,
+    #[serde(default)]
+    pub cols: Option<usize>,
+    #[serde(default)]
+    pub cells: Vec<FlexibleCellItem>,
+    #[serde(default)]
+    pub confidence: Option<f64>,
+    #[serde(default)]
+    pub source: Option<String>,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+struct FullTablesWrapper {
+    pub tables: Vec<FlexibleFullTableItem>,
+}
+
+fn convert_flexible_table(item: FlexibleFullTableItem, default_idx: usize) -> markdown::FullTableDto {
+    let table_id = item.table_id.or(item.table_index).unwrap_or(default_idx);
+    let bbox = item.bbox.map(|b| b.to_array()).unwrap_or([0.0, 0.0, 0.0, 0.0]);
+    let cells: Vec<markdown::TableCellDto> = item
+        .cells
+        .into_iter()
+        .map(|c| markdown::TableCellDto {
+            text: c.text,
+            row_index: c.row_index,
+            col_index: c.col_index,
+            rowspan: c.rowspan.max(1),
+            colspan: c.colspan.max(1),
+            bbox: c.bbox.map(|b| b.to_array()).unwrap_or([0.0, 0.0, 0.0, 0.0]),
+        })
+        .collect();
+
+    let inferred_rows = cells
+        .iter()
+        .map(|c| c.row_index + c.rowspan)
+        .max()
+        .unwrap_or(0);
+    let inferred_cols = cells
+        .iter()
+        .map(|c| c.col_index + c.colspan)
+        .max()
+        .unwrap_or(0);
+
+    let rows = item.rows.unwrap_or(0);
+    let rows = if rows == 0 { inferred_rows } else { rows };
+
+    let cols = item.cols.unwrap_or(0);
+    let cols = if cols == 0 { inferred_cols } else { cols };
+
+    markdown::FullTableDto {
+        table_id,
+        bbox,
+        rows,
+        cols,
+        cells,
+        confidence: item.confidence,
+        source: item.source,
+    }
+}
+
+pub fn parse_full_tables_json(tables_arg: &str) -> Result<Vec<markdown::FullTableDto>, String> {
+    let trimmed = tables_arg.trim();
+    if trimmed.is_empty() || trimmed == "[]" {
+        return Ok(Vec::new());
+    }
+
+    let json_content = if !trimmed.starts_with('[') && !trimmed.starts_with('{') {
+        let p = Path::new(trimmed);
+        if p.is_file() {
+            fs::read_to_string(trimmed).map_err(|e| format!("Failed to read file {}: {}", trimmed, e))?
+        } else if trimmed.ends_with(".json") {
+            return Err(format!("File not found: {}", trimmed));
+        } else {
+            trimmed.to_string()
+        }
+    } else {
+        trimmed.to_string()
+    };
+
+    let trimmed_content = json_content.trim();
+    if trimmed_content.is_empty() || trimmed_content == "[]" {
+        return Ok(Vec::new());
+    }
+
+    if let Ok(items) = serde_json::from_str::<Vec<FlexibleFullTableItem>>(trimmed_content) {
+        let tables = items
+            .into_iter()
+            .enumerate()
+            .map(|(idx, item)| convert_flexible_table(item, idx))
+            .collect();
+        return Ok(tables);
+    }
+
+    if let Ok(wrapper) = serde_json::from_str::<FullTablesWrapper>(trimmed_content) {
+        let tables = wrapper
+            .tables
+            .into_iter()
+            .enumerate()
+            .map(|(idx, item)| convert_flexible_table(item, idx))
+            .collect();
+        return Ok(tables);
+    }
+
+    if let Ok(single) = serde_json::from_str::<FlexibleFullTableItem>(trimmed_content) {
+        if single.bbox.is_some() || !single.cells.is_empty() {
+            return Ok(vec![convert_flexible_table(single, 0)]);
+        }
+    }
+
+    match serde_json::from_str::<Vec<FlexibleFullTableItem>>(trimmed_content) {
+        Err(e) => Err(format!("Failed to parse full tables JSON: {}", e)),
+        Ok(_) => unreachable!(),
+    }
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
+    if args.len() >= 2 && (args[1] == "--help" || args[1] == "-h") {
+        println!("Usage: pdfium_probe <command> [args...]");
+        println!("Commands:");
+        println!("  render <pdf_path> <page_index> <dpi> <out_png>");
+        println!("  normalize <pdf_path> <page_index> <out_json>");
+        println!("  layout <pdf_path> <page_index> <tables_json> <out_json>");
+        println!("  markdown <pdf_path> <page_index> <tables_json> <out_md>");
+        println!("  json <pdf_path> <page_index> <tables_json> <out_json>");
+        return Ok(());
+    }
     if args.len() >= 2 && args[1] == "render" {
+        if args.iter().any(|a| a == "--help" || a == "-h") {
+            println!("Usage: pdfium_probe render <pdf_path> <page_index> <dpi> <out_png>");
+            return Ok(());
+        }
         if args.len() < 6 {
             eprintln!("Usage: pdfium_probe render <pdf_path> <page_index> <dpi> <out_png>");
             return Err("Invalid arguments for render command".into());
@@ -818,6 +988,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     if args.len() >= 2 && args[1] == "normalize" {
+        if args.iter().any(|a| a == "--help" || a == "-h") {
+            println!("Usage: pdfium_probe normalize <pdf_path> <page_index> <out_json>");
+            return Ok(());
+        }
         if args.len() < 5 {
             eprintln!("Usage: pdfium_probe normalize <pdf_path> <page_index> <out_json>");
             return Err("Invalid arguments for normalize command".into());
@@ -891,6 +1065,111 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let json_str = serde_json::to_string_pretty(&layout_elements)?;
         fs::write(out_json, json_str)?;
         println!("[pdfium_probe] Layout for page {} written to {:?}", page_idx, out_json);
+        return Ok(());
+    }
+
+    if args.len() >= 2 && args[1] == "markdown" {
+        if args.iter().any(|a| a == "--help" || a == "-h") {
+            println!("Usage: pdfium_probe markdown <pdf_path> <page_index> <tables_json> <out_md>");
+            return Ok(());
+        }
+        if args.len() < 6 {
+            eprintln!("Usage: pdfium_probe markdown <pdf_path> <page_index> <tables_json> <out_md>");
+            return Err("Invalid arguments for markdown command".into());
+        }
+        let pdf_file = Path::new(&args[2]);
+        let page_idx: usize = args[3].parse()?;
+        let tables_arg = &args[4];
+        let out_md = Path::new(&args[5]);
+
+        let tables = parse_full_tables_json(tables_arg)
+            .map_err(|e| format!("Failed to parse tables JSON: {}", e))?;
+
+        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let (lib_path, _) = get_platform_native_lib(&manifest_dir)?;
+        let bindings = Pdfium::bind_to_library(lib_path)?;
+        let pdfium = Pdfium::new(bindings);
+        let doc = pdfium.load_pdf_from_file(pdf_file, None)?;
+        let page_idx_u16 = u16::try_from(page_idx)
+            .map_err(|e| format!("Page index {} exceeds u16 range: {}", page_idx, e))?;
+        let page = doc.pages().get(page_idx_u16)?;
+        let raw_page = extract_page(&page, page_idx)?;
+        let source_file_name = pdf_file.file_name().and_then(|s| s.to_str()).unwrap_or("");
+        let normalized = normalizer::normalize_raw_page_with_meta(
+            &raw_page,
+            Some(source_file_name),
+            Some("pdfium_probe markdown"),
+        );
+
+        let regions: Vec<layout::TableRegionInput> = tables
+            .iter()
+            .map(|t| layout::TableRegionInput {
+                bbox: t.bbox,
+                table_id: t.table_id,
+            })
+            .collect();
+
+        let layout_elements = layout::build_page_layout(&normalized, &regions, &[]);
+        let md_str = markdown::render_page_markdown(&layout_elements, &tables, &[], &[], page_idx);
+
+        if let Some(parent) = out_md.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(out_md, md_str)?;
+        println!("[pdfium_probe] Markdown for page {} written to {:?}", page_idx, out_md);
+        return Ok(());
+    }
+
+    if args.len() >= 2 && args[1] == "json" {
+        if args.iter().any(|a| a == "--help" || a == "-h") {
+            println!("Usage: pdfium_probe json <pdf_path> <page_index> <tables_json> <out_json>");
+            return Ok(());
+        }
+        if args.len() < 6 {
+            eprintln!("Usage: pdfium_probe json <pdf_path> <page_index> <tables_json> <out_json>");
+            return Err("Invalid arguments for json command".into());
+        }
+        let pdf_file = Path::new(&args[2]);
+        let page_idx: usize = args[3].parse()?;
+        let tables_arg = &args[4];
+        let out_json = Path::new(&args[5]);
+
+        let tables = parse_full_tables_json(tables_arg)
+            .map_err(|e| format!("Failed to parse tables JSON: {}", e))?;
+
+        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let (lib_path, _) = get_platform_native_lib(&manifest_dir)?;
+        let bindings = Pdfium::bind_to_library(lib_path)?;
+        let pdfium = Pdfium::new(bindings);
+        let doc = pdfium.load_pdf_from_file(pdf_file, None)?;
+        let page_idx_u16 = u16::try_from(page_idx)
+            .map_err(|e| format!("Page index {} exceeds u16 range: {}", page_idx, e))?;
+        let page = doc.pages().get(page_idx_u16)?;
+        let raw_page = extract_page(&page, page_idx)?;
+        let source_file_name = pdf_file.file_name().and_then(|s| s.to_str()).unwrap_or("");
+        let normalized = normalizer::normalize_raw_page_with_meta(
+            &raw_page,
+            Some(source_file_name),
+            Some("pdfium_probe json"),
+        );
+
+        let regions: Vec<layout::TableRegionInput> = tables
+            .iter()
+            .map(|t| layout::TableRegionInput {
+                bbox: t.bbox,
+                table_id: t.table_id,
+            })
+            .collect();
+
+        let layout_elements = layout::build_page_layout(&normalized, &regions, &[]);
+        let json_val = json_export::export_page_to_json(&normalized, &layout_elements, &tables, page_idx);
+
+        if let Some(parent) = out_json.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let json_str = serde_json::to_string_pretty(&json_val)?;
+        fs::write(out_json, json_str)?;
+        println!("[pdfium_probe] JSON for page {} written to {:?}", page_idx, out_json);
         return Ok(());
     }
 
@@ -1285,5 +1564,114 @@ mod tests {
         assert_eq!(tables4.len(), 1);
         assert_eq!(tables4[0].bbox, [1.0, 2.0, 3.0, 4.0]);
         assert_eq!(tables4[0].table_id, 42);
+    }
+
+    #[test]
+    fn test_parse_full_tables_json_empty() {
+        assert!(parse_full_tables_json("").unwrap().is_empty());
+        assert!(parse_full_tables_json("   ").unwrap().is_empty());
+        assert!(parse_full_tables_json("[]").unwrap().is_empty());
+        assert!(parse_full_tables_json(" [  ] \n").unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_parse_full_tables_json_simple_bbox() {
+        // Array with [x0, y0, x1, y1] bbox
+        let json_arr = r#"[{"bbox": [10.0, 20.0, 100.0, 200.0]}]"#;
+        let tables1 = parse_full_tables_json(json_arr).unwrap();
+        assert_eq!(tables1.len(), 1);
+        assert_eq!(tables1[0].table_id, 0);
+        assert_eq!(tables1[0].bbox, [10.0, 20.0, 100.0, 200.0]);
+        assert_eq!(tables1[0].rows, 0);
+        assert_eq!(tables1[0].cols, 0);
+        assert!(tables1[0].cells.is_empty());
+
+        // Array with dict bbox {"x0": ..., "y0": ..., "x1": ..., "y1": ...} and explicit table_id
+        let json_dict = r#"[{"bbox": {"x0": 5.0, "y0": 10.0, "x1": 50.0, "y1": 80.0}, "table_id": 3}]"#;
+        let tables2 = parse_full_tables_json(json_dict).unwrap();
+        assert_eq!(tables2.len(), 1);
+        assert_eq!(tables2[0].table_id, 3);
+        assert_eq!(tables2[0].bbox, [5.0, 10.0, 50.0, 80.0]);
+    }
+
+    #[test]
+    fn test_parse_full_tables_json_full_cells() {
+        let json_full = r#"[
+            {
+                "table_id": 1,
+                "bbox": [0.0, 0.0, 300.0, 400.0],
+                "rows": 2,
+                "cols": 2,
+                "cells": [
+                    {
+                        "text": "Header",
+                        "row_index": 0,
+                        "col_index": 0,
+                        "rowspan": 1,
+                        "colspan": 2,
+                        "bbox": [0.0, 0.0, 300.0, 50.0]
+                    },
+                    {
+                        "text": "Cell A",
+                        "row_index": 1,
+                        "col_index": 0,
+                        "rowspan": 1,
+                        "colspan": 1,
+                        "bbox": {"x0": 0.0, "y0": 50.0, "x1": 150.0, "y1": 100.0}
+                    },
+                    {
+                        "text": "Cell B",
+                        "row_index": 1,
+                        "col_index": 1,
+                        "bbox": [150.0, 50.0, 300.0, 100.0]
+                    }
+                ],
+                "confidence": 0.95,
+                "source": "native"
+            }
+        ]"#;
+        let tables = parse_full_tables_json(json_full).unwrap();
+        assert_eq!(tables.len(), 1);
+        let t = &tables[0];
+        assert_eq!(t.table_id, 1);
+        assert_eq!(t.bbox, [0.0, 0.0, 300.0, 400.0]);
+        assert_eq!(t.rows, 2);
+        assert_eq!(t.cols, 2);
+        assert_eq!(t.confidence, Some(0.95));
+        assert_eq!(t.source.as_deref(), Some("native"));
+        assert_eq!(t.cells.len(), 3);
+        assert_eq!(t.cells[0].text, "Header");
+        assert_eq!(t.cells[0].colspan, 2);
+        assert_eq!(t.cells[1].bbox, [0.0, 50.0, 150.0, 100.0]);
+        assert_eq!(t.cells[2].rowspan, 1);
+        assert_eq!(t.cells[2].colspan, 1);
+    }
+
+    #[test]
+    fn test_parse_full_tables_json_wrapped() {
+        let json_wrapped = r#"{
+            "tables": [
+                {
+                    "bbox": [10.0, 20.0, 30.0, 40.0],
+                    "cells": [
+                        {
+                            "text": "Inferred Grid",
+                            "row_index": 1,
+                            "col_index": 2,
+                            "rowspan": 2,
+                            "colspan": 1
+                        }
+                    ]
+                }
+            ]
+        }"#;
+        let tables = parse_full_tables_json(json_wrapped).unwrap();
+        assert_eq!(tables.len(), 1);
+        assert_eq!(tables[0].table_id, 0);
+        assert_eq!(tables[0].bbox, [10.0, 20.0, 30.0, 40.0]);
+        assert_eq!(tables[0].rows, 3);
+        assert_eq!(tables[0].cols, 3);
+        assert_eq!(tables[0].cells.len(), 1);
+        assert_eq!(tables[0].cells[0].text, "Inferred Grid");
     }
 }
