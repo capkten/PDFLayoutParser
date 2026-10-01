@@ -356,3 +356,60 @@ pdfium_probe normalize <pdf_path> <page_index> <out_json>
 7. **代码约束与零侵入性**：
    - 核心生产代码（`src/`、`rust/`、根 `Cargo.toml`）严格保持零修改；
    - 既有工作区未暂存的合成测试 PDF 完好保留。
+
+---
+
+## 8. Markdown 与 JSON 格式化导出器迁移至纯 Rust 原生实现 (Phase 3)
+
+### 8.1 任务背景与核心目标
+
+Phase 3 实现了将全流程下游格式化导出器（Markdown 与统一 JSON）从 Python 原生迁移至 compiled Rust 原生引擎：
+1. **纯 Rust Markdown 导出核心 (`markdown.rs`)**：
+   - 实现 HTML 表格渲染 (`render_html_table`)，忠实对齐 Python `MarkdownWriter._render_table`：
+     - 正确处理 `rowspan > 1` 与 `colspan > 1` 属性；
+     - 维护槽位覆盖集 `covered`，并在未显式声明的稀疏槽位自动补全 `<td></td>`；
+     - HTML 实体转义（`&` -> `&amp;`，`<` -> `&lt;`，`>` -> `&gt;`；单双引号保持不转义，严格对齐 Python `html.escape(quote=False)`）；
+     - 纯正则等价的数字内部多余断行空格清洗（`clean_number_text` 严格对齐 Python `re.compile(r"(?<=[\d,\.\-])\s+(?=[\d,\.\-])")`）。
+   - 实现整页自然阅读顺序排版渲染 (`render_page_markdown`)：正文文本块段落输出、表格按版面位置就地嵌入、图片与印章占位标记。
+   - CLI 命令行接口：`pdfium_probe markdown <pdf_path> <page_index> <tables_json> <out_md>`。
+2. **纯 Rust 统一 JSON 导出核心 (`json_export.rs`)**：
+   - 坐标契约统一：所有几何元素使用 `BBoxCoordDto` (`{"x0": f64, "y0": f64, "x1": f64, "y1": f64}`)，与 Python `JSONWriter` 数据模型完全同构；
+   - 完整页面导出 (`export_page_to_json`)：包含 `index`、`size` (`width`/`height`)、`rotation`、`page_type`、`blocks`、`tables`、`images`、`seals`、`render`、`layout_elements`；
+   - 完整文档导出 (`export_document_to_json`)：包含 `document` 元数据与多页 `pages` 结构；
+   - CLI 命令行接口：`pdfium_probe json <pdf_path> <page_index> <tables_json> <out_json>`。
+3. **表格参数解析与网格推断 (`main.rs` 中的 `parse_full_tables_json`)**：
+   - 兼顾直接传入内联 JSON 字符串与读取 JSON 临时文件路径；
+   - 灵活反序列化：支持原生列表 `[...]`、含 `"tables"` 包装的字典对象、单表格对象；
+   - 网格缺失自动推断：当表格 `rows` 或 `cols` 未提供或为 0 时，依据包含单元格的 `row_index + rowspan` 与 `col_index + colspan` 自动推断最大网格维度。
+4. **Python 适配层接入 (`pdfium_writer_adapter.py`)**：
+   - 统一二进制定位器 `_find_pdfium_probe_bin() -> Optional[str]`；
+   - 规范化转换器 `normalize_full_tables_for_probe(tables)`：将 Python dataclass `Table`、`Cell`、及字典等任意合法输入转换至规范线格式；
+   - Windows 临时文件句柄安全：在调用子进程前显式 `close()` 临时文件句柄，避免子进程读取锁冲突；
+   - 优雅回退保障：在 Rust 探针二进制未编译或执行异常时，平滑降级至 `_python_fallback_markdown` 与 `_python_fallback_json`；
+   - 语言兼容性：严格遵循 Python 3.7+ 语法，类型注解全部引用自 `typing`，严禁使用 PEP 604 联合类型语法。
+5. **不回读 Words 的核心架构约束**：
+   - 无论 Markdown 导出还是 JSON 导出，全流程严格消费原子 TextObject、Native Span、列带、物理网格和逻辑 Cell。
+   - 结构恢复与排版阶段绝对不再次调用 `page.get_text("words")` 进行二次重读。
+
+### 8.2 4 级全量测试与双端 Parity 验收
+
+全套 4 级验证套件 100% 通过：
+1. **Probe Rust 全量测试**：
+   - 命令：`cargo test --manifest-path tools/pdfium_probe/Cargo.toml`
+   - 结果：**83 passed; 0 failed; finished in 0.13s**（涵盖 `markdown`、`json_export`、`parse_full_tables_json`、`layout`、`classifier`、`clustering`、`drawings` 与 `normalizer` 全量测试）。
+2. **Probe Python 自动化测试**：
+   - 命令：`$env:PYTHONPATH = "src;tools/pdfium_probe/scripts"; $env:REPO_ROOT = "D:\codes\PDFLayoutParser"; python -m pytest -q tools/pdfium_probe/tests/`
+   - 结果：**97 passed in 8.35s**（新增并通过 `test_pdfium_writers.py` 全部 5 项测试）。
+3. **主 Rust 库全量测试**：
+   - 命令：`cargo test`
+   - 结果：**103 passed; 0 failed; finished in 0.06s**。
+4. **核心 Python 业务回归**：
+   - 命令：`$env:PYTHONPATH = "src;tools/pdfium_probe/scripts"; $env:REPO_ROOT = "D:\codes\PDFLayoutParser"; python -m pytest -q tests/test_classify_pdf_page.py tests/test_extract_table_region.py tests/test_financial_header_normalizer.py tests/test_header_upward_merge.py tests/test_wireless_structure_merges.py tests/test_wireless_structure_grid.py tests/test_markdown_writer.py tests/test_json_writer.py`
+   - 结果：**82 passed, 1 skipped in 2.30s**。
+5. **端到端流水线可视化验证**：
+   - 命令：`python tools/pdfium_probe/scripts/visualize_pipeline_steps.py --sample test_p27_table --sample credit_p1_detail`
+   - 结果：成功生成 4 阶段高分辨率可视化全景图，各阶段产物完整无报错。
+6. **双端对齐 (Parity) 验收**：
+   - Markdown 对齐：复杂跨度、稀疏空白单元格、特殊字符 HTML 转义及数字空格清洗在 Rust 与 Python 间实现逐字符 100% 吻合；
+   - JSON 结构对齐：页面对象顶级键、表格嵌套结构、单元格字典键集合、几何 BBox 坐标字典格式完全同构；
+   - 真实/合成样本端到端验证通过。
