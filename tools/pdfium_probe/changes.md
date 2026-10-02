@@ -469,3 +469,57 @@ Phase 4 实现了将版面分析关键的 ML 阶段——YOLO 目标检测模型
 5. **端到端流水线可视化验证**：
    - 命令：`python tools/pdfium_probe/scripts/visualize_pipeline_steps.py --sample test_p27_table --sample credit_p1_detail`
    - 结果：成功生成 4 阶段高分辨率可视化全景图，各阶段产物完整无报错。
+
+---
+
+## 10. 流水线 Stage 调度编排与统一端到端 CLI 原生化 (Phase 5)
+
+### 10.1 任务背景与核心目标
+
+Phase 5 实现了整个 PDFLayoutParser 全链路纯 Rust 化的终极闭环——将此前各独立迁移的阶段引擎（底图光栅化渲染、Normalizer 规范化聚类、ONNX Runtime YOLO 表格检测、递归 XY-Cut 阅读序拓扑重构、Markdown 与 JSON 统一导出）汇聚成一个原生调度引擎：
+1. **纯 Rust 统一流水线调度器 (`pipeline.rs`)**：
+   - 统一调度：输入 PDF -> PDFium 绑定加载 -> 目标页范围过滤 -> 多阶段逐页处理 -> 文档级统一聚合输出；
+   - Stage 1 (Normalizer): 规范化提取文字、词元与矢量绘制图元，执行 6 级 Unicode 门禁状态机判定与页面分类；
+   - Stage 2 (Render): 页面底图光栅化导出（`output_dir/renders/page-XXX.png`）；
+   - Stage 3 (Detector): ONNX Runtime YOLO 原生推理，检出表格候选框生成 `FullTableDto`；
+   - Stage 4 (Layout): 扣除表格区域、合并水平视觉行、递归 XY-Cut 空间剖分重构自然阅读流拓扑；
+   - Stage 5 (Writers): 导出单页 `pages/page-XXX.json` 与 `pages/page-XXX.md`；
+   - 文档级聚合：导出整篇文档的 `output.json` 与 `output.md`（分页隔断 `\n\n---\n\n`）；
+   - 耗时统计：返回包含各页面与总处理耗时的 `PipelineSummaryDto`。
+2. **统一端到端 CLI 子命令 (`pdfium_probe parse`)**：
+   - 命令格式：`pdfium_probe parse <pdf_path> [options]`；
+   - 丰富选项：`-o`/`--output`（输出目录）、`--dpi`（光栅化 DPI）、`--pages`（选定页码列表）、`--model`（YOLO 模型路径，支持 `auto` 自动探测）、`--confidence`（置信度阈值）、`--no-renders`（跳过底图生成）、`--no-pages`（跳过单页文件导出）；同时支持位置参数回退 `<pdf_path> <output_dir>`；
+   - 严格校验：防范非法负数/非有限 DPI、超出 `[0.0, 1.0]` 置信度、参数歧义与越界页码索引。
+3. **Python 适配层接入 (`pdfium_pipeline_adapter.py`)**：
+   - 核心接口：`parse_pdf_with_rust_probe(pdf_path, output_dir, page_indices=None, render_dpi=72.0, model_path=None, confidence_threshold=0.40, export_renders=True, export_pages=True) -> Dict[str, Any]`；
+   - 跨平台二进制智能探测：支持环境变量 `PDFIUM_PROBE_BIN`、工作树多层 target 目录以及系统 PATH；
+   - 120 秒超时防护与进程安全执行；
+   - 优雅降级机制：探针缺失或子进程执行失败时无缝自动回退到 Python 原生 `Pipeline` 实现；
+   - 严格遵循 Python 3.7+ 兼容性，杜绝 PEP 604 联合类型语法。
+4. **端到端测试与质量验证 (`test_pdfium_pipeline.py`)**：
+   - 端到端全产物持久化验证（`output.json`, `output.md`, `pages/`, `renders/` 文件有效性与非空检查）；
+   - 页面切片索引选择验证；
+   - 二进制缺失模拟回退验证；
+   - 导出标志位过滤控制验证。
+
+### 10.2 5 级全量验证矩阵 (5-Tier Verification Suite)
+
+全套 5 级验证套件 100% 通过：
+1. **Probe Rust 全量测试**：
+   - 命令：`cargo test --manifest-path tools/pdfium_probe/Cargo.toml`
+   - 结果：**108 passed; 0 failed; finished in 6.54s**（涵盖 `pipeline`、`detector`、`markdown`、`json_export`、`layout`、`classifier`、`clustering`、`drawings` 与 `normalizer` 全量 108 项测试）。
+2. **Probe Python 自动化测试**：
+   - 命令：`$env:PYTHONPATH = "src;tools/pdfium_probe/scripts"; $env:REPO_ROOT = "D:\codes\PDFLayoutParser"; python -m pytest -q tools/pdfium_probe/tests/`
+   - 结果：**107 passed in 40.65s**（新增并通过 `test_pdfium_pipeline.py` 全部 4 项端到端及特性测试）。
+3. **主 Rust 库全量测试**：
+   - 命令：`cargo test`
+   - 结果：**103 passed; 0 failed; finished in 0.06s**。
+4. **核心 Python 业务回归**：
+   - 命令：`$env:PYTHONPATH = "src;tools/pdfium_probe/scripts"; $env:REPO_ROOT = "D:\codes\PDFLayoutParser"; python -m pytest -q tests/test_classify_pdf_page.py tests/test_extract_table_region.py tests/test_financial_header_normalizer.py tests/test_header_upward_merge.py tests/test_wireless_structure_merges.py tests/test_wireless_structure_grid.py tests/test_markdown_writer.py tests/test_json_writer.py tests/test_ml_table_detector.py`
+   - 结果：**99 passed, 1 skipped in 3.60s**。
+5. **端到端流水线可视化验证**：
+   - 命令：`python tools/pdfium_probe/scripts/visualize_pipeline_steps.py --sample test_p27_table --sample credit_p1_detail`
+   - 结果：成功生成 4 阶段高分辨率可视化全景图，各阶段产物完整无报错。
+6. **静态分析与代码格式**：
+   - `cargo clippy --bin pdfium_probe -D warnings`：0 warnings / 0 errors。
+   - `git diff --check`：0 格式错误。
