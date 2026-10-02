@@ -122,4 +122,3 @@ def test_parse_pdf_export_flags(tmp_path: Path) -> None:
     assert out_md.is_file()
     assert not render_png.is_file()
     assert not page_json.is_file()
-
