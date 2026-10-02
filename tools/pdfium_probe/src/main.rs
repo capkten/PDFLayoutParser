@@ -959,6 +959,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("  layout <pdf_path> <page_index> <tables_json> <out_json>");
         println!("  markdown <pdf_path> <page_index> <tables_json> <out_md>");
         println!("  json <pdf_path> <page_index> <tables_json> <out_json>");
+        println!("  detect-tables <pdf_path> <page_index> <model_path> <out_json>");
         return Ok(());
     }
     if args.len() >= 2 && args[1] == "render" {
@@ -1171,6 +1172,70 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let json_str = serde_json::to_string_pretty(&json_val)?;
         fs::write(out_json, json_str)?;
         println!("[pdfium_probe] JSON for page {} written to {:?}", page_idx, out_json);
+        return Ok(());
+    }
+
+    if args.len() >= 2 && args[1] == "detect-tables" {
+        if args.iter().any(|a| a == "--help" || a == "-h") {
+            println!("Usage: pdfium_probe detect-tables <pdf_path> <page_index> <model_path> <out_json>");
+            return Ok(());
+        }
+        if args.len() < 6 {
+            eprintln!("Usage: pdfium_probe detect-tables <pdf_path> <page_index> <model_path> <out_json>");
+            return Err("Invalid arguments for detect-tables command".into());
+        }
+        let pdf_file = Path::new(&args[2]);
+        let page_idx: usize = args[3].parse()?;
+        let model_path_arg = &args[4];
+        let out_json = Path::new(&args[5]);
+
+        let resolved_model_path: PathBuf = if model_path_arg == "auto" || model_path_arg.is_empty() || model_path_arg == "default" {
+            detector::resolve_default_model_path().ok_or_else(|| {
+                "Unable to resolve default YOLO table detector model path (tried env YOLO_TABLE_DETECTOR_MODEL and default repository locations)".to_string()
+            })?
+        } else {
+            let p = PathBuf::from(model_path_arg);
+            if !p.exists() {
+                return Err(format!("Specified model file does not exist: {:?}", p).into());
+            }
+            p
+        };
+
+        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let (lib_path, _) = get_platform_native_lib(&manifest_dir)?;
+        let bindings = Pdfium::bind_to_library(lib_path)?;
+        let pdfium = Pdfium::new(bindings);
+        let doc = pdfium.load_pdf_from_file(pdf_file, None)?;
+        let page_idx_u16 = u16::try_from(page_idx)
+            .map_err(|e| format!("Page index {} exceeds u16 range: {}", page_idx, e))?;
+        let page = doc.pages().get(page_idx_u16)?;
+
+        let raw_page = extract_page(&page, page_idx)?;
+        let norm_page = normalizer::normalize_raw_page(&raw_page);
+        let words: Vec<[f32; 4]> = norm_page
+            .words
+            .iter()
+            .map(|w| [w.0 as f32, w.1 as f32, w.2 as f32, w.3 as f32])
+            .collect();
+
+        let detections = detector::detect_tables_on_pdf_page(
+            &page,
+            &words,
+            &resolved_model_path,
+            &detector::TableDetectorConfig::default(),
+        )?;
+
+        if let Some(parent) = out_json.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let json_str = serde_json::to_string_pretty(&detections)?;
+        fs::write(out_json, json_str)?;
+        println!(
+            "[pdfium_probe] Detected {} tables for page {} written to {:?}",
+            detections.len(),
+            page_idx,
+            out_json
+        );
         return Ok(());
     }
 
@@ -1674,5 +1739,45 @@ mod tests {
         assert_eq!(tables[0].cols, 3);
         assert_eq!(tables[0].cells.len(), 1);
         assert_eq!(tables[0].cells[0].text, "Inferred Grid");
+    }
+
+    #[test]
+    fn test_detect_tables_cli_model_resolver() {
+        let path = detector::resolve_default_model_path();
+        assert!(path.is_some(), "Expected default model path to be resolved");
+        let p = path.unwrap();
+        assert!(p.exists(), "Resolved model path {:?} must exist", p);
+    }
+
+    #[test]
+    fn test_detect_tables_cli_on_pdf_page() {
+        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let (lib_path, _) = get_platform_native_lib(&manifest_dir).unwrap();
+        let bindings = Pdfium::bind_to_library(lib_path).unwrap();
+        let pdfium = Pdfium::new(bindings);
+
+        let synth_pdf = manifest_dir.join("test_data/synthetic/synth_crop_offset.pdf");
+        if !synth_pdf.exists() {
+            return;
+        }
+
+        let model_path = detector::resolve_default_model_path();
+        assert!(model_path.is_some(), "Model path must be resolved");
+        let m_path = model_path.unwrap();
+        let doc = pdfium.load_pdf_from_file(&synth_pdf, None).unwrap();
+        let page = doc.pages().get(0).unwrap();
+        let raw_page = extract_page(&page, 0).unwrap();
+        let norm = normalizer::normalize_raw_page(&raw_page);
+        let words: Vec<[f32; 4]> = norm
+            .words
+            .iter()
+            .map(|w| [w.0 as f32, w.1 as f32, w.2 as f32, w.3 as f32])
+            .collect();
+        let config = detector::TableDetectorConfig::default();
+        let result = detector::detect_tables_on_pdf_page(&page, &words, &m_path, &config);
+        assert!(result.is_ok(), "Page detection should succeed");
+        let detections = result.unwrap();
+        let json = serde_json::to_string_pretty(&detections);
+        assert!(json.is_ok(), "Detections must serialize cleanly to JSON");
     }
 }

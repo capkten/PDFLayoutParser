@@ -1,5 +1,6 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use image::{imageops::FilterType, DynamicImage};
+use pdfium_render::prelude::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -73,7 +74,14 @@ pub fn parse_yolo_detections(
             let score = output_slice[base + 4];
             let raw_cls = output_slice[base + 5];
 
-            if score.is_nan() || raw_cls.is_nan() || raw_cls < 0.0 {
+            if raw_x0.is_nan()
+                || raw_y0.is_nan()
+                || raw_x1.is_nan()
+                || raw_y1.is_nan()
+                || score.is_nan()
+                || raw_cls.is_nan()
+                || raw_cls < 0.0
+            {
                 continue;
             }
             let cls_id = raw_cls.round() as usize;
@@ -120,8 +128,8 @@ pub fn parse_yolo_detections(
         for i in 0..n {
             let (cx, cy, w, h) = if !transposed {
                 (
-                    output_slice[0 * n + i],
-                    output_slice[1 * n + i],
+                    output_slice[i],
+                    output_slice[n + i],
                     output_slice[2 * n + i],
                     output_slice[3 * n + i],
                 )
@@ -250,6 +258,54 @@ impl YoloTableDetector {
 
         Ok(page_detections)
     }
+}
+
+pub fn resolve_default_model_path() -> Option<PathBuf> {
+    // 1. Check environment variable YOLO_TABLE_DETECTOR_MODEL
+    if let Ok(p) = std::env::var("YOLO_TABLE_DETECTOR_MODEL") {
+        let pb = PathBuf::from(p);
+        if pb.exists() {
+            return Some(pb);
+        }
+    }
+    // 2. Standard repository candidate paths
+    let candidates = [
+        "src/hexai_pdf_parser/ml/table_detector_model/best.onnx",
+        "../../src/hexai_pdf_parser/ml/table_detector_model/best.onnx",
+        "../src/hexai_pdf_parser/ml/table_detector_model/best.onnx",
+        "models/table_detector/best.onnx",
+    ];
+    for c in candidates {
+        let pb = PathBuf::from(c);
+        if pb.exists() {
+            return Some(pb);
+        }
+    }
+    if let Ok(manifest) = std::env::var("CARGO_MANIFEST_DIR") {
+        let pb = PathBuf::from(manifest).join("../../src/hexai_pdf_parser/ml/table_detector_model/best.onnx");
+        if pb.exists() {
+            return Some(pb);
+        }
+    }
+    None
+}
+
+pub fn detect_tables_on_pdf_page(
+    page: &PdfPage,
+    words: &[[f32; 4]],
+    model_path: &Path,
+    config: &TableDetectorConfig,
+) -> Result<Vec<DetectedTableDto>, Box<dyn std::error::Error>> {
+    let scale = (config.render_dpi / 72.0).max(0.1);
+    let target_w = (page.width().value * scale).round().max(1.0) as i32;
+    let target_h = (page.height().value * scale).round().max(1.0) as i32;
+    let render_config = PdfRenderConfig::new()
+        .set_target_width(target_w)
+        .set_target_height(target_h);
+    let bitmap = page.render_with_config(&render_config)?;
+    let dyn_img = bitmap.as_image();
+    let mut detector = YoloTableDetector::new(model_path, config.clone())?;
+    detector.detect_from_image(&dyn_img, words, (page.width().value, page.height().value))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
