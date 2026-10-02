@@ -13,6 +13,7 @@ pub mod json_export;
 pub mod layout;
 pub mod markdown;
 pub mod normalizer;
+pub mod pipeline;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct CharInfo {
