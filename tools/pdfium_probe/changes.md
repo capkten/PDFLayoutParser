@@ -413,3 +413,59 @@ Phase 3 实现了将全流程下游格式化导出器（Markdown 与统一 JSON�
    - Markdown 对齐：复杂跨度、稀疏空白单元格、特殊字符 HTML 转义及数字空格清洗在 Rust 与 Python 间实现逐字符 100% 吻合；
    - JSON 结构对齐：页面对象顶级键、表格嵌套结构、单元格字典键集合、几何 BBox 坐标字典格式完全同构；
    - 真实/合成样本端到端验证通过。
+
+---
+
+## 9. YOLO 表格检测器迁移至纯 Rust ONNX Runtime 原生实现 (Phase 4)
+
+### 9.1 任务背景与核心目标
+
+Phase 4 实现了将版面分析关键的 ML 阶段——YOLO 目标检测模型（`best.onnx`）从 Python `onnxruntime` 迁移至纯 Rust 原生实现（基于 `ort` 2.0.0-rc.9）：
+1. **纯 Rust 图像预处理与张量构建 (`preprocess_image_to_nchw`)**：
+   - 采用 `image` crate 的双线性插值算法将 PDF 渲染底图缩放至 640×640；
+   - 提取 RGB 三通道归一化为 `[0.0, 1.0]` 的浮点数；
+   - 组装标准 `[1, 3, 640, 640]` NCHW planar layout 浮点数组，完全等价于 Python OpenCV + NumPy 流程。
+2. **纯 Rust 几何运算与非极大值抑制 (`non_maximum_suppression`)**：
+   - 实现高精度 `BBoxFloat` 几何计算（交集、并集、IoU 计算）；
+   - 实现 Greedy NMS 算法，默认 IoU 阈值 0.50，置信度阈值 0.40；
+   - 支持 End-to-End YOLO (`[1, N, 6]`) 与 YOLOv8 标准输出 (`[1, 84, N]`) 双格式解码，并过滤类别 ID (`table_class_ids: [0, 4]`)。
+3. **后处理算法对齐 (`filter_full_page_false_positives` & `expand_bbox_to_touching_words`)**：
+   - 假阳性过滤：面积占比超过整页 85% 且置信度低于 0.50 的误检候选框自动剔除；
+   - 词框向外扩展：仅对直接与原始检测框相交的文字 words 进行向外吸附扩展，不跨越未相交文字，并严格限制在页面视口包围盒内；
+   - 保持架构不变量：结构恢复阶段严格不回读 `page.get_text("words")`，检测后处理只消费标准提取出的 words 几何列表。
+4. **CLI 命令行接口与参数契约**：
+   - 子命令：`pdfium_probe detect-tables <pdf_path> <page_index> <model_path> <out_json>`；
+   - 模型路径智能解析：支持显式路径、`auto`/`default` 关键字及 `YOLO_TABLE_DETECTOR_MODEL` 环境变量；
+   - 边界安全防范：对 `out_json.parent()` 过滤空路径（`.filter(|p| !p.as_os_str().is_empty())`），防止相对路径建目录报错；
+   - 序列化输出：输出包含 `x0, y0, x1, y1, score, label` 的结构化 JSON。
+5. **Python 适配层接入 (`pdfium_table_detector_adapter.py`)**：
+   - 核心接口：`detect_tables_with_rust_probe(pdf_path, page_index=0, model_path=None, confidence_threshold=0.40) -> List[Tuple[BBox, float]]`；
+   - Windows 临时文件句柄安全释放；
+   - 二进制自动定位与优雅降级回退至 Python `MLTableDetector`；
+   - 严格遵循 Python 3.7+ 兼容性，杜绝 PEP 604 语法。
+6. **双端对齐 (Dual-Engine Parity) 验收**：
+   - 在真实表格样本（`test.pdf` 第 27 页）上验证双端对齐指标：
+     - 表格检出数量完全一致（1 个表格）；
+     - 双端几何包围盒 IoU >= 0.996（门禁阈值 0.95）；
+     - 各边坐标偏差 < 0.7 pt（门禁阈值 1.0 pt）；
+     - 置信度得分偏差 < 0.0001（门禁阈值 0.05）；
+     - 空白/无表格页面双端一致返回 `[]`。
+
+### 9.2 5 级全量验证矩阵 (5-Tier Verification Suite)
+
+全套 5 级验证套件 100% 通过：
+1. **Probe Rust 全量测试**：
+   - 命令：`cargo test --manifest-path tools/pdfium_probe/Cargo.toml`
+   - 结果：**100 passed; 0 failed; finished in 1.42s**（涵盖 `detector`、`markdown`、`json_export`、`layout`、`classifier`、`clustering`、`drawings` 与 `normalizer` 全量测试）。
+2. **Probe Python 自动化测试**：
+   - 命令：`$env:PYTHONPATH = "src;tools/pdfium_probe/scripts"; $env:REPO_ROOT = "D:\codes\PDFLayoutParser"; python -m pytest -q tools/pdfium_probe/tests/`
+   - 结果：**103 passed in 24.52s**（新增并通过 `test_pdfium_table_detector.py` 全部 6 项对齐与降级测试）。
+3. **主 Rust 库全量测试**：
+   - 命令：`cargo test`
+   - 结果：**103 passed; 0 failed; finished in 0.06s**。
+4. **核心 Python 业务回归**：
+   - 命令：`$env:PYTHONPATH = "src;tools/pdfium_probe/scripts"; $env:REPO_ROOT = "D:\codes\PDFLayoutParser"; python -m pytest -q tests/test_classify_pdf_page.py tests/test_extract_table_region.py tests/test_financial_header_normalizer.py tests/test_header_upward_merge.py tests/test_wireless_structure_merges.py tests/test_wireless_structure_grid.py tests/test_markdown_writer.py tests/test_json_writer.py tests/test_ml_table_detector.py`
+   - 结果：**99 passed, 1 skipped in 3.60s**。
+5. **端到端流水线可视化验证**：
+   - 命令：`python tools/pdfium_probe/scripts/visualize_pipeline_steps.py --sample test_p27_table --sample credit_p1_detail`
+   - 结果：成功生成 4 阶段高分辨率可视化全景图，各阶段产物完整无报错。

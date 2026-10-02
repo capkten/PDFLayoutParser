@@ -1225,7 +1225,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             &detector::TableDetectorConfig::default(),
         )?;
 
-        if let Some(parent) = out_json.parent() {
+        if let Some(parent) = out_json.parent().filter(|p| !p.as_os_str().is_empty()) {
             fs::create_dir_all(parent)?;
         }
         let json_str = serde_json::to_string_pretty(&detections)?;
