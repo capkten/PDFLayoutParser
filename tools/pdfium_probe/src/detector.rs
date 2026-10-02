@@ -1,5 +1,256 @@
+use std::path::Path;
 use image::{imageops::FilterType, DynamicImage};
 use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TableDetectorConfig {
+    pub confidence_threshold: f32, // default 0.40
+    pub iou_threshold: f32,        // default 0.50
+    pub table_class_ids: Vec<usize>, // default vec![0, 4]
+    pub input_size: u32,           // default 640
+    pub render_dpi: f32,           // default 72.0
+}
+
+impl Default for TableDetectorConfig {
+    fn default() -> Self {
+        Self {
+            confidence_threshold: 0.40,
+            iou_threshold: 0.50,
+            table_class_ids: vec![0, 4],
+            input_size: 640,
+            render_dpi: 72.0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DetectedTableDto {
+    pub x0: f32,
+    pub y0: f32,
+    pub x1: f32,
+    pub y1: f32,
+    pub score: f32,
+    pub label: String,
+}
+
+pub fn parse_yolo_detections(
+    output_slice: &[f32],
+    shape: &[i64],
+    orig_size: (u32, u32),
+    config: &TableDetectorConfig,
+) -> Vec<DetectedTableDto> {
+    if config.input_size == 0 || orig_size.0 == 0 || orig_size.1 == 0 || shape.is_empty() {
+        return Vec::new();
+    }
+
+    let scale_x = orig_size.0 as f32 / config.input_size as f32;
+    let scale_y = orig_size.1 as f32 / config.input_size as f32;
+    let max_w = orig_size.0 as f32;
+    let max_h = orig_size.1 as f32;
+
+    let mut class_candidates: std::collections::BTreeMap<usize, (Vec<BBoxFloat>, Vec<f32>)> =
+        std::collections::BTreeMap::new();
+
+    // Determine format:
+    // Format 1: End-to-End YOLO: [1, N, 6] or [N, 6]
+    let is_format_1 = (shape.len() == 3 && shape[2] == 6) || (shape.len() == 2 && shape[1] == 6);
+
+    if is_format_1 {
+        let n = if shape.len() == 3 {
+            shape[1] as usize
+        } else {
+            shape[0] as usize
+        };
+        for k in 0..n {
+            let base = k * 6;
+            if base + 5 >= output_slice.len() {
+                break;
+            }
+            let raw_x0 = output_slice[base];
+            let raw_y0 = output_slice[base + 1];
+            let raw_x1 = output_slice[base + 2];
+            let raw_y1 = output_slice[base + 3];
+            let score = output_slice[base + 4];
+            let raw_cls = output_slice[base + 5];
+
+            if score.is_nan() || raw_cls.is_nan() || raw_cls < 0.0 {
+                continue;
+            }
+            let cls_id = raw_cls.round() as usize;
+
+            if score >= config.confidence_threshold && config.table_class_ids.contains(&cls_id) {
+                let x0 = (raw_x0 * scale_x).clamp(0.0, max_w);
+                let y0 = (raw_y0 * scale_y).clamp(0.0, max_h);
+                let x1 = (raw_x1 * scale_x).clamp(0.0, max_w);
+                let y1 = (raw_y1 * scale_y).clamp(0.0, max_h);
+                let bbox = BBoxFloat::new(x0, y0, x1, y1);
+                let entry = class_candidates.entry(cls_id).or_default();
+                entry.0.push(bbox);
+                entry.1.push(score);
+            }
+        }
+    } else {
+        // Format 2: Standard YOLO Head: [1, 4 + nc, N] or [4 + nc, N]
+        let (rows, n, transposed) = if shape.len() == 3 {
+            if shape[1] >= 5 {
+                (shape[1] as usize, shape[2] as usize, false)
+            } else if shape[2] >= 5 {
+                (shape[2] as usize, shape[1] as usize, true)
+            } else {
+                return Vec::new();
+            }
+        } else if shape.len() == 2 {
+            if shape[0] >= 5 {
+                (shape[0] as usize, shape[1] as usize, false)
+            } else if shape[1] >= 5 {
+                (shape[1] as usize, shape[0] as usize, true)
+            } else {
+                return Vec::new();
+            }
+        } else {
+            return Vec::new();
+        };
+
+        if rows < 5 || n == 0 || output_slice.len() < rows * n {
+            return Vec::new();
+        }
+
+        let nc = rows - 4;
+
+        for i in 0..n {
+            let (cx, cy, w, h) = if !transposed {
+                (
+                    output_slice[0 * n + i],
+                    output_slice[1 * n + i],
+                    output_slice[2 * n + i],
+                    output_slice[3 * n + i],
+                )
+            } else {
+                (
+                    output_slice[i * rows],
+                    output_slice[i * rows + 1],
+                    output_slice[i * rows + 2],
+                    output_slice[i * rows + 3],
+                )
+            };
+
+            if cx.is_nan() || cy.is_nan() || w.is_nan() || h.is_nan() {
+                continue;
+            }
+
+            let mut best_cls = 0;
+            let mut best_score = f32::MIN;
+            for c in 0..nc {
+                let score = if !transposed {
+                    output_slice[(4 + c) * n + i]
+                } else {
+                    output_slice[i * rows + 4 + c]
+                };
+                if score > best_score {
+                    best_score = score;
+                    best_cls = c;
+                }
+            }
+
+            if best_score >= config.confidence_threshold && config.table_class_ids.contains(&best_cls) {
+                let raw_x0 = cx - w / 2.0;
+                let raw_y0 = cy - h / 2.0;
+                let raw_x1 = cx + w / 2.0;
+                let raw_y1 = cy + h / 2.0;
+                let x0 = (raw_x0 * scale_x).clamp(0.0, max_w);
+                let y0 = (raw_y0 * scale_y).clamp(0.0, max_h);
+                let x1 = (raw_x1 * scale_x).clamp(0.0, max_w);
+                let y1 = (raw_y1 * scale_y).clamp(0.0, max_h);
+                let bbox = BBoxFloat::new(x0, y0, x1, y1);
+                let entry = class_candidates.entry(best_cls).or_default();
+                entry.0.push(bbox);
+                entry.1.push(best_score);
+            }
+        }
+    }
+
+    let mut detections = Vec::new();
+    for (_cls_id, (boxes, scores)) in class_candidates {
+        let keep_indices = non_maximum_suppression(&boxes, &scores, config.iou_threshold);
+        for idx in keep_indices {
+            let b = &boxes[idx];
+            let score = scores[idx];
+            detections.push(DetectedTableDto {
+                x0: b.x0,
+                y0: b.y0,
+                x1: b.x1,
+                y1: b.y1,
+                score,
+                label: "Table".to_string(),
+            });
+        }
+    }
+
+    detections.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    detections
+}
+
+pub struct YoloTableDetector {
+    session: ort::session::Session,
+    pub config: TableDetectorConfig,
+}
+
+impl YoloTableDetector {
+    pub fn new(model_path: &Path, config: TableDetectorConfig) -> Result<Self, Box<dyn std::error::Error>> {
+        let session = ort::session::Session::builder()?.commit_from_file(model_path)?;
+        Ok(Self { session, config })
+    }
+
+    pub fn detect_from_image(
+        &mut self,
+        img: &DynamicImage,
+        words: &[[f32; 4]],
+        page_size: (f32, f32),
+    ) -> Result<Vec<DetectedTableDto>, Box<dyn std::error::Error>> {
+        if img.width() == 0 || img.height() == 0 {
+            return Ok(Vec::new());
+        }
+
+        let tensor = preprocess_image_to_nchw(img, (self.config.input_size, self.config.input_size));
+        let shape = [1usize, 3, self.config.input_size as usize, self.config.input_size as usize];
+        let val = ort::value::Tensor::from_array((shape, tensor.into_boxed_slice()))?;
+        let outputs = self.session.run(ort::inputs![val])?;
+        let (out_shape, out_slice) = outputs[0].try_extract_tensor::<f32>()?;
+
+        let detections = parse_yolo_detections(
+            out_slice,
+            out_shape.as_ref(),
+            (img.width(), img.height()),
+            &self.config,
+        );
+
+        let scale_x = page_size.0 / img.width() as f32;
+        let scale_y = page_size.1 / img.height() as f32;
+
+        let mut page_detections = Vec::new();
+        for d in detections {
+            let page_bbox = BBoxFloat::new(d.x0 * scale_x, d.y0 * scale_y, d.x1 * scale_x, d.y1 * scale_y);
+            if filter_full_page_false_positives(&page_bbox, d.score, page_size.0, page_size.1) {
+                continue;
+            }
+            let expanded = expand_bbox_to_touching_words(
+                &page_bbox,
+                words,
+                Some([0.0, 0.0, page_size.0, page_size.1]),
+            );
+            page_detections.push(DetectedTableDto {
+                x0: expanded.x0,
+                y0: expanded.y0,
+                x1: expanded.x1,
+                y1: expanded.y1,
+                score: d.score,
+                label: d.label,
+            });
+        }
+
+        Ok(page_detections)
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct BBoxFloat {
@@ -341,5 +592,128 @@ mod tests {
     #[test]
     fn test_preprocess_image_to_nchw() {
         test_detector_geometry_preprocess_image_to_nchw();
+    }
+
+    #[test]
+    fn test_yolo_parser_config_and_dto() {
+        let config = TableDetectorConfig::default();
+        assert_eq!(config.confidence_threshold, 0.40);
+        assert_eq!(config.iou_threshold, 0.50);
+        assert_eq!(config.table_class_ids, vec![0, 4]);
+        assert_eq!(config.input_size, 640);
+        assert_eq!(config.render_dpi, 72.0);
+
+        let dto = DetectedTableDto {
+            x0: 10.0,
+            y0: 20.0,
+            x1: 100.0,
+            y1: 200.0,
+            score: 0.95,
+            label: "Table".to_string(),
+        };
+        let json = serde_json::to_string(&dto).unwrap();
+        let decoded: DetectedTableDto = serde_json::from_str(&json).unwrap();
+        assert_eq!(dto, decoded);
+    }
+
+    #[test]
+    fn test_yolo_parser_end_to_end_format() {
+        // [1, 4, 6] format: 4 candidate boxes, each [x0, y0, x1, y1, score, class_id]
+        let shape = vec![1, 4, 6];
+        let slice = vec![
+            // Box 0: Valid table (score 0.90, class 0)
+            100.0, 100.0, 200.0, 200.0, 0.90, 0.0,
+            // Box 1: Overlaps Box 0 with high IoU (~0.85), score 0.80 -> suppressed by NMS
+            105.0, 105.0, 205.0, 205.0, 0.80, 0.0,
+            // Box 2: Score 0.30 < 0.40 -> filtered by confidence threshold
+            300.0, 300.0, 400.0, 400.0, 0.30, 0.0,
+            // Box 3: Class 2 (not in table_class_ids [0, 4]) -> filtered by class
+            50.0, 50.0, 80.0, 80.0, 0.85, 2.0,
+        ];
+        let config = TableDetectorConfig {
+            confidence_threshold: 0.40,
+            iou_threshold: 0.50,
+            table_class_ids: vec![0, 4],
+            input_size: 640,
+            render_dpi: 72.0,
+        };
+        // orig_size is 1280x1280 (scale = 2.0)
+        let orig_size = (1280, 1280);
+        let detections = parse_yolo_detections(&slice, &shape, orig_size, &config);
+
+        assert_eq!(detections.len(), 1);
+        let det = &detections[0];
+        assert_eq!(det.label, "Table");
+        assert!((det.score - 0.90).abs() < 1e-4);
+        assert!((det.x0 - 200.0).abs() < 1e-3);
+        assert!((det.y0 - 200.0).abs() < 1e-3);
+        assert!((det.x1 - 400.0).abs() < 1e-3);
+        assert!((det.y1 - 400.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn test_yolo_parser_standard_head_format() {
+        // [1, 6, 2] format: rows = 6 (cx, cy, w, h, class0_score, class1_score), N = 2 candidates
+        // row-major: row * N + i
+        // cx row (0): [100.0, 105.0]
+        // cy row (1): [100.0, 105.0]
+        // w  row (2): [100.0, 100.0]
+        // h  row (3): [100.0, 100.0]
+        // c0 row (4): [0.90,  0.80]
+        // c1 row (5): [0.10,  0.10]
+        let shape = vec![1, 6, 2];
+        let slice = vec![
+            100.0, 105.0, // cx
+            100.0, 105.0, // cy
+            100.0, 100.0, // w
+            100.0, 100.0, // h
+            0.90, 0.80,   // class 0
+            0.10, 0.10,   // class 1
+        ];
+        let config = TableDetectorConfig {
+            confidence_threshold: 0.40,
+            iou_threshold: 0.50,
+            table_class_ids: vec![0, 4],
+            input_size: 640,
+            render_dpi: 72.0,
+        };
+        let orig_size = (640, 640);
+        let detections = parse_yolo_detections(&slice, &shape, orig_size, &config);
+
+        assert_eq!(detections.len(), 1);
+        let det = &detections[0];
+        assert_eq!(det.label, "Table");
+        assert!((det.score - 0.90).abs() < 1e-4);
+        // cx=100, cy=100, w=100, h=100 => x0=50, y0=50, x1=150, y1=150
+        assert!((det.x0 - 50.0).abs() < 1e-3);
+        assert!((det.y0 - 50.0).abs() < 1e-3);
+        assert!((det.x1 - 150.0).abs() < 1e-3);
+        assert!((det.y1 - 150.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn test_yolo_detector_pipeline_with_mock_or_real() {
+        let candidates = [
+            std::path::Path::new("src/hexai_pdf_parser/ml/table_detector_model/best.onnx"),
+            std::path::Path::new("../../src/hexai_pdf_parser/ml/table_detector_model/best.onnx"),
+        ];
+        let model_path = candidates.iter().find(|p| p.exists());
+        if let Some(path) = model_path {
+            let config = TableDetectorConfig::default();
+            let mut detector = YoloTableDetector::new(path, config).expect("Failed to initialize detector");
+            let img = DynamicImage::ImageRgb8(RgbImage::new(640, 640));
+            let words = vec![[10.0, 10.0, 50.0, 20.0]];
+            let page_size = (595.0, 842.0);
+            let detections = detector.detect_from_image(&img, &words, page_size).expect("Detection failed");
+            for det in &detections {
+                assert_eq!(det.label, "Table");
+                assert!(det.score >= 0.40);
+            }
+        }
+    }
+
+    #[test]
+    fn test_yolo_parser_detector_pipeline_with_mock_or_real() {
+        test_yolo_detector_pipeline_with_mock_or_real();
     }
 }
