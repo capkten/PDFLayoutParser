@@ -950,6 +950,178 @@ pub fn parse_full_tables_json(tables_arg: &str) -> Result<Vec<markdown::FullTabl
     }
 }
 
+pub fn parse_pipeline_args(
+    raw_args: &[String],
+) -> Result<(PathBuf, pipeline::PipelineConfig), Box<dyn std::error::Error>> {
+    let mut args = raw_args;
+    if let Some(first) = args.first() {
+        if first == "parse" {
+            args = &args[1..];
+        }
+    }
+
+    let mut output_dir: Option<PathBuf> = None;
+    let mut render_dpi: f32 = 72.0;
+    let mut page_indices: Option<Vec<usize>> = None;
+    let mut model_path: Option<PathBuf> = None;
+    let mut confidence_threshold: f32 = 0.40;
+    let mut export_renders: bool = true;
+    let mut export_pages: bool = true;
+    let mut positional_args: Vec<String> = Vec::new();
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = &args[i];
+        if arg == "-o" || arg == "--output" {
+            i += 1;
+            if i >= args.len() {
+                return Err(format!("Missing value for {}", arg).into());
+            }
+            output_dir = Some(PathBuf::from(&args[i]));
+        } else if arg == "--dpi" {
+            i += 1;
+            if i >= args.len() {
+                return Err("Missing value for --dpi".into());
+            }
+            let dpi = args[i]
+                .parse::<f32>()
+                .map_err(|e| format!("Invalid value for --dpi '{}': {}", args[i], e))?;
+            if dpi <= 0.0 || !dpi.is_finite() {
+                return Err(format!("Invalid value for --dpi '{}': must be positive", args[i]).into());
+            }
+            render_dpi = dpi;
+        } else if arg == "--confidence" {
+            i += 1;
+            if i >= args.len() {
+                return Err("Missing value for --confidence".into());
+            }
+            let conf = args[i]
+                .parse::<f32>()
+                .map_err(|e| format!("Invalid value for --confidence '{}': {}", args[i], e))?;
+            if !(0.0..=1.0).contains(&conf) || !conf.is_finite() {
+                return Err(format!("Invalid value for --confidence '{}': must be between 0.0 and 1.0", args[i]).into());
+            }
+            confidence_threshold = conf;
+        } else if arg == "--model" {
+            i += 1;
+            if i >= args.len() {
+                return Err("Missing value for --model".into());
+            }
+            let m_val = &args[i];
+            if m_val.is_empty() || m_val == "auto" || m_val == "default" {
+                model_path = None;
+            } else {
+                model_path = Some(PathBuf::from(m_val));
+            }
+        } else if arg == "--no-renders" {
+            export_renders = false;
+        } else if arg == "--no-pages" {
+            export_pages = false;
+        } else if arg == "--pages" {
+            i += 1;
+            if i >= args.len() {
+                return Err("Missing value for --pages".into());
+            }
+            let first_token = &args[i];
+            if first_token.starts_with('-') {
+                return Err("Missing value for --pages".into());
+            }
+            let mut pages = Vec::new();
+            for part in first_token.split(',') {
+                let trimmed = part.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                let idx = trimmed
+                    .parse::<usize>()
+                    .map_err(|e| format!("Invalid page index '{}': {}", trimmed, e))?;
+                pages.push(idx);
+            }
+            while i + 1 < args.len() {
+                let next_token = &args[i + 1];
+                if next_token.starts_with('-') {
+                    break;
+                }
+                let parts: Vec<&str> = next_token
+                    .split(',')
+                    .map(|s| s.trim())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                if parts.is_empty() || !parts.iter().all(|s| s.parse::<usize>().is_ok()) {
+                    break;
+                }
+                i += 1;
+                for p in parts {
+                    pages.push(p.parse::<usize>().unwrap());
+                }
+            }
+            if pages.is_empty() {
+                return Err("No valid page indices provided for --pages".into());
+            }
+            match &mut page_indices {
+                Some(existing) => existing.extend(pages),
+                None => page_indices = Some(pages),
+            }
+        } else if arg.starts_with('-') {
+            return Err(format!("Unknown option: {}", arg).into());
+        } else {
+            positional_args.push(arg.clone());
+        }
+        i += 1;
+    }
+
+    if positional_args.is_empty() {
+        return Err("Missing required argument: <pdf_path>".into());
+    }
+
+    let pdf_path = PathBuf::from(&positional_args[0]);
+
+    if positional_args.len() > 1 {
+        if output_dir.is_none() {
+            output_dir = Some(PathBuf::from(&positional_args[1]));
+        } else {
+            return Err(format!(
+                "Output directory specified both positionally ('{}') and via -o/--output",
+                positional_args[1]
+            )
+            .into());
+        }
+    }
+    if positional_args.len() > 2 {
+        return Err(format!("Unexpected positional argument: '{}'", positional_args[2]).into());
+    }
+
+    let final_output_dir = output_dir.unwrap_or_else(|| PathBuf::from("."));
+
+    let config = pipeline::PipelineConfig {
+        output_dir: final_output_dir,
+        render_dpi,
+        page_indices,
+        model_path,
+        confidence_threshold,
+        export_renders,
+        export_pages,
+    };
+
+    Ok((pdf_path, config))
+}
+
+pub fn handle_parse_command(
+    args: &[String],
+) -> Result<pipeline::PipelineSummaryDto, Box<dyn std::error::Error>> {
+    let (pdf_path, config) = parse_pipeline_args(args)?;
+    let summary = pipeline::run_pipeline(&pdf_path, &config)?;
+    println!(
+        "[pdfium_probe] Pipeline finished for {:?}: {}/{} pages processed in {}ms. Output: {:?}",
+        summary.pdf_path,
+        summary.processed_pages,
+        summary.total_pages,
+        summary.elapsed_ms,
+        summary.output_dir
+    );
+    Ok(summary)
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
     if args.len() >= 2 && (args[1] == "--help" || args[1] == "-h") {
@@ -961,6 +1133,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("  markdown <pdf_path> <page_index> <tables_json> <out_md>");
         println!("  json <pdf_path> <page_index> <tables_json> <out_json>");
         println!("  detect-tables <pdf_path> <page_index> <model_path> <out_json>");
+        println!("  parse <pdf_path> [options]");
         return Ok(());
     }
     if args.len() >= 2 && args[1] == "render" {
@@ -1237,6 +1410,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             page_idx,
             out_json
         );
+        return Ok(());
+    }
+
+    if args.len() >= 2 && args[1] == "parse" {
+        if args.iter().any(|a| a == "--help" || a == "-h") {
+            println!("Usage: pdfium_probe parse <pdf_path> [options]");
+            println!("Options:");
+            println!("  -o, --output <dir>        Output directory path (default: .)");
+            println!("  --dpi <f32>               Rendering DPI (default: 72.0)");
+            println!("  --pages <p0,p1,...>       Page indices to process (e.g. 0,1,2 or space-separated)");
+            println!("  --model <path>            Path to YOLO detection model ('auto' or empty to auto-resolve)");
+            println!("  --confidence <f32>        Confidence threshold for table detector (default: 0.40)");
+            println!("  --no-renders              Omit exporting page rasterization PNGs");
+            println!("  --no-pages                Omit exporting per-page JSON/MD files");
+            return Ok(());
+        }
+        if args.len() < 3 {
+            eprintln!("Usage: pdfium_probe parse <pdf_path> [options]");
+            return Err("Missing PDF path for parse command".into());
+        }
+        handle_parse_command(&args[2..])?;
         return Ok(());
     }
 
@@ -1780,5 +1974,172 @@ mod tests {
         let detections = result.unwrap();
         let json = serde_json::to_string_pretty(&detections);
         assert!(json.is_ok(), "Detections must serialize cleanly to JSON");
+    }
+
+    #[test]
+    fn test_cli_parse_args_builder() {
+        // 1. Defaults with only pdf path
+        let args_default = vec!["parse".to_string(), "sample.pdf".to_string()];
+        let (pdf, config) = parse_pipeline_args(&args_default).expect("should parse defaults");
+        assert_eq!(pdf, PathBuf::from("sample.pdf"));
+        assert_eq!(config.output_dir, PathBuf::from("."));
+        assert!((config.render_dpi - 72.0).abs() < f32::EPSILON);
+        assert!((config.confidence_threshold - 0.40).abs() < f32::EPSILON);
+        assert!(config.export_renders);
+        assert!(config.export_pages);
+        assert!(config.page_indices.is_none());
+        assert!(config.model_path.is_none());
+
+        // 2. Positional output dir fallback
+        let args_pos = vec![
+            "parse".to_string(),
+            "sample.pdf".to_string(),
+            "custom_out".to_string(),
+        ];
+        let (pdf, config) = parse_pipeline_args(&args_pos).expect("should parse positional output");
+        assert_eq!(pdf, PathBuf::from("sample.pdf"));
+        assert_eq!(config.output_dir, PathBuf::from("custom_out"));
+
+        // 3. Flags: -o, --dpi, --confidence, --no-renders, --no-pages
+        let args_flags = vec![
+            "parse".to_string(),
+            "sample.pdf".to_string(),
+            "-o".to_string(),
+            "flags_out".to_string(),
+            "--dpi".to_string(),
+            "144.0".to_string(),
+            "--confidence".to_string(),
+            "0.65".to_string(),
+            "--no-renders".to_string(),
+            "--no-pages".to_string(),
+        ];
+        let (pdf, config) = parse_pipeline_args(&args_flags).expect("should parse flags");
+        assert_eq!(pdf, PathBuf::from("sample.pdf"));
+        assert_eq!(config.output_dir, PathBuf::from("flags_out"));
+        assert!((config.render_dpi - 144.0).abs() < f32::EPSILON);
+        assert!((config.confidence_threshold - 0.65).abs() < f32::EPSILON);
+        assert!(!config.export_renders);
+        assert!(!config.export_pages);
+
+        // 4. Long flag --output
+        let args_long_out = vec![
+            "parse".to_string(),
+            "sample.pdf".to_string(),
+            "--output".to_string(),
+            "long_out".to_string(),
+        ];
+        let (_, config) = parse_pipeline_args(&args_long_out).expect("should parse --output");
+        assert_eq!(config.output_dir, PathBuf::from("long_out"));
+
+        // 5. Pages comma-separated
+        let args_pages_comma = vec![
+            "parse".to_string(),
+            "sample.pdf".to_string(),
+            "--pages".to_string(),
+            "0,2,4".to_string(),
+        ];
+        let (_, config) = parse_pipeline_args(&args_pages_comma).expect("should parse comma pages");
+        assert_eq!(config.page_indices, Some(vec![0, 2, 4]));
+
+        // 6. Pages space-separated
+        let args_pages_space = vec![
+            "parse".to_string(),
+            "sample.pdf".to_string(),
+            "--pages".to_string(),
+            "1".to_string(),
+            "3".to_string(),
+            "5".to_string(),
+        ];
+        let (_, config) = parse_pipeline_args(&args_pages_space).expect("should parse space pages");
+        assert_eq!(config.page_indices, Some(vec![1, 3, 5]));
+
+        // 7. Pages mixed comma and space separated
+        let args_pages_mixed = vec![
+            "parse".to_string(),
+            "sample.pdf".to_string(),
+            "--pages".to_string(),
+            "0,1".to_string(),
+            "2,3".to_string(),
+        ];
+        let (_, config) = parse_pipeline_args(&args_pages_mixed).expect("should parse mixed pages");
+        assert_eq!(config.page_indices, Some(vec![0, 1, 2, 3]));
+
+        // 8. Model flag: custom path and auto
+        let args_model_custom = vec![
+            "parse".to_string(),
+            "sample.pdf".to_string(),
+            "--model".to_string(),
+            "custom_yolo.onnx".to_string(),
+        ];
+        let (_, config) = parse_pipeline_args(&args_model_custom).expect("should parse custom model");
+        assert_eq!(config.model_path, Some(PathBuf::from("custom_yolo.onnx")));
+
+        let args_model_auto = vec![
+            "parse".to_string(),
+            "sample.pdf".to_string(),
+            "--model".to_string(),
+            "auto".to_string(),
+        ];
+        let (_, config) = parse_pipeline_args(&args_model_auto).expect("should parse auto model");
+        assert_eq!(config.model_path, None);
+
+        // 9. Error cases
+        let empty_args: Vec<String> = vec![];
+        assert!(parse_pipeline_args(&empty_args).is_err());
+
+        let just_subcmd = vec!["parse".to_string()];
+        assert!(parse_pipeline_args(&just_subcmd).is_err());
+
+        let invalid_dpi = vec![
+            "sample.pdf".to_string(),
+            "--dpi".to_string(),
+            "not_a_number".to_string(),
+        ];
+        assert!(parse_pipeline_args(&invalid_dpi).is_err());
+
+        let missing_opt_val = vec!["sample.pdf".to_string(), "-o".to_string()];
+        assert!(parse_pipeline_args(&missing_opt_val).is_err());
+
+        let unknown_flag = vec!["sample.pdf".to_string(), "--unknown-flag".to_string()];
+        assert!(parse_pipeline_args(&unknown_flag).is_err());
+    }
+
+    #[test]
+    fn test_cli_parse_end_to_end() {
+        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let synth_pdf = manifest_dir.join("test_data/synthetic/synth_crop_offset.pdf");
+        assert!(synth_pdf.exists(), "Synthetic PDF fixture must exist: {:?}", synth_pdf);
+
+        let temp_dir = std::env::temp_dir().join(format!(
+            "test_cli_parse_e2e_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+
+        let args = vec![
+            "parse".to_string(),
+            synth_pdf.to_string_lossy().to_string(),
+            "-o".to_string(),
+            temp_dir.to_string_lossy().to_string(),
+            "--dpi".to_string(),
+            "72.0".to_string(),
+            "--confidence".to_string(),
+            "0.40".to_string(),
+        ];
+
+        let summary = handle_parse_command(&args).expect("handle_parse_command should succeed");
+        assert_eq!(summary.total_pages, 1);
+        assert_eq!(summary.processed_pages, 1);
+        assert_eq!(summary.page_indices, vec![0]);
+
+        assert!(temp_dir.join("output.json").exists(), "output.json must exist");
+        assert!(temp_dir.join("output.md").exists(), "output.md must exist");
+        assert!(temp_dir.join("pages/page-000.json").exists(), "pages/page-000.json must exist");
+        assert!(temp_dir.join("pages/page-000.md").exists(), "pages/page-000.md must exist");
+        assert!(temp_dir.join("renders/page-000.png").exists(), "renders/page-000.png must exist");
+
+        let _ = fs::remove_dir_all(&temp_dir);
     }
 }
