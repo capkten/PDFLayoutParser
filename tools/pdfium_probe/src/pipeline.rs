@@ -156,26 +156,40 @@ pub fn run_pipeline(
                 m_path,
                 &detector_config,
             )?;
-            detections
-                .into_iter()
-                .enumerate()
-                .map(|(idx, d)| crate::markdown::FullTableDto {
-                    table_id: idx,
-                    bbox: [d.x0 as f64, d.y0 as f64, d.x1 as f64, d.y1 as f64],
-                    rows: 0,
-                    cols: 0,
-                    cells: Vec::new(),
-                    confidence: Some(d.score as f64),
-                    source: Some(d.label),
-                })
-                .collect()
+            let mut recovered_tables = Vec::with_capacity(detections.len());
+            for (idx, d) in detections.into_iter().enumerate() {
+                let bbox = [d.x0 as f64, d.y0 as f64, d.x1 as f64, d.y1 as f64];
+                let recovered = crate::table_engine::recover_table_in_region(
+                    &norm_page,
+                    bbox,
+                    Some(d.score as f64),
+                    &d.label,
+                    idx,
+                );
+                if let Some(table) = recovered {
+                    recovered_tables.push(table);
+                } else {
+                    recovered_tables.push(crate::markdown::FullTableDto {
+                        table_id: idx,
+                        bbox,
+                        rows: 0,
+                        cols: 0,
+                        cells: Vec::new(),
+                        confidence: Some(d.score as f64),
+                        source: Some(d.label),
+                    });
+                }
+            }
+            recovered_tables
         } else {
             Vec::new()
         };
 
         // Stage 4: layout assembly via recursive XY-Cut
+        // Only deduct tables with non-empty recovered cells so unrecovered tables don't swallow page text
         let table_regions: Vec<crate::layout::TableRegionInput> = tables
             .iter()
+            .filter(|t| !t.cells.is_empty())
             .map(|t| crate::layout::TableRegionInput {
                 bbox: t.bbox,
                 table_id: t.table_id,

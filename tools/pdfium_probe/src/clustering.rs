@@ -352,32 +352,6 @@ pub fn is_punctuation(ch: char) -> bool {
     true
 }
 
-fn is_digit_str(s: &str) -> bool {
-    !s.is_empty() && s.chars().all(|c| c.is_ascii_digit())
-}
-
-fn is_alnum_non_cjk_str(s: &str) -> bool {
-    !s.is_empty() && s.chars().all(|c| c.is_alphanumeric() && !is_cjk(c))
-}
-
-fn is_alpha_non_cjk_str(s: &str) -> bool {
-    !s.is_empty() && s.chars().all(|c| c.is_alphabetic() && !is_cjk(c))
-}
-
-fn is_buffer_numeric(buf: &[&VisualChar]) -> bool {
-    if buf.is_empty() {
-        return false;
-    }
-    let mut text = String::new();
-    for c in buf {
-        text.push_str(&c.c);
-    }
-    if matches!(text.as_str(), "+" | "-" | "+." | "-." | ".") {
-        return true;
-    }
-    let stripped = text.trim_start_matches(['+', '-']);
-    !stripped.is_empty() && stripped.chars().any(|ch| ch.is_ascii_digit())
-}
 
 pub fn cluster_spans_into_blocks(
     spans: &[SpanInfo],
@@ -506,10 +480,6 @@ pub fn derive_words(
                 for c in buf.iter() {
                     w_text.push_str(&c.c);
                 }
-                if matches!(w_text.as_str(), "+" | "-" | "+." | "-." | ".") {
-                    buf.clear();
-                    return;
-                }
                 let mut w_x0 = f64::INFINITY;
                 let mut w_y0 = f64::INFINITY;
                 let mut w_x1 = f64::NEG_INFINITY;
@@ -570,90 +540,13 @@ pub fn derive_words(
                     let char_h = (prev_c.bbox[3] - prev_c.bbox[1])
                         .min(ch_item.bbox[3] - ch_item.bbox[1]);
                     let char_gap = ch_item.bbox[0] - prev_c.bbox[2];
-                    if char_gap > WORD_CHAR_GAP_FACTOR * char_h {
+                    if char_gap > 0.22 * char_h || char_gap >= 2.5 {
                         flush_buf(&mut current_buf);
                     }
                 }
 
-                if !current_buf.is_empty() {
-                    let prev_c = *current_buf.last().unwrap();
-                    let prev_char = prev_c.c.as_str();
-
-                    if is_buffer_numeric(&current_buf) {
-                        if is_digit_str(c_str) {
-                            current_buf.push(ch_item);
-                            i += 1;
-                            continue;
-                        } else if c_str == "." || c_str == "," {
-                            let next_is_digit = i + 1 < line_chars.len()
-                                && is_digit_str(&line_chars[i + 1].c);
-                            if is_digit_str(prev_char) && next_is_digit {
-                                if c_str == "." && current_buf.iter().any(|c| c.c == ".") {
-                                    flush_buf(&mut current_buf);
-                                } else {
-                                    current_buf.push(ch_item);
-                                    i += 1;
-                                    continue;
-                                }
-                            } else {
-                                flush_buf(&mut current_buf);
-                            }
-                        } else if c_str == "%" && is_digit_str(prev_char) {
-                            current_buf.push(ch_item);
-                            flush_buf(&mut current_buf);
-                            i += 1;
-                            continue;
-                        } else {
-                            flush_buf(&mut current_buf);
-                        }
-                    } else if is_cjk_str(prev_char) {
-                        if is_cjk_str(c_str) {
-                            current_buf.push(ch_item);
-                            i += 1;
-                            continue;
-                        } else {
-                            flush_buf(&mut current_buf);
-                        }
-                    } else {
-                        // Latin / Alphanumeric word
-                        let is_alnum_non_cjk = is_alnum_non_cjk_str(c_str);
-                        let is_contraction = c_str == "'"
-                            && i + 1 < line_chars.len()
-                            && is_alpha_non_cjk_str(&line_chars[i + 1].c);
-                        if is_alnum_non_cjk || is_contraction {
-                            current_buf.push(ch_item);
-                            i += 1;
-                            continue;
-                        } else {
-                            flush_buf(&mut current_buf);
-                        }
-                    }
-                }
-
-                // current_buf is empty (either initially or just flushed). Start new token if applicable:
-                if is_digit_str(c_str) {
-                    current_buf.push(ch_item);
-                    i += 1;
-                } else if c_str == "+" || c_str == "-" {
-                    let next_is_digit = i + 1 < line_chars.len()
-                        && (is_digit_str(&line_chars[i + 1].c)
-                            || (line_chars[i + 1].c == "."
-                                && i + 2 < line_chars.len()
-                                && is_digit_str(&line_chars[i + 2].c)));
-                    if next_is_digit {
-                        current_buf.push(ch_item);
-                        i += 1;
-                    } else {
-                        // standalone operator / delimiter
-                        i += 1;
-                    }
-                } else if is_cjk_str(c_str) || is_alnum_non_cjk_str(c_str) {
-                    current_buf.push(ch_item);
-                    i += 1;
-                } else {
-                    // delimiter punctuation
-                    i += 1;
-                }
+                current_buf.push(ch_item);
+                i += 1;
             }
 
             flush_buf(&mut current_buf);
@@ -765,13 +658,13 @@ mod tests {
         let blocks = cluster_spans_into_blocks(&[span], 0);
         let (tuples, wire) = derive_words(&blocks, 0);
         let words: Vec<&str> = tuples.iter().map(|t| t.text()).collect();
-        assert_eq!(words, vec!["Hello", "world", "It", "don't", "stop"]);
+        assert_eq!(words, vec!["Hello", "world!", "It", "don't", "stop."]);
         assert_eq!(wire.len(), 5);
         assert_eq!(wire[0].text, "Hello");
-        assert_eq!(wire[1].text, "world");
+        assert_eq!(wire[1].text, "world!");
         assert_eq!(wire[2].text, "It");
         assert_eq!(wire[3].text, "don't");
-        assert_eq!(wire[4].text, "stop");
+        assert_eq!(wire[4].text, "stop.");
     }
 
     #[test]
@@ -802,19 +695,58 @@ mod tests {
     }
 
     #[test]
-    fn test_clustering_standalone_operators_ignored() {
-        let texts = ["+", "-", ".", "+.", "-."];
-        let mut spans = Vec::new();
-        let mut x = 10.0;
-        for (i, t) in texts.iter().enumerate() {
-            spans.push(make_test_span(t, [x, 10.0, x + 10.0, 20.0], Some("Arial"), 10.0, i));
-            x += 25.0;
-        }
-        let blocks = cluster_spans_into_blocks(&spans, 0);
-        let (tuples, wire) = derive_words(&blocks, 0);
-        assert_eq!(tuples.len(), 0);
-        assert_eq!(wire.len(), 0);
+    fn test_clustering_derive_words_preserves_punctuation_and_symbols() {
+        // English punctuation, hyphen, dash, parens
+        let span1 = make_test_span(
+            "e-Submission System – FAQs",
+            [10.0, 10.0, 250.0, 20.0],
+            Some("Arial"),
+            10.0,
+            1,
+        );
+        let blocks1 = cluster_spans_into_blocks(&[span1], 0);
+        let (tuples1, _) = derive_words(&blocks1, 0);
+        let words1: Vec<&str> = tuples1.iter().map(|t| t.text()).collect();
+        assert_eq!(words1, vec!["e-Submission", "System", "–", "FAQs"]);
+
+        let span2 = make_test_span(
+            "Access to e-Submission System (ESS)",
+            [10.0, 30.0, 300.0, 40.0],
+            Some("Arial"),
+            10.0,
+            2,
+        );
+        let blocks2 = cluster_spans_into_blocks(&[span2], 0);
+        let (tuples2, _) = derive_words(&blocks2, 0);
+        let words2: Vec<&str> = tuples2.iter().map(|t| t.text()).collect();
+        assert_eq!(words2, vec!["Access", "to", "e-Submission", "System", "(ESS)"]);
+
+        // Chinese punctuation: parentheses, dunhao, book quotes, dash, comma
+        let span3 = make_test_span(
+            "（4）现金和现金等价物",
+            [10.0, 50.0, 200.0, 60.0],
+            Some("SimSun"),
+            10.0,
+            3,
+        );
+        let blocks3 = cluster_spans_into_blocks(&[span3], 0);
+        let (tuples3, _) = derive_words(&blocks3, 0);
+        let words3: Vec<&str> = tuples3.iter().map(|t| t.text()).collect();
+        assert_eq!(words3, vec!["（4）现金和现金等价物"]);
+
+        let span4 = make_test_span(
+            "五、关联方关系及其交易",
+            [10.0, 70.0, 200.0, 80.0],
+            Some("SimSun"),
+            10.0,
+            4,
+        );
+        let blocks4 = cluster_spans_into_blocks(&[span4], 0);
+        let (tuples4, _) = derive_words(&blocks4, 0);
+        let words4: Vec<&str> = tuples4.iter().map(|t| t.text()).collect();
+        assert_eq!(words4, vec!["五、关联方关系及其交易"]);
     }
+
 
     #[test]
     fn test_clustering_word_tuple_and_wire_dto_contract() {
