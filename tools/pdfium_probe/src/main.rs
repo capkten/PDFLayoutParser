@@ -14,6 +14,7 @@ pub mod layout;
 pub mod markdown;
 pub mod normalizer;
 pub mod pipeline;
+pub mod table_engine;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct CharInfo {
