@@ -103,7 +103,7 @@ pub fn run_pipeline(
         None => (0..total_pages).collect(),
     };
 
-    // 4. Resolve model_path.
+    // 4. Resolve model_path and initialize YoloTableDetector once for the entire document.
     let model_path: Option<PathBuf> = match &config.model_path {
         Some(p) => {
             if !p.exists() {
@@ -112,6 +112,17 @@ pub fn run_pipeline(
             Some(p.clone())
         }
         None => crate::detector::resolve_default_model_path(),
+    };
+
+    let mut table_detector = if let Some(ref m_path) = model_path {
+        let detector_config = crate::detector::TableDetectorConfig {
+            confidence_threshold: config.confidence_threshold,
+            render_dpi: config.render_dpi,
+            ..Default::default()
+        };
+        Some(crate::detector::YoloTableDetector::new(m_path, detector_config)?)
+    } else {
+        None
     };
 
     let mut all_page_mds: Vec<String> = Vec::with_capacity(target_pages.len());
@@ -132,30 +143,35 @@ pub fn run_pipeline(
             Some("pdfium_probe pipeline"),
         );
 
-        // Stage 2: native page rasterization
+        // Unified Rasterization (Stage 2 export & Stage 3 detection shared)
+        let needs_raster = config.export_renders || table_detector.is_some();
+        let page_image = if needs_raster {
+            Some(crate::render_page_to_image(&page, config.render_dpi)?)
+        } else {
+            None
+        };
+
+        // Stage 2: native page rasterization export
         if config.export_renders {
-            let png_path = renders_dir.join(format!("page-{:03}.png", page_idx));
-            crate::render_page_to_png(&page, config.render_dpi, &png_path)?;
+            if let Some(ref img) = page_image {
+                let png_path = renders_dir.join(format!("page-{:03}.png", page_idx));
+                crate::save_image_to_png(img, &png_path)?;
+            }
         }
 
-        // Stage 3: table detection & conversion
-        let tables: Vec<crate::markdown::FullTableDto> = if let Some(ref m_path) = model_path {
+        // Stage 3: table detection & conversion (reusing detector session)
+        let tables: Vec<crate::markdown::FullTableDto> = if let Some(ref mut detector) = table_detector {
             let words: Vec<[f32; 4]> = norm_page
                 .words
                 .iter()
                 .map(|w| [w.0 as f32, w.1 as f32, w.2 as f32, w.3 as f32])
                 .collect();
-            let detector_config = crate::detector::TableDetectorConfig {
-                confidence_threshold: config.confidence_threshold,
-                render_dpi: config.render_dpi,
-                ..Default::default()
+            let page_size = (page.width().value, page.height().value);
+            let detections = if let Some(ref img) = page_image {
+                detector.detect_from_image(img, &words, page_size)?
+            } else {
+                Vec::new()
             };
-            let detections = crate::detector::detect_tables_on_pdf_page(
-                &page,
-                &words,
-                m_path,
-                &detector_config,
-            )?;
             let mut recovered_tables = Vec::with_capacity(detections.len());
             for (idx, d) in detections.into_iter().enumerate() {
                 let bbox = [d.x0 as f64, d.y0 as f64, d.x1 as f64, d.y1 as f64];

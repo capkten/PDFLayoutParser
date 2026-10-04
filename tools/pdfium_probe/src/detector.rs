@@ -290,13 +290,12 @@ pub fn resolve_default_model_path() -> Option<PathBuf> {
     None
 }
 
-pub fn detect_tables_on_pdf_page(
+pub fn detect_tables_on_pdf_page_with_detector(
     page: &PdfPage,
     words: &[[f32; 4]],
-    model_path: &Path,
-    config: &TableDetectorConfig,
+    detector: &mut YoloTableDetector,
 ) -> Result<Vec<DetectedTableDto>, Box<dyn std::error::Error>> {
-    let scale = (config.render_dpi / 72.0).max(0.1);
+    let scale = (detector.config.render_dpi / 72.0).max(0.1);
     let target_w = (page.width().value * scale).round().max(1.0) as i32;
     let target_h = (page.height().value * scale).round().max(1.0) as i32;
     let render_config = PdfRenderConfig::new()
@@ -304,8 +303,17 @@ pub fn detect_tables_on_pdf_page(
         .set_target_height(target_h);
     let bitmap = page.render_with_config(&render_config)?;
     let dyn_img = bitmap.as_image();
-    let mut detector = YoloTableDetector::new(model_path, config.clone())?;
     detector.detect_from_image(&dyn_img, words, (page.width().value, page.height().value))
+}
+
+pub fn detect_tables_on_pdf_page(
+    page: &PdfPage,
+    words: &[[f32; 4]],
+    model_path: &Path,
+    config: &TableDetectorConfig,
+) -> Result<Vec<DetectedTableDto>, Box<dyn std::error::Error>> {
+    let mut detector = YoloTableDetector::new(model_path, config.clone())?;
+    detect_tables_on_pdf_page_with_detector(page, words, &mut detector)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
