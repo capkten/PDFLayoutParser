@@ -189,6 +189,384 @@ pub fn transform_rect_coords(
     [round4(min_x), round4(min_y), round4(max_x), round4(max_y)]
 }
 
+pub fn transform_quad_with_matrix_to_page_coords(
+    left: PdfPoints,
+    bottom: PdfPoints,
+    right: PdfPoints,
+    top: PdfPoints,
+    parent_matrix: PdfMatrix,
+    crop_x0: f64,
+    crop_y1: f64,
+) -> [f64; 4] {
+    let p1 = parent_matrix.apply_to_points(left, bottom);
+    let p2 = parent_matrix.apply_to_points(left, top);
+    let p3 = parent_matrix.apply_to_points(right, top);
+    let p4 = parent_matrix.apply_to_points(right, bottom);
+    let min_x = (p1.0.value as f64).min(p2.0.value as f64).min(p3.0.value as f64).min(p4.0.value as f64);
+    let min_y = (p1.1.value as f64).min(p2.1.value as f64).min(p3.1.value as f64).min(p4.1.value as f64);
+    let max_x = (p1.0.value as f64).max(p2.0.value as f64).max(p3.0.value as f64).max(p4.0.value as f64);
+    let max_y = (p1.1.value as f64).max(p2.1.value as f64).max(p3.1.value as f64).max(p4.1.value as f64);
+    transform_rect_coords(min_x, min_y, max_x, max_y, crop_x0, crop_y1)
+}
+
+fn process_page_object_text_recursive(
+    obj: &PdfPageObject,
+    parent_matrix: PdfMatrix,
+    depth: usize,
+    page_text: Option<&PdfPageText>,
+    page_index: usize,
+    crop_x0: f64,
+    crop_y1: f64,
+    order: &mut i64,
+    obj_counter: &mut usize,
+    spans: &mut Vec<SpanInfo>,
+    visible_text_scalar_count: &mut usize,
+    extracted_char_scalar_count: &mut usize,
+    synthetic_space_count: &mut usize,
+    replacement_char_count: &mut usize,
+    control_char_count: &mut usize,
+    has_invisible_text: &mut bool,
+    has_char_mismatch: &mut bool,
+    has_invalid_geometry: &mut bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if depth > 16 {
+        return Ok(());
+    }
+
+    if let Some(form) = obj.as_x_object_form_object() {
+        let form_matrix = form.matrix().unwrap_or(PdfMatrix::IDENTITY);
+        let child_parent_matrix = form_matrix.multiply(parent_matrix);
+        for child in form.iter() {
+            process_page_object_text_recursive(
+                &child,
+                child_parent_matrix,
+                depth + 1,
+                page_text,
+                page_index,
+                crop_x0,
+                crop_y1,
+                order,
+                obj_counter,
+                spans,
+                visible_text_scalar_count,
+                extracted_char_scalar_count,
+                synthetic_space_count,
+                replacement_char_count,
+                control_char_count,
+                has_invisible_text,
+                has_char_mismatch,
+                has_invalid_geometry,
+            )?;
+        }
+        return Ok(());
+    }
+
+    let obj_idx = *obj_counter;
+    *obj_counter += 1;
+
+    if let Some(text_obj) = obj.as_text_object() {
+        // 禁止使用 .trim() 盲目丢弃独立空格！保留原始字符串
+        let text = text_obj.text();
+        if text.is_empty() {
+            return Ok(());
+        }
+        let bounds = text_obj.bounds()?;
+        let bbox = transform_quad_with_matrix_to_page_coords(
+            bounds.left(),
+            bounds.bottom(),
+            bounds.right(),
+            bounds.top(),
+            parent_matrix,
+            crop_x0,
+            crop_y1,
+        );
+        if !bbox[0].is_finite()
+            || !bbox[1].is_finite()
+            || !bbox[2].is_finite()
+            || !bbox[3].is_finite()
+            || bbox[0] > bbox[2]
+            || bbox[1] > bbox[3]
+        {
+            *has_invalid_geometry = true;
+        }
+
+        for ch in text.chars() {
+            *visible_text_scalar_count += 1;
+            if ch == '\u{FFFD}' {
+                *replacement_char_count += 1;
+            } else if is_illegal_control_char(ch) {
+                *control_char_count += 1;
+            }
+        }
+
+        let font_name = Some(text_obj.font().name());
+        let font_size = Some(round4(text_obj.unscaled_font_size().value as f64));
+
+        let render_mode = text_obj.render_mode();
+        let is_invisible = matches!(render_mode, PdfPageTextRenderMode::Invisible);
+        let render_mode_int = match render_mode {
+            PdfPageTextRenderMode::Unknown => -1,
+            PdfPageTextRenderMode::FilledUnstroked => 0,
+            PdfPageTextRenderMode::StrokedUnfilled => 1,
+            PdfPageTextRenderMode::FilledThenStroked => 2,
+            PdfPageTextRenderMode::Invisible => 3,
+            _ => 0,
+        };
+
+        if is_invisible {
+            *has_invisible_text = true;
+        }
+
+        let flags: Option<i64> = None; // 严禁伪造 PyMuPDF 的 64 位 flags，诚实标记为 None
+
+        let mut chars_list = Vec::new();
+        if let Some(ref pt) = page_text {
+            if let Ok(chars) = text_obj.chars(pt) {
+                for (ch_idx, ch) in chars.iter().enumerate() {
+                    let c_str = ch.unicode_string().unwrap_or_default();
+                    let c_bbox = if let Ok(b) = ch.loose_bounds() {
+                        transform_rect_coords(
+                            b.left().value as f64,
+                            b.bottom().value as f64,
+                            b.right().value as f64,
+                            b.top().value as f64,
+                            crop_x0,
+                            crop_y1,
+                        )
+                    } else {
+                        [0.0, 0.0, 0.0, 0.0]
+                    };
+                    if !c_bbox[0].is_finite()
+                        || !c_bbox[1].is_finite()
+                        || !c_bbox[2].is_finite()
+                        || !c_bbox[3].is_finite()
+                        || c_bbox[0] > c_bbox[2]
+                        || c_bbox[1] > c_bbox[3]
+                    {
+                        *has_invalid_geometry = true;
+                    }
+                    *extracted_char_scalar_count += c_str.chars().count();
+                    chars_list.push(CharInfo {
+                        c: c_str,
+                        bbox: c_bbox,
+                        char_index: ch_idx,
+                    });
+                }
+            } else {
+                *has_char_mismatch = true;
+            }
+        } else {
+            *has_char_mismatch = true;
+        }
+
+        // 映射不完整只保留诊断，不再合成估算尾部字符
+        let mut extracted_text = String::new();
+        for ci in &chars_list {
+            extracted_text.push_str(&ci.c);
+        }
+        if extracted_text == text {
+            // 完全一致
+        } else if text.trim_end_matches(' ') == extracted_text {
+            // TextPage 在对象边界合成的末尾空格，不视为字符映射缺失
+            *synthetic_space_count += text.chars().count().saturating_sub(extracted_text.chars().count());
+        } else {
+            *has_char_mismatch = true;
+        }
+
+        // 若 TextPage 在对象边界合成了末尾空格且 chars_list 未包含，物化该空格为 CharInfo
+        // 保证 downstream derive_words 识别到字符级边界空格
+        let chars_end_with_space = chars_list
+            .last()
+            .map(|ci| ci.c.ends_with(' '))
+            .unwrap_or(false);
+        if text.ends_with(' ') && !chars_end_with_space {
+            let missing_spaces = text.chars().rev().take_while(|&c| c == ' ').count();
+            let space_w = font_size.unwrap_or(10.0).max(1.0) * 0.25;
+            let mut cur_x1 = chars_list.last().map(|c| c.bbox[2]).unwrap_or(bbox[0]);
+            let y0 = chars_list.last().map(|c| c.bbox[1]).unwrap_or(bbox[1]);
+            let y1 = chars_list.last().map(|c| c.bbox[3]).unwrap_or(bbox[3]);
+            for _ in 0..missing_spaces {
+                let sp_bbox = [cur_x1, y0, cur_x1 + space_w, y1];
+                cur_x1 += space_w;
+                let ch_idx = chars_list.len();
+                chars_list.push(CharInfo {
+                    c: " ".to_string(),
+                    bbox: sp_bbox,
+                    char_index: ch_idx,
+                });
+            }
+        }
+
+        let total_chars_count = chars_list.len();
+        let provenance = ProvenanceSidecar {
+            page_index,
+            pdfium_object_index: obj_idx,
+            character_count: total_chars_count,
+            char_start_index: 0,
+            char_end_index: total_chars_count,
+            char_indices: (0..total_chars_count).collect(),
+            is_derived: false,
+            derived_block: None,
+            derived_line: None,
+        };
+
+        spans.push(SpanInfo {
+            order: *order,
+            text,
+            bbox,
+            font: font_name,
+            size: font_size,
+            flags,
+            render_mode: render_mode_int,
+            is_invisible,
+            provenance,
+            characters: chars_list,
+        });
+        *order += 1;
+    }
+
+    Ok(())
+}
+
+fn process_page_object_drawing_recursive(
+    obj: &PdfPageObject,
+    parent_matrix: PdfMatrix,
+    depth: usize,
+    crop_x0: f64,
+    crop_y1: f64,
+    drawing_idx: &mut usize,
+    drawings: &mut Vec<DrawingInfo>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if depth > 16 {
+        return Ok(());
+    }
+
+    if let Some(form) = obj.as_x_object_form_object() {
+        let form_matrix = form.matrix().unwrap_or(PdfMatrix::IDENTITY);
+        let child_parent_matrix = form_matrix.multiply(parent_matrix);
+        for child in form.iter() {
+            process_page_object_drawing_recursive(
+                &child,
+                child_parent_matrix,
+                depth + 1,
+                crop_x0,
+                crop_y1,
+                drawing_idx,
+                drawings,
+            )?;
+        }
+        return Ok(());
+    }
+
+    if let Some(path_obj) = obj.as_path_object() {
+        let width_val = round4(path_obj.stroke_width().map(|w| w.value as f64).unwrap_or(1.0));
+        let bounds = path_obj.bounds()?;
+        let mut rect = transform_quad_with_matrix_to_page_coords(
+            bounds.left(),
+            bounds.bottom(),
+            bounds.right(),
+            bounds.top(),
+            parent_matrix,
+            crop_x0,
+            crop_y1,
+        );
+
+        let path_type = match (path_obj.is_stroked(), path_obj.fill_mode()) {
+            (Ok(is_stroked), Ok(fill_mode)) => {
+                let is_filled = fill_mode != PdfPathFillMode::None;
+                match (is_stroked, is_filled) {
+                    (true, true) => "stroked_filled",
+                    (true, false) => "stroked",
+                    (false, true) => "filled",
+                    (false, false) => "unknown",
+                }
+            }
+            _ => "unknown",
+        }
+        .to_string();
+
+        let mut items = Vec::new();
+        let mut current_pt: Option<[f64; 2]> = None;
+        let mut subpath_start: Option<[f64; 2]> = None;
+        let mut pts_all: Vec<[f64; 2]> = Vec::new();
+
+        let segments = match path_obj.matrix() {
+            Ok(m) => path_obj.segments().transform(m.multiply(parent_matrix)),
+            Err(_) => {
+                if parent_matrix != PdfMatrix::IDENTITY {
+                    path_obj.segments().transform(parent_matrix)
+                } else {
+                    path_obj.segments()
+                }
+            }
+        };
+
+        for seg in segments.iter() {
+            let (pt_x, pt_y) = seg.point();
+            let raw_x = pt_x.value as f64;
+            let raw_y = pt_y.value as f64;
+            let [vx, vy] = transform_point_to_page_coords(raw_x, raw_y, crop_x0, crop_y1);
+            pts_all.push([vx, vy]);
+
+            match seg.segment_type() {
+                PdfPathSegmentType::MoveTo => {
+                    current_pt = Some([vx, vy]);
+                    subpath_start = Some([vx, vy]);
+                }
+                PdfPathSegmentType::LineTo => {
+                    let p0 = current_pt.unwrap_or([vx, vy]);
+                    items.push(DrawingItem {
+                        cmd: "l".to_string(),
+                        points: vec![p0, [vx, vy]],
+                    });
+                    current_pt = Some([vx, vy]);
+                }
+                PdfPathSegmentType::BezierTo => {
+                    let p0 = current_pt.unwrap_or([vx, vy]);
+                    items.push(DrawingItem {
+                        cmd: "c".to_string(),
+                        points: vec![p0, [vx, vy]],
+                    });
+                    current_pt = Some([vx, vy]);
+                }
+                _ => {}
+            }
+
+            if seg.is_close() {
+                if let (Some(p0), Some(start)) = (current_pt, subpath_start) {
+                    if p0 != start {
+                        items.push(DrawingItem {
+                            cmd: "l".to_string(),
+                            points: vec![p0, start],
+                        });
+                    }
+                }
+            }
+        }
+
+        if !pts_all.is_empty() {
+            let min_x = pts_all.iter().map(|p| p[0]).fold(f64::INFINITY, f64::min);
+            let min_y = pts_all.iter().map(|p| p[1]).fold(f64::INFINITY, f64::min);
+            let max_x = pts_all.iter().map(|p| p[0]).fold(f64::NEG_INFINITY, f64::max);
+            let max_y = pts_all.iter().map(|p| p[1]).fold(f64::NEG_INFINITY, f64::max);
+            rect = [round4(min_x), round4(min_y), round4(max_x), round4(max_y)];
+        }
+
+        drawings.push(DrawingInfo {
+            drawing_index: *drawing_idx,
+            path_type,
+            rect,
+            width: width_val,
+            color: None,
+            fill: None,
+            items,
+        });
+        *drawing_idx += 1;
+    }
+
+    Ok(())
+}
+
 pub fn extract_page(page: &PdfPage, page_index: usize) -> Result<PdfiumRawPage, Box<dyn std::error::Error>> {
     let width = round4(page.width().value as f64);
     let height = round4(page.height().value as f64);
@@ -226,6 +604,7 @@ pub fn extract_page(page: &PdfPage, page_index: usize) -> Result<PdfiumRawPage, 
     let page_text = page.text().ok();
     let mut spans = Vec::new();
     let mut order = 0i64;
+    let mut obj_counter = 0usize;
     let mut has_invisible_text = false;
 
     let mut visible_text_scalar_count = 0usize;
@@ -236,246 +615,43 @@ pub fn extract_page(page: &PdfPage, page_index: usize) -> Result<PdfiumRawPage, 
     let mut has_char_mismatch = false;
     let mut has_invalid_geometry = false;
 
-    for (obj_idx, obj) in page.objects().iter().enumerate() {
-        if let Some(text_obj) = obj.as_text_object() {
-            // 禁止使用 .trim() 盲目丢弃独立空格！保留原始字符串
-            let text = text_obj.text();
-            if text.is_empty() {
-                continue;
-            }
-            let bounds = text_obj.bounds()?;
-            let bbox = transform_rect_coords(
-                bounds.left().value as f64,
-                bounds.bottom().value as f64,
-                bounds.right().value as f64,
-                bounds.top().value as f64,
-                crop_x0,
-                crop_y1,
-            );
-            if !bbox[0].is_finite()
-                || !bbox[1].is_finite()
-                || !bbox[2].is_finite()
-                || !bbox[3].is_finite()
-                || bbox[0] > bbox[2]
-                || bbox[1] > bbox[3]
-            {
-                has_invalid_geometry = true;
-            }
-
-            for ch in text.chars() {
-                visible_text_scalar_count += 1;
-                if ch == '\u{FFFD}' {
-                    replacement_char_count += 1;
-                } else if is_illegal_control_char(ch) {
-                    control_char_count += 1;
-                }
-            }
-
-            let font_name = Some(text_obj.font().name());
-            let font_size = Some(round4(text_obj.unscaled_font_size().value as f64));
-
-            let render_mode = text_obj.render_mode();
-            let is_invisible = matches!(render_mode, PdfPageTextRenderMode::Invisible);
-            let render_mode_int = match render_mode {
-                PdfPageTextRenderMode::Unknown => -1,
-                PdfPageTextRenderMode::FilledUnstroked => 0,
-                PdfPageTextRenderMode::StrokedUnfilled => 1,
-                PdfPageTextRenderMode::FilledThenStroked => 2,
-                PdfPageTextRenderMode::Invisible => 3,
-                _ => 0,
-            };
-
-            if is_invisible {
-                has_invisible_text = true;
-            }
-
-            let flags: Option<i64> = None; // 严禁伪造 PyMuPDF 的 64 位 flags，诚实标记为 None
-
-            let mut chars_list = Vec::new();
-            if let Some(ref pt) = page_text {
-                if let Ok(chars) = text_obj.chars(pt) {
-                    for (ch_idx, ch) in chars.iter().enumerate() {
-                        let c_str = ch.unicode_string().unwrap_or_default();
-                        let c_bbox = if let Ok(b) = ch.loose_bounds() {
-                            transform_rect_coords(
-                                b.left().value as f64,
-                                b.bottom().value as f64,
-                                b.right().value as f64,
-                                b.top().value as f64,
-                                crop_x0,
-                                crop_y1,
-                            )
-                        } else {
-                            [0.0, 0.0, 0.0, 0.0]
-                        };
-                        if !c_bbox[0].is_finite()
-                            || !c_bbox[1].is_finite()
-                            || !c_bbox[2].is_finite()
-                            || !c_bbox[3].is_finite()
-                            || c_bbox[0] > c_bbox[2]
-                            || c_bbox[1] > c_bbox[3]
-                        {
-                            has_invalid_geometry = true;
-                        }
-                        extracted_char_scalar_count += c_str.chars().count();
-                        chars_list.push(CharInfo {
-                            c: c_str,
-                            bbox: c_bbox,
-                            char_index: ch_idx,
-                        });
-                    }
-                } else {
-                    has_char_mismatch = true;
-                }
-            } else {
-                has_char_mismatch = true;
-            }
-
-            // 映射不完整只保留诊断，不再合成估算尾部字符
-            let mut extracted_text = String::new();
-            for ci in &chars_list {
-                extracted_text.push_str(&ci.c);
-            }
-            if extracted_text == text {
-                // 完全一致
-            } else if text.trim_end_matches(' ') == extracted_text {
-                // TextPage 在对象边界合成的末尾空格，不视为字符映射缺失
-                synthetic_space_count += text.chars().count().saturating_sub(extracted_text.chars().count());
-            } else {
-                has_char_mismatch = true;
-            }
-
-            let total_chars_count = chars_list.len();
-            let provenance = ProvenanceSidecar {
-                page_index,
-                pdfium_object_index: obj_idx,
-                character_count: total_chars_count,
-                char_start_index: 0,
-                char_end_index: total_chars_count,
-                char_indices: (0..total_chars_count).collect(),
-                is_derived: false,
-                derived_block: None,
-                derived_line: None,
-            };
-
-            spans.push(SpanInfo {
-                order,
-                text,
-                bbox,
-                font: font_name,
-                size: font_size,
-                flags,
-                render_mode: render_mode_int,
-                is_invisible,
-                provenance,
-                characters: chars_list,
-            });
-            order += 1;
-        }
+    for obj in page.objects().iter() {
+        process_page_object_text_recursive(
+            &obj,
+            PdfMatrix::IDENTITY,
+            0,
+            page_text.as_ref(),
+            page_index,
+            crop_x0,
+            crop_y1,
+            &mut order,
+            &mut obj_counter,
+            &mut spans,
+            &mut visible_text_scalar_count,
+            &mut extracted_char_scalar_count,
+            &mut synthetic_space_count,
+            &mut replacement_char_count,
+            &mut control_char_count,
+            &mut has_invisible_text,
+            &mut has_char_mismatch,
+            &mut has_invalid_geometry,
+        )?;
     }
 
     let mut drawings = Vec::new();
     let mut drawing_idx = 0;
     for obj in page.objects().iter() {
-        if let Some(path_obj) = obj.as_path_object() {
-            let width_val = round4(path_obj.stroke_width().map(|w| w.value as f64).unwrap_or(1.0));
-            let bounds = path_obj.bounds()?;
-            let mut rect = transform_rect_coords(
-                bounds.left().value as f64,
-                bounds.bottom().value as f64,
-                bounds.right().value as f64,
-                bounds.top().value as f64,
-                crop_x0,
-                crop_y1,
-            );
-
-            let path_type = match (path_obj.is_stroked(), path_obj.fill_mode()) {
-                (Ok(is_stroked), Ok(fill_mode)) => {
-                    let is_filled = fill_mode != PdfPathFillMode::None;
-                    match (is_stroked, is_filled) {
-                        (true, true) => "stroked_filled",
-                        (true, false) => "stroked",
-                        (false, true) => "filled",
-                        (false, false) => "unknown",
-                    }
-                }
-                _ => "unknown",
-            }
-            .to_string();
-
-            let mut items = Vec::new();
-            let mut current_pt: Option<[f64; 2]> = None;
-            let mut subpath_start: Option<[f64; 2]> = None;
-            let mut pts_all: Vec<[f64; 2]> = Vec::new();
-
-            let segments = match path_obj.matrix() {
-                Ok(m) => path_obj.segments().transform(m),
-                Err(_) => path_obj.segments(),
-            };
-
-            for seg in segments.iter() {
-                let (pt_x, pt_y) = seg.point();
-                let raw_x = pt_x.value as f64;
-                let raw_y = pt_y.value as f64;
-                let [vx, vy] = transform_point_to_page_coords(raw_x, raw_y, crop_x0, crop_y1);
-                pts_all.push([vx, vy]);
-
-                match seg.segment_type() {
-                    PdfPathSegmentType::MoveTo => {
-                        current_pt = Some([vx, vy]);
-                        subpath_start = Some([vx, vy]);
-                    }
-                    PdfPathSegmentType::LineTo => {
-                        let p0 = current_pt.unwrap_or([vx, vy]);
-                        items.push(DrawingItem {
-                            cmd: "l".to_string(),
-                            points: vec![p0, [vx, vy]],
-                        });
-                        current_pt = Some([vx, vy]);
-                    }
-                    PdfPathSegmentType::BezierTo => {
-                        let p0 = current_pt.unwrap_or([vx, vy]);
-                        items.push(DrawingItem {
-                            cmd: "c".to_string(),
-                            points: vec![p0, [vx, vy]],
-                        });
-                        current_pt = Some([vx, vy]);
-                    }
-                    _ => {}
-                }
-
-                if seg.is_close() {
-                    if let (Some(p0), Some(start)) = (current_pt, subpath_start) {
-                        if p0 != start {
-                            items.push(DrawingItem {
-                                cmd: "l".to_string(),
-                                points: vec![p0, start],
-                            });
-                        }
-                    }
-                }
-            }
-
-            if !pts_all.is_empty() {
-                let min_x = pts_all.iter().map(|p| p[0]).fold(f64::INFINITY, f64::min);
-                let min_y = pts_all.iter().map(|p| p[1]).fold(f64::INFINITY, f64::min);
-                let max_x = pts_all.iter().map(|p| p[0]).fold(f64::NEG_INFINITY, f64::max);
-                let max_y = pts_all.iter().map(|p| p[1]).fold(f64::NEG_INFINITY, f64::max);
-                rect = [round4(min_x), round4(min_y), round4(max_x), round4(max_y)];
-            }
-
-            drawings.push(DrawingInfo {
-                drawing_index: drawing_idx,
-                path_type,
-                rect,
-                width: width_val,
-                color: None,
-                fill: None,
-                items,
-            });
-            drawing_idx += 1;
-        }
+        process_page_object_drawing_recursive(
+            &obj,
+            PdfMatrix::IDENTITY,
+            0,
+            crop_x0,
+            crop_y1,
+            &mut drawing_idx,
+            &mut drawings,
+        )?;
     }
+
 
     let (mapping_status, classification_reason) = if page_text.is_none() {
         ("unknown".to_string(), Some("unknown_unicode_mapping".to_string()))
@@ -2156,4 +2332,37 @@ mod tests {
 
         let _ = fs::remove_dir_all(&temp_dir);
     }
+
+    #[test]
+    fn test_form_xobject_recursion_extracts_child_spans() {
+        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let (lib_path, _) = get_platform_native_lib(&manifest_dir).unwrap();
+        let bindings = Pdfium::bind_to_library(lib_path).unwrap();
+        let pdfium = Pdfium::new(bindings);
+        let pdf_path = PathBuf::from(r"D:\codes\PDFLayoutParser\fix\zh_all_table_pages.pdf");
+        assert!(pdf_path.is_file(), "PDF must exist: {:?}", pdf_path);
+        let doc = pdfium.load_pdf_from_file(&pdf_path, None).unwrap();
+        let page = doc.pages().get(790).unwrap();
+        let raw_page = extract_page(&page, 790).unwrap();
+        assert!(
+            raw_page.spans.len() > 50,
+            "Expected spans.len() > 50, got {}",
+            raw_page.spans.len()
+        );
+        let has_expected_text = raw_page
+            .spans
+            .iter()
+            .any(|s| s.text.contains("会合04表") || s.text.contains("资本"));
+        assert!(
+            has_expected_text,
+            "Expected text to contain '会合04表' or '资本'"
+        );
+        assert!(
+            raw_page.drawings.len() > 100,
+            "Expected drawings.len() > 100, got {}",
+            raw_page.drawings.len()
+        );
+    }
+
 }
+

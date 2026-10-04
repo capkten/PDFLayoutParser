@@ -47,6 +47,7 @@ pub fn classify_raw_page(raw_page: &crate::PdfiumRawPage) -> PageClassification 
     let mut control_count = raw_page.mapping_diagnostics.control_char_count;
     if raw_page.mapping_diagnostics.classification_reason.as_deref() == Some("invalid_unicode")
         && replacement_count == 0
+        && control_count == 0
     {
         replacement_count = 1;
     }
@@ -70,7 +71,13 @@ pub fn classify_raw_page(raw_page: &crate::PdfiumRawPage) -> PageClassification 
         }
     }
 
-    if replacement_count > 0 || control_count > 0 {
+    let total_chars = raw_page.mapping_diagnostics.visible_text_scalar_count.max(1);
+    let bad_char_ratio = (replacement_count + control_count) as f64 / total_chars as f64;
+    let is_dominant_invalid = (replacement_count + control_count >= 10)
+        || (bad_char_ratio > 0.01 && total_chars < 500)
+        || (total_chars <= 20 && (replacement_count > 0 || control_count > 0));
+
+    if is_dominant_invalid {
         return PageClassification {
             page_type: "scanned".to_string(),
             reason: Some("invalid_unicode".to_string()),
@@ -78,6 +85,7 @@ pub fn classify_raw_page(raw_page: &crate::PdfiumRawPage) -> PageClassification 
             evidence: serde_json::json!({
                 "replacement_char_count": replacement_count,
                 "control_char_count": control_count,
+                "bad_char_ratio": bad_char_ratio,
             }),
         };
     }
@@ -181,14 +189,16 @@ pub fn classify_raw_page(raw_page: &crate::PdfiumRawPage) -> PageClassification 
             .classification_reason
             .clone()
             .unwrap_or_else(|| "invalid_unicode_mapping".to_string());
-        return PageClassification {
-            page_type: "scanned".to_string(),
-            reason: Some(reason),
-            mapping_status: "invalid".to_string(),
-            evidence: serde_json::json!({
-                "diagnostics": serde_json::to_value(&raw_page.mapping_diagnostics).unwrap_or_default(),
-            }),
-        };
+        if reason != "invalid_unicode" {
+            return PageClassification {
+                page_type: "scanned".to_string(),
+                reason: Some(reason),
+                mapping_status: "invalid".to_string(),
+                evidence: serde_json::json!({
+                    "diagnostics": serde_json::to_value(&raw_page.mapping_diagnostics).unwrap_or_default(),
+                }),
+            };
+        }
     }
 
     // 6. 其余 -> vector/valid
@@ -508,4 +518,74 @@ mod tests {
         };
         assert!(!is_vector_page(&scanned));
     }
+
+    fn find_pdf_fixture(manifest_dir: &std::path::Path) -> Option<std::path::PathBuf> {
+        let mut cur = Some(manifest_dir);
+        while let Some(dir) = cur {
+            let p = dir.join("fix/zh_all_table_pages.pdf");
+            if p.is_file() {
+                return Some(p);
+            }
+            cur = dir.parent();
+        }
+        let fallback = std::path::PathBuf::from(r"D:\codes\PDFLayoutParser\fix\zh_all_table_pages.pdf");
+        if fallback.is_file() {
+            return Some(fallback);
+        }
+        None
+    }
+
+    #[test]
+    fn test_page_1_with_isolated_control_char_remains_vector() {
+        let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let pdf_path = find_pdf_fixture(&manifest_dir).expect("fix/zh_all_table_pages.pdf must exist");
+        let (lib_path, _) = crate::get_platform_native_lib(&manifest_dir).unwrap();
+        let bindings = pdfium_render::prelude::Pdfium::bind_to_library(lib_path).unwrap();
+        let pdfium = pdfium_render::prelude::Pdfium::new(bindings);
+        let doc = pdfium.load_pdf_from_file(&pdf_path, None).unwrap();
+        let page = doc.pages().get(1).unwrap();
+        let raw_page = crate::extract_page(&page, 1).unwrap();
+
+        let classification = classify_raw_page(&raw_page);
+        assert_eq!(classification.page_type, "vector");
+        assert_eq!(classification.mapping_status, "valid");
+    }
+
+    #[test]
+    fn test_isolated_control_char_tolerated_for_large_page() {
+        let text = "a".repeat(1000) + "\x02";
+        let page = make_test_page(&text);
+        let result = classify_raw_page(&page);
+        assert_eq!(result.page_type, "vector");
+        assert_eq!(result.reason, None);
+        assert_eq!(result.mapping_status, "valid");
+        assert!(is_vector_page(&result));
+    }
+
+    #[test]
+    fn test_high_ratio_control_chars_classified_as_scanned() {
+        // 200 chars total, 5 control chars -> ratio 2.5% (> 1.0% and total < 500)
+        let text = "a".repeat(195) + "\x02\x02\x02\x02\x02";
+        let page = make_test_page(&text);
+        let result = classify_raw_page(&page);
+        assert_eq!(result.page_type, "scanned");
+        assert_eq!(result.reason.as_deref(), Some("invalid_unicode"));
+        assert_eq!(result.mapping_status, "invalid");
+        assert!(!is_vector_page(&result));
+    }
+
+    #[test]
+    fn test_many_control_chars_classified_as_scanned() {
+        // >= 10 control chars
+        let text = "a".repeat(1000) + &"\x02".repeat(10);
+        let page = make_test_page(&text);
+        let result = classify_raw_page(&page);
+        assert_eq!(result.page_type, "scanned");
+        assert_eq!(result.reason.as_deref(), Some("invalid_unicode"));
+        assert_eq!(result.mapping_status, "invalid");
+        assert!(!is_vector_page(&result));
+    }
 }
+
+
+

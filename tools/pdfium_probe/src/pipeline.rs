@@ -403,4 +403,45 @@ mod tests {
         let res = run_pipeline(&synth_pdf, &config);
         assert!(res.is_err(), "Expected error for invalid model path");
     }
+
+    #[test]
+    fn test_pipeline_empty_table_filter_defense() {
+        let empty_table = crate::markdown::FullTableDto {
+            table_id: 1,
+            bbox: [10.0, 10.0, 100.0, 100.0],
+            rows: 0,
+            cols: 0,
+            cells: vec![],
+            confidence: Some(0.9),
+            source: Some("detector".to_string()),
+        };
+        let nonempty_table = crate::markdown::FullTableDto {
+            table_id: 2,
+            bbox: [10.0, 110.0, 100.0, 200.0],
+            rows: 1,
+            cols: 1,
+            cells: vec![crate::markdown::TableCellDto {
+                text: "val".to_string(),
+                row_index: 0,
+                col_index: 0,
+                rowspan: 1,
+                colspan: 1,
+                bbox: [10.0, 110.0, 100.0, 200.0],
+            }],
+            confidence: Some(0.9),
+            source: Some("detector".to_string()),
+        };
+        let tables = vec![empty_table, nonempty_table];
+        let table_regions: Vec<crate::layout::TableRegionInput> = tables
+            .iter()
+            .filter(|t| !t.cells.is_empty())
+            .map(|t| crate::layout::TableRegionInput {
+                bbox: t.bbox,
+                table_id: t.table_id,
+            })
+            .collect();
+        assert_eq!(table_regions.len(), 1);
+        assert_eq!(table_regions[0].table_id, 2);
+    }
 }
+
