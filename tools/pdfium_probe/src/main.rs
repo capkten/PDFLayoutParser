@@ -373,6 +373,30 @@ fn process_page_object_text_recursive(
             *has_char_mismatch = true;
         }
 
+        // 若 TextPage 在对象边界合成了末尾空格且 chars_list 未包含，物化该空格为 CharInfo
+        // 保证 downstream derive_words 识别到字符级边界空格
+        let chars_end_with_space = chars_list
+            .last()
+            .map(|ci| ci.c.ends_with(' '))
+            .unwrap_or(false);
+        if text.ends_with(' ') && !chars_end_with_space {
+            let missing_spaces = text.chars().rev().take_while(|&c| c == ' ').count();
+            let space_w = font_size.unwrap_or(10.0).max(1.0) * 0.25;
+            let mut cur_x1 = chars_list.last().map(|c| c.bbox[2]).unwrap_or(bbox[0]);
+            let y0 = chars_list.last().map(|c| c.bbox[1]).unwrap_or(bbox[1]);
+            let y1 = chars_list.last().map(|c| c.bbox[3]).unwrap_or(bbox[3]);
+            for _ in 0..missing_spaces {
+                let sp_bbox = [cur_x1, y0, cur_x1 + space_w, y1];
+                cur_x1 += space_w;
+                let ch_idx = chars_list.len();
+                chars_list.push(CharInfo {
+                    c: " ".to_string(),
+                    bbox: sp_bbox,
+                    char_index: ch_idx,
+                });
+            }
+        }
+
         let total_chars_count = chars_list.len();
         let provenance = ProvenanceSidecar {
             page_index,

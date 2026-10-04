@@ -8,6 +8,7 @@ pub const SPAN_MERGE_MAX_GAP_FACTOR: f64 = 0.4;
 pub const BLOCK_LINE_GAP_FACTOR: f64 = 1.5;
 pub const BLOCK_HORIZONTAL_GAP_FACTOR: f64 = 2.0;
 pub const WORD_CHAR_GAP_FACTOR: f64 = 0.5;
+pub const LINE_MAX_HORIZONTAL_GAP: f64 = 25.0;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct Rect4Dto {
@@ -201,6 +202,25 @@ impl VisualLine {
             if h_overlap > 0.3 * min_w {
                 return false;
             }
+        }
+
+        // Horizontal gap between span and line must not exceed maximum gap
+        // (prohibits merging across columns or between distant header/footer elements)
+        let min_h_dist = self
+            .spans
+            .iter()
+            .map(|existing| {
+                if span.x0() > existing.x1() {
+                    span.x0() - existing.x1()
+                } else if existing.x0() > span.x1() {
+                    existing.x0() - span.x1()
+                } else {
+                    0.0
+                }
+            })
+            .fold(f64::INFINITY, f64::min);
+        if min_h_dist > LINE_MAX_HORIZONTAL_GAP {
+            return false;
         }
 
         let v_overlap = (self.y1.min(span.y1()) - self.y0.max(span.y0())).max(0.0);
@@ -644,6 +664,20 @@ mod tests {
     }
 
     #[test]
+    fn test_clustering_span_large_horizontal_gap_not_merged() {
+        // Two spans on the same horizontal baseline but with horizontal gap > 25.0pt
+        let span1 = make_test_span("Version 1.8", [50.0, 20.0, 110.0, 30.0], Some("Arial"), 10.0, 1);
+        let span2 = make_test_span("Page 3", [500.0, 20.0, 540.0, 30.0], Some("Arial"), 10.0, 2);
+        let blocks = cluster_spans_into_blocks(&[span1, span2], 0);
+        // Should be separate lines and separate blocks
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0].lines.len(), 1);
+        assert_eq!(blocks[1].lines.len(), 1);
+        assert_eq!(blocks[0].lines[0].spans[0].text, "Version 1.8");
+        assert_eq!(blocks[1].lines[0].spans[0].text, "Page 3");
+    }
+
+    #[test]
     fn test_clustering_different_baselines() {
         let span1 = make_test_span("Line1", [10.0, 10.0, 50.0, 20.0], Some("Arial"), 10.0, 1);
         let span2 = make_test_span("Line2", [10.0, 30.0, 50.0, 40.0], Some("Arial"), 10.0, 2);
@@ -776,4 +810,90 @@ mod tests {
         assert!(tuple_json.starts_with('['));
         assert!(tuple_json.contains("\"Test\""));
     }
+
+    fn find_pdf_fixture(manifest_dir: &std::path::Path) -> Option<std::path::PathBuf> {
+        let mut cur = Some(manifest_dir);
+        while let Some(dir) = cur {
+            let p = dir.join("fix/zh_all_table_pages.pdf");
+            if p.is_file() {
+                return Some(p);
+            }
+            cur = dir.parent();
+        }
+        let fallback = std::path::PathBuf::from(r"D:\codes\PDFLayoutParser\fix\zh_all_table_pages.pdf");
+        if fallback.is_file() {
+            return Some(fallback);
+        }
+        None
+    }
+
+    #[test]
+    fn test_preserve_trailing_span_space_and_footer_separation() {
+        let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let pdf_path = find_pdf_fixture(&manifest_dir).expect("fix/zh_all_table_pages.pdf must exist");
+        let (lib_path, _) = crate::get_platform_native_lib(&manifest_dir).unwrap();
+        let bindings = pdfium_render::prelude::Pdfium::bind_to_library(lib_path).unwrap();
+        let pdfium = pdfium_render::prelude::Pdfium::new(bindings);
+        let doc = pdfium.load_pdf_from_file(&pdf_path, None).unwrap();
+        let page = doc.pages().get(0).unwrap();
+        let raw_page = crate::extract_page(&page, 0).unwrap();
+        let norm_page = crate::normalizer::normalize_raw_page_with_meta(
+            &raw_page,
+            Some("zh_all_table_pages.pdf"),
+            Some("test_p0"),
+        );
+
+        // 2. Check footer left 'Version 1.8' and right 'Page 3' are in separate words/blocks
+        let snapshot = norm_page
+            .page_snapshot
+            .as_ref()
+            .expect("page_snapshot should exist");
+        for (b_i, block) in snapshot.text_blocks.iter().enumerate() {
+            let block_text = block
+                .lines
+                .iter()
+                .flat_map(|l| l.spans.iter().map(|s| s.text.as_str()))
+                .collect::<Vec<_>>()
+                .join(" ");
+            assert!(
+                !(block_text.contains("Version 1.8") && block_text.contains("Page")),
+                "Footer 'Version 1.8' and 'Page' should be in separate blocks, but found block {}: '{}'",
+                b_i,
+                block_text
+            );
+            for line in &block.lines {
+                let line_text: String = line
+                    .spans
+                    .iter()
+                    .map(|s| s.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                assert!(
+                    !(line_text.contains("Version 1.8") && line_text.contains("Page")),
+                    "Footer 'Version 1.8' and 'Page' should not be merged in the same line: {}",
+                    line_text
+                );
+            }
+        }
+
+        for w in &norm_page.words {
+            let t = w.text();
+            assert!(
+                !(t.contains("Version 1.8") && t.contains("Page 3")),
+                "Footer 'Version 1.8' and 'Page 3' should not be merged in the same word: {}",
+                t
+            );
+        }
+
+        // 1. Check no word contains "ESS(https://"
+        let ess_merged = norm_page
+            .words
+            .iter()
+            .any(|w| w.text().contains("ESS(https://"));
+        assert!(
+            !ess_merged,
+            "Found word containing 'ESS(https://', expected trailing space to separate them into distinct words"
+        );
+    }
 }
+
