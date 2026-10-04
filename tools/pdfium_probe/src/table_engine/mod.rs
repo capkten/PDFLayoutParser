@@ -25,6 +25,9 @@ pub fn recover_table_in_region(
     let mut v_lines = Vec::new();
 
     for drawing in &snapshot.drawings {
+        if drawing.kind == "f" {
+            continue;
+        }
         for line in &drawing.lines {
             let r = &line.rect;
             if r.x1 >= bbox[0] - tol
@@ -253,4 +256,63 @@ pub fn recover_table_in_region(
     }
 
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pdfium_render::prelude::*;
+    use std::path::{Path, PathBuf};
+
+    fn find_pdf_fixture(manifest_dir: &Path) -> Option<PathBuf> {
+        let mut cur = Some(manifest_dir);
+        while let Some(dir) = cur {
+            let p = dir.join("fix/zh_all_table_pages.pdf");
+            if p.is_file() {
+                return Some(p);
+            }
+            cur = dir.parent();
+        }
+        let fallback = PathBuf::from(r"D:\codes\PDFLayoutParser\fix\zh_all_table_pages.pdf");
+        if fallback.is_file() {
+            return Some(fallback);
+        }
+        None
+    }
+
+    #[test]
+    fn test_recover_table_p597_filters_filled_paths() {
+        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let pdf_path = find_pdf_fixture(&manifest_dir).expect("fix/zh_all_table_pages.pdf must exist");
+        let (lib_path, _) = crate::get_platform_native_lib(&manifest_dir).unwrap();
+        let bindings = Pdfium::bind_to_library(lib_path).unwrap();
+        let pdfium = Pdfium::new(bindings);
+        let doc = pdfium.load_pdf_from_file(&pdf_path, None).unwrap();
+        let page = doc.pages().get(597).unwrap();
+        let raw_page = crate::extract_page(&page, 597).unwrap();
+        let norm_page = crate::normalizer::normalize_raw_page_with_meta(
+            &raw_page,
+            Some("zh_all_table_pages.pdf"),
+            Some("test_p597"),
+        );
+        let recovered = recover_table_in_region(
+            &norm_page,
+            [85.2, 148.7, 547.6, 346.7],
+            Some(0.95),
+            "Table",
+            0,
+        )
+        .expect("table should be recovered on page 597");
+
+        assert!(
+            recovered.rows <= 12,
+            "Expected recovered.rows <= 12, but got {}",
+            recovered.rows
+        );
+        assert!(
+            recovered.cols <= 8,
+            "Expected recovered.cols <= 8, but got {}",
+            recovered.cols
+        );
+    }
 }
