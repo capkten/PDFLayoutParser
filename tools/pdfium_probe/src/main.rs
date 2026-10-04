@@ -622,11 +622,10 @@ pub fn save_rgba_as_png(
     Ok(())
 }
 
-pub fn render_page_to_png(
+pub fn render_page_to_image(
     page: &PdfPage,
     dpi: f32,
-    out_path: &Path,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<image::DynamicImage, Box<dyn std::error::Error>> {
     let scale = (dpi / 72.0).max(0.1);
     let mut target_w = (page.width().value * scale).round() as i32;
     let mut target_h = (page.height().value * scale).round() as i32;
@@ -638,10 +637,24 @@ pub fn render_page_to_png(
         .set_target_height(target_h);
 
     let bitmap = page.render_with_config(&render_config)?;
-    let dyn_img = bitmap.as_image();
-    let rgba = dyn_img.to_rgba8();
-    save_rgba_as_png(rgba.width(), rgba.height(), rgba.as_raw(), out_path)?;
-    Ok(())
+    Ok(bitmap.as_image())
+}
+
+pub fn save_image_to_png(
+    img: &image::DynamicImage,
+    out_path: &Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let rgba = img.to_rgba8();
+    save_rgba_as_png(rgba.width(), rgba.height(), rgba.as_raw(), out_path)
+}
+
+pub fn render_page_to_png(
+    page: &PdfPage,
+    dpi: f32,
+    out_path: &Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let img = render_page_to_image(page, dpi)?;
+    save_image_to_png(&img, out_path)
 }
 
 pub fn process_pdf_file(
