@@ -61,13 +61,33 @@ pub fn serialize_table_dto(table: &FullTableDto) -> serde_json::Value {
     })
 }
 
-/// Extracts text blocks from `norm.rawdict` or `norm.page_snapshot`.
-fn extract_blocks_json(norm: &NormalizedPageDto) -> Vec<serde_json::Value> {
+fn is_bbox_inside_any_table(bbox: &[f64; 4], tables: &[FullTableDto]) -> bool {
+    let cx = (bbox[0] + bbox[2]) / 2.0;
+    let cy = (bbox[1] + bbox[3]) / 2.0;
+    for t in tables {
+        if t.cells.is_empty() {
+            continue;
+        }
+        let tol = 1.0;
+        if cx >= t.bbox[0] - tol
+            && cx <= t.bbox[2] + tol
+            && cy >= t.bbox[1] - tol
+            && cy <= t.bbox[3] + tol
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// Extracts text blocks from `norm.rawdict` or `norm.page_snapshot`, deducting blocks inside recovered tables.
+fn extract_blocks_json(norm: &NormalizedPageDto, tables: &[FullTableDto]) -> Vec<serde_json::Value> {
     if let Some(ref rawdict) = norm.rawdict {
         if !rawdict.blocks.is_empty() {
             return rawdict
                 .blocks
                 .iter()
+                .filter(|b| !is_bbox_inside_any_table(&b.bbox, tables))
                 .map(|b| {
                     let mut line_texts = Vec::new();
                     let mut line_objs = Vec::new();
@@ -98,6 +118,10 @@ fn extract_blocks_json(norm: &NormalizedPageDto) -> Vec<serde_json::Value> {
         return snapshot
             .text_blocks
             .iter()
+            .filter(|b| {
+                let bbox = [b.rect.x0, b.rect.y0, b.rect.x1, b.rect.y1];
+                !is_bbox_inside_any_table(&bbox, tables)
+            })
             .map(|b| {
                 let mut line_texts = Vec::new();
                 let mut line_objs = Vec::new();
@@ -155,7 +179,7 @@ pub fn export_page_to_json(
         (612.0, 792.0, 0)
     };
 
-    let blocks = extract_blocks_json(norm);
+    let blocks = extract_blocks_json(norm, tables);
     let tables_json: Vec<serde_json::Value> = tables.iter().map(serialize_table_dto).collect();
 
     let layout_elements: Vec<serde_json::Value> = elements
@@ -539,5 +563,76 @@ mod tests {
         assert_eq!(page_json["blocks"][0]["text"], "Rawdict text");
         assert_eq!(page_json["layout_elements"][0]["type"], "image");
         assert!(page_json["layout_elements"][0]["content"].is_null());
+    }
+
+    #[test]
+    fn test_export_page_to_json_deducts_table_internal_blocks() {
+        use crate::markdown::TableCellDto;
+
+        let norm = NormalizedPageDto {
+            page_type: "vector".to_string(),
+            page_snapshot: None,
+            rawdict: Some(RawdictWireDto {
+                width: 500.0,
+                height: 700.0,
+                blocks: vec![
+                    RawdictBlockWireDto {
+                        block_type: 0,
+                        bbox: [10.0, 10.0, 50.0, 30.0],
+                        lines: vec![RawdictLineWireDto {
+                            bbox: [10.0, 10.0, 50.0, 30.0],
+                            spans: vec![RawdictSpanWireDto {
+                                bbox: [10.0, 10.0, 50.0, 30.0],
+                                text: "Outside block".to_string(),
+                                font: "Arial".to_string(),
+                                size: 10.0,
+                                flags: 0,
+                                chars: vec![],
+                            }],
+                        }],
+                    },
+                    RawdictBlockWireDto {
+                        block_type: 0,
+                        bbox: [100.0, 100.0, 150.0, 120.0],
+                        lines: vec![RawdictLineWireDto {
+                            bbox: [100.0, 100.0, 150.0, 120.0],
+                            spans: vec![RawdictSpanWireDto {
+                                bbox: [100.0, 100.0, 150.0, 120.0],
+                                text: "Inside table block".to_string(),
+                                font: "Arial".to_string(),
+                                size: 10.0,
+                                flags: 0,
+                                chars: vec![],
+                            }],
+                        }],
+                    },
+                ],
+            }),
+            words: vec![],
+            sidecar: serde_json::Value::Null,
+            diagnostics: serde_json::Value::Null,
+        };
+
+        let table = FullTableDto {
+            table_id: 1,
+            bbox: [90.0, 90.0, 200.0, 200.0],
+            rows: 2,
+            cols: 2,
+            cells: vec![TableCellDto {
+                text: "Inside table cell".to_string(),
+                row_index: 0,
+                col_index: 0,
+                rowspan: 1,
+                colspan: 1,
+                bbox: [100.0, 100.0, 150.0, 120.0],
+            }],
+            confidence: Some(0.95),
+            source: Some("line_projection".to_string()),
+        };
+
+        let page_json = export_page_to_json(&norm, &[], &[table], 0);
+        let blocks = page_json["blocks"].as_array().expect("blocks array");
+        assert_eq!(blocks.len(), 1, "Only outside block should remain in exported blocks");
+        assert_eq!(blocks[0]["text"], "Outside block");
     }
 }
