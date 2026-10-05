@@ -8,6 +8,42 @@ pub mod wireless_structure;
 pub use geometry::Line4;
 pub use types::*;
 
+fn is_color_similar(c: &[f64], bg: &[f64; 3], tol: f64) -> bool {
+    if c.len() >= 3 {
+        (c[0] - bg[0]).abs() <= tol
+            && (c[1] - bg[1]).abs() <= tol
+            && (c[2] - bg[2]).abs() <= tol
+    } else if c.len() == 1 {
+        (c[0] - bg[0]).abs() <= tol
+            && (c[0] - bg[1]).abs() <= tol
+            && (c[0] - bg[2]).abs() <= tol
+    } else {
+        false
+    }
+}
+
+fn is_drawing_visible(drawing: &crate::drawings::WireDrawingDto, bg_color: &[f64; 3]) -> bool {
+    let tol = 0.04;
+    if drawing.kind == "f" {
+        if let Some(ref fill) = drawing.fill {
+            if is_color_similar(fill, bg_color, tol) {
+                return false;
+            }
+        }
+    } else if drawing.kind == "s" {
+        if let Some(ref stroke) = drawing.stroke {
+            if is_color_similar(stroke, bg_color, tol) {
+                return false;
+            }
+        } else if let Some(ref color) = drawing.color {
+            if is_color_similar(color, bg_color, tol) {
+                return false;
+            }
+        }
+    }
+    true
+}
+
 /// Recovers table structure for a detected table bounding box from page normalizer data.
 /// Tries wired extraction first if vector lines exist; falls back to native-span wireless recovery.
 pub fn recover_table_in_region(
@@ -24,8 +60,9 @@ pub fn recover_table_in_region(
     let mut h_lines = Vec::new();
     let mut v_lines = Vec::new();
 
+    let bg_color = [1.0, 1.0, 1.0];
     for drawing in &snapshot.drawings {
-        if drawing.kind == "f" {
+        if !is_drawing_visible(drawing, &bg_color) {
             continue;
         }
         for line in &drawing.lines {
@@ -37,29 +74,31 @@ pub fn recover_table_in_region(
             {
                 let dx = (r.x1 - r.x0).abs();
                 let dy = (r.y1 - r.y0).abs();
-                if dx >= 1.0 && dy <= 3.0 {
+                if dx >= 3.0 && dy <= 2.3 {
+                    let cy = (r.y0 + r.y1) / 2.0;
                     h_lines.push(LineDto {
                         schema_version: 1,
                         rect: Rect4 {
                             schema_version: 1,
-                            x0: r.x0,
-                            y0: r.y0,
-                            x1: r.x1,
-                            y1: r.y1,
+                            x0: r.x0.min(r.x1),
+                            y0: cy,
+                            x1: r.x0.max(r.x1),
+                            y1: cy,
                         },
                         width: line.width,
                         color: line.color,
                         source_order: line.source_order as i64,
                     });
-                } else if dy >= 1.0 && dx <= 3.0 {
+                } else if dy >= 3.0 && dx <= 2.3 {
+                    let cx = (r.x0 + r.x1) / 2.0;
                     v_lines.push(LineDto {
                         schema_version: 1,
                         rect: Rect4 {
                             schema_version: 1,
-                            x0: r.x0,
-                            y0: r.y0,
-                            x1: r.x1,
-                            y1: r.y1,
+                            x0: cx,
+                            y0: r.y0.min(r.y1),
+                            x1: cx,
+                            y1: r.y0.max(r.y1),
                         },
                         width: line.width,
                         color: line.color,
@@ -156,7 +195,7 @@ pub fn recover_table_in_region(
                     cols: num_cols,
                     cells: table_cells,
                     confidence,
-                    source: Some("wired_table_recovery".to_string()),
+                    source: Some("line_projection".to_string()),
                 });
             }
         }
@@ -304,6 +343,13 @@ mod tests {
         )
         .expect("table should be recovered on page 597");
 
+        println!("recovered p597: source={:?}, rows={}, cols={}, cells={}", recovered.source, recovered.rows, recovered.cols, recovered.cells.len());
+        for c in &recovered.cells {
+            if c.row_index > 8 {
+                println!("  cell at row={}: bbox={:?} text={:?}", c.row_index, c.bbox, c.text);
+            }
+        }
+
         assert!(
             recovered.rows <= 12,
             "Expected recovered.rows <= 12, but got {}",
@@ -314,5 +360,34 @@ mod tests {
             "Expected recovered.cols <= 8, but got {}",
             recovered.cols
         );
+    }
+
+    #[test]
+    fn test_recover_table_p1_extracts_filled_rect_wired_table() {
+        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let pdf_path = find_pdf_fixture(&manifest_dir).expect("fix/zh_all_table_pages.pdf must exist");
+        let (lib_path, _) = crate::get_platform_native_lib(&manifest_dir).unwrap();
+        let bindings = Pdfium::bind_to_library(lib_path).unwrap();
+        let pdfium = Pdfium::new(bindings);
+        let doc = pdfium.load_pdf_from_file(&pdf_path, None).unwrap();
+        let page = doc.pages().get(1).unwrap();
+        let raw_page = crate::extract_page(&page, 1).unwrap();
+        let norm_page = crate::normalizer::normalize_raw_page_with_meta(
+            &raw_page,
+            Some("zh_all_table_pages.pdf"),
+            Some("test_p1"),
+        );
+        let recovered = recover_table_in_region(
+            &norm_page,
+            [63.0, 82.0, 532.0, 711.0],
+            Some(0.95),
+            "Table",
+            0,
+        )
+        .expect("table on page 1 should be recovered as wired table");
+
+        assert!(recovered.rows >= 6, "Expected recovered.rows >= 6, got {}", recovered.rows);
+        assert!(recovered.cols >= 2, "Expected recovered.cols >= 2, got {}", recovered.cols);
+        assert_eq!(recovered.source.as_deref(), Some("line_projection"));
     }
 }

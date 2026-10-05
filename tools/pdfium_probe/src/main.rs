@@ -557,8 +557,8 @@ fn process_page_object_drawing_recursive(
             path_type,
             rect,
             width: width_val,
-            color: None,
-            fill: None,
+            color: path_obj.stroke_color().ok().map(|c| vec![c.red() as f64 / 255.0, c.green() as f64 / 255.0, c.blue() as f64 / 255.0]),
+            fill: path_obj.fill_color().ok().map(|c| vec![c.red() as f64 / 255.0, c.green() as f64 / 255.0, c.blue() as f64 / 255.0]),
             items,
         });
         *drawing_idx += 1;
