@@ -8,7 +8,7 @@ pub const SPAN_MERGE_MAX_GAP_FACTOR: f64 = 0.4;
 pub const BLOCK_LINE_GAP_FACTOR: f64 = 1.5;
 pub const BLOCK_HORIZONTAL_GAP_FACTOR: f64 = 2.0;
 pub const WORD_CHAR_GAP_FACTOR: f64 = 0.5;
-pub const LINE_MAX_HORIZONTAL_GAP: f64 = 25.0;
+pub const LINE_MAX_HORIZONTAL_GAP: f64 = 40.0;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct Rect4Dto {
@@ -204,34 +204,20 @@ impl VisualLine {
             }
         }
 
-        // Horizontal gap between span and line must not exceed maximum gap
-        // (prohibits merging across columns or between distant header/footer elements)
-        let min_h_dist = self
-            .spans
-            .iter()
-            .map(|existing| {
-                if span.x0() > existing.x1() {
-                    span.x0() - existing.x1()
-                } else if existing.x0() > span.x1() {
-                    existing.x0() - span.x1()
-                } else {
-                    0.0
-                }
-            })
-            .fold(f64::INFINITY, f64::min);
-        if min_h_dist > LINE_MAX_HORIZONTAL_GAP {
+        let v_overlap = (self.y1.min(span.y1()) - self.y0.max(span.y0())).max(0.0);
+        let min_h = self.height.min(span.height()).max(0.1);
+        let height_ratio = self.height.max(span.height()) / min_h;
+        if height_ratio > 3.0 {
             return false;
         }
 
-        let v_overlap = (self.y1.min(span.y1()) - self.y0.max(span.y0())).max(0.0);
-        let min_h = self.height.min(span.height());
         let overlap_ratio = v_overlap / min_h;
         let center_dist = (self.cy - span.cy()).abs();
 
-        if overlap_ratio >= LINE_OVERLAP_RATIO_TOLERANCE {
+        if overlap_ratio >= 0.45 {
             return true;
         }
-        if center_dist <= LINE_Y_CENTER_FACTOR * min_h {
+        if center_dist <= 0.35 * min_h {
             return true;
         }
         false
@@ -408,41 +394,98 @@ pub fn cluster_spans_into_blocks(
         })
         .collect();
 
-    // 2. Sort by (cy, x0)
+    // 2. Sort by (y0, x0)
     visual_spans.sort_by(|a, b| {
-        a.cy()
-            .partial_cmp(&b.cy())
+        a.y0()
+            .partial_cmp(&b.y0())
             .unwrap_or(std::cmp::Ordering::Equal)
             .then_with(|| a.x0().partial_cmp(&b.x0()).unwrap_or(std::cmp::Ordering::Equal))
     });
 
-    // 3. Cluster lines
-    let mut lines: Vec<VisualLine> = Vec::new();
+    // 3. Cluster spans into Row Bands
+    let mut row_bands: Vec<Vec<VisualSpan>> = Vec::new();
+    let mut band_bounds: Vec<(f64, f64)> = Vec::new(); // (y0, y1)
+
     for s in visual_spans {
         let mut matched_idx = None;
-        for (idx, l) in lines.iter().enumerate() {
-            if l.matches_span(&s) {
+        for (idx, &(by0, by1)) in band_bounds.iter().enumerate() {
+            let b_cy = (by0 + by1) / 2.0;
+            let b_h = (by1 - by0).max(1.0);
+            let s_h = s.height().max(1.0);
+            let min_h = b_h.min(s_h);
+
+            // Vertical inclusion: if span is vertically contained within the row band (with slight tolerance),
+            // or if it satisfies the relative vertical overlap / center distance ratio
+            let is_contained = s.y0() >= by0 - 1.0 && s.y1() <= by1 + 1.0;
+            let v_overlap = (by1.min(s.y1()) - by0.max(s.y0())).max(0.0);
+            let height_ratio = b_h.max(s_h) / min_h;
+            let center_dist = (b_cy - s.cy()).abs();
+
+            let matches = is_contained
+                || (height_ratio <= 3.0
+                    && (v_overlap >= 0.45 * min_h || center_dist <= 0.35 * min_h));
+
+            if matches {
                 matched_idx = Some(idx);
                 break;
             }
         }
+
         if let Some(idx) = matched_idx {
-            lines[idx].add_span(s);
+            band_bounds[idx].0 = band_bounds[idx].0.min(s.y0());
+            band_bounds[idx].1 = band_bounds[idx].1.max(s.y1());
+            row_bands[idx].push(s);
         } else {
-            lines.push(VisualLine::new(s));
+            band_bounds.push((s.y0(), s.y1()));
+            row_bands.push(vec![s]);
         }
     }
 
-    // 4. Sort lines by (y0, x0) and normalize spans
+    // 4. Within each row band, sort strictly by x0 and break into lines on column/large gutter gaps
+    let mut lines: Vec<VisualLine> = Vec::new();
+    for row in row_bands {
+        let mut sorted_row = row;
+        sorted_row.sort_by(|a, b| {
+            a.x0()
+                .partial_cmp(&b.x0())
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        let mut current_line_spans: Vec<VisualSpan> = Vec::new();
+        for span in sorted_row {
+            if let Some(last_span) = current_line_spans.last() {
+                let gap_x = span.x0() - last_span.x1();
+                let char_h = last_span.height().min(span.height()).max(1.0);
+                let max_gap = (4.0 * char_h).max(LINE_MAX_HORIZONTAL_GAP);
+                if gap_x > max_gap {
+                    let mut line = VisualLine::new(current_line_spans.remove(0));
+                    for s in current_line_spans.drain(..) {
+                        line.add_span(s);
+                    }
+                    line.normalize_spans();
+                    lines.push(line);
+                }
+            }
+            current_line_spans.push(span);
+        }
+
+        if !current_line_spans.is_empty() {
+            let mut line = VisualLine::new(current_line_spans.remove(0));
+            for s in current_line_spans.drain(..) {
+                line.add_span(s);
+            }
+            line.normalize_spans();
+            lines.push(line);
+        }
+    }
+
+    // 5. Sort lines by (y0, x0)
     lines.sort_by(|a, b| {
         a.y0
             .partial_cmp(&b.y0)
             .unwrap_or(std::cmp::Ordering::Equal)
             .then_with(|| a.x0().partial_cmp(&b.x0()).unwrap_or(std::cmp::Ordering::Equal))
     });
-    for l in &mut lines {
-        l.normalize_spans();
-    }
 
     // 5. Cluster blocks
     let mut blocks: Vec<VisualBlock> = Vec::new();
@@ -895,5 +938,35 @@ mod tests {
             "Found word containing 'ESS(https://', expected trailing space to separate them into distinct words"
         );
     }
+
+    #[test]
+    fn test_row_banding_intra_line_reading_order_preserves_left_to_right() {
+        // A sentence with label '5. ', main text, uppercase acronym 'ESS', and question mark '?'
+        // The question mark and uppercase letters have slightly higher cy than lowercase letters.
+        let span_num = make_test_span("5. ", [71.1, 89.6, 78.3, 96.7], Some("Arial"), 10.0, 1);
+        let span_body = make_test_span("I have missed the publication deadline via ", [105.1, 89.2, 496.7, 98.4], Some("Arial"), 10.0, 2);
+        let span_ess = make_test_span("ESS", [499.9, 89.2, 518.7, 96.6], Some("Arial"), 10.0, 3);
+        let span_q = make_test_span("?", [519.6, 89.3, 524.7, 96.5], Some("Arial"), 10.0, 4);
+
+        let blocks = cluster_spans_into_blocks(&[span_q, span_ess, span_num, span_body], 0);
+        assert_eq!(blocks.len(), 1, "Should be 1 block for the entire line");
+        let line = &blocks[0].lines[0];
+        let full_text: String = line.spans.iter().map(|s| s.text.as_str()).collect();
+        assert_eq!(full_text, "5. I have missed the publication deadline via ESS?");
+    }
+
+    #[test]
+    fn test_header_prefix_not_fragmented() {
+        // 'e' followed by '-Submission System'
+        let span_e = make_test_span("e", [395.2, 52.2, 399.9, 57.6], Some("Arial"), 10.0, 1);
+        let span_dash = make_test_span("-", [400.6, 54.5, 403.3, 55.3], Some("Arial"), 10.0, 2);
+        let span_rest = make_test_span("Submission System", [404.1, 50.2, 490.6, 59.6], Some("Arial"), 10.0, 3);
+
+        let blocks = cluster_spans_into_blocks(&[span_rest, span_e, span_dash], 0);
+        assert_eq!(blocks.len(), 1);
+        let full_text: String = blocks[0].lines[0].spans.iter().map(|s| s.text.as_str()).collect();
+        assert_eq!(full_text, "e-Submission System");
+    }
 }
+
 
