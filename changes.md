@@ -1,6 +1,37 @@
 # Changes
 
-## 2026-09-28 (跨语言边界与算法性能瓶颈优化)
+## 2026-10-05 (Rust 端细长填充矩形线条提取、行带聚类与表格内文本块扣除)
+
+- **根因分析与问题定位**：
+  1. **Page 1 有线表格丢失降级为无线表格**：此前提交粗暴增加了 `if drawing.kind == "f" { continue; }`，直接将 Page 1 依靠细长实心填充矩形（厚度约 0.48pt）绘制的 22 条横线和 24 条竖线全数忽略，导致网格线数为 0 降级为无线表格。
+  2. **文本块碎片化与语序倒错**：
+     - `clustering.rs` 原先使用 `a.cy().partial_cmp(&b.cy())` 浮点严格比较，导致句末标点（如 `?`）或大写缩写词（如 `ESS`）因包围盒下行无笔画导致其包围盒中心 `cy` 略微偏上（差 0.5~0.8pt），被排到句首。
+     - 原先写死 `LINE_MAX_HORIZONTAL_GAP = 25.0`，在排序扰动或正常缩进间隙（如 `"5. "` 与正文间距 26.8pt）时，错误判定为跨栏而打断当前行，造成单句撕裂为碎片 Block。
+  3. **表格区域文本块全屏红框**：`json_export.rs` 导出 `page.json["blocks"]` 时未扣除已恢复表格内部的文本块，导致表格内每一个单元格字符均额外渲染为普通段落文本框。
+
+- **核心判定条件与实现**：
+  1. **背景色对比度过滤与细长矩形中心线提取**：
+     - 在 `main.rs::process_page_object_drawing_recursive` 中完整提取 PDFium 原生的 `stroke_color` 与 `fill_color`（RGB 归一化浮点数组）。
+     - 在 `table_engine/mod.rs` 中引入 `is_drawing_visible`：对填充路径（`kind == "f"`），若其填充色与白色背景（`[1.0, 1.0, 1.0]`）容差 `<= 0.04` 则跳过，精准过滤单元格内用于遮罩或高亮的白色填充条（Page 597 稳定恢复为标准 10 行）。
+     - 放开细长填充矩形：对 `dx >= 3.0 && dy <= 2.3`（横线）和 `dy >= 3.0 && dx <= 2.3`（竖线）提取几何中心线，Page 1 准确以 `line_projection` 恢复为有线表格。
+  2. **Row Banding 行带归纳与行内严格按 `x0` 排序**：
+     - 在 `clustering.rs` 中将 spans 粗排方式由 `(cy, x0)` 改为 `(y0, x0)`。
+     - 引入行带动态归纳：当 span 垂直落入行带范围，或满足 `height_ratio <= 3.0 && (overlap >= 0.45 * min_h || center_dist <= 0.35 * min_h)` 时归入同一行带。
+     - 行带内完全按 `x0` 严格从小到大排序，从根本上解决标点符号跑到句首的问题。
+     - 移除行级别 25pt 的硬编码阻断；对相邻 span 采用与 Python 端对齐的动态间隙阈值（`gap_x > (4.0 * char_h).max(40.0)`）进行跨栏/页脚切分，确保正常缩进正文和标号完整连续。
+  3. **导出统一 JSON 时扣除表格内部文本块**：
+     - 在 `json_export.rs::extract_blocks_json` 中，通过 `is_bbox_inside_any_table` 检查 block 中心点是否落在已恢复表格内部；如果是则予以排除，消除评审工作台及最终导出中的表格内重复红框。
+  4. **严格不回读 words 约束**：
+     - 全程消费 native span、atom、网格基线及逻辑 Cell，不回退到基于 page words 的二次回退重构。
+
+- **测试结果与验证**：
+  - Rust 全量单测：`cargo test --bin pdfium_probe` 全部 188 个测试通过（`188 passed, 0 failed`）。
+  - Page 1 针对性测试 `test_recover_table_p1_extracts_filled_rect_wired_table`：通过，恢复为 `line_projection` 有线表格。
+  - Page 597 针对性测试 `test_recover_table_p597_filters_filled_paths`：通过，稳定保留 10 行。
+  - 行带排序测试 `test_row_banding_intra_line_reading_order_preserves_left_to_right`：通过，整句语序完好。
+  - 前缀连字符测试 `test_header_prefix_not_fragmented`：通过，`e-Submission System` 不打碎。
+  - 表格文本块扣除测试 `test_export_page_to_json_deducts_table_internal_blocks`：通过，表格内 block 被准确扣除。
+  - 分支合并：已合回 `dev-rust` 分支并保持验证通过。
 
 - **同步个人查询续表判定**：将 `feature-dev` 的日期列约束同步到 Python 调试路径与 Rust `is_query_record`：日期文本必须位于独立日期列带（`105 <= x < 240`），避免编号列中带“年”的普通编号正文被误恢复为 `personal_query_recovery`；新增 Python 与 Rust 正反例回归测试。
 - **固定 Rust 主路径**：个人信用报告默认 Rust 路径直接调用 Rust kernel，Rust 异常不再通过 `run_python_or_rust` 回退到慢速 Python 规则；显式 `PDF_RUST_MODE_PERSONAL_CREDIT=python` 仍可用于调试。针对性 Python 测试 `32 passed`，Rust fast 测试 `20 passed`，Rust 单元测试 `103 passed`。
