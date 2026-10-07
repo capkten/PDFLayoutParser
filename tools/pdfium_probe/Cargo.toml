@@ -3,6 +3,9 @@ name = "pdfium_probe"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+path = "src/lib.rs"
+
 [dependencies]
 image = "0.25"
 ort = { version = "2.0.0-rc.13", features = ["download-binaries"] }
