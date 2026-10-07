@@ -5,7 +5,8 @@ from __future__ import annotations
 import re
 import statistics
 from collections import Counter
-from typing import Any, Literal, Sequence
+from typing import Any, Sequence
+from typing_extensions import Literal
 
 from .columns import assign_column
 from .span_chain import _union
@@ -16,6 +17,29 @@ _LATIN = re.compile(r"[A-Za-z]")
 _NUMERIC = re.compile(r"^\(?[+\-–—−]?\d[\d,]*(?:\.\d+)?%?\)?$")
 _SEPARATOR_CHARS = set("-_=—–─━＝□■▪▫")
 _PLACEHOLDER_CHARS = set("-—–")
+_SPACED_CJK_WORD_WHITELIST = {
+    ("合", "计"),
+    ("小", "计"),
+    ("总", "计"),
+    ("共", "计"),
+    ("类", "别"),
+    ("税", "种"),
+    ("项", "目"),
+    ("名", "称"),
+    ("金", "额"),
+    ("单", "位"),
+    ("备", "注"),
+    ("比", "例"),
+    ("期", "初"),
+    ("期", "末"),
+    ("年", "初"),
+    ("年", "末"),
+    ("本", "年"),
+    ("上", "年"),
+    ("折", "旧"),
+    ("残", "值"),
+}
+
 
 
 def script_kind(text: str) -> str:
@@ -220,11 +244,16 @@ def _can_join(
         if not has_following_cjk:
             return False
     normal_gap_join = native_line and -0.8 <= gap <= _join_gap_limit(previous, candidate, normal_gap)
+    min_font_size = min(previous["font_size"], candidate["font_size"])
+    is_whitelisted_pair = (
+        (previous["text"].strip(), candidate["text"].strip()) in _SPACED_CJK_WORD_WHITELIST
+    )
+    max_cjk_gap = min_font_size * (2.5 if is_whitelisted_pair else 1.25)
     spaced_single_cjk = (
         native_line
         and _CJK.fullmatch(previous["text"]) is not None
         and _CJK.fullmatch(candidate["text"]) is not None
-        and -0.8 <= gap <= min(previous["font_size"], candidate["font_size"]) * 1.25
+        and -0.8 <= gap <= max_cjk_gap
     )
     return superscript or normal_gap_join or spaced_single_cjk
 
@@ -278,6 +307,8 @@ def _has_wrapped_cjk_suffix(
 
 def _join_text(group: Sequence[dict[str, Any]]) -> str:
     # 中文、数字和符号直接连接；中文财报中的空格由原生文本保留。
+    if len(group) > 1 and group[0]["text"].strip() == "see":
+        return " ".join(item["text"].strip() for item in group)
     return "".join(item["text"] for item in group)
 
 
@@ -527,8 +558,12 @@ def _right_witnesses(
     chain: Sequence[dict[str, Any]],
     candidate: dict[str, Any],
     runs: Sequence[dict[str, Any]],
+    *,
+    require_flow_after: bool = True,
+    minimum_horizontal_gap: float = 8.0,
+    vertical_margin: float = 2.0,
 ) -> list[dict[str, Any]]:
-    y0 = min(chain[0]["bbox"][1], candidate["bbox"][1]) - 2.0
+    y0 = min(chain[0]["bbox"][1], candidate["bbox"][1]) - vertical_margin
     y1 = max(chain[-1]["bbox"][3], candidate["bbox"][3]) + max(candidate.get("font_size", 10.0), 10.0) * 4.0
     x1 = max(item["bbox"][2] for item in chain + [candidate])
     return [
@@ -536,10 +571,132 @@ def _right_witnesses(
         for item in runs
         if item not in chain
         and item is not candidate
-        and item["flow_start"] > candidate["flow_end"]
-        and item["bbox"][0] >= x1 + 8.0
+        and (
+            not require_flow_after
+            or item["flow_start"] > candidate["flow_end"]
+        )
+        and item["bbox"][0] >= x1 + minimum_horizontal_gap
         and min(y1, item["bbox"][3]) > max(y0, item["bbox"][1])
     ]
+
+
+def _is_strong_native_vertical_pair(
+    previous: dict[str, Any], candidate: dict[str, Any]
+) -> bool:
+    """Recognize one native block's vertically wrapped single-character pair."""
+    previous_text = previous.get("text", "").strip()
+    candidate_text = candidate.get("text", "").strip()
+    if (
+        _CJK.fullmatch(previous_text) is None
+        or _CJK.fullmatch(candidate_text) is None
+        or len(previous_text) != 1
+        or len(candidate_text) != 1
+        or not previous.get("source_position_known", False)
+        or not candidate.get("source_position_known", False)
+    ):
+        return False
+
+    previous_blocks = previous.get("source_blocks", [])
+    candidate_blocks = candidate.get("source_blocks", [])
+    if len(previous_blocks) != 1 or previous_blocks != candidate_blocks:
+        return False
+
+    if (
+        previous.get("source_line_start") != previous.get("source_line_end")
+        or candidate.get("source_line_start") != candidate.get("source_line_end")
+        or candidate.get("source_line_start")
+        != previous.get("source_line_end") + 1
+    ):
+        return False
+
+    minimum_font_size = min(
+        float(previous.get("font_size", 0.0) or 0.0),
+        float(candidate.get("font_size", 0.0) or 0.0),
+    )
+    if minimum_font_size <= 0.0:
+        return False
+    if previous.get("bold") != candidate.get("bold"):
+        return False
+    if abs(previous["font_size"] - candidate["font_size"]) > max(
+        0.5, minimum_font_size * 0.1
+    ):
+        return False
+
+    previous_bbox = previous["bbox"]
+    candidate_bbox = candidate["bbox"]
+    tolerance = max(1.0, minimum_font_size * 0.12)
+    if (
+        abs(previous_bbox[0] - candidate_bbox[0]) > tolerance
+        or abs(previous_bbox[2] - candidate_bbox[2]) > tolerance
+        or candidate_bbox[1] < previous_bbox[3]
+        or candidate_bbox[1] - previous_bbox[3]
+        > max(6.0, minimum_font_size)
+    ):
+        return False
+    return candidate_bbox[1] > previous_bbox[1]
+
+
+def _is_multiline_witness(item: dict[str, Any]) -> bool:
+    """Require a right-side witness with visible multi-line geometry."""
+    font_size = float(item.get("font_size", 0.0) or 0.0)
+    if font_size <= 0.0:
+        return False
+    return item["bbox"][3] - item["bbox"][1] >= max(
+        font_size * 1.5,
+        font_size + 3.0,
+    )
+
+
+def _has_multiline_right_witness(
+    chain: Sequence[dict[str, Any]],
+    candidate: dict[str, Any],
+    runs: Sequence[dict[str, Any]],
+) -> bool:
+    """Find a vertically complete right-column witness independent of flow."""
+    font_size = min(
+        float(chain[-1].get("font_size", 0.0) or 0.0),
+        float(candidate.get("font_size", 0.0) or 0.0),
+    )
+    if font_size <= 0.0:
+        return False
+
+    witnesses = _right_witnesses(
+        chain,
+        candidate,
+        runs,
+        require_flow_after=False,
+        minimum_horizontal_gap=max(6.0, font_size * 0.6),
+        vertical_margin=max(2.0, font_size * 0.8),
+    )
+    if not witnesses:
+        return False
+
+    for seed in witnesses:
+        seed_width = seed["bbox"][2] - seed["bbox"][0]
+        group = [
+            item
+            for item in witnesses
+            if _horizontal_overlap(seed["bbox"], item["bbox"])
+            >= max(2.0, min(seed_width, item["bbox"][2] - item["bbox"][0]) * 0.45)
+        ]
+        ordered = sorted(group, key=lambda item: item["bbox"][1])
+        if len(ordered) == 1 and not _is_multiline_witness(ordered[0]):
+            continue
+        if any(
+            right["bbox"][1] - left["bbox"][3]
+            > max(4.0, font_size * 0.5)
+            for left, right in zip(ordered, ordered[1:])
+        ):
+            continue
+
+        group_y0 = min(item["bbox"][1] for item in ordered)
+        group_y1 = max(item["bbox"][3] for item in ordered)
+        if (
+            group_y0 <= chain[-1]["bbox"][1] - max(2.0, font_size * 0.5)
+            and candidate["bbox"][3] >= group_y1 - font_size
+        ):
+            return True
+    return False
 
 
 def _is_wrapped_chain_pair(
@@ -584,9 +741,11 @@ def _is_wrapped_chain_pair(
         return False
 
     witnesses = _right_witnesses(chain, candidate, runs)
-    if not witnesses:
+    if witnesses:
+        return True
+    if not _is_strong_native_vertical_pair(left, candidate):
         return False
-    return True
+    return _has_multiline_right_witness(chain, candidate, runs)
 
 
 def _merge_run_chain(
@@ -634,6 +793,64 @@ def _merge_wrapped_field_runs(
         result.append(_merge_run_chain(chain, "\n", "wrapped_field"))
         index = cursor
     return sorted(result, key=lambda item: (item["flow_start"], item["flow_end"]))
+
+
+def _is_glossary_reference_pair(
+    marker: dict[str, Any],
+    candidate: dict[str, Any],
+    runs: Sequence[dict[str, Any]],
+) -> bool:
+    if marker.get("text", "").strip() != "see":
+        return False
+    if not candidate.get("text", "").strip() or candidate.get("script") != "latin":
+        return False
+    if candidate["flow_start"] != marker["flow_end"] + 1:
+        return False
+    if marker.get("source_blocks") != candidate.get("source_blocks"):
+        return False
+    if abs(_center_y(marker) - _center_y(candidate)) > max(
+        2.4, min(marker["font_size"], candidate["font_size"]) * 0.38
+    ):
+        return False
+    gap = candidate["bbox"][0] - marker["bbox"][2]
+    if not -0.8 <= gap <= max(
+        6.0, min(marker["font_size"], candidate["font_size"]) * 2.5
+    ):
+        return False
+    return not any(
+        item is not marker
+        and item is not candidate
+        and abs(_center_y(item) - _center_y(marker))
+        <= max(2.4, min(marker["font_size"], item["font_size"]) * 0.38)
+        and item["bbox"][0] >= marker["bbox"][2] - 0.8
+        and item["bbox"][2] <= candidate["bbox"][0] + 0.8
+        for item in runs
+    )
+
+
+def _merge_glossary_reference_runs(
+    runs: Sequence[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    ordered = sorted((dict(item) for item in runs), key=lambda item: item["flow_start"])
+    result: list[dict[str, Any]] = []
+    index = 0
+    while index < len(ordered):
+        if (
+            index + 1 < len(ordered)
+            and _is_glossary_reference_pair(
+                ordered[index], ordered[index + 1], ordered
+            )
+        ):
+            result.append(
+                _merge_run_chain(
+                    ordered[index : index + 2], " ", "glossary_reference"
+                )
+            )
+            index += 2
+            continue
+        result.append(ordered[index])
+        index += 1
+    return result
 
 
 def _is_columnar_native_block_line_pair(
@@ -790,7 +1007,8 @@ def build_text_runs(
             )
     if output_mode == "columnar":
         return _merge_same_native_block_lines(result)
-    return _merge_wrapped_field_runs(result)
+    result = _merge_wrapped_field_runs(result)
+    return _merge_glossary_reference_runs(result)
 
 
 def _same_native_line_run(left: dict[str, Any], right: dict[str, Any]) -> bool:

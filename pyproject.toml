@@ -9,6 +9,7 @@ description = "A Python library for parsing PDF layouts"
 requires-python = ">=3.7"
 dependencies = [
     "PyMuPDF",
+    "typing_extensions>=3.7.4; python_version < '3.8'",
 ]
 
 [project.optional-dependencies]
@@ -36,3 +37,4 @@ version = {file = "version"}
 
 [tool.pytest.ini_options]
 addopts = "-p no:cacheprovider"
+pythonpath = ["src"]

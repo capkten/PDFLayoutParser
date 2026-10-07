@@ -87,6 +87,36 @@ def test_merge_same_slot_fragments_joins_right_side_numbered_prefix():
     assert result[0]["merge_kind"] == "same_slot_horizontal_prefix"
 
 
+def test_merge_same_slot_fragments_joins_numbered_prefix_with_multiblock_wrapped_body():
+    # Page 587 scenario: left marker has source_blocks=[35], right body wrapped into source_blocks=[35, 36]
+    marker = _cell("6.", flow=1, row=1, x0=10, y0=20, x1=15, y1=30, source_line=0)
+    marker["source_blocks"] = [35]
+    marker["source_line_start"] = 0
+    marker["source_line_end"] = 0
+
+    body = _cell(
+        "一揽子交易处置对子公司股权投资丧失控制权之前\n投资",
+        flow=2,
+        row=1,
+        x0=18,
+        y0=16,
+        x1=90,
+        y1=36,
+        source_line=0,
+    )
+    body["source_blocks"] = [35, 36]
+    body["source_line_start"] = 0
+    body["source_line_end"] = 1
+
+    marker["font_size"] = body["font_size"] = 6.72
+
+    result = merge_same_slot_fragments([marker, body], header_cutoff=None)
+
+    assert len(result) == 1
+    assert result[0]["text"] == "6.一揽子交易处置对子公司股权投资丧失控制权之前\n投资"
+    assert result[0]["merge_kind"] == "same_slot_horizontal_prefix"
+
+
 def test_merge_same_slot_fragments_keeps_right_side_prefix_in_different_column():
     marker = _cell(
         "2.", flow=1, row=1, col=1, x0=10, y0=20, x1=15, y1=30, source_line=0

@@ -10,7 +10,7 @@ import os
 from typing import List, Optional
 
 from hexai_pdf_parser.core.models import ApiResult, BBox, Block, Document, Image, Line, RenderInfo, Table
-from hexai_pdf_parser.page_normalizer import normalize_page_rotation
+from hexai_pdf_parser.page_normalizer import isolated_page, normalize_page_rotation
 
 
 class PDFParser:
@@ -43,6 +43,7 @@ class PDFParser:
         else:
             self._pdf_path = source
             self._document = None
+        self._pdf_doc = None
 
         self._text_ready = self._document is not None
         self._document_complete = self._document is not None
@@ -59,7 +60,20 @@ class PDFParser:
         return self
 
     def __exit__(self, *exc) -> None:
-        pass
+        self.close()
+
+    def _get_pdf_doc(self):
+        if self._pdf_path is None:
+            raise ValueError("PDF file path required")
+        if self._pdf_doc is None or self._pdf_doc.is_closed:
+            import fitz
+            self._pdf_doc = fitz.open(self._pdf_path)
+        return self._pdf_doc
+
+    def close(self) -> None:
+        if self._pdf_doc is not None:
+            self._pdf_doc.close()
+            self._pdf_doc = None
 
     # ------------------------------------------------------------------
     # Response helpers
@@ -151,22 +165,22 @@ class PDFParser:
                     lambda p: p.blocks, page_indices
                 )
 
-            import fitz as _fitz
             from hexai_pdf_parser.core.loader import Loader
             from hexai_pdf_parser.tables.table_extractor import TableExtractor
             from hexai_pdf_parser.extractors.text_extractor import TextExtractor
 
-            document = Loader(self._pdf_path).load()
-            pdf_doc = _fitz.open(self._pdf_path)
-            try:
-                table_extractor = TableExtractor(
-                    ml_model_path=self._ml_model_path,
-                    ml_confidence=self._ml_confidence,
-                )
-                for page in document.pages:
-                    if page_indices is not None and page.index not in page_indices:
-                        continue
-                    page_handle = pdf_doc[page.index]
+            pdf_doc = self._get_pdf_doc()
+            document = Loader(self._pdf_path).load(pdf_doc)
+            table_extractor = TableExtractor(
+                ml_model_path=self._ml_model_path,
+                ml_confidence=self._ml_confidence,
+            )
+            for page in document.pages:
+                if page_indices is not None and page.index not in page_indices:
+                    continue
+                page_handle = pdf_doc[page.index]
+                original_rotation = page_handle.rotation
+                try:
                     normalize_page_rotation(page_handle)
                     page.blocks = TextExtractor().extract_blocks(page_handle)
                     page.tables = table_extractor.extract(page_handle)
@@ -174,8 +188,9 @@ class PDFParser:
                         page_handle,
                         page.tables,
                     )
-            finally:
-                pdf_doc.close()
+                finally:
+                    if page_handle.rotation != original_rotation:
+                        page_handle.set_rotation(original_rotation)
             self._document = document
             self._text_ready = True
             self._document_complete = False
@@ -199,25 +214,26 @@ class PDFParser:
                     lambda p: p.tables, page_indices
                 )
 
-            import fitz as _fitz
             from hexai_pdf_parser.core.loader import Loader
             from hexai_pdf_parser.tables.table_extractor import TableExtractor
 
-            document = Loader(self._pdf_path).load()
-            pdf_doc = _fitz.open(self._pdf_path)
-            try:
-                extractor = TableExtractor(
-                    ml_model_path=self._ml_model_path,
-                    ml_confidence=self._ml_confidence,
-                )
-                for page in document.pages:
-                    if page_indices is not None and page.index not in page_indices:
-                        continue
-                    page_handle = pdf_doc[page.index]
+            pdf_doc = self._get_pdf_doc()
+            document = Loader(self._pdf_path).load(pdf_doc)
+            extractor = TableExtractor(
+                ml_model_path=self._ml_model_path,
+                ml_confidence=self._ml_confidence,
+            )
+            for page in document.pages:
+                if page_indices is not None and page.index not in page_indices:
+                    continue
+                page_handle = pdf_doc[page.index]
+                original_rotation = page_handle.rotation
+                try:
                     normalize_page_rotation(page_handle)
                     page.tables = extractor.extract(page_handle)
-            finally:
-                pdf_doc.close()
+                finally:
+                    if page_handle.rotation != original_rotation:
+                        page_handle.set_rotation(original_rotation)
             self._document = document
             self._text_ready = False
             self._document_complete = False
@@ -239,13 +255,21 @@ class PDFParser:
             pdf_path = self._pdf_path
             if pdf_path is None:
                 raise ValueError("extract_images requires a PDF file path, not a Document")
-            document = Loader(pdf_path).load()
+            pdf_doc = self._get_pdf_doc()
+            document = Loader(pdf_path).load(pdf_doc)
             extractor = ImageExtractor(output_dir)
             images: List[Image] = []
             for page in document.pages:
                 if page_indices is not None and page.index not in page_indices:
                     continue
-                images.extend(extractor.extract(pdf_path, page.index))
+                with isolated_page(pdf_doc[page.index]) as working_page:
+                    images.extend(
+                        extractor.extract_page(
+                            working_page.parent,
+                            page.index,
+                            page=working_page,
+                        )
+                    )
             return images
 
         return self._execute_result(_do, "images extracted", "no images extracted")
@@ -266,22 +290,53 @@ class PDFParser:
             if pdf_path is None:
                 raise ValueError("render_pages requires a PDF file path, not a Document")
             effective_dpi = dpi if dpi is not None else self._render_dpi
-            document = Loader(pdf_path).load()
+            pdf_doc = self._get_pdf_doc()
+            document = Loader(pdf_path).load(pdf_doc)
             engine = RenderEngine(output_dir, effective_dpi)
             renders: List[RenderInfo] = []
             for page in document.pages:
                 if page_indices is not None and page.index not in page_indices:
                     continue
-                renders.append(
-                    engine.render(
-                        pdf_path,
-                        page.index,
-                        page_type=page.page_type,
+                with isolated_page(pdf_doc[page.index]) as working_page:
+                    renders.append(
+                        engine.render_page(
+                            working_page.parent,
+                            page.index,
+                            page=working_page,
+                            page_type=page.page_type,
+                        )
                     )
-                )
             return renders
 
         return self._execute_result(_do, "pages rendered", "no pages rendered")
+
+    def classify_page(
+        self,
+        page_index: int = 0,
+    ) -> ApiResult:
+        """Classify whether a page is 'vector' or 'scanned'.
+
+        If a cached Document exists, returns the cached page_type.
+        Otherwise loads that specific page and classifies it.
+        """
+        def _do() -> str:
+            if self._document is not None:
+                for page in self._document.pages:
+                    if page.index == page_index:
+                        return page.page_type
+                raise IndexError(f"page_index {page_index} out of range")
+
+            from hexai_pdf_parser.extractors.page_classifier import classify_page_type
+
+            if self._pdf_path is None:
+                raise ValueError("classify_page requires a PDF file path")
+
+            doc = self._get_pdf_doc()
+            if page_index < 0 or page_index >= len(doc):
+                raise IndexError(f"page_index {page_index} out of range (total pages: {len(doc)})")
+            return classify_page_type(doc[page_index])
+
+        return self._execute_result(_do, "page classified", "page classified but empty")
 
     def to_json(
         self,
@@ -385,15 +440,11 @@ class PDFParser:
                 p.index: (p.size["width"], p.size["height"])
                 for p in self._document.pages
             }
-        import fitz as _fitz
-        doc = _fitz.open(self._pdf_path)
-        try:
-            return {
-                i: (doc[i].rect.width, doc[i].rect.height)
-                for i in range(len(doc))
-            }
-        finally:
-            doc.close()
+        doc = self._get_pdf_doc()
+        return {
+            i: (doc[i].rect.width, doc[i].rect.height)
+            for i in range(len(doc))
+        }
 
     @staticmethod
     def _bbox_intersects(block_bbox, region_bbox: dict) -> bool:
@@ -415,65 +466,57 @@ class PDFParser:
         Uses PyMuPDF word-level extraction for precise region clipping.
         """
         def _do():
-            import fitz as _fitz
-
+            if self._pdf_path is None:
+                raise ValueError("extract_text_in_region requires a PDF file path")
             page_sizes = self._get_page_sizes()
             regions = self._normalize_regions(region, page_sizes)
 
-            pdf_path = self._pdf_path
-            if pdf_path is None:
-                raise ValueError("extract_text_in_region requires a PDF file path")
-
             blocks: List[Block] = []
-            pdf_doc = _fitz.open(pdf_path)
-            try:
-                for r in regions:
-                    page_idx = r["page_index"]
-                    page = pdf_doc[page_idx]
-                    words = page.get_text("words")  # (x0, y0, x1, y1, text, block_no, line_no, word_no)
+            pdf_doc = self._get_pdf_doc()
+            for r in regions:
+                page_idx = r["page_index"]
+                page = pdf_doc[page_idx]
+                words = page.get_text("words")  # (x0, y0, x1, y1, text, block_no, line_no, word_no)
 
-                    matched = [
-                        w for w in words
-                        if self._bbox_intersects(
-                            BBox(w[0], w[1], w[2], w[3]), r
-                        )
-                    ]
-                    if not matched:
-                        continue
+                matched = [
+                    w for w in words
+                    if self._bbox_intersects(
+                        BBox(w[0], w[1], w[2], w[3]), r
+                    )
+                ]
+                if not matched:
+                    continue
 
-                    # Group by (block_no, line_no) to preserve line structure
-                    from collections import OrderedDict
-                    lines_map: dict[tuple[int, int], list] = OrderedDict()
-                    for w in matched:
-                        key = (w[5], w[6])
-                        lines_map.setdefault(key, []).append(w)
+                # Group by (block_no, line_no) to preserve line structure
+                from collections import OrderedDict
+                lines_map: dict[tuple[int, int], list] = OrderedDict()
+                for w in matched:
+                    key = (w[5], w[6])
+                    lines_map.setdefault(key, []).append(w)
 
-                    lines: List[Line] = []
-                    for words_in_line in lines_map.values():
-                        words_in_line.sort(key=lambda w: w[0])  # sort by x
-                        line_text = " ".join(w[4] for w in words_in_line)
-                        lx0 = min(w[0] for w in words_in_line)
-                        ly0 = min(w[1] for w in words_in_line)
-                        lx1 = max(w[2] for w in words_in_line)
-                        ly1 = max(w[3] for w in words_in_line)
-                        lines.append(Line(
-                            text=line_text,
-                            bbox=BBox(lx0, ly0, lx1, ly1),
-                        ))
-
-                    block_text = "\n".join(l.text for l in lines)
-                    bx0 = min(l.bbox.x0 for l in lines)
-                    by0 = min(l.bbox.y0 for l in lines)
-                    bx1 = max(l.bbox.x1 for l in lines)
-                    by1 = max(l.bbox.y1 for l in lines)
-                    blocks.append(Block(
-                        text=block_text,
-                        bbox=BBox(bx0, by0, bx1, by1),
-                        lines=lines,
+                lines: List[Line] = []
+                for words_in_line in lines_map.values():
+                    words_in_line.sort(key=lambda w: w[0])  # sort by x
+                    line_text = " ".join(w[4] for w in words_in_line)
+                    lx0 = min(w[0] for w in words_in_line)
+                    ly0 = min(w[1] for w in words_in_line)
+                    lx1 = max(w[2] for w in words_in_line)
+                    ly1 = max(w[3] for w in words_in_line)
+                    lines.append(Line(
+                        text=line_text,
+                        bbox=BBox(lx0, ly0, lx1, ly1),
                     ))
-            finally:
-                pdf_doc.close()
 
+                block_text = "\n".join(l.text for l in lines)
+                bx0 = min(l.bbox.x0 for l in lines)
+                by0 = min(l.bbox.y0 for l in lines)
+                bx1 = max(l.bbox.x1 for l in lines)
+                by1 = max(l.bbox.y1 for l in lines)
+                blocks.append(Block(
+                    text=block_text,
+                    bbox=BBox(bx0, by0, bx1, by1),
+                    lines=lines,
+                ))
             return blocks
 
         return self._execute_result(_do, "region text extracted", "no text found in region")
@@ -488,38 +531,28 @@ class PDFParser:
         Returns ApiResult wrapping Table for single region (or None), list[Table] for multiple.
         """
         def _do():
-            import fitz as _fitz
             from hexai_pdf_parser.tables.table_extractor import TableExtractor
 
             is_single = isinstance(region, dict)
             page_sizes = self._get_page_sizes()
             regions = self._normalize_regions(region, page_sizes)
 
-            pdf_path = self._pdf_path
-            if pdf_path is None:
-                raise ValueError("extract_table_in_region requires a PDF file path")
-            pdf_doc = _fitz.open(pdf_path)
-            try:
-                extractor = TableExtractor(
-                    ml_model_path=self._ml_model_path,
-                    ml_confidence=self._ml_confidence,
-                )
-                results: list[Table] = []
-                for r in regions:
-                    page_idx = r["page_index"]
-                    page_handle = pdf_doc[page_idx]
-                    tables = extractor.extract(page_handle)
-                    # Filter tables that intersect with the region
-                    matched = [
-                        t for t in tables
-                        if self._bbox_intersects(t.bbox, r)
-                    ]
-                    if is_single:
-                        return matched[0] if matched else None
-                    results.extend(matched)
-                return results
-            finally:
-                pdf_doc.close()
+            pdf_doc = self._get_pdf_doc()
+            extractor = TableExtractor(
+                use_ml_table_detector=False,
+            )
+            results: list[Table] = []
+            for r in regions:
+                page_idx = r["page_index"]
+                page_handle = pdf_doc[page_idx]
+                r_bbox = BBox(r["x0"], r["y0"], r["x1"], r["y1"])
+                with isolated_page(page_handle) as working_page:
+                    table = extractor.extract_table_in_region(working_page, r_bbox)
+                if is_single:
+                    return table
+                if table is not None:
+                    results.append(table)
+            return results
 
         return self._execute_result(_do, "region table extracted", "no table found in region")
 
@@ -537,14 +570,11 @@ class PDFParser:
         - region: extract from normalized 0~1 region(s)
         """
         def _do():
-            import fitz as _fitz
             from hexai_pdf_parser.core.loader import Loader
             from hexai_pdf_parser.tables.table_extractor import TableExtractor
 
-            pdf_path = self._pdf_path
-            if pdf_path is None:
+            if self._pdf_path is None:
                 raise ValueError("extract_table_structure requires a PDF file path")
-
             extractor = TableExtractor(
                 ml_model_path=self._ml_model_path,
                 ml_confidence=self._ml_confidence,
@@ -553,34 +583,30 @@ class PDFParser:
             if region is not None:
                 page_sizes = self._get_page_sizes()
                 regions = self._normalize_regions(region, page_sizes)
-                pdf_doc = _fitz.open(pdf_path)
-                try:
-                    all_results = []
-                    for r in regions:
-                        page_idx = r["page_index"]
-                        page_handle = pdf_doc[page_idx]
-                        structures = extractor.extract_table_structure(page_handle)
-                        for s in structures:
-                            if self._bbox_intersects(s.bbox, r):
-                                all_results.append(s)
-                    return all_results
-                finally:
-                    pdf_doc.close()
+                pdf_doc = self._get_pdf_doc()
+                all_results = []
+                for r in regions:
+                    page_idx = r["page_index"]
+                    page_handle = pdf_doc[page_idx]
+                    with isolated_page(page_handle) as working_page:
+                        structures = extractor.extract_table_structure(working_page)
+                    for s in structures:
+                        if self._bbox_intersects(s.bbox, r):
+                            all_results.append(s)
+                return all_results
             else:
-                document = Loader(pdf_path).load()
-                pdf_doc = _fitz.open(pdf_path)
-                try:
-                    all_results = []
-                    for page in document.pages:
-                        if page_indices is not None and page.index not in page_indices:
-                            continue
-                        page_handle = pdf_doc[page.index]
+                pdf_doc = self._get_pdf_doc()
+                document = Loader(self._pdf_path).load(pdf_doc)
+                all_results = []
+                for page in document.pages:
+                    if page_indices is not None and page.index not in page_indices:
+                        continue
+                    page_handle = pdf_doc[page.index]
+                    with isolated_page(page_handle) as working_page:
                         all_results.extend(
-                            extractor.extract_table_structure(page_handle)
+                            extractor.extract_table_structure(working_page)
                         )
-                    return all_results
-                finally:
-                    pdf_doc.close()
+                return all_results
 
         return self._execute_result(_do, "table structure extracted", "no table structure extracted")
 
@@ -633,41 +659,36 @@ class PDFParser:
         Region coordinates are normalized 0~1 relative to page size.
         """
         def _do():
-            import fitz as _fitz
-
             is_single = isinstance(region, dict)
             effective_dpi = dpi if dpi is not None else self._render_dpi
             page_sizes = self._get_page_sizes()
             regions = self._normalize_regions(region, page_sizes)
 
             os.makedirs(output_dir, exist_ok=True)
-            pdf_path = self._pdf_path
-            if pdf_path is None:
+            if self._pdf_path is None:
                 raise ValueError("render_region requires a PDF file path")
-            pdf_doc = _fitz.open(pdf_path)
-            try:
-                results: list[RenderInfo] = []
-                for idx, r in enumerate(regions):
-                    page_handle = pdf_doc[r["page_index"]]
-                    clip = _fitz.Rect(r["x0"], r["y0"], r["x1"], r["y1"])
-                    mat = _fitz.Matrix(effective_dpi / 72, effective_dpi / 72)
-                    pix = page_handle.get_pixmap(matrix=mat, clip=clip)
+            import fitz as _fitz
+            pdf_doc = self._get_pdf_doc()
+            results: list[RenderInfo] = []
+            for idx, r in enumerate(regions):
+                page_handle = pdf_doc[r["page_index"]]
+                clip = _fitz.Rect(r["x0"], r["y0"], r["x1"], r["y1"])
+                mat = _fitz.Matrix(effective_dpi / 72, effective_dpi / 72)
+                pix = page_handle.get_pixmap(matrix=mat, clip=clip)
 
-                    file_name = f"region-{r['page_index']:03d}-{idx:03d}.png"
-                    path = os.path.join(output_dir, file_name)
-                    pix.save(path)
+                file_name = f"region-{r['page_index']:03d}-{idx:03d}.png"
+                path = os.path.join(output_dir, file_name)
+                pix.save(path)
 
-                    info = RenderInfo(
-                        path=path,
-                        width=pix.width,
-                        height=pix.height,
-                        dpi=effective_dpi,
-                    )
-                    if is_single:
-                        return info
-                    results.append(info)
-                return results
-            finally:
-                pdf_doc.close()
+                info = RenderInfo(
+                    path=path,
+                    width=pix.width,
+                    height=pix.height,
+                    dpi=effective_dpi,
+                )
+                if is_single:
+                    return info
+                results.append(info)
+            return results
 
         return self._execute_result(_do, "region rendered", "region rendered but empty")

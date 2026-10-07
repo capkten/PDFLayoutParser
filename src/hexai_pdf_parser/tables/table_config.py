@@ -64,13 +64,14 @@ class LayoutProfile:
 class GlobalTableSettings:
     """Global table extraction thresholds and flags."""
 
-    line_tolerance: float = 2.0
+    line_tolerance: float = 2.3
     merge_group_tol: float = 0.3
     row_gap_threshold: float = 30.0
     fallback_max_cols: int = 30
     fallback_max_tables: int = 10
     separator_min_width: float = 200.0
     separator_max_height: float = 1.5
+    ml_render_dpi: int = 72
 
 
 @dataclass

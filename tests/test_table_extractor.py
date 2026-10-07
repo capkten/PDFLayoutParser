@@ -12,6 +12,7 @@ import pytest
 from hexai_pdf_parser.models import BBox, Cell, Table
 from hexai_pdf_parser.personal_credit_report import (
     PersonalCreditReportTableExtractor,
+    _query_rows,
     parse_personal_credit_report,
 )
 from hexai_pdf_parser.text_region_detector import CandidateRegion
@@ -207,6 +208,87 @@ def test_native_span_table_skips_legacy_word_rebuild(monkeypatch):
     assert get_text_calls == []
 
 
+def test_personal_credit_no_model_keeps_native_span_wireless_source(monkeypatch):
+    extractor = PersonalCreditReportTableExtractor(use_ml_table_detector=False)
+    bbox = BBox(0, 0, 100, 100)
+    wireless = Table(
+        bbox=bbox,
+        rows=1,
+        cols=1,
+        cells=[Cell("混合", 0, 0, bbox)],
+        source="wireless_span_recovery",
+    )
+    page = SimpleNamespace(
+        number=0,
+        rect=fitz.Rect(0, 0, 100, 100),
+        get_drawings=lambda: [],
+        get_text=lambda mode: [],
+    )
+    extractor._wired_extractor.extract = lambda page: []
+    extractor._extract_via_text_alignment = (
+        lambda page, excluded_regions=None: [wireless]
+    )
+
+    class FailDetector:
+        def detect_with_scores(self, page):
+            raise AssertionError("ML detector must not run for personal reports")
+
+    extractor._ml_detector = FailDetector()
+    monkeypatch.setattr(
+        "hexai_pdf_parser.extractors.language_detector.detect_page_language",
+        lambda page: "mixed",
+    )
+    monkeypatch.setattr(
+        "hexai_pdf_parser.tables.table_extractor.normalize_page_rotation",
+        lambda page: None,
+        raising=False,
+    )
+
+    result = extractor.extract(page)
+
+    assert len(result) == 1
+    assert result[0].source == "wireless_span_recovery"
+    assert result[0].rows == wireless.rows
+    assert result[0].cols == wireless.cols
+    assert [(cell.text, cell.row_index, cell.col_index) for cell in result[0].cells] == [
+        ("混合", 0, 0)
+    ]
+
+
+def test_personal_query_rows_merged_path_uses_text_extractor():
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_text((40, 40), "query rows")
+
+    rows = _query_rows(page, merged=True)
+
+    doc.close()
+    assert rows
+    assert "query" in "".join(item[4] for item in rows[0])
+
+
+def test_parse_personal_credit_report_forwards_ml_switch(monkeypatch):
+    captured = []
+
+    class FakePipeline:
+        def __init__(self, **kwargs):
+            captured.append(kwargs)
+
+        def run(self):
+            return SimpleNamespace(file_name="sample.pdf", page_count=0, pages=[])
+
+    monkeypatch.setattr(
+        "hexai_pdf_parser.extractors.personal_credit_report.PersonalCreditReportPipeline",
+        FakePipeline,
+    )
+
+    parse_personal_credit_report("sample.pdf")
+    parse_personal_credit_report("sample.pdf", use_ml_table_detector=True)
+
+    assert captured[0]["use_ml_table_detector"] is False
+    assert captured[1]["use_ml_table_detector"] is True
+
+
 def test_hybrid_wired_table_recovers_only_tall_body_cell(monkeypatch):
     extractor = TableExtractor()
     bbox = BBox(100, 100, 400, 400)
@@ -316,6 +398,26 @@ def test_hybrid_wired_table_keeps_normal_height_grid():
     ]
     table = Table(BBox(0, 0, 100, 70), 3, 2, cells, source="line_projection")
     assert extractor._recover_hybrid_wired_table(object(), table, "zh") is table
+
+
+def test_clamp_table_to_page_preserves_physical_line_metadata():
+    table = Table(
+        bbox=BBox(-10, -10, 110, 110),
+        rows=1,
+        cols=1,
+        cells=[Cell("", 0, 0, BBox(-10, -10, 110, 110))],
+        source="line_projection",
+        h_lines=[(-10.0, 0.0, 110.0, 0.0)],
+        v_lines=[(0.0, -10.0, 0.0, 110.0)],
+    )
+
+    class Page:
+        rect = fitz.Rect(0, 0, 100, 100)
+
+    clamped = TableExtractor._clamp_table_to_page(table, Page())
+
+    assert clamped.h_lines == table.h_lines
+    assert clamped.v_lines == table.v_lines
 
 
 def test_hybrid_wired_table_preserves_body_colspan_without_conflict(monkeypatch):
@@ -2868,3 +2970,135 @@ def test_physical_horizontal_line_row_separation_and_multi_dollar_split():
     assert data_cells[2].text == "$10,680"
     assert data_cells[3].text == "$47,396"
     assert data_cells[4].text == "$63,754"
+
+
+def test_p415_chart_candidate_is_not_recovered_as_english_wireless():
+    """P415 的模型候选框不能绕过 chart 过滤再次生成英文无线表格。"""
+    import os
+
+    pdf_path = r"D:\codes\PDFLayoutParser\fix\zh_all_table_pages.pdf"
+    if not os.path.exists(pdf_path):
+        pytest.skip("zh_all_table_pages.pdf not found")
+
+    doc = fitz.open(pdf_path)
+    try:
+        page = doc[415]
+        extractor = TableExtractor()
+        wired_tables = extractor._wired_extractor.extract(page)
+        chart_candidate = (BBox(59.6, 120.9, 542.1, 286.7), 0.9)
+
+        tables = extractor._recover_tables_from_regions(
+            page,
+            regions=[chart_candidate],
+            wired_tables=wired_tables,
+            page_language="en",
+        )
+
+        assert tables == []
+    finally:
+        doc.close()
+
+
+def _make_chart_state_page():
+    return SimpleNamespace(
+        rect=fitz.Rect(0.0, 0.0, 200.0, 200.0),
+        get_drawings=lambda **_kwargs: [],
+        get_fonts=lambda **_kwargs: [],
+        get_image_info=lambda **_kwargs: [],
+        get_text=lambda *_args, **_kwargs: {"blocks": []},
+    )
+
+
+def _prime_chart_mask(extractor, page, mask, monkeypatch):
+    monkeypatch.setattr(
+        extractor._wired_extractor,
+        "_find_bar_chart_regions",
+        lambda *_args, **_kwargs: [mask],
+    )
+    extractor._wired_extractor._extract_lines_from_drawings(page)
+
+
+def test_chart_mask_is_not_reused_for_a_different_page(monkeypatch):
+    """上一页的柱形图 mask 不能过滤当前页的正常候选。"""
+    extractor = TableExtractor()
+    chart_page = _make_chart_state_page()
+    current_page = _make_chart_state_page()
+    _prime_chart_mask(extractor, chart_page, fitz.Rect(0.0, 0.0, 100.0, 100.0), monkeypatch)
+
+    bbox = BBox(10.0, 10.0, 90.0, 90.0)
+    recovered = Table(
+        bbox=bbox,
+        rows=1,
+        cols=2,
+        cells=[],
+        source="english_general_wireless",
+    )
+    monkeypatch.setattr(
+        extractor._wireless_extractor,
+        "extract",
+        lambda *_args, **_kwargs: [recovered],
+    )
+
+    tables = extractor._recover_tables_from_regions(
+        current_page,
+        regions=[(bbox, 0.9)],
+        wired_tables=[],
+        page_language="en",
+    )
+
+    assert tables == [recovered]
+
+
+def test_partial_chart_overlap_does_not_drop_normal_wireless_candidate(monkeypatch):
+    """候选仅小面积碰到图表 mask 时仍应进入无线恢复。"""
+    extractor = TableExtractor()
+    page = _make_chart_state_page()
+    _prime_chart_mask(extractor, page, fitz.Rect(80.0, 80.0, 100.0, 100.0), monkeypatch)
+
+    bbox = BBox(0.0, 0.0, 100.0, 100.0)
+    recovered = Table(
+        bbox=bbox,
+        rows=1,
+        cols=2,
+        cells=[],
+        source="english_general_wireless",
+    )
+    monkeypatch.setattr(
+        extractor._wireless_extractor,
+        "extract",
+        lambda *_args, **_kwargs: [recovered],
+    )
+
+    tables = extractor._recover_tables_from_regions(
+        page,
+        regions=[(bbox, 0.9)],
+        wired_tables=[],
+        page_language="en",
+    )
+
+    assert tables == [recovered]
+
+
+def test_p415_full_extraction_drops_chart_and_keeps_operating_expenses():
+    """主入口应丢弃柱形图候选，同时保留下方 Operating Expenses 真表。"""
+    import os
+
+    pdf_path = r"D:\codes\PDFLayoutParser\fix\zh_all_table_pages.pdf"
+    if not os.path.exists(pdf_path):
+        pytest.skip("zh_all_table_pages.pdf not found")
+
+    doc = fitz.open(pdf_path)
+    try:
+        tables = TableExtractor().extract(doc[415])
+
+        assert not any(
+            table.bbox.y0 < 280.0 and table.bbox.x0 < 400.0 for table in tables
+        )
+        assert any(
+            table.source == "english_general_wireless"
+            and (table.rows, table.cols) == (9, 4)
+            and table.bbox.y0 > 500.0
+            for table in tables
+        )
+    finally:
+        doc.close()

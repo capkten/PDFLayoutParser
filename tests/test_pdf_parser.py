@@ -60,6 +60,21 @@ def real_pdf_path() -> str:
     return REAL_PDF_PATH
 
 
+@pytest.fixture(autouse=True)
+def close_parsers_after_test(monkeypatch, tmp_dir):
+    parsers = []
+    original_init = PDFParser.__init__
+
+    def tracked_init(parser, *args, **kwargs):
+        original_init(parser, *args, **kwargs)
+        parsers.append(parser)
+
+    monkeypatch.setattr(PDFParser, "__init__", tracked_init)
+    yield
+    for parser in parsers:
+        parser.close()
+
+
 # ---------------------------------------------------------------------------
 # Shared response assertions
 # ---------------------------------------------------------------------------
@@ -140,8 +155,10 @@ def test_context_manager_closes_handle(tmp_dir):
     pdf_path = os.path.join(tmp_dir, "test.pdf")
     make_text_pdf(pdf_path, text="Hello")
     with PDFParser(pdf_path) as parser:
-        assert parser is not None
-    # Context manager exits cleanly without error
+        assert parser.classify_page(0).code == 1
+        pdf_doc = parser._pdf_doc
+        assert not pdf_doc.is_closed
+    assert pdf_doc.is_closed
 
 
 def test_context_manager_with_document():
@@ -374,6 +391,31 @@ def test_extract_images_with_page_indices(tmp_dir):
     result = parser.extract_images(output_dir, page_indices=[0])
     assert_success_result(result)
     assert len(result.data) >= 1
+
+
+def test_extract_images_and_render_pages_reuse_parser_handle(tmp_dir, monkeypatch):
+    pdf_path = os.path.join(tmp_dir, "media.pdf")
+    make_pdf_with_image(pdf_path)
+    real_open = fitz.open
+    opened = []
+
+    def counted_open(*args, **kwargs):
+        document = real_open(*args, **kwargs)
+        if args and isinstance(args[0], (str, os.PathLike)):
+            opened.append(document)
+        return document
+
+    monkeypatch.setattr(fitz, "open", counted_open)
+    parser = PDFParser(pdf_path)
+    try:
+        images = parser.extract_images(os.path.join(tmp_dir, "images"), page_indices=[0])
+        renders = parser.render_pages(os.path.join(tmp_dir, "renders"), page_indices=[0])
+
+        assert_success_result(images)
+        assert_success_result(renders)
+        assert len(opened) == 1
+    finally:
+        parser.close()
 
 
 def test_render_pages_writes_png(tmp_dir):
@@ -930,3 +972,199 @@ def test_parse_with_process_backend(real_pdf_path):
 
     from hexai_pdf_parser.pipeline import _PROCESS_POOL
     assert _PROCESS_POOL is not None
+
+
+def test_region_apis_reuse_one_pdf_handle_and_close_reopens(tmp_dir, monkeypatch):
+    pdf_path = os.path.join(tmp_dir, "reuse.pdf")
+    make_text_pdf(pdf_path, text="Hello Region")
+    region = {"page_index": 0, "x0": 0.0, "y0": 0.0, "x1": 1.0, "y1": 1.0}
+    other_region = {"page_index": 0, "x0": 0.0, "y0": 0.0, "x1": 0.8, "y1": 0.2}
+
+    real_open = fitz.open
+    opened = []
+
+    def counted_open(*args, **kwargs):
+        document = real_open(*args, **kwargs)
+        if args and isinstance(args[0], (str, os.PathLike)):
+            opened.append(document)
+        return document
+
+    monkeypatch.setattr(fitz, "open", counted_open)
+    parser = PDFParser(pdf_path)
+
+    assert parser.extract_tables().code in {0, 1}
+    assert parser.extract_text().code == 1
+    assert parser.extract_text_in_region(region).code == 1
+    assert parser.extract_text_in_region(other_region).code == 1
+    assert parser.extract_table_in_region(region).code in {0, 1}
+    assert len(opened) == 1
+
+    parser.close()
+    assert opened[0].is_closed
+    parser.close()
+
+    assert parser.extract_text_in_region(region).code == 1
+    assert len(opened) == 2
+    parser.close()
+
+
+def test_lightweight_apis_do_not_mutate_shared_pages(tmp_dir, monkeypatch):
+    pdf_path = os.path.join(tmp_dir, "rotated-media.pdf")
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_text((50, 80), "Persistent source text")
+    pix = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 10, 10))
+    pix.set_rect(pix.irect, (255, 0, 0))
+    page.insert_image(fitz.Rect(100, 100, 200, 200), pixmap=pix)
+    page.set_rotation(90)
+    doc.save(pdf_path)
+    doc.close()
+
+    region = {"page_index": 0, "x0": 0.0, "y0": 0.0, "x1": 0.4, "y1": 0.3}
+    real_open = fitz.open
+    opened_paths = []
+
+    def counted_open(*args, **kwargs):
+        if args and isinstance(args[0], (str, os.PathLike)):
+            opened_paths.append(os.fspath(args[0]))
+        return real_open(*args, **kwargs)
+
+    monkeypatch.setattr(fitz, "open", counted_open)
+    parser = PDFParser(pdf_path)
+    try:
+        source_page = parser._get_pdf_doc()[0]
+
+        def page_state():
+            partial = parser.extract_text_in_region(region)
+            assert_success_result(partial)
+            text = " ".join(block.text for block in partial.data)
+            assert "Persistent source text" in text
+            return (
+                source_page.rotation,
+                source_page.rect.width,
+                source_page.rect.height,
+                text,
+                source_page.get_text(),
+            )
+
+        initial_state = page_state()
+        assert initial_state[0] == 90
+        states = []
+
+        assert parser.extract_table_in_region(region).code in {0, 1}
+        states.append(page_state())
+        assert parser.extract_table_structure(region=region).code in {0, 1}
+        states.append(page_state())
+        assert parser.extract_table_structure(page_indices=[0]).code in {0, 1}
+        states.append(page_state())
+        images = parser.extract_images(
+            os.path.join(tmp_dir, "images"), page_indices=[0]
+        )
+        assert_success_result(images)
+        assert len(images.data) >= 1
+        states.append(page_state())
+
+        first_render = parser.render_pages(
+            os.path.join(tmp_dir, "renders"), page_indices=[0]
+        )
+        assert_success_result(first_render)
+        first_render_bytes = open(first_render.data[0].path, "rb").read()
+        states.append(page_state())
+        second_render = parser.render_pages(
+            os.path.join(tmp_dir, "renders"), page_indices=[0]
+        )
+        assert_success_result(second_render)
+        second_render_bytes = open(second_render.data[0].path, "rb").read()
+        states.append(page_state())
+
+        assert all(state == initial_state for state in states)
+        assert first_render_bytes == second_render_bytes
+        assert opened_paths == [pdf_path]
+    finally:
+        parser.close()
+
+
+def test_text_and_table_extraction_preserve_rotated_page_for_region_reads(tmp_dir, monkeypatch):
+    pdf_path = os.path.join(tmp_dir, "rotated.pdf")
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_text((50, 80), "Rotation State")
+    page.set_rotation(90)
+    doc.save(pdf_path)
+    doc.close()
+
+    parser = PDFParser(pdf_path)
+    pdf_doc = parser._get_pdf_doc()
+    page = pdf_doc[0]
+    original_rotation = page.rotation
+    original_size = (page.rect.width, page.rect.height)
+    region = {"page_index": 0, "x0": 0.0, "y0": 0.0, "x1": 1.0, "y1": 1.0}
+    partial_region = {
+        "page_index": 0,
+        "x0": 0.0,
+        "y0": 0.0,
+        "x1": 0.2,
+        "y1": 0.3,
+    }
+    before = parser.extract_text_in_region(region)
+    before_text = " ".join(block.text for block in before.data)
+    assert "Rotation State" in before_text
+    partial_before = parser.extract_text_in_region(partial_region)
+    partial_before_text = " ".join(block.text for block in partial_before.data)
+    assert "Rotation State" in partial_before_text
+
+    assert parser.extract_tables().code in {0, 1}
+    assert page.rotation == original_rotation
+    assert (page.rect.width, page.rect.height) == original_size
+    assert parser.extract_text().code == 1
+    assert page.rotation == original_rotation
+    assert (page.rect.width, page.rect.height) == original_size
+
+    after = parser.extract_text_in_region(region)
+    after_text = " ".join(block.text for block in after.data)
+    assert after_text == before_text
+    partial_after = parser.extract_text_in_region(partial_region)
+    partial_after_text = " ".join(block.text for block in partial_after.data)
+    assert partial_after_text == partial_before_text
+    parser.close()
+
+    failing_parser = PDFParser(pdf_path)
+    failing_page = failing_parser._get_pdf_doc()[0]
+
+    def fail_extraction(*args, **kwargs):
+        raise RuntimeError("extractor failed")
+
+    monkeypatch.setattr(
+        "hexai_pdf_parser.extractors.text_extractor.TextExtractor.extract_blocks",
+        fail_extraction,
+    )
+    assert failing_parser.extract_text().code == -1
+    assert failing_page.rotation == original_rotation
+    assert (failing_page.rect.width, failing_page.rect.height) == original_size
+
+
+def test_separate_parser_instances_open_separate_documents(tmp_dir, monkeypatch):
+    pdf_path = os.path.join(tmp_dir, "two-parsers.pdf")
+    make_text_pdf(pdf_path, text="Hello")
+    real_open = fitz.open
+    opened = []
+
+    def counted_open(*args, **kwargs):
+        document = real_open(*args, **kwargs)
+        opened.append(document)
+        return document
+
+    monkeypatch.setattr(fitz, "open", counted_open)
+    first = PDFParser(pdf_path)
+    second = PDFParser(pdf_path)
+    assert first.classify_page(0).code == 1
+    assert second.classify_page(0).code == 1
+
+    assert len(opened) == 2
+    assert opened[0] is not opened[1]
+    assert not opened[0].is_closed
+    assert not opened[1].is_closed
+    first.close()
+    second.close()
+    assert opened[0].is_closed
+    assert opened[1].is_closed

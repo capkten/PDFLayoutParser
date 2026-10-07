@@ -30,6 +30,8 @@ from __future__ import annotations
 
 import re
 import bisect
+from html import escape
+from pathlib import Path
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
@@ -37,7 +39,15 @@ from typing import Any, Dict, List, Optional, Tuple
 import fitz
 import copy
 
-from hexai_pdf_parser.core.models import BBox, Cell, CellStructure, Table, TableStructure, TextBlock
+from hexai_pdf_parser.core.models import (
+    ApiResult,
+    BBox,
+    Cell,
+    CellStructure,
+    Table,
+    TableStructure,
+    TextBlock,
+)
 from hexai_pdf_parser.page_normalizer import normalize_page_rotation
 
 # Pre-compiled regex for numeric token classification (used per-word)
@@ -94,17 +104,24 @@ class _RegionRowView:
 class TableExtractor:
     """Extract tables from a single PDF page using line-projection."""
 
+    # The chart mask is padded around bars, so suppress a model candidate only
+    # when most of that candidate is chart area.
+    _CHART_CANDIDATE_OVERLAP_THRESHOLD = 0.5
+
     def __init__(
         self,
-        line_tolerance: float = 2.0,
+        line_tolerance: float = 2.3,
         merge_group_tol: float = 0.3,
         row_gap_threshold: float = 30.0,
         fallback_max_cols: int = 30,
         fallback_max_tables: int = 10,
         ml_model_path: Optional[str] = None,
         ml_confidence: float = 0.40,
+        ml_render_dpi: Optional[int] = None,
         table_config: Optional[TableConfig] = None,
         debug_pipeline: bool = False,
+        use_ml_table_detector: bool = True,
+        wired_line_tolerance: Optional[float] = None,
     ):
         self.line_tolerance = line_tolerance
         self.merge_group_tol = merge_group_tol
@@ -113,6 +130,8 @@ class TableExtractor:
         self.fallback_max_tables = fallback_max_tables
         self._ml_model_path = ml_model_path
         self._ml_confidence = ml_confidence
+        self.ml_render_dpi = ml_render_dpi if ml_render_dpi is not None else 72
+        self._use_ml_table_detector = use_ml_table_detector
         self._ml_detector = None  # Lazy initialization
         self._last_text_alignment_debug: Optional[dict] = None
         self.debug_pipeline = debug_pipeline
@@ -124,7 +143,12 @@ class TableExtractor:
 
         # Unified Wired (Chinese line grid + English zebra) and Wireless extractors
         self._wired_extractor = WiredTableExtractor(
-            line_tolerance=self.line_tolerance, merge_group_tol=self.merge_group_tol
+            line_tolerance=(
+                self.line_tolerance
+                if wired_line_tolerance is None
+                else wired_line_tolerance
+            ),
+            merge_group_tol=self.merge_group_tol,
         )
         self._wireless_extractor = WirelessTableExtractor(line_tolerance=self.line_tolerance)
         self._wireless_extractor._legacy_text_alignment_callback = (
@@ -141,6 +165,8 @@ class TableExtractor:
             self.fallback_max_tables = settings.fallback_max_tables
             self._separator_min_width = settings.separator_min_width
             self._separator_max_height = settings.separator_max_height
+            if ml_render_dpi is None and hasattr(settings, "ml_render_dpi"):
+                self.ml_render_dpi = settings.ml_render_dpi
         else:
             self._separator_min_width = 200.0
             self._separator_max_height = 1.5
@@ -313,6 +339,18 @@ class TableExtractor:
             and min(left.y1, right.y1) > max(left.y0, right.y0)
         )
 
+    @staticmethod
+    def _bbox_overlap_ratio(left: BBox, right: BBox) -> float:
+        """Return the positive overlap area as a fraction of ``left``."""
+        ix0 = max(left.x0, right.x0)
+        iy0 = max(left.y0, right.y0)
+        ix1 = min(left.x1, right.x1)
+        iy1 = min(left.y1, right.y1)
+        left_area = (left.x1 - left.x0) * (left.y1 - left.y0)
+        if ix1 <= ix0 or iy1 <= iy0 or left_area <= 0:
+            return 0.0
+        return ((ix1 - ix0) * (iy1 - iy0)) / left_area
+
     def _extract_model_tables(
         self,
         page: fitz.Page,
@@ -331,6 +369,7 @@ class TableExtractor:
                 self._ml_detector = MLTableDetector(
                     model_path=self._ml_model_path,
                     confidence_threshold=self._ml_confidence,
+                    render_dpi=self.ml_render_dpi,
                 )
             model_items = self._ml_detector.detect_with_scores(page)
             model_items = self._filter_contained_bboxes(model_items)
@@ -341,15 +380,57 @@ class TableExtractor:
         if not model_items:
             return list(wired_tables or [])
 
+        return self._recover_tables_from_regions(
+            page,
+            regions=model_items,
+            wired_tables=wired_tables,
+            page_language=page_language,
+        )
+
+    def _recover_tables_from_regions(
+        self,
+        page: fitz.Page,
+        regions: List[Tuple[BBox, float]],
+        wired_tables: Optional[List[Table]] = None,
+        page_language: Optional[str] = None,
+    ) -> List[Table]:
+        """Recover detected regions, preferring wired results.
+
+        A chart mask is used only when it belongs to this page and covers at
+        least half of the candidate bbox; small overlaps remain recoverable.
+        """
+        if page_language is None:
+            from hexai_pdf_parser.extractors.language_detector import detect_page_language
+
+            page_language = detect_page_language(page)
+
         tables: List[Table] = []
         valid_wired_tables = list(wired_tables or [])
+        chart_regions: List[fitz.Rect] = []
+        if getattr(self._wired_extractor, "_last_bar_chart_page", None) is page:
+            chart_regions = getattr(
+                self._wired_extractor, "_last_bar_chart_regions", []
+            )
         if page_language in {"zh", "mixed"}:
             valid_wired_tables = [
                 self._recover_hybrid_wired_table(page, table, page_language)
                 for table in valid_wired_tables
             ]
         included_wired: set[int] = set()
-        for bbox, score in model_items:
+        for item in regions:
+            if len(item) >= 3:
+                bbox, score, fallback_table = item[0], item[1], item[2]
+            else:
+                bbox, score = item[0], item[1]
+                fallback_table = None
+
+            if any(
+                self._bbox_overlap_ratio(bbox, region)
+                >= self._CHART_CANDIDATE_OVERLAP_THRESHOLD
+                for region in chart_regions
+            ):
+                continue
+
             bbox_h = max(1.0, bbox.y1 - bbox.y0)
             full_matching_wired = [
                 table
@@ -396,6 +477,8 @@ class TableExtractor:
                     except Exception:
                         region_tables = []
                     region_tables = [t for t in region_tables if t.cols > 1]
+                    if not region_tables and fallback_table is not None:
+                        region_tables = [fallback_table]
             tables.extend(region_tables)
 
         tables.extend(
@@ -405,6 +488,43 @@ class TableExtractor:
             and not any(self._bbox_overlaps(table.bbox, t.bbox) for t in tables)
         )
         return tables
+
+    def _extract_rule_tables(
+        self,
+        page: fitz.Page,
+        candidates: List[Table],
+        page_language: str,
+    ) -> List[Table]:
+        """Return rule/native-span candidates without invoking the ML detector."""
+        wired_tables = [
+            table
+            for table in candidates
+            if table.source == "line_projection"
+        ]
+        wireless_candidates = [
+            candidate
+            for candidate in candidates
+            if candidate.source not in {"line_projection", "wireless_page_signal"}
+        ]
+        raw_items = [
+            (candidate.bbox, candidate.confidence)
+            for candidate in wireless_candidates
+        ]
+        filtered_items = self._filter_contained_bboxes(raw_items)
+        filtered_items = self._refine_overlapping_model_bboxes(filtered_items, page)
+        rule_regions = []
+        for bbox, score in filtered_items:
+            orig = next(
+                (c for c in wireless_candidates if self._bbox_overlaps(c.bbox, bbox)),
+                None,
+            )
+            rule_regions.append((bbox, score, orig))
+        return self._recover_tables_from_regions(
+            page,
+            regions=rule_regions,
+            wired_tables=wired_tables,
+            page_language=page_language,
+        )
 
     def _recover_hybrid_wired_table(
         self, page: fitz.Page, table: Table, page_language: str
@@ -574,9 +694,15 @@ class TableExtractor:
             v_lines=table.v_lines,
         )
 
-    def extract(self, page: fitz.Page) -> List[Table]:
+    def extract(
+        self,
+        page: fitz.Page,
+        *,
+        page_already_normalized: bool = False,
+    ) -> List[Table]:
         """Detect rule candidates, then use the model for final table results."""
-        normalize_page_rotation(page)
+        if not page_already_normalized:
+            normalize_page_rotation(page)
         from hexai_pdf_parser.extractors.language_detector import detect_page_language
 
         page_language = detect_page_language(page)
@@ -601,9 +727,14 @@ class TableExtractor:
         wired_tables = [
             table for table in candidates if table.source == "line_projection"
         ]
-        tables = self._extract_model_tables(
-            page, wired_tables=wired_tables, page_language=page_language
-        )
+        if self._use_ml_table_detector:
+            tables = self._extract_model_tables(
+                page, wired_tables=wired_tables, page_language=page_language
+            )
+        else:
+            tables = self._extract_rule_tables(
+                page, candidates=candidates, page_language=page_language
+            )
 
         # Apply layout rule system when a config with profiles is provided.
         if self._table_config and self._table_config.profiles:
@@ -664,6 +795,8 @@ class TableExtractor:
             cells=clamped_cells,
             confidence=table.confidence,
             source=table.source,
+            h_lines=table.h_lines,
+            v_lines=table.v_lines,
         )
 
     @staticmethod
@@ -781,6 +914,151 @@ class TableExtractor:
             )
 
         return structures
+
+    @staticmethod
+    def _coerce_to_bbox(
+        table_bbox: Any, page: fitz.Page
+    ) -> Optional[BBox]:
+        """Convert various bbox representations to a BBox object in page points."""
+        if isinstance(table_bbox, BBox):
+            return table_bbox
+        if isinstance(table_bbox, (list, tuple)) and len(table_bbox) >= 4:
+            return BBox(
+                float(table_bbox[0]),
+                float(table_bbox[1]),
+                float(table_bbox[2]),
+                float(table_bbox[3]),
+            )
+        if isinstance(table_bbox, dict):
+            w, h = float(page.rect.width), float(page.rect.height)
+            x0 = float(table_bbox.get("x0", 0.0))
+            y0 = float(table_bbox.get("y0", 0.0))
+            x1 = float(table_bbox.get("x1", 0.0))
+            y1 = float(table_bbox.get("y1", 0.0))
+            if (
+                0.0 <= x0 <= 1.0
+                and 0.0 <= y0 <= 1.0
+                and 0.0 <= x1 <= 1.0
+                and 0.0 <= y1 <= 1.0
+                and w > 1.0
+                and h > 1.0
+            ):
+                x0 *= w
+                y0 *= h
+                x1 *= w
+                y1 *= h
+            return BBox(x0, y0, x1, y1)
+        if (
+            hasattr(table_bbox, "x0")
+            and hasattr(table_bbox, "y0")
+            and hasattr(table_bbox, "x1")
+            and hasattr(table_bbox, "y1")
+        ):
+            return BBox(
+                float(table_bbox.x0),
+                float(table_bbox.y0),
+                float(table_bbox.x1),
+                float(table_bbox.y1),
+            )
+        return None
+
+    def extract_table_in_region(
+        self,
+        page: fitz.Page,
+        table_bbox: BBox | tuple[float, float, float, float] | list[float] | dict,
+        confidence: Optional[float] = None,
+        page_language: Optional[str] = None,
+    ) -> Optional[Table]:
+        """Extract a single table from a designated bounding box.
+
+        This method bypasses full-page candidate scanning and ML object detection.
+        It directly evaluates the specified region using:
+        1. Wired table extraction (vector lines and grid topology).
+        2. Wireless table structure recovery (native-span structure recovery).
+
+        Args:
+            page: The PyMuPDF Page object.
+            table_bbox: Target region as BBox, tuple/list (x0, y0, x1, y1),
+                or dict with x0, y0, x1, y1 (supports 0~1 normalized coordinates).
+            confidence: Optional confidence override.
+            page_language: Optional language ("zh", "en", "mixed"). If None, auto-detected.
+
+        Returns:
+            The extracted Table or None if no valid table structure was found.
+        """
+        normalize_page_rotation(page)
+        bbox = self._coerce_to_bbox(table_bbox, page)
+        if bbox is None:
+            return None
+
+        if page_language is None:
+            from hexai_pdf_parser.extractors.language_detector import detect_page_language
+
+            page_language = detect_page_language(page)
+
+        # 1. Try wired table extraction inside the region
+        try:
+            wired_tables = self._wired_extractor.extract(
+                page,
+                table_bbox=bbox,
+                confidence=confidence,
+            )
+        except Exception:
+            wired_tables = []
+
+        valid_wired = [
+            t for t in wired_tables if t.cols > 1 and t.rows >= 1 and len(t.cells) > 0
+        ]
+        if valid_wired:
+            table = max(valid_wired, key=lambda t: (len(t.cells), t.rows * t.cols))
+            if page_language in {"zh", "mixed"}:
+                table = self._recover_hybrid_wired_table(page, table, page_language)
+                table = normalize_table_headers(table, page)
+                table = normalize_complex_financial_header(table, page)
+            if self._table_config and self._table_config.profiles:
+                applied = self._apply_layout_rules(page, [table])
+                if applied:
+                    table = applied[0]
+            return self._clamp_table_to_page(table, page)
+
+        # 2. Fallback to wireless table structure recovery
+        try:
+            wireless_tables = self._wireless_extractor.extract(
+                page,
+                table_bbox=bbox,
+                confidence=confidence,
+                page_language=page_language,
+            )
+        except Exception:
+            wireless_tables = []
+
+        valid_wireless = [
+            t for t in wireless_tables if t.cols > 1 and t.rows >= 1 and len(t.cells) > 0
+        ]
+        if valid_wireless:
+            table = max(valid_wireless, key=lambda t: (len(t.cells), t.rows * t.cols))
+            if page_language in {"zh", "mixed"}:
+                table = normalize_table_headers(table, page)
+                table = normalize_complex_financial_header(table, page)
+            if self._table_config and self._table_config.profiles:
+                applied = self._apply_layout_rules(page, [table])
+                if applied:
+                    table = applied[0]
+            return self._clamp_table_to_page(table, page)
+
+        return None
+
+    def _extract_english(
+        self,
+        page: fitz.Page,
+        table_bbox: Optional[BBox] = None,
+        confidence: Optional[float] = None,
+    ) -> List[Table]:
+        """Extract tables from English financial reports.
+
+        Uses color-alternating row backgrounds as strong row signals.
+        """
+        return self._en_extractor.extract(page, table_bbox=table_bbox, confidence=confidence)
 
     def _collect_page_text_lines(self, page: fitz.Page) -> List[str]:
         """Collect normalized text lines from a page for profile matching."""
@@ -4246,3 +4524,283 @@ class TableExtractor:
             max(c.bbox.y1 for c in chars),
         )
         return TextBlock(text=full_text, bbox=tb, chars=chars)
+
+    # ------------------------------------------------------------------
+    # Main line-projection extraction
+    # ------------------------------------------------------------------
+
+    def _extract_via_lines(self, page: fitz.Page) -> List[Table]:
+        """Extract tables using line-projection approach."""
+        h_lines, v_lines = self._extract_lines_from_drawings(page)
+
+        if self.debug_pipeline:
+            self._last_pipeline_debug["raw_lines"] = {
+                "horizontal": [self._line_to_list(line) for line in h_lines],
+                "vertical": [self._line_to_list(line) for line in v_lines],
+            }
+
+        if len(h_lines) < 2 or len(v_lines) < 2:
+            return []
+
+        h_lines = self._merge_h_lines(h_lines)
+        v_lines = self._merge_v_lines(v_lines)
+
+        if self.debug_pipeline:
+            self._last_pipeline_debug["merged_lines"] = {
+                "horizontal": [self._line_to_list(line) for line in h_lines],
+                "vertical": [self._line_to_list(line) for line in v_lines],
+            }
+
+        if len(h_lines) < 2 or len(v_lines) < 2:
+            return []
+
+        table_regions = self._find_table_regions(h_lines, v_lines, page=page)
+
+        if self.debug_pipeline:
+            self._last_pipeline_debug["line_regions"] = [
+                {
+                    "bbox": self._rect_to_dict(
+                        fitz.Rect(bbox.x0, bbox.y0, bbox.x1, bbox.y1)
+                    ),
+                    "horizontal": [self._line_to_list(line) for line in region_h],
+                    "vertical": [self._line_to_list(line) for line in region_v],
+                }
+                for bbox, region_h, region_v in table_regions
+            ]
+
+        if not table_regions:
+            return []
+
+        tables = []
+        for table_bbox, region_h_lines, region_v_lines in table_regions:
+            cells = self._build_cells_for_region(
+                table_bbox, region_h_lines, region_v_lines
+            )
+            if self.debug_pipeline:
+                self._last_pipeline_debug["line_cells"].append(
+                    {
+                        "bbox": self._rect_to_dict(
+                            fitz.Rect(
+                                table_bbox.x0,
+                                table_bbox.y0,
+                                table_bbox.x1,
+                                table_bbox.y1,
+                            )
+                        ),
+                        "cells": [
+                            {
+                                "row_index": cell.row_index,
+                                "col_index": cell.col_index,
+                                "rowspan": cell.rowspan,
+                                "colspan": cell.colspan,
+                                "bbox": {
+                                    "x0": float(cell.bbox.x0),
+                                    "y0": float(cell.bbox.y0),
+                                    "x1": float(cell.bbox.x1),
+                                    "y1": float(cell.bbox.y1),
+                                },
+                            }
+                            for cell in cells
+                        ],
+                    }
+                )
+            if not cells:
+                continue
+
+            cells = self._assign_text_to_cells(cells, page)
+
+            # Merge over-segmented columns (empty spacer columns)
+            cells = self._merge_oversegmented_columns(cells)
+
+            row_count = max((c.row_index for c in cells), default=-1) + 1
+            col_count = max((c.col_index for c in cells), default=-1) + 1
+
+            if row_count >= 1 and col_count >= 1 and cells:
+                # Filter empty false positives (e.g. decorative single lines with height < 6pt and no text)
+                has_text = any(c.text.strip() for c in cells)
+                table_height = table_bbox.y1 - table_bbox.y0
+                if not has_text and (table_height < 6.0 or row_count * col_count <= 1):
+                    continue
+
+                tables.append(
+                    Table(
+                        bbox=table_bbox,
+                        rows=row_count,
+                        cols=col_count,
+                        cells=cells,
+                        confidence=0.9,
+                        source="line_projection",
+                    )
+                )
+
+        return tables
+
+    # ------------------------------------------------------------------
+    # PyMuPDF fallback
+    # ------------------------------------------------------------------
+
+    def _extract_via_pymupdf(self, page: fitz.Page) -> List[Table]:
+        """Fallback using PyMuPDF find_tables()."""
+        try:
+            tables_result = page.find_tables()
+        except AttributeError:
+            return []
+
+        tables = []
+        for table in tables_result.tables:
+            bbox = BBox(*table.bbox)
+            rows_data = table.extract()
+            row_count = len(rows_data)
+            col_count = len(rows_data[0]) if row_count > 0 else 0
+
+            cells = []
+            cell_bboxes = table.cells if hasattr(table, "cells") else []
+            cell_idx = 0
+
+            for r_idx, row in enumerate(rows_data):
+                for c_idx, text in enumerate(row):
+                    if cell_idx < len(cell_bboxes):
+                        cb = BBox(*cell_bboxes[cell_idx])
+                    else:
+                        cb = BBox(0.0, 0.0, 0.0, 0.0)
+
+                    cells.append(
+                        Cell(
+                            text=text or "",
+                            row_index=r_idx,
+                            col_index=c_idx,
+                            bbox=cb,
+                        )
+                    )
+                    cell_idx += 1
+
+            tables.append(
+                Table(
+                    bbox=bbox,
+                    rows=row_count,
+                    cols=col_count,
+                    cells=cells,
+                    confidence=1.0,
+                    source="PyMuPDF.find_tables",
+                )
+            )
+
+        return tables
+
+
+def extract_table_from_region(
+    source: str | Path | fitz.Page | fitz.Document,
+    table_bbox: BBox | tuple[float, float, float, float] | list[float] | dict,
+    page_index: int = 0,
+    *,
+    table_config: Optional[TableConfig] = None,
+    confidence: Optional[float] = None,
+    page_language: Optional[str] = None,
+) -> ApiResult:
+    """Extract a table from a specified region without running ML table detection.
+
+    Args:
+        source: PDF file path (str or Path), fitz.Page, or fitz.Document.
+        table_bbox: Bounding box of the table (BBox, tuple, list, or dict).
+        page_index: 0-based page index (used when source is file path or Document).
+        table_config: Optional TableConfig.
+        confidence: Optional confidence score.
+        page_language: Optional language code ("zh", "en", "mixed").
+
+    Returns:
+        ApiResult:
+        - code=1, message="table extracted", data=Table if a table is found.
+        - code=0, message="no table found in region", data=None if no table is found.
+        - code=-1, message=str(exc), data=None if an exception occurs.
+    """
+    def _do():
+        extractor = TableExtractor(
+            table_config=table_config,
+            use_ml_table_detector=False,
+        )
+
+        if isinstance(source, fitz.Page):
+            return extractor.extract_table_in_region(
+                source,
+                table_bbox=table_bbox,
+                confidence=confidence,
+                page_language=page_language,
+            )
+
+        if isinstance(source, fitz.Document):
+            page = source[page_index]
+            return extractor.extract_table_in_region(
+                page,
+                table_bbox=table_bbox,
+                confidence=confidence,
+                page_language=page_language,
+            )
+
+        doc = fitz.open(str(source))
+        try:
+            page = doc[page_index]
+            return extractor.extract_table_in_region(
+                page,
+                table_bbox=table_bbox,
+                confidence=confidence,
+                page_language=page_language,
+            )
+        finally:
+            doc.close()
+
+    try:
+        table = _do()
+        if table is not None:
+            return ApiResult(code=1, message="table extracted", data=table)
+        return ApiResult(code=0, message="no table found in region", data=None)
+    except Exception as exc:
+        return ApiResult(code=-1, message=str(exc), data=None)
+
+
+def table_to_html(table: Table) -> str:
+    """Convert a table model to a semantic HTML table."""
+    cells_by_row: Dict[int, List[Cell]] = defaultdict(list)
+    for cell in table.cells:
+        cells_by_row[cell.row_index].append(cell)
+
+    rows = []
+    for row_index in range(max(table.rows, 0)):
+        cells = []
+        for cell in sorted(cells_by_row.get(row_index, []), key=lambda item: item.col_index):
+            attributes = []
+            if cell.rowspan > 1:
+                attributes.append(f'rowspan="{cell.rowspan}"')
+            if cell.colspan > 1:
+                attributes.append(f'colspan="{cell.colspan}"')
+            suffix = f" {' '.join(attributes)}" if attributes else ""
+            cells.append(f"<td{suffix}>{escape(cell.text or '')}</td>")
+        rows.append(f"<tr>{''.join(cells)}</tr>")
+
+    return f"<table>{''.join(rows)}</table>"
+
+
+def extract_table_html_from_region(
+    source: str | Path | fitz.Page | fitz.Document,
+    table_bbox: BBox | tuple[float, float, float, float] | list[float] | dict,
+    page_index: int = 0,
+    *,
+    table_config: Optional[TableConfig] = None,
+    confidence: Optional[float] = None,
+    page_language: Optional[str] = None,
+) -> ApiResult:
+    """Extract a table from a region and return its HTML representation."""
+    result = extract_table_from_region(
+        source,
+        table_bbox,
+        page_index=page_index,
+        table_config=table_config,
+        confidence=confidence,
+        page_language=page_language,
+    )
+    if result.code != 1 or result.data is None:
+        return ApiResult(code=result.code, message=result.message, data=None)
+    return ApiResult(
+        code=1,
+        message="table html extracted",
+        data=table_to_html(result.data),
+    )

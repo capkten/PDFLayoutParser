@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+import fitz
 import pytest
 
 import hexai_pdf_parser.writers.render_engine as render_engine_module
@@ -41,3 +42,44 @@ class TestRenderEngine:
         )
 
         assert calls == ["scanned"]
+
+    def test_render_page_uses_existing_document(self, tmp_dir):
+        pdf_path = Path(tmp_dir) / "render_existing_page.pdf"
+        make_text_pdf(pdf_path, text="Existing page")
+
+        document = fitz.open(str(pdf_path))
+        try:
+            render_info = RenderEngine(output_dir=tmp_dir, dpi=72).render_page(
+                document,
+                page_index=0,
+                page=document[0],
+                page_already_normalized=True,
+            )
+        finally:
+            document.close()
+
+        assert render_info.path is not None
+        assert Path(render_info.path).exists()
+
+    def test_render_page_can_skip_normalization(self, tmp_dir, monkeypatch):
+        pdf_path = Path(tmp_dir) / "render_no_normalization.pdf"
+        make_text_pdf(pdf_path, text="Already normalized")
+        calls = []
+        monkeypatch.setattr(
+            render_engine_module,
+            "normalize_page_rotation",
+            lambda _page: calls.append(True),
+        )
+
+        document = fitz.open(str(pdf_path))
+        try:
+            RenderEngine(output_dir=tmp_dir, dpi=72).render_page(
+                document,
+                page_index=0,
+                page=document[0],
+                page_already_normalized=True,
+            )
+        finally:
+            document.close()
+
+        assert calls == []

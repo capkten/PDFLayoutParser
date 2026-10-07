@@ -73,11 +73,8 @@ def _compute_cell_grid_rects(table: Table) -> list[tuple[Cell, fitz.Rect]]:
     has_span = any(c.rowspan > 1 or c.colspan > 1 for c in table.cells)
     if (
         not has_span
-        and table.source != "wireless_span_recovery"
-        and (
-            table.source in ("line_projection", "zebra_background", "wireless", "ml_detection")
-            or len(table.cells) == table.rows * table.cols
-        )
+        and table.source in ("line_projection", "PyMuPDF.find_tables")
+        and len(table.cells) == table.rows * table.cols
     ):
         return [(c, fitz.Rect(c.bbox.x0, c.bbox.y0, c.bbox.x1, c.bbox.y1)) for c in table.cells]
 
@@ -149,13 +146,45 @@ def _compute_cell_grid_rects(table: Table) -> list[tuple[Cell, fitz.Rect]]:
         row_bounds.append(boundary)
     row_bounds.append(tb.y1)
 
+    import statistics
+
     col_bounds = [tb.x0]
     for i in range(len(sorted_cols) - 1):
         c_cur = sorted_cols[i]
         c_nxt = sorted_cols[i + 1]
-        boundary = (col_rights[c_cur] + col_lefts[c_nxt]) / 2.0
-        boundary = max(boundary, col_lefts[c_cur])
-        boundary = min(boundary, col_lefts[c_nxt])
+
+        cur_rights = [
+            c.bbox.x1
+            for c in geometry_cells
+            if c.col_index == c_cur and c.colspan == 1 and c.text.strip()
+        ]
+        nxt_lefts = [
+            c.bbox.x0
+            for c in geometry_cells
+            if c.col_index == c_nxt and c.colspan == 1 and c.text.strip()
+        ]
+
+        if cur_rights and nxt_lefts:
+            max_cur_r = max(cur_rights)
+            min_nxt_l = min(nxt_lefts)
+            if max_cur_r <= min_nxt_l:
+                boundary = (max_cur_r + min_nxt_l) / 2.0
+            else:
+                dominant_nxt = [x for x in nxt_lefts if x >= max_cur_r]
+                dominant_cur = [x for x in cur_rights if x <= min_nxt_l]
+                if len(dominant_nxt) >= len(nxt_lefts) * 0.5:
+                    boundary = (max_cur_r + min(dominant_nxt)) / 2.0
+                elif len(dominant_cur) >= len(cur_rights) * 0.5:
+                    boundary = (max(dominant_cur) + min_nxt_l) / 2.0
+                else:
+                    boundary = (statistics.median(cur_rights) + statistics.median(nxt_lefts)) / 2.0
+            boundary = max(boundary, col_lefts.get(c_cur, boundary))
+            boundary = min(boundary, col_rights.get(c_nxt, boundary))
+        else:
+            boundary = (col_rights[c_cur] + col_lefts[c_nxt]) / 2.0
+            boundary = max(boundary, col_lefts[c_cur])
+            boundary = min(boundary, col_lefts[c_nxt])
+
         col_bounds.append(boundary)
     col_bounds.append(tb.x1)
 
@@ -173,6 +202,41 @@ def _compute_cell_grid_rects(table: Table) -> list[tuple[Cell, fitz.Rect]]:
         results.append((c, fitz.Rect(x0, y0, x1, y1)))
 
     return results
+
+
+def _draw_physical_line_segments(shape, table: Table) -> None:
+    """Draw the physical line segments carried by a wired table."""
+    table_rect = fitz.Rect(
+        table.bbox.x0, table.bbox.y0, table.bbox.x1, table.bbox.y1
+    )
+
+    for line in table.h_lines or []:
+        try:
+            x0, y, x1, _ = (float(value) for value in line)
+        except (TypeError, ValueError):
+            continue
+        if y < table_rect.y0 or y > table_rect.y1:
+            continue
+        start = max(table_rect.x0, min(x0, x1))
+        end = min(table_rect.x1, max(x0, x1))
+        if end <= start:
+            continue
+        shape.draw_line(fitz.Point(start, y), fitz.Point(end, y))
+        shape.finish(color=CELL_BORDER_COLOR, width=0.8)
+
+    for line in table.v_lines or []:
+        try:
+            x, y0, _, y1 = (float(value) for value in line)
+        except (TypeError, ValueError):
+            continue
+        if x < table_rect.x0 or x > table_rect.x1:
+            continue
+        start = max(table_rect.y0, min(y0, y1))
+        end = min(table_rect.y1, max(y0, y1))
+        if end <= start:
+            continue
+        shape.draw_line(fitz.Point(x, start), fitz.Point(x, end))
+        shape.finish(color=CELL_BORDER_COLOR, width=0.8)
 
 
 LAYOUT_TEXT_COLOR = (0.15, 0.65, 0.35)       # Emerald green for natural text blocks
@@ -239,10 +303,14 @@ def draw_tables_on_page(
         table_rect = fitz.Rect(tb.x0, tb.y0, tb.x1, tb.y1)
 
         # 2a. Draw full 2D Cell Grid boundaries (Blue) & cell text blocks (Green)
+        has_physical_lines = table.h_lines is not None or table.v_lines is not None
+        if has_physical_lines:
+            _draw_physical_line_segments(shape, table)
         cell_grid_pairs = _compute_cell_grid_rects(table)
         for cell, grid_rect in cell_grid_pairs:
-            shape.draw_rect(grid_rect)
-            shape.finish(color=CELL_BORDER_COLOR, width=0.8)
+            if not has_physical_lines:
+                shape.draw_rect(grid_rect)
+                shape.finish(color=CELL_BORDER_COLOR, width=0.8)
 
             if cell.text.strip():
                 bx0 = max(grid_rect.x0, cell.bbox.x0)
@@ -379,6 +447,7 @@ def render_table_visualization(
     page_index: Optional[int] = None,
     dpi: int = 200,
     page_type: Optional[str] = None,
+    page_already_normalized: bool = False,
 ) -> str:
     """Render a PDF page with table detection overlays and save to output_path.
 
@@ -405,7 +474,8 @@ def render_table_visualization(
 
     if isinstance(source, fitz.Page):
         # Draw directly on the provided page
-        normalize_page_rotation(source)
+        if not page_already_normalized:
+            normalize_page_rotation(source)
         draw_tables_on_page(source, tables)
         draw_page_type_label(source, page_type)
         pix = source.get_pixmap(matrix=matrix, alpha=False)

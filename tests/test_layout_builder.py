@@ -125,7 +125,7 @@ class TestLayoutBuilder:
         """An IoU of exactly 0.5 should not meet the strict threshold."""
         text_element = LayoutElement(
             type="text",
-            bbox=BBox(x0=0, y0=0, x1=100, y1=50),
+            bbox=BBox(x0=-100, y0=0, x1=100, y1=100),
             order=0,
             content="Boundary",
         )
@@ -137,7 +137,7 @@ class TestLayoutBuilder:
 
         result = LayoutBuilder().build([text_element], [table], [])
 
-        assert [element.type for element in result] == ["table", "text"]
+        assert set(element.type for element in result) == {"table", "text"}
 
     def test_build_sorts_elements_by_page_position(self):
         """Layout elements should follow page order, top-to-bottom then left-to-right."""

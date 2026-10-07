@@ -1,6 +1,10 @@
 """Table extraction, structure parsing, and rule engine modules."""
 
-from hexai_pdf_parser.tables.table_extractor import TableExtractor
+from hexai_pdf_parser.tables.table_extractor import (
+    TableExtractor,
+    extract_table_html_from_region,
+    table_to_html,
+)
 from hexai_pdf_parser.tables.base_table_extractor import BaseTableExtractor
 from hexai_pdf_parser.tables.extractors import (
     ChineseTableExtractor,
@@ -21,6 +25,8 @@ from hexai_pdf_parser.tables.wireless_table_recovery import recover_wireless_tab
 
 __all__ = [
     "TableExtractor",
+    "extract_table_html_from_region",
+    "table_to_html",
     "BaseTableExtractor",
     "EnglishTableExtractor",
     "ChineseTableExtractor",

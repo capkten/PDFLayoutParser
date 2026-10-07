@@ -62,6 +62,80 @@ def test_rule_hit_calls_model_and_only_model_tables_are_final(monkeypatch):
     assert rule_table not in result
 
 
+def test_model_disabled_uses_wireless_candidates_without_detector(monkeypatch):
+    extractor = TableExtractor(use_ml_table_detector=False)
+    wireless = _table("wireless_span_recovery", 20)
+    _configure_rule_candidates(extractor, [])
+    extractor._extract_via_text_alignment = (
+        lambda page, excluded_regions=None: [wireless]
+    )
+
+    class FailDetector:
+        def detect_with_scores(self, page):
+            raise AssertionError("ML detector must not run when disabled")
+
+    extractor._ml_detector = FailDetector()
+    monkeypatch.setattr(
+        "hexai_pdf_parser.tables.table_extractor.normalize_page_rotation",
+        lambda page: None,
+        raising=False,
+    )
+
+    assert extractor.extract(_page()) == [wireless]
+
+
+def test_model_disabled_drops_wireless_page_signal(monkeypatch):
+    extractor = TableExtractor(use_ml_table_detector=False)
+    extractor._wireless_extractor.extract_zebra = lambda page: []
+    extractor._wired_extractor.extract = lambda page: []
+
+    def signal_alignment(page, excluded_regions=None):
+        extractor._last_wireless_recovery = {
+            "page_signal": {
+                "matched": True,
+                "bbox": {"x0": 20.0, "y0": 40.0, "x1": 380.0, "y1": 180.0},
+            }
+        }
+        return []
+
+    extractor._extract_via_text_alignment = signal_alignment
+
+    class FailDetector:
+        def detect_with_scores(self, page):
+            raise AssertionError("ML detector must not run for signal-only page")
+
+    extractor._ml_detector = FailDetector()
+    monkeypatch.setattr(
+        "hexai_pdf_parser.extractors.language_detector.detect_page_language",
+        lambda page: "mixed",
+    )
+    monkeypatch.setattr(
+        "hexai_pdf_parser.tables.table_extractor.normalize_page_rotation",
+        lambda page: None,
+        raising=False,
+    )
+
+    assert extractor.extract(_page()) == []
+
+
+def test_model_disabled_prefers_wired_overlapping_wireless_candidate(monkeypatch):
+    extractor = TableExtractor(use_ml_table_detector=False)
+    wired = _table("line_projection", 10)
+    wireless = _table("wireless_span_recovery", 20)
+    extractor._wireless_extractor.extract_zebra = lambda page: []
+    extractor._wired_extractor.extract = lambda page: [wired]
+    extractor._extract_via_text_alignment = (
+        lambda page, excluded_regions=None: [wireless]
+    )
+    monkeypatch.setattr(
+        "hexai_pdf_parser.tables.table_extractor.normalize_page_rotation",
+        lambda page: None,
+        raising=False,
+    )
+
+    assert extractor.extract(_page()) == [wired]
+
+
 def test_rule_miss_does_not_call_model(monkeypatch):
     extractor = TableExtractor()
     _configure_rule_candidates(extractor, [])

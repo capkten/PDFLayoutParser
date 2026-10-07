@@ -16,7 +16,7 @@ from hexai_pdf_parser.tables.table_extractor import TableExtractor
 
 _QUERY_SECTION = "查询记录"
 _INSTITUTION_TITLE = "机构查询记录明细"
-_PERSONAL_TITLE = "个人查询记录明细"
+_PERSONAL_TITLES = ("个人查询记录明细", "本人查询记录明细")
 _QUERY_HEADERS = ("编号", "查询日期", "查询机构", "查询原因")
 
 
@@ -36,7 +36,7 @@ def _find_text_line_bboxes(page: fitz.Page, texts: List[str]) -> dict[str, BBox]
                 matches = (
                     text in line_text
                     and _INSTITUTION_TITLE not in line_text
-                    and _PERSONAL_TITLE not in line_text
+                    and not any(pt in line_text for pt in _PERSONAL_TITLES)
                 )
             else:
                 matches = text in line_text
@@ -55,12 +55,12 @@ def _query_regions(page: fitz.Page) -> Optional[List[BBox]]:
     """Build query-detail regions from section titles and spatial boundaries."""
     anchors = _find_text_line_bboxes(
         page,
-        [_QUERY_SECTION, _INSTITUTION_TITLE, _PERSONAL_TITLE],
+        [_QUERY_SECTION, _INSTITUTION_TITLE, *_PERSONAL_TITLES],
     )
     if _QUERY_SECTION not in anchors:
         return []
     institution = anchors.get(_INSTITUTION_TITLE)
-    personal = anchors.get(_PERSONAL_TITLE)
+    personal = next((anchors[pt] for pt in _PERSONAL_TITLES if pt in anchors), None)
     if institution is None or personal is None or personal.y0 <= institution.y0:
         return []
 
@@ -73,28 +73,34 @@ def _query_regions(page: fitz.Page) -> Optional[List[BBox]]:
 
 
 def _trim_query_table(table: Table) -> Table:
-    """Drop section-title rows before the four-column query header."""
+    """Drop arbitrary title rows before header, keeping query section titles in table."""
     header_row = None
     for row_index in range(table.rows):
-        row_text = {
-            cell.text.strip()
-            for cell in table.cells
-            if cell.row_index == row_index
-        }
-        if all(header in row_text for header in _QUERY_HEADERS):
+        cells_in_row = [cell for cell in table.cells if cell.row_index == row_index]
+        row_text_combined = "".join(cell.text.replace(" ", "") for cell in cells_in_row)
+        if all(header in row_text_combined for header in _QUERY_HEADERS):
             header_row = row_index
             break
     if header_row is None or header_row == 0:
         return table
 
+    keep_from_row = header_row
+    if header_row == 1:
+        row0_text = "".join(cell.text.replace(" ", "") for cell in table.cells if cell.row_index == 0)
+        if _INSTITUTION_TITLE in row0_text or any(pt in row0_text for pt in _PERSONAL_TITLES):
+            keep_from_row = 0
+
+    if keep_from_row == 0:
+        return table
+
     cells = []
     for cell in table.cells:
-        if cell.row_index < header_row:
+        if cell.row_index < keep_from_row:
             continue
-        cell.row_index -= header_row
+        cell.row_index -= keep_from_row
         cells.append(cell)
     table.cells = cells
-    table.rows -= header_row
+    table.rows -= keep_from_row
     if cells:
         table.bbox = BBox(
             min(cell.bbox.x0 for cell in cells),
@@ -110,23 +116,101 @@ def _bbox_values(bbox: BBox) -> list[float]:
     return [float(bbox.x0), float(bbox.y0), float(bbox.x1), float(bbox.y1)]
 
 
+def _normalize_spaced_items(
+    items: list[tuple[float, float, float, float, str]],
+) -> list[tuple[float, float, float, float, str]]:
+    """Split items that contain multiple consecutive spaces or strip trailing spaces."""
+    result: list[tuple[float, float, float, float, str]] = []
+    for x0, y0, x1, y1, text in items:
+        stripped = text.strip()
+        if not stripped:
+            continue
+        if re.search(r"\s{2,}", text):
+            matches = list(re.finditer(r"\S+", text))
+            if len(matches) > 1:
+                total_len = max(len(text), 1)
+                char_w = (x1 - x0) / total_len
+                for m in matches:
+                    sub_text = m.group()
+                    sub_x0 = x0 + m.start() * char_w
+                    sub_x1 = x0 + m.end() * char_w
+                    result.append((sub_x0, y0, sub_x1, y1, sub_text))
+                continue
+        if len(stripped) != len(text):
+            m = re.search(r"\S+", text)
+            if m:
+                total_len = max(len(text), 1)
+                char_w = (x1 - x0) / total_len
+                sub_x0 = x0 + m.start() * char_w
+                sub_x1 = x0 + m.end() * char_w
+                result.append((sub_x0, y0, sub_x1, y1, stripped))
+                continue
+        result.append((x0, y0, x1, y1, stripped))
+    return result
+
+
+def _extract_page_char_words(page: fitz.Page) -> list[tuple[float, float, float, float, str]]:
+    """Extract non-whitespace token runs directly from page rawdict using union of exact char bboxes."""
+    try:
+        raw = page.get_text("rawdict")
+    except Exception:
+        return []
+    if not isinstance(raw, dict):
+        return []
+    items: list[tuple[float, float, float, float, str]] = []
+    for b in raw.get("blocks", []):
+        if "lines" not in b:
+            continue
+        for l in b.get("lines", []):
+            for s in l.get("spans", []):
+                chars = s.get("chars", [])
+                if not chars:
+                    continue
+                cur_run = []
+                for ch in chars:
+                    c = ch.get("c", "")
+                    if not c.strip():
+                        if cur_run:
+                            txt = "".join(it["c"] for it in cur_run)
+                            x0 = min(it["bbox"][0] for it in cur_run)
+                            y0 = min(it["bbox"][1] for it in cur_run)
+                            x1 = max(it["bbox"][2] for it in cur_run)
+                            y1 = max(it["bbox"][3] for it in cur_run)
+                            items.append((x0, y0, x1, y1, txt))
+                            cur_run = []
+                    else:
+                        cur_run.append(ch)
+                if cur_run:
+                    txt = "".join(it["c"] for it in cur_run)
+                    x0 = min(it["bbox"][0] for it in cur_run)
+                    y0 = min(it["bbox"][1] for it in cur_run)
+                    x1 = max(it["bbox"][2] for it in cur_run)
+                    y1 = max(it["bbox"][3] for it in cur_run)
+                    items.append((x0, y0, x1, y1, txt))
+    return items
+
+
 def _query_rows(
     page: fitz.Page,
     *,
     bbox: BBox | None = None,
     merged: bool = False,
+    row_tolerance: float = 4.5,
 ) -> list[list[tuple[float, float, float, float, str]]]:
-    """Group query-region words into rows, optionally using merged spans."""
+    """Group query-region words into rows, using exact char bboxes from page."""
     rows: list[list[tuple[float, float, float, float, str]]] = []
-    if merged:
-        source_words = [
-            (word.bbox.x0, word.bbox.y0, word.bbox.x1, word.bbox.y1, word.text)
-            for block in TextExtractor().extract_blocks(page)
-            for line in block.lines
-            for word in line.words
-        ]
-    else:
-        source_words = [word[:5] for word in page.get_text("words")]
+    source_words = _extract_page_char_words(page)
+    if not source_words:
+        if merged:
+            source_words = [
+                (word.bbox.x0, word.bbox.y0, word.bbox.x1, word.bbox.y1, word.text)
+                for block in TextExtractor().extract_blocks(page)
+                for line in block.lines
+                for word in line.words
+            ]
+        else:
+            source_words = [word[:5] for word in page.get_text("words")]
+        source_words = _normalize_spaced_items(source_words)
 
     for x0, y0, x1, y1, text in source_words:
         if not text.strip():
@@ -138,7 +222,7 @@ def _query_rows(
                 continue
         center_y = (y0 + y1) / 2.0
         row = next(
-            (candidate for candidate in rows if abs((candidate[0][1] + candidate[0][3]) / 2.0 - center_y) <= 2.0),
+            (candidate for candidate in rows if abs((candidate[0][1] + candidate[0][3]) / 2.0 - center_y) <= row_tolerance),
             None,
         )
         item = (x0, y0, x1, y1, text)
@@ -152,27 +236,29 @@ def _query_rows(
 def _join_query_items(items: list[tuple[float, float, float, float, str]]) -> str:
     """Join span-backed query words with the main text spacing rules."""
     words = [Word(text=item[4], bbox=BBox(*item[:4])) for item in items]
-    return TextExtractor()._join_words(words)
+    text = TextExtractor()._join_words(words)
+    return re.sub(r"(\b\d)\s+(\d{3}年)", r"\1\2", text)
 
 
 def _is_query_record_row(row: list[tuple[float, float, float, float, str]]) -> bool:
-    """Return True for a row with the four query-record column anchors."""
-    texts = [item[4] for item in row]
-    has_number = any(item[0] < 110 and re.fullmatch(r"\d+", item[4]) for item in row)
-    has_date = any(item[0] >= 120 and item[0] < 240 and "年" in text for item, text in zip(row, texts))
-    has_reason = any(item[0] >= 350 for item in row)
+    """Return True for a row with distinct query number, date, and reason columns."""
+    texts = [item[4].strip() for item in row]
+    has_number = any(item[0] < 110 and re.fullmatch(r"\d+", text) for item, text in zip(row, texts))
+    has_date = any(105.0 <= item[0] < 240 and "年" in text for item, text in zip(row, texts))
+    has_reason = any(item[0] >= 340 for item in row)
     return has_number and has_date and has_reason
 
 
 def _make_query_table(
     page: fitz.Page,
-    *,
     header_index: int | None = None,
     end_index: int | None = None,
+    section_index: int | None = None,
+    is_continuation: bool = False,
 ) -> Table | None:
     """Recover one four-column institution-query table directly from page words."""
     rows = _query_rows(page)
-    if header_index is None:
+    if not is_continuation and header_index is None:
         for index, row in enumerate(rows):
             row_text = "".join(item[4] for item in row)
             if all(header in row_text for header in _QUERY_HEADERS):
@@ -180,30 +266,65 @@ def _make_query_table(
                 break
 
     if header_index is None:
-        record_indices = [index for index, row in enumerate(rows) if _is_query_record_row(row)]
-        if len(record_indices) < 2:
+        target_rows = rows[:end_index] if end_index is not None else rows
+        record_indices = [index for index, row in enumerate(target_rows) if _is_query_record_row(row)]
+        if len(record_indices) < 1:
             return None
         start_index = record_indices[0]
-        end_index = record_indices[-1] + 1
+        last_rec = record_indices[-1]
+        actual_end = last_rec + 1
+        limit = len(target_rows)
+        while actual_end < limit:
+            r = target_rows[actual_end]
+            r_text = "".join(item[4] for item in r).replace(" ", "")
+            if "页" in r_text and "第" in r_text:
+                break
+            if any(t in r_text for t in (_QUERY_SECTION, _INSTITUTION_TITLE, *_PERSONAL_TITLES)):
+                break
+            if any((item[0] + item[2]) / 2.0 >= 220.0 for item in r):
+                actual_end += 1
+            else:
+                break
+        end_index = actual_end
         header_cells: list[Cell] = []
     else:
         start_index = header_index + 1
-        end_index = len(rows) if end_index is None else end_index
+        header_items_by_col: dict[int, list[tuple[float, float, float, float, str]]] = {i: [] for i in range(4)}
+        for item in rows[header_index]:
+            cx = (item[0] + item[2]) / 2.0
+            col = 0 if cx < 105.0 else 1 if cx < 240.0 else 2 if cx < 440.0 else 3
+            header_items_by_col[col].append(item)
         header_cells = [
             Cell(
-                text=header,
+                text=_QUERY_HEADERS[col],
                 row_index=0,
-                col_index=index,
+                col_index=col,
                 bbox=BBox(
-                    item[0], item[1], item[2], item[3]
+                    min(it[0] for it in header_items_by_col[col]),
+                    min(it[1] for it in header_items_by_col[col]),
+                    max(it[2] for it in header_items_by_col[col]),
+                    max(it[3] for it in header_items_by_col[col]),
                 ),
             )
-            for index, header in enumerate(_QUERY_HEADERS)
-            for item in rows[header_index]
-            if header == item[4]
+            for col in range(4)
+            if header_items_by_col[col]
         ]
 
-    region_start_index = header_index if header_index is not None else start_index
+    section_title: str | None = None
+    section_bbox: BBox | None = None
+    if section_index is not None and section_index < (header_index or start_index):
+        s_row = rows[section_index]
+        s_text = "".join(item[4] for item in s_row).strip()
+        if _INSTITUTION_TITLE in s_text or any(pt in s_text for pt in _PERSONAL_TITLES):
+            section_title = s_text
+            section_bbox = BBox(
+                min(item[0] for item in s_row),
+                min(item[1] for item in s_row),
+                max(item[2] for item in s_row),
+                max(item[3] for item in s_row),
+            )
+
+    region_start_index = section_index if section_title is not None else (header_index if header_index is not None else start_index)
     region_start = min(item[1] for item in rows[region_start_index])
     region_end = max(item[3] for item in rows[end_index - 1])
     merged_rows = _query_rows(
@@ -226,7 +347,13 @@ def _make_query_table(
     rows = merged_rows
     end_index = len(rows)
 
-    boundaries = [120.0, 243.0, 410.0]
+    if len(header_cells) == 4:
+        h_sorted = sorted(header_cells, key=lambda c: c.col_index)
+        h_centers = [(c.bbox.x0 + c.bbox.x1) / 2.0 for c in h_sorted]
+        boundaries = [(h_centers[i] + h_centers[i + 1]) / 2.0 for i in range(3)]
+    else:
+        boundaries = [105.0, 240.0, 440.0]
+
     recovered_rows: list[list[tuple[float, float, float, float, str]]] = []
     for row in rows[start_index:end_index]:
         row_text = "".join(item[4] for item in row)
@@ -235,31 +362,95 @@ def _make_query_table(
         if _is_query_record_row(row):
             recovered_rows.append(row)
             continue
-        if recovered_rows and any((item[0] + item[2]) / 2.0 >= 243.0 for item in row):
+        if recovered_rows and any((item[0] + item[2]) / 2.0 >= boundaries[1] for item in row):
             recovered_rows.append(row)
 
-    if not recovered_rows or not any(_is_query_record_row(row) for row in recovered_rows):
+    if not recovered_rows:
+        if header_index is None or len(header_cells) != len(_QUERY_HEADERS):
+            return None
+        cells: list[Cell] = []
+        cur_row = 0
+        if section_title and section_bbox:
+            t_x0 = min(cell.bbox.x0 for cell in header_cells)
+            t_x1 = max(cell.bbox.x1 for cell in header_cells)
+            cells.append(Cell(text=section_title, row_index=0, col_index=0, colspan=4, bbox=BBox(t_x0, section_bbox.y0, t_x1, section_bbox.y1)))
+            cur_row = 1
+        for cell in header_cells:
+            cell.row_index = cur_row
+            cells.append(cell)
+        return Table(
+            bbox=BBox(
+                min(cell.bbox.x0 for cell in cells),
+                min(cell.bbox.y0 for cell in cells),
+                max(cell.bbox.x1 for cell in cells),
+                max(cell.bbox.y1 for cell in cells),
+            ),
+            rows=cur_row + 1,
+            cols=4,
+            cells=cells,
+            confidence=0.95,
+            source="personal_query_recovery",
+        )
+
+    if not any(_is_query_record_row(row) for row in recovered_rows):
         return None
 
-    cells = list(header_cells)
-    row_number = 1 if header_index is not None else 0
+    cells: list[Cell] = []
+    cur_row = 0
+    if section_title and section_bbox:
+        t_x0 = min(min(item[0] for item in row) for row in recovered_rows)
+        t_x1 = max(max(item[2] for item in row) for row in recovered_rows)
+        if header_cells:
+            t_x0 = min(t_x0, min(c.bbox.x0 for c in header_cells))
+            t_x1 = max(t_x1, max(c.bbox.x1 for c in header_cells))
+        cells.append(Cell(
+            text=section_title,
+            row_index=0,
+            col_index=0,
+            colspan=4,
+            bbox=BBox(t_x0, section_bbox.y0, t_x1, section_bbox.y1),
+        ))
+        cur_row = 1
+
+    if header_cells:
+        for c in header_cells:
+            c.row_index = cur_row
+            cells.append(c)
+        cur_row += 1
+
     for row in recovered_rows:
         by_col: dict[int, list[tuple[float, float, float, float, str]]] = {index: [] for index in range(4)}
         for item in row:
             center_x = (item[0] + item[2]) / 2.0
-            col_index = 0 if center_x < boundaries[0] else 1 if center_x < boundaries[1] else 2 if center_x < boundaries[2] else 3
+            if item[4].isdigit() and item[0] < boundaries[0]:
+                col_index = 0
+            elif center_x < boundaries[0]:
+                col_index = 0
+            elif center_x < boundaries[1]:
+                col_index = 1
+            elif center_x < boundaries[2]:
+                col_index = 2
+            else:
+                col_index = 3
             by_col[col_index].append(item)
 
         if not by_col[0]:
-            if row_number <= 1:
+            if cur_row <= (1 if section_title else 0):
                 continue
-            continuation_items = by_col[2] + by_col[3]
-            continuation = _join_query_items(continuation_items)
-            if continuation:
-                target_col = 3 if by_col[3] else 2
-                previous = next(cell for cell in cells if cell.row_index == row_number - 1 and cell.col_index == target_col)
-                previous.text += continuation
-                previous.bbox = BBox(previous.bbox.x0, previous.bbox.y0, max(previous.bbox.x1, max(item[2] for item in continuation_items)), max(previous.bbox.y1, max(item[3] for item in continuation_items)))
+            for col_idx in (2, 3):
+                if not by_col[col_idx]:
+                    continue
+                continuation = _join_query_items(by_col[col_idx])
+                if continuation:
+                    previous = next((cell for cell in cells if cell.row_index == cur_row - 1 and cell.col_index == col_idx), None)
+                    if previous is not None:
+                        previous.text += continuation
+                        previous.bbox = BBox(
+                            previous.bbox.x0,
+                            previous.bbox.y0,
+                            max(previous.bbox.x1, max(item[2] for item in by_col[col_idx])),
+                            max(previous.bbox.y1, max(item[3] for item in by_col[col_idx])),
+                        )
             continue
 
         row_y0 = min(item[1] for item in row)
@@ -279,12 +470,12 @@ def _make_query_table(
                 x1 = boundaries[col_index] if col_index < 3 else page.rect.width
                 bbox = BBox(x0, row_y0, x1, row_y1)
                 text = ""
-            cells.append(Cell(text, row_number, col_index, bbox))
-        row_number += 1
+            cells.append(Cell(text, cur_row, col_index, bbox))
+        cur_row += 1
 
-    if row_number <= (1 if header_index is not None else 0):
+    if cur_row <= (2 if (section_title and header_cells) else (1 if (section_title or header_cells) else 0)):
         return None
-    all_cells = [cell for cell in cells if cell.text or cell.row_index == 0]
+    all_cells = [cell for cell in cells if cell.text or cell.row_index <= (1 if section_title else 0)]
     return Table(
         bbox=BBox(
             min(cell.bbox.x0 for cell in all_cells),
@@ -292,7 +483,7 @@ def _make_query_table(
             max(cell.bbox.x1 for cell in all_cells),
             max(cell.bbox.y1 for cell in all_cells),
         ),
-        rows=row_number,
+        rows=cur_row,
         cols=4,
         cells=all_cells,
         confidence=0.95,
@@ -309,7 +500,7 @@ def _make_query_tables(page: fitz.Page) -> list[Table]:
         row_text = "".join(item[4] for item in row)
         if all(header in row_text for header in _QUERY_HEADERS):
             header_indices.append(index)
-        if _INSTITUTION_TITLE in row_text or _PERSONAL_TITLE in row_text:
+        if _INSTITUTION_TITLE in row_text or any(pt in row_text for pt in _PERSONAL_TITLES):
             section_indices.append(index)
 
     if not header_indices:
@@ -317,16 +508,30 @@ def _make_query_tables(page: fitz.Page) -> list[Table]:
         return [table] if table is not None else []
 
     tables = []
+    first_header = header_indices[0]
+    prev_sections = [s for s in section_indices if s < first_header]
+    first_bound = min(prev_sections) if prev_sections else first_header
+    if first_bound > 0:
+        lead_table = _make_query_table(page, end_index=first_bound, is_continuation=True)
+        if lead_table is not None:
+            tables.append(lead_table)
+
     for header_index in header_indices:
         next_boundaries = [
             index
             for index in [*header_indices, *section_indices, len(rows)]
             if index > header_index
         ]
+        prev_headers = [h for h in header_indices if h < header_index]
+        prev_header_bound = max(prev_headers) if prev_headers else -1
+        poss_sections = [s for s in section_indices if prev_header_bound < s < header_index]
+        section_index = max(poss_sections) if poss_sections else None
+
         table = _make_query_table(
             page,
             header_index=header_index,
             end_index=min(next_boundaries),
+            section_index=section_index,
         )
         if table is not None:
             tables.append(table)
@@ -350,12 +555,7 @@ def _document_result(document: Document) -> dict:
         blocks = []
         ordered_elements = sorted(
             page.layout_elements,
-            key=lambda element: (
-                element.bbox.y0,
-                element.bbox.x0,
-                element.bbox.y1,
-                element.bbox.x1,
-            ),
+            key=lambda element: element.order,
         )
         for element in ordered_elements:
             if element.type == "text":
@@ -398,6 +598,10 @@ def _document_result(document: Document) -> dict:
 class PersonalCreditReportTableExtractor(TableExtractor):
     """Table extractor reserved for personal-credit-report region rules."""
 
+    def __init__(self, *args, **kwargs):
+        kwargs.setdefault("wired_line_tolerance", 2.2)
+        super().__init__(*args, **kwargs)
+
     def _get_text_alignment_regions(
         self, page: fitz.Page
     ) -> Optional[list[BBox]]:
@@ -411,12 +615,30 @@ class PersonalCreditReportTableExtractor(TableExtractor):
     @staticmethod
     def _is_numbered_prose_candidate(table: Table) -> bool:
         """Reject sparse long numbered paragraphs emitted as two-column tables."""
-        cells = [cell.text.strip() for cell in table.cells if cell.text.strip()]
-        return (
-            table.cols <= 2
-            and sum(len(text) >= 50 for text in cells) >= 2
-            and sum(bool(re.match(r"^\d+[.、]", text)) for text in cells) >= 2
-        )
+        if table.cols > 2:
+            return False
+
+        all_text = " ".join(cell.text for cell in table.cells)
+        if any(k in all_text for k in ("\u67e5\u8be2\u539f\u56e0", "\u67e5\u8be2\u673a\u6784", "\u67e5\u8be2\u65e5\u671f")):
+            return False
+
+        from collections import defaultdict
+
+        rows: dict[int, list[str]] = defaultdict(list)
+        for cell in table.cells:
+            text = cell.text.strip()
+            if text:
+                rows[cell.row_index].append(text)
+
+        long_numbered_rows = 0
+        has_prose_lead = "\u660e\u7ec6\u5982\u4e0b" in all_text
+
+        for r_texts in rows.values():
+            row_text = "".join(r_texts)
+            if re.match(r"^\d+[.、]", row_text) and len(row_text) >= 40:
+                long_numbered_rows += 1
+
+        return (has_prose_lead and long_numbered_rows >= 1) or (long_numbered_rows >= 2)
 
     @staticmethod
     def _is_report_metadata_candidate(table: Table) -> bool:
@@ -429,6 +651,15 @@ class PersonalCreditReportTableExtractor(TableExtractor):
             "\u5176\u4ed6\u8bc1\u4ef6\u4fe1\u606f",
         )
         return sum(marker in text for marker in markers) >= 2
+
+    @staticmethod
+    def _is_wired_table(table: Table) -> bool:
+        """Return whether a table has explicit wired-extraction evidence."""
+        return table.source in {
+            "line_projection",
+            "hybrid_line_span_recovery",
+            "PyMuPDF.find_tables",
+        } or (bool(table.h_lines) and bool(table.v_lines))
 
     @staticmethod
     def _split_repeated_record_table(table: Table) -> list[Table]:
@@ -502,7 +733,36 @@ class PersonalCreditReportTableExtractor(TableExtractor):
             _trim_query_table(table)
             for table in tables
             if not self._is_numbered_prose_candidate(table)
-            and not self._is_report_metadata_candidate(table)
+            and (
+                self._is_wired_table(table)
+                or not self._is_report_metadata_candidate(table)
+            )
+        ]
+        return [
+            split
+            for table in filtered
+            for split in self._split_repeated_record_table(table)
+        ]
+
+    def extract(self, page: fitz.Page, *args, **kwargs) -> List[Table]:
+        """Ensure query tables retain section-title rows and replace rough candidates."""
+        tables = super().extract(page, *args, **kwargs)
+        query_tables = _make_query_tables(page)
+        if query_tables:
+            tables = [
+                table
+                for table in tables
+                if not any(_table_overlaps(table, query) for query in query_tables)
+            ]
+            tables.extend(query_tables)
+        filtered = [
+            _trim_query_table(table)
+            for table in tables
+            if not self._is_numbered_prose_candidate(table)
+            and (
+                self._is_wired_table(table)
+                or not self._is_report_metadata_candidate(table)
+            )
         ]
         return [
             split
@@ -511,8 +771,23 @@ class PersonalCreditReportTableExtractor(TableExtractor):
         ]
 
 
+
 class PersonalCreditReportPipeline(Pipeline):
     """Main pipeline with a personal-credit-report table extractor."""
+
+    def __init__(
+        self,
+        *args,
+        use_ml_table_detector: bool = False,
+        wired_line_tolerance: float = 2.2,
+        **kwargs,
+    ):
+        super().__init__(
+            *args,
+            use_ml_table_detector=use_ml_table_detector,
+            wired_line_tolerance=wired_line_tolerance,
+            **kwargs,
+        )
 
     def _get_table_extractor_class(self):
         return PersonalCreditReportTableExtractor
@@ -525,6 +800,9 @@ def parse_personal_credit_report(
     page_indices: list[int] | None = None,
     debug: bool = False,
     debug_pipeline: bool = False,
+    use_ml_table_detector: bool = False,
+    ml_render_dpi: int | None = None,
+    wired_line_tolerance: float = 2.2,
 ) -> dict:
     """Parse a personal credit report into the compact public result format."""
     document = PersonalCreditReportPipeline(
@@ -534,5 +812,8 @@ def parse_personal_credit_report(
         page_indices=page_indices,
         debug=debug,
         debug_pipeline=debug_pipeline,
+        use_ml_table_detector=use_ml_table_detector,
+        ml_render_dpi=ml_render_dpi,
+        wired_line_tolerance=wired_line_tolerance,
     ).run()
     return _document_result(document)
