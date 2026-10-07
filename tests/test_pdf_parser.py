@@ -393,19 +393,14 @@ def test_extract_images_with_page_indices(tmp_dir):
     assert len(result.data) >= 1
 
 
-def test_extract_images_and_render_pages_reuse_parser_handle(tmp_dir, monkeypatch):
+def test_extract_images_and_render_pages_do_not_open_with_pymupdf(tmp_dir, monkeypatch):
     pdf_path = os.path.join(tmp_dir, "media.pdf")
     make_pdf_with_image(pdf_path)
-    real_open = fitz.open
-    opened = []
 
-    def counted_open(*args, **kwargs):
-        document = real_open(*args, **kwargs)
-        if args and isinstance(args[0], (str, os.PathLike)):
-            opened.append(document)
-        return document
+    def forbidden(*args, **kwargs):
+        raise AssertionError("target API used PyMuPDF")
 
-    monkeypatch.setattr(fitz, "open", counted_open)
+    monkeypatch.setattr(fitz, "open", forbidden)
     parser = PDFParser(pdf_path)
     try:
         images = parser.extract_images(os.path.join(tmp_dir, "images"), page_indices=[0])
@@ -413,7 +408,6 @@ def test_extract_images_and_render_pages_reuse_parser_handle(tmp_dir, monkeypatc
 
         assert_success_result(images)
         assert_success_result(renders)
-        assert len(opened) == 1
     finally:
         parser.close()
 
