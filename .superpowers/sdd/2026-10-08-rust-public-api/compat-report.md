@@ -3,6 +3,7 @@
 日期：2026-10-08  
 分支：`codex/rust-public-api-compat`  
 起始提交：`dafe1c8`
+实现提交：`191f12a5a1c7e04e66f6a34f2526b5b933a4c1db`
 
 ## 改动
 
