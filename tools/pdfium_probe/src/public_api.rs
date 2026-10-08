@@ -657,10 +657,192 @@ fn table_detector(
         })
 }
 
+#[derive(Serialize)]
+struct RenderInfoDto {
+    path: String,
+    width: u32,
+    height: u32,
+    dpi: f32,
+}
+
+fn render_public_page(page: &PdfPage<'_>, dpi: f32) -> Result<image::DynamicImage, String> {
+    if !dpi.is_finite() || dpi <= 0.0 {
+        return Err("render dpi must be positive and finite".to_string());
+    }
+    let width = (page.width().value * dpi / 72.0).ceil().max(1.0) as u32;
+    let height = (page.height().value * dpi / 72.0).ceil().max(1.0) as u32;
+    let image = crate::render_page_to_image(page, dpi).map_err(|err| err.to_string())?;
+    // The shared pipeline rounds pixel dimensions; public APIs retain MuPDF's outward rounding.
+    if image.width() == width && image.height() == height {
+        Ok(image)
+    } else {
+        Ok(image.resize_exact(width, height, image::imageops::FilterType::Triangle))
+    }
+}
+
+fn draw_page_type_badge(
+    pdfium: &Pdfium,
+    image: &mut image::DynamicImage,
+    page_width: f32,
+    page_height: f32,
+    page_type: &str,
+) -> Result<(), String> {
+    let label = format!("page_type: {}", page_type);
+    let badge_width = (label.len() as f32 * 4.8 + 10.0)
+        .max(96.0)
+        .min((page_width - 12.0).max(0.0));
+    if badge_width <= 0.0 || page_height < 26.0 {
+        return Ok(());
+    }
+    // A separate transparent PDFium page keeps the original PDF and region renders untouched.
+    let mut overlay_document = pdfium.create_new_pdf().map_err(|err| err.to_string())?;
+    let font = overlay_document.fonts_mut().helvetica();
+    let mut overlay_page = overlay_document
+        .pages_mut()
+        .create_page_at_end(PdfPagePaperSize::new_custom(
+            PdfPoints::new(page_width),
+            PdfPoints::new(page_height),
+        ))
+        .map_err(|err| err.to_string())?;
+    let fill = PdfColor::new(20, 20, 20, 255);
+    let badge = PdfPagePathObject::new_rect(
+        &overlay_document,
+        PdfRect::new(
+            PdfPoints::new(page_height - 20.0),
+            PdfPoints::new(6.0),
+            PdfPoints::new(page_height - 6.0),
+            PdfPoints::new(6.0 + badge_width),
+        ),
+        Some(fill),
+        Some(PdfPoints::new(1.0)),
+        Some(fill),
+    )
+    .map_err(|err| err.to_string())?;
+    overlay_page
+        .objects_mut()
+        .add_path_object(badge)
+        .map_err(|err| err.to_string())?;
+    let mut text = PdfPageTextObject::new(&overlay_document, label, font, PdfPoints::new(8.0))
+        .map_err(|err| err.to_string())?;
+    text.set_fill_color(PdfColor::WHITE)
+        .map_err(|err| err.to_string())?;
+    text.translate(PdfPoints::new(11.0), PdfPoints::new(page_height - 16.0))
+        .map_err(|err| err.to_string())?;
+    overlay_page
+        .objects_mut()
+        .add_text_object(text)
+        .map_err(|err| err.to_string())?;
+    let config = PdfRenderConfig::new()
+        .set_target_width(image.width() as i32)
+        .set_target_height(image.height() as i32)
+        .set_clear_color(PdfColor::new(0, 0, 0, 0));
+    let overlay = overlay_page
+        .render_with_config(&config)
+        .map_err(|err| err.to_string())?
+        .as_image();
+    image::imageops::overlay(image, &overlay, 0, 0);
+    Ok(())
+}
+
+fn write_render(
+    image: &image::DynamicImage,
+    path: &Path,
+    dpi: f32,
+) -> Result<RenderInfoDto, String> {
+    crate::save_image_to_png(image, path)
+        .map_err(|err| format!("Could not write render {}: {}", path.display(), err))?;
+    Ok(RenderInfoDto {
+        path: path.to_string_lossy().into_owned(),
+        width: image.width(),
+        height: image.height(),
+        dpi,
+    })
+}
+
 pub fn run_public_api_json(request_json: &str) -> Result<String, String> {
     let request: PublicApiOperation = serde_json::from_str(request_json)
         .map_err(|err| format!("Invalid public API request: {}", err))?;
     let data = match request {
+        PublicApiOperation::RenderPages {
+            pdf_path,
+            pdfium_library_path,
+            output_dir,
+            dpi,
+            page_indices,
+        } => {
+            let pdfium = bind_pdfium(pdfium_library_path.as_deref())?;
+            let document = pdfium
+                .load_pdf_from_file(&pdf_path, None)
+                .map_err(|err| format!("Could not load PDF {}: {}", pdf_path, err))?;
+            std::fs::create_dir_all(&output_dir).map_err(|err| err.to_string())?;
+            let mut renders = Vec::new();
+            // Existing render_pages scans pages in document order and ignores duplicates/invalid indices.
+            for page_index in 0..document.pages().len() as usize {
+                if page_indices
+                    .as_ref()
+                    .is_some_and(|indices| !indices.contains(&page_index))
+                {
+                    continue;
+                }
+                let page_type = classify_page(&document, page_index)?;
+                let page = get_page(&document, page_index)?;
+                let mut image = render_public_page(&page, dpi)?;
+                draw_page_type_badge(
+                    &pdfium,
+                    &mut image,
+                    page.width().value,
+                    page.height().value,
+                    &page_type,
+                )?;
+                let path = Path::new(&output_dir).join(format!("page-{:03}.png", page_index));
+                renders.push(write_render(&image, &path, dpi)?);
+            }
+            serde_json::to_value(renders).map_err(|err| err.to_string())?
+        }
+        PublicApiOperation::RenderRegion {
+            pdf_path,
+            pdfium_library_path,
+            output_dir,
+            regions,
+            dpi,
+            single,
+        } => with_document(&pdf_path, pdfium_library_path.as_deref(), |document| {
+            std::fs::create_dir_all(&output_dir).map_err(|err| err.to_string())?;
+            let mut renders = Vec::new();
+            for (region_index, region) in regions.iter().enumerate() {
+                let page = get_page(document, region.page_index)?;
+                let image = render_public_page(&page, dpi)?;
+                let scale = dpi as f64 / 72.0;
+                let x0 = (region.x0 * page.width().value as f64 * scale)
+                    .floor()
+                    .max(0.0) as u32;
+                let y0 = (region.y0 * page.height().value as f64 * scale)
+                    .floor()
+                    .max(0.0) as u32;
+                let x1 = (region.x1 * page.width().value as f64 * scale)
+                    .ceil()
+                    .max(0.0) as u32;
+                let y1 = (region.y1 * page.height().value as f64 * scale)
+                    .ceil()
+                    .max(0.0) as u32;
+                let x1 = x1.min(image.width());
+                let y1 = y1.min(image.height());
+                if x0 >= x1 || y0 >= y1 {
+                    return Err("Cannot render an empty region".to_string());
+                }
+                let crop = image.crop_imm(x0, y0, x1 - x0, y1 - y0);
+                let path = Path::new(&output_dir).join(format!(
+                    "region-{:03}-{:03}.png",
+                    region.page_index, region_index,
+                ));
+                let render = write_render(&crop, &path, dpi)?;
+                if single {
+                    return serde_json::to_value(render).map_err(|err| err.to_string());
+                }
+                renders.push(render);
+            }
+            serde_json::to_value(renders).map_err(|err| err.to_string())
+        })?,
         PublicApiOperation::ExtractImages {
             pdf_path,
             pdfium_library_path,
@@ -853,7 +1035,6 @@ pub fn run_public_api_json(request_json: &str) -> Result<String, String> {
             }
             serde_json::to_value(output).map_err(|err| err.to_string())
         })?,
-        _ => return Err("Public API operation is not implemented yet".to_string()),
     };
     serde_json::to_string(&serde_json::json!({ "data": data })).map_err(|err| err.to_string())
 }
@@ -1418,16 +1599,153 @@ mod tests {
     }
 
     #[test]
-    fn rejects_unsupported_operation_and_invalid_json() {
+    fn renders_pages_and_regions_with_badge_and_compatible_dimensions() {
+        let output = std::env::temp_dir().join(format!("pdfium-render-api-{}", std::process::id()));
         let request = serde_json::json!({
-            "operation": "render_pages",
-            "pdf_path": fixture("page_000_vector.pdf"),
-            "output_dir": "unused",
-            "dpi": 72.0
+            "operation": "render_pages", "pdf_path": fixture("page_000_vector.pdf"),
+            "output_dir": output.join("pages"), "dpi": 72.0, "page_indices": [0, 0, 999]
         });
+        let full: serde_json::Value =
+            serde_json::from_str(&run_public_api_json(&request.to_string()).unwrap()).unwrap();
+        assert_eq!(full["data"].as_array().unwrap().len(), 1);
+        let page = &full["data"][0];
+        assert_eq!(page["width"], 597);
+        assert_eq!(page["height"], 843);
+        assert_eq!(page["dpi"], 72.0);
+        let full_image = image::open(page["path"].as_str().unwrap())
+            .unwrap()
+            .to_rgb8();
+        assert!(output.join("pages/page-000.png").is_file());
+        assert!(full_image
+            .get_pixel(8, 8)
+            .0
+            .iter()
+            .all(|channel| *channel < 30));
+        assert!(
+            (11..85).any(|x| (9..17).any(|y| full_image.get_pixel(x, y).0[0] > 200)),
+            "badge must have white text"
+        );
+        let request = serde_json::json!({
+            "operation": "render_region", "pdf_path": fixture("page_000_vector.pdf"),
+            "output_dir": output.join("regions"), "dpi": 72.0, "single": true,
+            "regions": [{"page_index": 0, "x0": 0.0, "y0": 0.0, "x1": 1.0, "y1": 1.0}]
+        });
+        let crop: serde_json::Value =
+            serde_json::from_str(&run_public_api_json(&request.to_string()).unwrap()).unwrap();
+        assert_eq!(crop["data"]["width"], 597);
+        assert_eq!(crop["data"]["height"], 843);
+        let crop_image = image::open(crop["data"]["path"].as_str().unwrap())
+            .unwrap()
+            .to_rgb8();
+        assert!(crop_image
+            .get_pixel(8, 8)
+            .0
+            .iter()
+            .all(|channel| *channel > 240));
+        assert!(output.join("regions/region-000-000.png").is_file());
+    }
+
+    #[test]
+    fn renders_region_list_in_order_with_fractional_pixel_boundaries() {
+        let output =
+            std::env::temp_dir().join(format!("pdfium-render-regions-{}", std::process::id()));
+        let request = serde_json::json!({
+            "operation": "render_region", "pdf_path": fixture("page_000_vector.pdf"),
+            "output_dir": output, "dpi": 144.0, "single": false,
+            "regions": [
+                {"page_index": 0, "x0": 0.25, "y0": 0.25, "x1": 0.5, "y1": 0.5},
+                {"page_index": 0, "x0": 0.0, "y0": 0.0, "x1": 1.0, "y1": 1.0}
+            ]
+        });
+        let result: serde_json::Value =
+            serde_json::from_str(&run_public_api_json(&request.to_string()).unwrap()).unwrap();
+        let crops = result["data"].as_array().unwrap();
+        assert_eq!(crops.len(), 2);
+        assert_eq!(crops[0]["width"], 299);
+        assert_eq!(crops[0]["height"], 422);
+        assert_eq!(crops[1]["width"], 1193);
+        assert_eq!(crops[1]["height"], 1685);
+        assert!(output.join("region-000-000.png").is_file());
+        assert!(output.join("region-000-001.png").is_file());
+    }
+
+    #[test]
+    fn render_reports_file_errors_and_empty_selection() {
+        let blocked =
+            std::env::temp_dir().join(format!("pdfium-render-blocked-{}", std::process::id()));
+        std::fs::write(&blocked, b"file").unwrap();
+        let mut request = serde_json::json!({
+            "operation": "render_pages", "pdf_path": fixture("page_000_vector.pdf"),
+            "output_dir": blocked, "dpi": 72.0, "page_indices": []
+        });
+        assert!(run_public_api_json(&request.to_string()).is_err());
+        request["output_dir"] = serde_json::json!(blocked.with_extension("empty"));
+        let result: serde_json::Value =
+            serde_json::from_str(&run_public_api_json(&request.to_string()).unwrap()).unwrap();
+        assert_eq!(result["data"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn render_pages_preserves_document_order_and_scanned_baseline_dimensions() {
+        let path = image_fixture("render-order", false, false);
+        let output = path.parent().unwrap().join("renders");
+        let request = serde_json::json!({
+            "operation": "render_pages", "pdf_path": path,
+            "output_dir": output, "dpi": 72.0, "page_indices": [1, 0, 1]
+        });
+        let result: serde_json::Value =
+            serde_json::from_str(&run_public_api_json(&request.to_string()).unwrap()).unwrap();
+        let pages = result["data"].as_array().unwrap();
+        assert_eq!(pages.len(), 2);
+        assert!(pages[0]["path"].as_str().unwrap().ends_with("page-000.png"));
+        assert!(pages[1]["path"].as_str().unwrap().ends_with("page-001.png"));
+        for (name, width, height) in [
+            ("page_437_wireless.pdf", 595, 843),
+            ("page_705_scanned.pdf", 596, 842),
+        ] {
+            let request = serde_json::json!({
+                "operation": "render_pages", "pdf_path": fixture(name),
+                "output_dir": output.join(name), "dpi": 72.0
+            });
+            let result: serde_json::Value =
+                serde_json::from_str(&run_public_api_json(&request.to_string()).unwrap()).unwrap();
+            assert_eq!(result["data"][0]["width"], width);
+            assert_eq!(result["data"][0]["height"], height);
+            let image = image::open(result["data"][0]["path"].as_str().unwrap())
+                .unwrap()
+                .to_rgb8();
+            assert!(image.get_pixel(8, 8).0.iter().all(|channel| *channel < 30));
+        }
+    }
+
+    #[test]
+    fn render_region_preserves_rotated_cropbox_and_reports_invalid_page_and_file_errors() {
+        let path = image_fixture("render-rotation", false, true);
+        let output = path.parent().unwrap().join("renders");
+        let mut request = serde_json::json!({
+            "operation": "render_region", "pdf_path": path,
+            "output_dir": output, "dpi": 72.0, "single": true,
+            "regions": [{"page_index": 0, "x0": 0.0, "y0": 0.0, "x1": 1.0, "y1": 1.0}]
+        });
+        let result: serde_json::Value =
+            serde_json::from_str(&run_public_api_json(&request.to_string()).unwrap()).unwrap();
+        assert_eq!(result["data"]["width"], 350);
+        assert_eq!(result["data"]["height"], 350);
+        request["regions"][0]["page_index"] = serde_json::json!(999);
         assert!(run_public_api_json(&request.to_string())
             .unwrap_err()
-            .contains("not implemented"));
+            .contains("out of range"));
+        request["regions"][0]["page_index"] = serde_json::json!(0);
+        let blocked = output.join("blocked");
+        std::fs::create_dir_all(blocked.join("region-000-000.png")).unwrap();
+        request["output_dir"] = serde_json::json!(blocked);
+        assert!(run_public_api_json(&request.to_string())
+            .unwrap_err()
+            .contains("Could not write render"));
+    }
+
+    #[test]
+    fn rejects_invalid_json() {
         assert!(run_public_api_json("{").is_err());
     }
 }

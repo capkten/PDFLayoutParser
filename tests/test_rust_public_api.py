@@ -105,3 +105,20 @@ def test_extract_image_region_preserves_write_scope(tmp_path):
     request["regions"] += [FULL_PAGE, {"page_index": 0, "x0": 0, "y0": 0, "x1": 0.01, "y1": 0.01}]
     images = json.loads(_pdf_fast.run_public_pdf_api(json.dumps(request)))["data"]
     assert [image["resource_index"] for image in images] == [0, 0, 1]
+
+
+def test_rust_render_page_and_region_dimensions(tmp_path, monkeypatch):
+    def forbidden(*args, **kwargs):
+        raise AssertionError("target render API used PyMuPDF")
+
+    monkeypatch.setattr(fitz.Page, "get_pixmap", forbidden)
+    monkeypatch.setattr(fitz.Page, "get_text", forbidden)
+    parser = PDFParser(str(FIXTURE_DIR / "page_000_vector.pdf"), render_dpi=72)
+    full = parser.render_pages(str(tmp_path / "pages"), page_indices=[0])
+    crop = parser.render_region(FULL_PAGE, str(tmp_path / "regions"), dpi=72)
+    assert full.code == 1, full.message
+    assert crop.code == 1, crop.message
+    assert (full.data[0].width, full.data[0].height) == (597, 843)
+    assert (crop.data.width, crop.data.height) == (597, 843)
+    assert (tmp_path / "pages" / "page-000.png").is_file()
+    assert (tmp_path / "regions" / "region-000-000.png").is_file()
