@@ -22,6 +22,7 @@ version
 /src/hexai_pdf_parser/_pdf_fast*.pyd
 /src/hexai_pdf_parser/_pdf_fast*.so
 /src/hexai_pdf_parser/_pdf_fast*.dylib
+/src/hexai_pdf_parser/native/
 
 # Pipeline output directories
 out_*/

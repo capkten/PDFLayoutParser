@@ -36,6 +36,7 @@ python-source = "src"
 module-name = "hexai_pdf_parser._pdf_fast"
 bindings = "pyo3"
 include = [
+    "src/hexai_pdf_parser/native/**/*",
     "src/hexai_pdf_parser/tables/table_templates/*.json",
     "src/hexai_pdf_parser/ml/table_detector_model/*.onnx",
 ]

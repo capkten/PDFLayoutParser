@@ -1,9 +1,12 @@
 """Migration checks for the public PDF APIs."""
 
 import json
+import hashlib
+import importlib.util
 from pathlib import Path
 
 import fitz
+import pytest
 
 from hexai_pdf_parser import _pdf_fast
 from hexai_pdf_parser.pdf_parser import PDFParser
@@ -19,6 +22,59 @@ API_NAMES = {
     "text_region", "table_region", "table_structure", "images",
     "image_region", "render_pages", "render_region", "classify_page",
 }
+
+
+def _load_pdfium_stager():
+    path = Path(__file__).parents[1] / "tools/pdfium_probe/scripts/stage_pdfium_package.py"
+    spec = importlib.util.spec_from_file_location("stage_pdfium_package", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_stage_pdfium_package(tmp_path):
+    stager = _load_pdfium_stager()
+    source_root = tmp_path / "probe"
+    destination_root = tmp_path / "package"
+    source = source_root / "native/win-x64/pdfium.dll"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"verified pdfium bytes")
+    digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    manifest = {"platforms": {"win-x64": {
+        "library_relpath": "native/win-x64/pdfium.dll",
+        "library_sha256": digest,
+    }}}
+
+    destination = stager.stage_pdfium(source_root, destination_root, "win-x64", manifest)
+    assert destination == destination_root / "native/win-x64/pdfium.dll"
+    assert destination.read_bytes() == source.read_bytes()
+    assert hashlib.sha256(destination.read_bytes()).hexdigest() == digest
+
+    with pytest.raises(FileNotFoundError, match="pdfium.dll"):
+        stager.stage_pdfium(source_root / "missing", destination_root, "win-x64", manifest)
+
+    real_manifest = json.loads(
+        (Path(__file__).parents[1] / "tools/pdfium_probe/manifest.json").read_text(encoding="utf-8")
+    )
+    expected = {
+        "win-x64": ("win-x64", "pdfium.dll"),
+        "linux-x64": ("linux-x64", "libpdfium.so"),
+        "mac-x64": ("mac-x64", "libpdfium.dylib"),
+        "mac-arm64": ("mac-arm64", "libpdfium.dylib"),
+    }
+    assert {
+        key: (entry["library_relpath"].split("/")[-2], entry["library_relpath"].split("/")[-1])
+        for key, entry in real_manifest["platforms"].items()
+    } == expected
+    mapping_manifest = {"platforms": {key: {"library_relpath": entry["library_relpath"]}
+                                       for key, entry in real_manifest["platforms"].items()}}
+    for key, entry in real_manifest["platforms"].items():
+        src = source_root / entry["library_relpath"]
+        src.parent.mkdir(parents=True, exist_ok=True)
+        src.write_bytes(key.encode("ascii"))
+        copied = stager.stage_pdfium(source_root, destination_root, key, mapping_manifest)
+        assert (copied.parent.name, copied.name) == expected[key]
+        assert copied.read_bytes() == key.encode("ascii")
 
 
 def test_python_wrapper_dispatches_all_path_operations(monkeypatch, tmp_path):
@@ -85,7 +141,7 @@ def test_python_wrapper_converts_rust_dtos(monkeypatch):
 
 def test_json_bridge_calls_rust_with_native_path_or_none(monkeypatch):
     calls = []
-    monkeypatch.setattr(pdfium_api, "_library_path", lambda: None)
+    monkeypatch.setattr(pdfium_api, "_native_library_path", lambda: None)
     monkeypatch.setattr(_pdf_fast, "run_public_pdf_api", lambda payload: calls.append(json.loads(payload)) or '{"data":"vector"}', raising=False)
     assert pdfium_api._run({"operation": "classify_page", "pdf_path": "input.pdf", "page_index": 0}) == {"data": "vector"}
     assert calls == [{"operation": "classify_page", "pdf_path": "input.pdf", "page_index": 0, "pdfium_library_path": None}]

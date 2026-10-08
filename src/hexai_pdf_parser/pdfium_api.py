@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import platform
 from pathlib import Path
+from typing import Optional
 
 from hexai_pdf_parser import _pdf_fast
 from hexai_pdf_parser.core.models import (
@@ -13,7 +14,7 @@ from hexai_pdf_parser.core.models import (
 )
 
 
-def _library_path() -> str | None:
+def _native_library_path() -> Optional[str]:
     system = platform.system()
     machine = platform.machine().lower()
     target = {
@@ -31,12 +32,12 @@ def _library_path() -> str | None:
 
 
 def _run(request: dict):
-    request = {**request, "pdfium_library_path": _library_path()}
+    request = {**request, "pdfium_library_path": _native_library_path()}
     return json.loads(_pdf_fast.run_public_pdf_api(json.dumps(request)))
 
 
 def classify_bytes(data: bytes, page_index: int) -> str:
-    return _pdf_fast.classify_page_from_bytes(data, page_index, _library_path())
+    return _pdf_fast.classify_page_from_bytes(data, page_index, _native_library_path())
 
 
 def bbox(value: dict) -> BBox:
