@@ -349,7 +349,11 @@ fn bbox_intersects(left: [f64; 4], right: [f64; 4]) -> bool {
 }
 
 fn valid_table(table: &markdown::FullTableDto) -> bool {
-    if table.rows < 2 || table.cols < 2 || !table.cells.iter().any(|c| !c.text.trim().is_empty()) {
+    if table.rows == 0
+        || table.cols == 0
+        || (table.rows == 1 && table.cols == 1)
+        || !table.cells.iter().any(|c| !c.text.trim().is_empty())
+    {
         return false;
     }
     let mut occupied = vec![false; table.rows * table.cols];
@@ -405,8 +409,24 @@ fn table_lines(
     let mut horizontal = Vec::new();
     let mut vertical = Vec::new();
     if let Some(snapshot) = &norm.page_snapshot {
+        let is_white = |color: &[f64]| match color {
+            [gray] => (gray - 1.0).abs() <= 0.04,
+            [red, green, blue, ..] => [red, green, blue]
+                .into_iter()
+                .all(|component| (component - 1.0).abs() <= 0.04),
+            _ => false,
+        };
         for drawing in &snapshot.drawings {
-            if drawing.kind == "f" {
+            let invisible = match drawing.kind.as_str() {
+                "f" => drawing.fill.as_deref().is_some_and(is_white),
+                "s" => drawing
+                    .stroke
+                    .as_deref()
+                    .or(drawing.color.as_deref())
+                    .is_some_and(is_white),
+                _ => false,
+            };
+            if invisible {
                 continue;
             }
             for line in &drawing.lines {
@@ -768,6 +788,132 @@ pub fn run_public_api_json(request_json: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn accepts_single_axis_tables_when_every_slot_has_one_cell() {
+        for (rows, cols) in [(1, 2), (2, 1)] {
+            let cells = (0..rows)
+                .flat_map(|row| {
+                    (0..cols).map(move |col| markdown::TableCellDto {
+                        text: format!("{}:{}", row, col),
+                        row_index: row,
+                        col_index: col,
+                        rowspan: 1,
+                        colspan: 1,
+                        bbox: [col as f64, row as f64, (col + 1) as f64, (row + 1) as f64],
+                    })
+                })
+                .collect();
+            let table = markdown::FullTableDto {
+                table_id: 0,
+                bbox: [0.0, 0.0, cols as f64, rows as f64],
+                rows,
+                cols,
+                cells,
+                confidence: None,
+                source: None,
+            };
+            assert!(valid_table(&table), "{}x{} table was rejected", rows, cols);
+        }
+    }
+
+    #[test]
+    fn rejects_an_isolated_text_slot_as_a_table() {
+        let table = markdown::FullTableDto {
+            table_id: 0,
+            bbox: [0.0, 0.0, 1.0, 1.0],
+            rows: 1,
+            cols: 1,
+            cells: vec![markdown::TableCellDto {
+                text: "isolated text".to_string(),
+                row_index: 0,
+                col_index: 0,
+                rowspan: 1,
+                colspan: 1,
+                bbox: [0.0, 0.0, 1.0, 1.0],
+            }],
+            confidence: None,
+            source: None,
+        };
+        assert!(!valid_table(&table));
+    }
+
+    fn filled_rule_page(fill: Vec<f64>) -> normalizer::NormalizedPageDto {
+        let rect = |x0, y0, x1, y1| crate::clustering::make_rect4(x0, y0, x1, y1);
+        let lines = [
+            rect(10.0, 10.0, 50.0, 10.0),
+            rect(10.0, 50.0, 50.0, 50.0),
+            rect(10.0, 10.0, 10.0, 50.0),
+            rect(50.0, 10.0, 50.0, 50.0),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(source_order, rect)| crate::drawings::WireDrawingLine {
+            schema_version: 1,
+            rect,
+            width: None,
+            color: None,
+            source_order,
+        })
+        .collect();
+        normalizer::NormalizedPageDto {
+            page_type: "vector".to_string(),
+            page_snapshot: Some(normalizer::PageSnapshotWireDto {
+                schema_version: 1,
+                page_index: 0,
+                page: normalizer::PageInfoDto {
+                    schema_version: 1,
+                    width: 100.0,
+                    height: 100.0,
+                    rotation: 0,
+                },
+                text_blocks: Vec::new(),
+                spans: Vec::new(),
+                words: Vec::new(),
+                drawings: vec![crate::drawings::WireDrawingDto {
+                    schema_version: 1,
+                    kind: "f".to_string(),
+                    path_type: "filled".to_string(),
+                    lines,
+                    rect: rect(10.0, 10.0, 50.0, 50.0),
+                    fill: Some(fill),
+                    stroke: None,
+                    clip: None,
+                    source_order: 0,
+                    raw_source_position: Vec::new(),
+                    color: None,
+                    width: None,
+                    items: Vec::new(),
+                }],
+                allowed_regions: Vec::new(),
+                excluded_regions: Vec::new(),
+                extraction_options: normalizer::ExtractionOptionsWireDto {
+                    schema_version: 1,
+                    options: serde_json::Map::new(),
+                },
+            }),
+            rawdict: None,
+            words: Vec::new(),
+            sidecar: serde_json::Value::Null,
+            diagnostics: serde_json::Value::Null,
+        }
+    }
+
+    #[test]
+    fn visible_filled_rectangle_contributes_rules_but_white_background_does_not() {
+        let (horizontal, vertical) = table_lines(
+            &filled_rule_page(vec![0.0, 0.0, 0.0]),
+            [0.0, 0.0, 100.0, 100.0],
+        );
+        assert_eq!(horizontal.unwrap().len(), 2);
+        assert_eq!(vertical.unwrap().len(), 2);
+        let (horizontal, vertical) = table_lines(
+            &filled_rule_page(vec![1.0, 1.0, 1.0]),
+            [0.0, 0.0, 100.0, 100.0],
+        );
+        assert!(horizontal.is_none());
+        assert!(vertical.is_none());
+    }
 
     fn fixture(name: &str) -> String {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
