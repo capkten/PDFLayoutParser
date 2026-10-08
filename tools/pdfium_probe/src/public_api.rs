@@ -667,10 +667,14 @@ pub fn run_public_api_json(request_json: &str) -> Result<String, String> {
             output_dir,
             page_indices,
         } => with_document(&pdf_path, pdfium_library_path.as_deref(), |document| {
-            let indices =
-                page_indices.unwrap_or_else(|| (0..document.pages().len() as usize).collect());
             let mut images = Vec::new();
-            for page_index in indices {
+            for page_index in 0..document.pages().len() as usize {
+                if page_indices
+                    .as_ref()
+                    .is_some_and(|indices| !indices.contains(&page_index))
+                {
+                    continue;
+                }
                 let page = get_page(document, page_index)?;
                 images.extend(crate::image_extraction::extract_page_images(
                     &page,
@@ -859,6 +863,15 @@ mod tests {
     use super::*;
 
     fn image_fixture(name: &str, form: bool, rotated: bool) -> std::path::PathBuf {
+        image_fixture_with_form_content(name, form, rotated, "q 50 0 0 50 10 20 cm /Im Do Q")
+    }
+
+    fn image_fixture_with_form_content(
+        name: &str,
+        form: bool,
+        rotated: bool,
+        form_content: &str,
+    ) -> std::path::PathBuf {
         let directory =
             std::env::temp_dir().join(format!("pdfium-images-{}-{}", std::process::id(), name));
         std::fs::create_dir_all(&directory).unwrap();
@@ -872,7 +885,6 @@ mod tests {
         } else {
             ""
         };
-        let form_content = "q 50 0 0 50 10 20 cm /Im Do Q";
         let objects = vec![
             "<< /Type /Catalog /Pages 2 0 R >>".as_bytes().to_vec(),
             "<< /Type /Pages /Kids [3 0 R 7 0 R] /Count 2 >>".as_bytes().to_vec(),
@@ -942,6 +954,51 @@ mod tests {
             images[1]["bbox"],
             serde_json::json!({"x0":300.0,"y0":300.0,"x1":400.0,"y1":400.0})
         );
+    }
+
+    #[test]
+    fn images_page_selection_deduplicates_in_document_order() {
+        let path = image_fixture("selection", false, false);
+        let output = path.parent().unwrap().join("export");
+        let mut request = image_request(&path, "extract_images", &output);
+        for (indices, expected) in [
+            (serde_json::json!([0, 0]), vec![0, 0]),
+            (serde_json::json!([1, 0]), vec![0, 0, 1, 1]),
+            (serde_json::json!([999, 0]), vec![0, 0]),
+            (serde_json::json!([999]), vec![]),
+        ] {
+            request["page_indices"] = indices;
+            let result: serde_json::Value =
+                serde_json::from_str(&run_public_api_json(&request.to_string()).unwrap()).unwrap();
+            let pages: Vec<_> = result["data"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|image| image["page_index"].as_u64().unwrap())
+                .collect();
+            assert_eq!(pages, expected);
+        }
+    }
+
+    #[test]
+    fn images_skip_children_fully_clipped_by_form_bbox() {
+        let path = image_fixture_with_form_content(
+            "form-clipping",
+            true,
+            false,
+            "q 20 0 0 20 10 20 cm /Im Do Q q 20 0 0 20 120 20 cm /Im Do Q",
+        );
+        let output = path.parent().unwrap().join("export");
+        let request = image_request(&path, "extract_images", &output);
+        let result: serde_json::Value =
+            serde_json::from_str(&run_public_api_json(&request.to_string()).unwrap()).unwrap();
+        let images = result["data"].as_array().unwrap();
+        assert_eq!(images.len(), 1);
+        assert_eq!(
+            images[0]["bbox"],
+            serde_json::json!({"x0":50.0,"y0":286.0,"x1":90.0,"y1":326.0})
+        );
+        assert_eq!(std::fs::read_dir(&output).unwrap().count(), 1);
     }
 
     #[test]

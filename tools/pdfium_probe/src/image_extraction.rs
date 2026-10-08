@@ -36,8 +36,58 @@ struct PageImages<'a> {
 }
 
 impl PageImages<'_> {
-    fn visit(&mut self, object: &PdfPageObject, parent: PdfMatrix) -> Result<(), String> {
+    fn viewport_point(&self, x: PdfPoints, y: PdfPoints, matrix: PdfMatrix) -> [f64; 2] {
+        let (x, y) = matrix.apply_to_points(x, y);
+        transform_point_to_viewport(
+            x.value as f64,
+            y.value as f64,
+            self.crop[0],
+            self.crop[1],
+            self.crop[2],
+            self.crop[3],
+            self.rotation,
+        )
+    }
+
+    fn visit(
+        &mut self,
+        object: &PdfPageObject,
+        parent: PdfMatrix,
+        mut clip_bounds: [f64; 4],
+    ) -> Result<(), String> {
         if !object.is_active().map_err(|err| err.to_string())? {
+            return Ok(());
+        }
+        // PDFium 将 Form /BBox 裁剪附在需要裁剪的子对象上；其点已包含局部
+        // Form Matrix，因此这里只应用祖先矩阵，并向下累计各层裁剪边界。
+        if let Some(clip) = object.get_clip_path() {
+            // PDFium 无 clip 时返回 -1，pdfium-render 的 u16 len 将其转换为 MAX。
+            if clip.len() != u16::MAX {
+                for path in clip.iter() {
+                    let mut bounds = [
+                        f64::INFINITY,
+                        f64::INFINITY,
+                        f64::NEG_INFINITY,
+                        f64::NEG_INFINITY,
+                    ];
+                    for segment in path.iter() {
+                        let (x, y) = segment.point();
+                        let point = self.viewport_point(x, y, parent);
+                        bounds[0] = bounds[0].min(point[0]);
+                        bounds[1] = bounds[1].min(point[1]);
+                        bounds[2] = bounds[2].max(point[0]);
+                        bounds[3] = bounds[3].max(point[1]);
+                    }
+                    clip_bounds = [
+                        clip_bounds[0].max(bounds[0]),
+                        clip_bounds[1].max(bounds[1]),
+                        clip_bounds[2].min(bounds[2]),
+                        clip_bounds[3].min(bounds[3]),
+                    ];
+                }
+            }
+        }
+        if clip_bounds[2] <= clip_bounds[0] || clip_bounds[3] <= clip_bounds[1] {
             return Ok(());
         }
         if let Some(form) = object.as_x_object_form_object() {
@@ -46,25 +96,15 @@ impl PageImages<'_> {
                 .map_err(|err| err.to_string())?
                 .multiply(parent);
             for child in form.iter() {
-                self.visit(&child, matrix)?;
+                self.visit(&child, matrix, clip_bounds)?;
             }
         } else if let Some(image) = object.as_image_object() {
             let matrix = image
                 .matrix()
                 .map_err(|err| err.to_string())?
                 .multiply(parent);
-            let points = [(0.0, 0.0), (0.0, 1.0), (1.0, 1.0), (1.0, 0.0)].map(|(x, y)| {
-                let (x, y) = matrix.apply_to_points(PdfPoints::new(x), PdfPoints::new(y));
-                transform_point_to_viewport(
-                    x.value as f64,
-                    y.value as f64,
-                    self.crop[0],
-                    self.crop[1],
-                    self.crop[2],
-                    self.crop[3],
-                    self.rotation,
-                )
-            });
+            let points = [(0.0, 0.0), (0.0, 1.0), (1.0, 1.0), (1.0, 0.0)]
+                .map(|(x, y)| self.viewport_point(PdfPoints::new(x), PdfPoints::new(y), matrix));
             let bbox = ImageBBox {
                 x0: points
                     .iter()
@@ -83,18 +123,12 @@ impl PageImages<'_> {
                     .map(|point| point[1])
                     .fold(f64::NEG_INFINITY, f64::max),
             };
-            let (width, height) = (self.crop[2] - self.crop[0], self.crop[3] - self.crop[1]);
-            let (width, height) = if matches!(self.rotation, 90 | 270) {
-                (height, width)
-            } else {
-                (width, height)
-            };
             if bbox.x1 <= bbox.x0
                 || bbox.y1 <= bbox.y0
-                || bbox.x1 <= 0.0
-                || bbox.y1 <= 0.0
-                || bbox.x0 >= width
-                || bbox.y0 >= height
+                || bbox.x1 <= clip_bounds[0]
+                || bbox.y1 <= clip_bounds[1]
+                || bbox.x0 >= clip_bounds[2]
+                || bbox.y0 >= clip_bounds[3]
             {
                 return Ok(());
             }
@@ -169,8 +203,14 @@ pub fn extract_page_images(
         output_dir,
         images: Vec::new(),
     };
+    let bounds = [
+        0.0,
+        0.0,
+        page.width().value as f64,
+        page.height().value as f64,
+    ];
     for object in page.objects().iter() {
-        extraction.visit(&object, PdfMatrix::IDENTITY)?;
+        extraction.visit(&object, PdfMatrix::IDENTITY, bounds)?;
     }
     Ok(extraction.images)
 }
