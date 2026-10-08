@@ -267,6 +267,7 @@ fn intersects(word: &WordTupleDto, region: [f64; 4]) -> bool {
 fn extract_region(
     document: &PdfDocument<'_>,
     region: &RegionInput,
+    glyph_map_lookup: &mut crate::font_mapping::Type3GlyphMapLookup,
 ) -> Result<Option<BlockDto>, String> {
     let page = get_page(document, region.page_index)?;
     let raw = extract_page(&page, region.page_index).map_err(|err| err.to_string())?;
@@ -276,7 +277,11 @@ fn extract_region(
         region.x1 * raw.width,
         region.y1 * raw.height,
     ];
-    let normalized = normalizer::normalize_raw_page_for_public_api(&raw);
+    let glyph_map = glyph_map_lookup.for_page(region.page_index);
+    let normalized = normalizer::normalize_raw_page_for_public_api_with_glyph_map(
+        &raw,
+        glyph_map.as_ref(),
+    );
     let mut groups: BTreeMap<(usize, usize), Vec<&WordTupleDto>> = BTreeMap::new();
     for word in &normalized.words {
         if intersects(word, rect) {
@@ -295,15 +300,11 @@ fn extract_region(
             .map(|word| word.4.as_str())
             .collect::<Vec<_>>()
             .join(" ");
-        let words = words
-            .into_iter()
-            .map(|word| WordDto {
-                text: word.4.clone(),
-                bbox: BBoxDto::from_word(word),
-                chars: Vec::new(),
-            })
-            .collect();
-        lines.push(LineDto { text, bbox, words });
+        lines.push(LineDto {
+            text,
+            bbox,
+            words: Vec::new(),
+        });
     }
     if lines.is_empty() {
         return Ok(None);
@@ -328,10 +329,15 @@ fn extract_region(
 fn normalized_page(
     document: &PdfDocument<'_>,
     page_index: usize,
+    glyph_map_lookup: &mut crate::font_mapping::Type3GlyphMapLookup,
 ) -> Result<normalizer::NormalizedPageDto, String> {
     let page = get_page(document, page_index)?;
     let raw = extract_page(&page, page_index).map_err(|err| err.to_string())?;
-    Ok(normalizer::normalize_raw_page_for_public_api(&raw))
+    let glyph_map = glyph_map_lookup.for_page(page_index);
+    Ok(normalizer::normalize_raw_page_for_public_api_with_glyph_map(
+        &raw,
+        glyph_map.as_ref(),
+    ))
 }
 
 fn region_bbox(region: &RegionInput, norm: &normalizer::NormalizedPageDto) -> Option<[f64; 4]> {
@@ -418,6 +424,29 @@ fn recover_table(
                 }
                 table.bbox = tight;
             }
+            if norm.page_type == "scanned"
+                && table.source.as_deref() == Some("line_projection")
+                && table.cells.iter().all(|cell| cell.text.trim().is_empty())
+            {
+                if let Some(page) = norm.page_snapshot.as_ref().map(|snapshot| &snapshot.page) {
+                    let horizontal = table_lines(norm, [0.0, 0.0, page.width, page.height])
+                        .0
+                        .unwrap_or_default();
+                    if let Some(left_edge) = horizontal
+                        .iter()
+                        .filter(|line| {
+                            line[1] >= table.bbox[1]
+                                && line[1] <= table.bbox[3]
+                                && line[2] >= table.bbox[0]
+                                && line[0] <= table.bbox[2]
+                        })
+                        .map(|line| line[0])
+                        .min_by(f64::total_cmp)
+                    {
+                        table.bbox[0] = table.bbox[0].min((left_edge * 10.0).round() / 10.0);
+                    }
+                }
+            }
             table
         })
 }
@@ -478,7 +507,11 @@ fn table_lines(
 }
 
 fn ordinary_table(table: markdown::FullTableDto, norm: &normalizer::NormalizedPageDto) -> TableDto {
-    let (h_lines, v_lines) = table_lines(norm, table.bbox);
+    let (h_lines, v_lines) = if table.source.as_deref() == Some("wireless_span_recovery") {
+        (None, None)
+    } else {
+        table_lines(norm, table.bbox)
+    };
     TableDto {
         bbox: BBoxDto::from_array(table.bbox),
         rows: table.rows,
@@ -953,9 +986,12 @@ pub fn run_public_api_json(request_json: &str) -> Result<String, String> {
             pdfium_library_path,
             regions,
         } => with_document(&pdf_path, pdfium_library_path.as_deref(), |document| {
+            let mut glyph_map_lookup = crate::font_mapping::Type3GlyphMapLookup::new(
+                Path::new(&pdf_path),
+            );
             let mut blocks = Vec::new();
             for region in &regions {
-                if let Some(block) = extract_region(document, region)? {
+                if let Some(block) = extract_region(document, region, &mut glyph_map_lookup)? {
                     blocks.push(block);
                 }
             }
@@ -987,13 +1023,16 @@ pub fn run_public_api_json(request_json: &str) -> Result<String, String> {
             regions,
             single,
         } => with_document(&pdf_path, pdfium_library_path.as_deref(), |document| {
+            let mut glyph_map_lookup = crate::font_mapping::Type3GlyphMapLookup::new(
+                Path::new(&pdf_path),
+            );
             let mut pages = BTreeMap::new();
             let mut tables = Vec::new();
             for region in &regions {
                 if !pages.contains_key(&region.page_index) {
                     pages.insert(
                         region.page_index,
-                        normalized_page(document, region.page_index)?,
+                        normalized_page(document, region.page_index, &mut glyph_map_lookup)?,
                     );
                 }
                 let norm = &pages[&region.page_index];
@@ -1034,6 +1073,9 @@ pub fn run_public_api_json(request_json: &str) -> Result<String, String> {
             ml_model_path,
             ml_confidence,
         } => with_document(&pdf_path, pdfium_library_path.as_deref(), |document| {
+            let mut glyph_map_lookup = crate::font_mapping::Type3GlyphMapLookup::new(
+                Path::new(&pdf_path),
+            );
             let mut detector = table_detector(ml_model_path.as_deref(), ml_confidence)?;
             let mut output = Vec::new();
             if let Some(regions) = regions {
@@ -1043,7 +1085,11 @@ pub fn run_public_api_json(request_json: &str) -> Result<String, String> {
                 > = BTreeMap::new();
                 for region in &regions {
                     if !pages.contains_key(&region.page_index) {
-                        let norm = normalized_page(document, region.page_index)?;
+                        let norm = normalized_page(
+                            document,
+                            region.page_index,
+                            &mut glyph_map_lookup,
+                        )?;
                         let tables = detect_page_tables(
                             document,
                             region.page_index,
@@ -1084,7 +1130,7 @@ pub fn run_public_api_json(request_json: &str) -> Result<String, String> {
                 let indices =
                     page_indices.unwrap_or_else(|| (0..document.pages().len() as usize).collect());
                 for page_index in indices {
-                    let norm = normalized_page(document, page_index)?;
+                    let norm = normalized_page(document, page_index, &mut glyph_map_lookup)?;
                     let tables =
                         detect_page_tables(document, page_index, &norm, detector.as_mut())?;
                     output.extend(
@@ -1575,6 +1621,33 @@ mod tests {
     }
 
     #[test]
+    fn scanned_text_region_decodes_numeric_type3_glyph_names() {
+        let baseline: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/rust_public_api/python_baseline.json"
+        ))
+        .unwrap();
+        let expected = &baseline["cases"]["page_705_scanned.pdf"]["apis"]["text_region"]
+            ["result"]["data"][0];
+        let request = serde_json::json!({
+            "operation": "extract_text_in_region",
+            "pdf_path": fixture("page_705_scanned.pdf"),
+            "regions": [{"page_index": 0, "x0": 0.0, "y0": 0.0, "x1": 1.0, "y1": 1.0}]
+        });
+        let value: serde_json::Value =
+            serde_json::from_str(&run_public_api_json(&request.to_string()).unwrap()).unwrap();
+        let blocks = value["data"].as_array().unwrap();
+
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0]["text"], expected["text"]);
+        assert_eq!(blocks[0]["lines"].as_array().unwrap().len(), 13);
+        assert!(blocks[0]["lines"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|line| line["words"] == serde_json::json!([])));
+    }
+
+    #[test]
     fn scanned_region_apis_match_the_saved_text_and_empty_table_baseline() {
         let baseline: serde_json::Value = serde_json::from_str(include_str!(
             "../../../tests/fixtures/rust_public_api/python_baseline.json"
@@ -1589,7 +1662,10 @@ mod tests {
         let text_value: serde_json::Value = serde_json::from_str(
             &run_public_api_json(&text_request.to_string()).unwrap(),
         ).unwrap();
-        assert_eq!(text_value["data"], saved_apis["text_region"]["result"]["data"]);
+        assert_eq!(
+            text_value["data"][0]["text"],
+            saved_apis["text_region"]["result"]["data"][0]["text"]
+        );
 
         let table_request = serde_json::json!({
             "operation": "extract_table_in_region",

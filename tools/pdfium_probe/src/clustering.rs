@@ -363,6 +363,21 @@ pub fn cluster_spans_into_blocks(
     spans: &[SpanInfo],
     page_index: usize,
 ) -> Vec<VisualBlock> {
+    cluster_spans_into_blocks_inner(spans, page_index, false)
+}
+
+pub fn cluster_spans_into_blocks_by_baseline(
+    spans: &[SpanInfo],
+    page_index: usize,
+) -> Vec<VisualBlock> {
+    cluster_spans_into_blocks_inner(spans, page_index, true)
+}
+
+fn cluster_spans_into_blocks_inner(
+    spans: &[SpanInfo],
+    page_index: usize,
+    group_by_baseline: bool,
+) -> Vec<VisualBlock> {
     // 1. SpanInfo -> VisualSpan
     let mut visual_spans: Vec<VisualSpan> = spans
         .iter()
@@ -421,9 +436,13 @@ pub fn cluster_spans_into_blocks(
             let height_ratio = b_h.max(s_h) / min_h;
             let center_dist = (b_cy - s.cy()).abs();
 
-            let matches = is_contained
-                || (height_ratio <= 3.0
-                    && (v_overlap >= 0.45 * min_h || center_dist <= 0.35 * min_h));
+            let matches = if group_by_baseline {
+                center_dist <= (s.size.max(1.0) * 0.25).max(0.5)
+            } else {
+                is_contained
+                    || (height_ratio <= 3.0
+                        && (v_overlap >= 0.45 * min_h || center_dist <= 0.35 * min_h))
+            };
 
             if matches {
                 matched_idx = Some(idx);
@@ -455,7 +474,11 @@ pub fn cluster_spans_into_blocks(
         for span in sorted_row {
             if let Some(last_span) = current_line_spans.last() {
                 let gap_x = span.x0() - last_span.x1();
-                let char_h = last_span.height().min(span.height()).max(1.0);
+                let char_h = if group_by_baseline {
+                    last_span.size.min(span.size).max(1.0)
+                } else {
+                    last_span.height().min(span.height()).max(1.0)
+                };
                 let max_gap = (4.0 * char_h).max(LINE_MAX_HORIZONTAL_GAP);
                 if gap_x > max_gap {
                     let mut line = VisualLine::new(current_line_spans.remove(0));
@@ -640,6 +663,7 @@ mod tests {
                 c: ch.to_string(),
                 bbox: [bbox[0] + idx as f64 * w, bbox[1], bbox[0] + (idx + 1) as f64 * w, bbox[3]],
                 char_index: idx,
+                text_layout: None,
             })
             .collect();
         SpanInfo {

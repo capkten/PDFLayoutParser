@@ -1,5 +1,33 @@
 # Task 6 & 验收评审整改变更记录 (changes.md)
 
+## 2026-10-08：Task 10 兼容修复复测
+
+### 换机前最新状态
+
+- 第 705 页的缺失 `/ToUnicode` Type3 字体由 Rust 读取 `/Encoding/Differences` 数字 glyph names 并建立字形映射；独立文本 API 现恢复为 54 字符、13 行，不回退到 Python。
+- 第 705 页表级 bbox、4×2 网格、`line_projection` 来源和 3 个空文本 cell 已与基线对齐。cell 边界仍约有 0.1 pt 差异，按用户确认接受不同解析引擎的微小几何差异，没有放宽全局断言。
+- 最近一次临时动态 ORT 配置下的 Rust 全量测试记录为 `194 passed, 6 failed`：4 项缺少 `fix/zh_all_table_pages.pdf`，1 项合成 normalizer 测试夹具缺少字符数据，1 项为已接受的扫描页 cell 几何差异。默认静态 ORT 链接的 MSVC `LNK1120` 仍未解决，因此不能称全量测试通过。
+- 本轮 `cargo check --offline --manifest-path tools/pdfium_probe/Cargo.toml --lib` 与 `cargo check --offline --locked --manifest-path tools/pdfium_probe/Cargo.toml --lib` 均成功。
+- 本轮 `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q tests/test_rust_public_api.py` 因工作树没有包内 `_pdf_fast.pyd` 而未进入收集；只有 `target/debug/_pdf_fast.dll`。这是当前本机扩展未安装状态，不能据此判定功能失败。
+- Type3 修复后的 benchmark 尚未重跑，先前的性能和结果摘要不代表当前代码。`git diff --check` 成功；Rust 格式检查显示多个文件存在格式差异，未执行全量重排。
+
+### 此前兼容修复记录（Type3 映射修复前）
+
+- 复测的路径调用链为 `PDFParser -> pdfium_api._run -> _pdf_fast.run_public_pdf_api -> public_api.rs -> PDFium`；路径 API 不调用 PyMuPDF 提取、渲染或回退。`parse()` 主流水线仍不在迁移范围。
+- wireless 指定区域结果之前由 `ordinary_table()` 从页面 drawing 快照补写 `h_lines/v_lines`，与 feature-dev 的 wireless 表格结果不符。现在 `source == "wireless_span_recovery"` 时保留 `None`。
+- `page_705_scanned.pdf` 使用无 `/ToUnicode` 的 Type3 字体，`/Encoding/Differences` 是 `[0 /i255 2 /3 ... /54]`。PyMuPDF `get_text("text")` 也返回控制码；其 `get_text("words")` 基线为 54 字符标点串和 13 行。PDFium diagnostics 标记 `invalid_unicode`，包含 65 个控制字符；当前 Rust 输出仍是控制码串，且 block bbox 部分越界。临时诊断确认 `tight_bounds()` 与 loose bbox 相同，TextPage 产生 60 个重复且重叠的文本段，首个 Type3 文本对象没有可用 glyph path。普通 Rust glyph-name 映射也不能解释数字 glyph names。过滤控制字符仍无法恢复基线行/词边界和 bbox，因此保留该差异，不通过 Python 回退、单文件映射或放宽断言。
+- 扫描页表级 table bbox 仍有精确差异：Rust `x0=204.9`，Python 基线 `x0=203.2`，相差 1.7 pt；未添加数值容差。
+
+### 此前验证结果（Type3 映射修复前）
+
+- 默认 ORT 静态链接仍在 MSVC 14.40 下 `LNK1120`，包含 13 个未解析 `__std_*` 符号。本轮 Rust 定向测试临时设置 `default-features = false`，仅启用 `std + load-dynamic + api-20`，并通过 `ORT_DYLIB_PATH` 加载本机 ONNX Runtime 1.20.1；测试后 Cargo 配置、lockfile 和进程环境变量已恢复。
+- 本轮新跑 `cargo test --manifest-path tools/pdfium_probe/Cargo.toml --lib 'public_api::tests::'`：29 passed、1 failed；唯一失败是扫描页文本与 Python 基线不同。临时诊断测试已移除，没有留在生产代码中。
+- `tests/test_rust_public_api.py`：14 passed、1 failed；唯一失败是相同的扫描页文本差异。无线针对性过滤运行 64 tests，全部通过。
+- Python/Rust 差异 benchmark 本轮重新执行：4 个 fixture × 8 个 API，Rust 每项 5 次，共 32 个组合全部测量且无 ORT skip。Rust 有 25/32 项更慢，speedup 范围 0.008x–2.383x；无线页 `table_region` 规范化字段现在一致。按 API 汇总的中位 speedup 和摘要一致数见 `.superpowers/sdd/2026-10-08-rust-public-api/compat-report.md`。渲染和分类摘要在 4/4 fixture 一致；文字与结构化表格仍有差异。
+- `git diff --check dafe1c8`：报告更新后重新检查。
+
+当前还不能合并：扫描页回归仍失败，多种 API 输出与基线不同，默认 ORT 静态链接也未解决。结果和速度均不描述为全面等价或整体提速。
+
 ## 2026-10-08：Task 10 Rust 公开 PDF API 验收
 
 ### 范围、根因与调用链

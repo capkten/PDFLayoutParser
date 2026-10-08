@@ -227,6 +227,7 @@ mod tests {
                 c: c.to_string(),
                 bbox: [0.0, 0.0, 1.0, 1.0],
                 char_index: i,
+                text_layout: None,
             })
             .collect();
         let scalar_count = text.chars().count();
@@ -347,6 +348,7 @@ mod tests {
             c: "中".to_string(),
             bbox: [0.0, 0.0, 1.0, 1.0],
             char_index: 0,
+            text_layout: None,
         }];
         let result = classify_raw_page(&page);
         assert_eq!(result.page_type, "scanned");
@@ -370,6 +372,7 @@ mod tests {
                 c: c.to_string(),
                 bbox: [0.0, 0.0, 1.0, 1.0],
                 char_index: i,
+                text_layout: None,
             })
             .collect();
         page3.mapping_diagnostics.visible_text_scalar_count = 5;
@@ -462,6 +465,7 @@ mod tests {
             c: "A".to_string(),
             bbox: [0.0, 0.0, 1.0, 1.0],
             char_index: 0,
+            text_layout: None,
         }];
         let res2 = classify_raw_page(&page2);
         assert_eq!(res2.reason.as_deref(), Some("invalid_unicode"));
@@ -472,6 +476,7 @@ mod tests {
             c: "A".to_string(),
             bbox: [5.0, 0.0, 1.0, 1.0], // inverted
             char_index: 0,
+            text_layout: None,
         }];
         let res3 = classify_raw_page(&page3);
         assert_eq!(res3.reason.as_deref(), Some("invalid_unicode_mapping"));

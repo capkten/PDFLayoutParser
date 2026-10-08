@@ -9,6 +9,7 @@ pub mod classifier;
 pub mod clustering;
 pub mod detector;
 pub mod drawings;
+pub mod font_mapping;
 pub mod image_extraction;
 pub mod json_export;
 pub mod layout;
@@ -23,6 +24,16 @@ pub struct CharInfo {
     pub c: String,
     pub bbox: [f64; 4],
     pub char_index: usize, // 字符在当前原子 TextObject 内的 0-indexed 局部位置
+    #[serde(skip)]
+    pub text_layout: Option<TextCharLayout>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextCharLayout {
+    pub origin: [f64; 2],
+    pub horizontal_scale: f64,
+    pub font_size: f64,
+    pub y_bounds: [f64; 2],
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -326,7 +337,8 @@ fn process_page_object_text_recursive(
             if let Ok(chars) = text_obj.chars(pt) {
                 for (ch_idx, ch) in chars.iter().enumerate() {
                     let c_str = ch.unicode_string().unwrap_or_default();
-                    let c_bbox = if let Ok(b) = ch.loose_bounds() {
+                    let native_bounds = ch.loose_bounds().ok();
+                    let c_bbox = if let Some(b) = &native_bounds {
                         transform_rect_coords(
                             b.left().value as f64,
                             b.bottom().value as f64,
@@ -348,10 +360,27 @@ fn process_page_object_text_recursive(
                         *has_invalid_geometry = true;
                     }
                     *extracted_char_scalar_count += c_str.chars().count();
+                    let text_layout = ch
+                        .origin()
+                        .ok()
+                        .zip(native_bounds.as_ref())
+                        .map(|((origin_x, origin_y), bounds)| TextCharLayout {
+                            origin: [
+                                origin_x.value as f64 - crop_x0,
+                                crop_y1 - origin_y.value as f64,
+                            ],
+                            horizontal_scale: ch.get_horizontal_scale() as f64,
+                            font_size: ch.scaled_font_size().value as f64,
+                            y_bounds: [
+                                crop_y1 - bounds.top().value as f64,
+                                crop_y1 - bounds.bottom().value as f64,
+                            ],
+                        });
                     chars_list.push(CharInfo {
                         c: c_str,
                         bbox: c_bbox,
                         char_index: ch_idx,
+                        text_layout,
                     });
                 }
             } else {
@@ -395,6 +424,7 @@ fn process_page_object_text_recursive(
                     c: " ".to_string(),
                     bbox: sp_bbox,
                     char_index: ch_idx,
+                    text_layout: None,
                 });
             }
         }

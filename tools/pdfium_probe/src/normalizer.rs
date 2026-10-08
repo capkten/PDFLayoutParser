@@ -1,7 +1,8 @@
 use crate::classifier;
 use crate::clustering::{make_rect4, Rect4Dto, WireWordDto, WordTupleDto};
 use crate::drawings::WireDrawingDto;
-use crate::{clustering, drawings, PdfiumRawPage, PdfiumRawSnapshot};
+use crate::font_mapping::Type3GlyphMap;
+use crate::{clustering, drawings, PdfiumRawPage, PdfiumRawSnapshot, SpanInfo};
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -133,13 +134,208 @@ pub struct NormalizedPageDto {
     pub diagnostics: serde_json::Value,
 }
 
+fn repair_invalid_unicode_spans(
+    spans: &[SpanInfo],
+    numeric_type3_glyph_map: Option<&Type3GlyphMap>,
+) -> Vec<SpanInfo> {
+    if numeric_type3_glyph_map.is_none() {
+        return repair_invalid_unicode_spans_without_type3_map(spans);
+    }
+
+    let mut repaired_spans = Vec::new();
+    for span in spans {
+        for mut character in span.characters.iter().cloned() {
+                let mapped_character = if character.text_layout.is_some() {
+                    let mut source_chars = character.c.chars();
+                    source_chars
+                        .next()
+                        .filter(|_| source_chars.next().is_none())
+                        .and_then(|source| {
+                            numeric_type3_glyph_map?
+                                .characters
+                                .get(&(source as u32))
+                                .copied()
+                        })
+                } else {
+                    None
+                };
+                if mapped_character.is_some()
+                    && character.text_layout.as_ref().is_some_and(|layout| {
+                        layout.horizontal_scale.abs() < 0.001
+                            || (layout.y_bounds[1] - layout.y_bounds[0]).abs() < 0.001
+                    })
+                {
+                    continue;
+                }
+                let decoded_text = mapped_character
+                    .map(|mapped| mapped.to_string())
+                    .unwrap_or_else(|| character.c.clone());
+                let visible_text: String = decoded_text
+                    .chars()
+                    .filter(|ch| !crate::is_illegal_control_char(*ch))
+                    .collect();
+                if visible_text.is_empty() {
+                    continue;
+                }
+
+                if visible_text.chars().any(|ch| !ch.is_whitespace()) {
+                    if let Some(layout) = &character.text_layout {
+                        let x0 = layout.origin[0] as f32;
+                        let x1 = x0 + layout.horizontal_scale as f32;
+                        if layout.horizontal_scale.is_finite()
+                            && layout.font_size.is_finite()
+                            && layout.font_size > 0.0
+                            && layout.y_bounds.iter().all(|value| value.is_finite())
+                        {
+                            let y_bounds = numeric_type3_glyph_map
+                                .and_then(|glyph_map| type3_y_bounds(layout, glyph_map))
+                                .unwrap_or(layout.y_bounds);
+                            character.bbox = [
+                                x0.min(x1) as f64,
+                                y_bounds[0],
+                                x0.max(x1) as f64,
+                                y_bounds[1],
+                            ];
+                        }
+                    }
+                }
+
+                character.c = visible_text.clone();
+                let mut repaired = span.clone();
+                repaired.text = visible_text;
+                repaired.bbox = character.bbox;
+                repaired.characters = vec![character.clone()];
+                repaired.provenance.character_count = 1;
+                repaired.provenance.char_start_index = character.char_index;
+                repaired.provenance.char_end_index = character.char_index.saturating_add(1);
+                repaired.provenance.char_indices = vec![character.char_index];
+                if let Some(layout) = &character.text_layout {
+                    if layout.font_size.is_finite() && layout.font_size > 0.0 {
+                        repaired.size = Some(layout.font_size);
+                    }
+                }
+                repaired_spans.push(repaired);
+        }
+    }
+    repaired_spans
+}
+
+fn repair_invalid_unicode_spans_without_type3_map(spans: &[SpanInfo]) -> Vec<SpanInfo> {
+    spans
+        .iter()
+        .filter_map(|span| {
+            let mut repaired = span.clone();
+            let mut text = String::new();
+            let mut characters = Vec::with_capacity(span.characters.len());
+            let mut font_size = None;
+
+            for mut character in repaired.characters.drain(..) {
+                let visible_text: String = character
+                    .c
+                    .chars()
+                    .filter(|ch| !crate::is_illegal_control_char(*ch))
+                    .collect();
+                if visible_text.is_empty() {
+                    continue;
+                }
+
+                if visible_text.chars().any(|ch| !ch.is_whitespace()) {
+                    if let Some(layout) = &character.text_layout {
+                        let x_end = layout.origin[0] + layout.horizontal_scale;
+                        if layout.horizontal_scale.is_finite()
+                            && layout.font_size.is_finite()
+                            && layout.font_size > 0.0
+                            && layout.y_bounds.iter().all(|value| value.is_finite())
+                        {
+                            character.bbox = [
+                                layout.origin[0].min(x_end),
+                                layout.y_bounds[0],
+                                layout.origin[0].max(x_end),
+                                layout.y_bounds[1],
+                            ];
+                            font_size.get_or_insert(layout.font_size);
+                        }
+                    }
+                }
+
+                character.c = visible_text.clone();
+                text.push_str(&visible_text);
+                characters.push(character);
+            }
+
+            if text.is_empty() {
+                return None;
+            }
+            repaired.text = text;
+            repaired.characters = characters;
+            if let Some(font_size) = font_size {
+                repaired.size = Some(font_size);
+            }
+            Some(repaired)
+        })
+        .collect()
+}
+
+fn type3_y_bounds(layout: &crate::TextCharLayout, glyph_map: &Type3GlyphMap) -> Option<[f64; 2]> {
+    if glyph_map
+        .font_matrix
+        .iter()
+        .any(|value| !value.is_finite())
+    {
+        return None;
+    }
+    let [_, b, _, d, _, f] = glyph_map.font_matrix;
+
+    let [x0, y0, x1, y1] = glyph_map.font_bbox;
+    let transformed_y = [
+        b * x0 + d * y0 + f,
+        b * x0 + d * y1 + f,
+        b * x1 + d * y0 + f,
+        b * x1 + d * y1 + f,
+    ];
+    let lower = transformed_y.iter().copied().fold(f64::INFINITY, f64::min);
+    let upper = transformed_y
+        .iter()
+        .copied()
+        .fold(f64::NEG_INFINITY, f64::max);
+    if !lower.is_finite()
+        || !upper.is_finite()
+        || !layout.origin[1].is_finite()
+        || !layout.font_size.is_finite()
+        || layout.font_size <= 0.0
+    {
+        return None;
+    }
+
+    let origin_y = layout.origin[1] as f32;
+    let font_size = layout.font_size as f32;
+    let upper_extent = upper as f32 * font_size;
+    let lower_extent = lower as f32 * font_size;
+    let bounds = [
+        (origin_y - upper_extent) as f64,
+        (origin_y - lower_extent) as f64,
+    ];
+    ((bounds[0] - layout.y_bounds[0])
+        .abs()
+        .max((bounds[1] - layout.y_bounds[1]).abs())
+        <= 0.01)
+        .then_some(bounds)
+}
+
 pub fn normalize_raw_page(raw_page: &PdfiumRawPage) -> NormalizedPageDto {
-    normalize_raw_page_with_meta_options(raw_page, None, None, false)
+    normalize_raw_page_with_meta_options(raw_page, None, None, false, None)
 }
 
 /// Includes native text views for standalone APIs while retaining the scanned classification.
 pub fn normalize_raw_page_for_public_api(raw_page: &PdfiumRawPage) -> NormalizedPageDto {
-    normalize_raw_page_with_meta_options(raw_page, None, None, true)
+    normalize_raw_page_for_public_api_with_glyph_map(raw_page, None)
+}
+
+pub fn normalize_raw_page_for_public_api_with_glyph_map(
+    raw_page: &PdfiumRawPage,
+    numeric_type3_glyph_map: Option<&Type3GlyphMap>,
+) -> NormalizedPageDto {
+    normalize_raw_page_with_meta_options(raw_page, None, None, true, numeric_type3_glyph_map)
 }
 
 pub fn normalize_raw_page_with_meta(
@@ -147,7 +343,7 @@ pub fn normalize_raw_page_with_meta(
     source_file: Option<&str>,
     generator: Option<&str>,
 ) -> NormalizedPageDto {
-    normalize_raw_page_with_meta_options(raw_page, source_file, generator, false)
+    normalize_raw_page_with_meta_options(raw_page, source_file, generator, false, None)
 }
 
 fn normalize_raw_page_with_meta_options(
@@ -155,6 +351,7 @@ fn normalize_raw_page_with_meta_options(
     source_file: Option<&str>,
     generator: Option<&str>,
     retain_scanned_text_views: bool,
+    numeric_type3_glyph_map: Option<&Type3GlyphMap>,
 ) -> NormalizedPageDto {
     let classification = classifier::classify_raw_page(raw_page);
 
@@ -173,7 +370,18 @@ fn normalize_raw_page_with_meta_options(
         };
     }
 
-    let blocks = clustering::cluster_spans_into_blocks(&raw_page.spans, raw_page.page_index);
+    let use_baseline_text_layout = retain_scanned_text_views
+        && is_scanned
+        && raw_page.mapping_diagnostics.classification_reason.as_deref() == Some("invalid_unicode")
+        && raw_page.mapping_diagnostics.control_char_count > 0;
+    let repaired_spans = use_baseline_text_layout
+        .then(|| repair_invalid_unicode_spans(&raw_page.spans, numeric_type3_glyph_map));
+    let spans = repaired_spans.as_deref().unwrap_or(&raw_page.spans);
+    let blocks = if use_baseline_text_layout {
+        clustering::cluster_spans_into_blocks_by_baseline(spans, raw_page.page_index)
+    } else {
+        clustering::cluster_spans_into_blocks(spans, raw_page.page_index)
+    };
     let (words_tuples, wire_words) = clustering::derive_words(&blocks, raw_page.page_index);
     let (wire_drawings, drawings_diagnostics) = drawings::normalize_drawings(&raw_page.drawings);
 
@@ -413,6 +621,7 @@ mod tests {
                 c: c.to_string(),
                 bbox: [10.0 + i as f64 * 10.0, 10.0, 20.0 + i as f64 * 10.0, 25.0],
                 char_index: i,
+                text_layout: None,
             })
             .collect();
         let scalar_count = text.chars().count();
