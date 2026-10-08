@@ -235,6 +235,49 @@ def test_python_baseline_has_replayable_cases():
         assert image["file"]["height"] > 0
 
 
+def test_scanned_region_apis_match_saved_baseline():
+    baseline = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))["cases"]["page_705_scanned.pdf"]["apis"]
+    parser = PDFParser(str(FIXTURE_DIR / "page_705_scanned.pdf"))
+
+    text = parser.extract_text_in_region(FULL_PAGE)
+    saved_text = baseline["text_region"]["result"]
+    assert text.code == saved_text["code"] == 1
+    assert text.message == saved_text["message"] == "region text extracted"
+    assert len(text.data) == len(saved_text["data"]) == 1
+    assert text.data[0].text == saved_text["data"][0]["text"]
+    assert len(text.data[0].text) == 54
+
+    table = parser.extract_table_in_region(FULL_PAGE)
+    saved_table = baseline["table_region"]["result"]
+    assert table.code == saved_table["code"] == 1
+    assert table.message == saved_table["message"] == "region table extracted"
+    assert table.data.rows == saved_table["data"]["rows"] == 4
+    assert table.data.cols == saved_table["data"]["cols"] == 2
+    assert table.data.source == saved_table["data"]["source"] == "line_projection"
+    assert [cell.text for cell in table.data.cells] == ["", "", ""]
+    assert [cell.rowspan for cell in table.data.cells] == [4, 1, 1]
+    assert [cell.col_index for cell in table.data.cells] == [1, 0, 0]
+    assert [
+        (cell.bbox.x0, cell.bbox.y0, cell.bbox.x1, cell.bbox.y1)
+        for cell in table.data.cells
+    ] == [
+        (cell["bbox"]["x0"], cell["bbox"]["y0"], cell["bbox"]["x1"], cell["bbox"]["y1"])
+        for cell in saved_table["data"]["cells"]
+    ]
+
+
+def test_wireless_full_page_region_rejects_candidate_but_designated_region_recovers():
+    parser = PDFParser(str(FIXTURE_DIR / "page_437_wireless.pdf"))
+    assert parser.extract_table_in_region(FULL_PAGE).data is None
+
+    designated = parser.extract_table_in_region({
+        "page_index": 0, "x0": 0.14, "y0": 0.17, "x1": 0.86, "y1": 0.35,
+    })
+    assert designated.code == 1
+    assert designated.data.source == "wireless_span_recovery"
+    assert designated.data.rows > 1
+
+
 def test_rust_batch_public_api_entry_exists():
     assert callable(_pdf_fast.run_public_pdf_api)
 

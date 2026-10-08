@@ -276,7 +276,7 @@ fn extract_region(
         region.x1 * raw.width,
         region.y1 * raw.height,
     ];
-    let normalized = normalizer::normalize_raw_page(&raw);
+    let normalized = normalizer::normalize_raw_page_for_public_api(&raw);
     let mut groups: BTreeMap<(usize, usize), Vec<&WordTupleDto>> = BTreeMap::new();
     for word in &normalized.words {
         if intersects(word, rect) {
@@ -331,7 +331,7 @@ fn normalized_page(
 ) -> Result<normalizer::NormalizedPageDto, String> {
     let page = get_page(document, page_index)?;
     let raw = extract_page(&page, page_index).map_err(|err| err.to_string())?;
-    Ok(normalizer::normalize_raw_page(&raw))
+    Ok(normalizer::normalize_raw_page_for_public_api(&raw))
 }
 
 fn region_bbox(region: &RegionInput, norm: &normalizer::NormalizedPageDto) -> Option<[f64; 4]> {
@@ -348,11 +348,16 @@ fn bbox_intersects(left: [f64; 4], right: [f64; 4]) -> bool {
     left[0] < right[2] && left[2] > right[0] && left[1] < right[3] && left[3] > right[1]
 }
 
-fn valid_table(table: &markdown::FullTableDto) -> bool {
+fn valid_table(table: &markdown::FullTableDto, allow_empty_line_projection: bool) -> bool {
+    let baseline_empty_line_projection = allow_empty_line_projection
+        && !table.cells.is_empty()
+        && table.source.as_deref() == Some("line_projection")
+        && table.cells.iter().all(|cell| cell.text.trim().is_empty());
     if table.rows == 0
         || table.cols == 0
         || (table.rows == 1 && table.cols == 1)
-        || !table.cells.iter().any(|c| !c.text.trim().is_empty())
+        || (!table.cells.iter().any(|c| !c.text.trim().is_empty())
+            && !baseline_empty_line_projection)
     {
         return false;
     }
@@ -375,7 +380,7 @@ fn valid_table(table: &markdown::FullTableDto) -> bool {
             }
         }
     }
-    occupied.into_iter().all(|slot| slot)
+    baseline_empty_line_projection || occupied.into_iter().all(|slot| slot)
 }
 
 fn recover_table(
@@ -384,9 +389,24 @@ fn recover_table(
     confidence: Option<f64>,
     label: &str,
     table_id: usize,
+    allow_empty_line_projection: bool,
+    allow_wireless_recovery: bool,
 ) -> Option<markdown::FullTableDto> {
-    table_engine::recover_table_in_region(norm, bbox, confidence, label, table_id)
-        .filter(valid_table)
+    table_engine::recover_table_in_region_with_options(
+        norm,
+        bbox,
+        confidence,
+        label,
+        table_id,
+        allow_empty_line_projection && norm.page_type == "scanned",
+        allow_wireless_recovery,
+    )
+        .filter(|table| {
+            valid_table(
+                table,
+                allow_empty_line_projection && norm.page_type == "scanned",
+            )
+        })
         .map(|mut table| {
             if let Some(first) = table.cells.first() {
                 let mut tight = first.bbox;
@@ -598,6 +618,8 @@ fn detect_page_tables(
                 Some(detection.score as f64),
                 &detection.label,
                 tables.len(),
+                false,
+                true,
             ) {
                 tables.push(table);
             }
@@ -620,7 +642,15 @@ fn detect_page_tables(
         if tables.iter().any(|table| bbox_intersects(table.bbox, bbox)) {
             continue;
         }
-        if let Some(table) = recover_table(norm, bbox, None, "Rust wired candidate", tables.len()) {
+        if let Some(table) = recover_table(
+            norm,
+            bbox,
+            None,
+            "Rust wired candidate",
+            tables.len(),
+            false,
+            true,
+        ) {
             tables.push(table);
         }
     }
@@ -968,7 +998,20 @@ pub fn run_public_api_json(request_json: &str) -> Result<String, String> {
                 }
                 let norm = &pages[&region.page_index];
                 let table = region_bbox(region, norm)
-                    .and_then(|bbox| recover_table(norm, bbox, None, "Region", tables.len()))
+                    .and_then(|bbox| {
+                        recover_table(
+                            norm,
+                            bbox,
+                            None,
+                            "Region",
+                            tables.len(),
+                            true,
+                            !(region.x0 <= 0.001
+                                && region.y0 <= 0.001
+                                && region.x1 >= 0.999
+                                && region.y1 >= 0.999),
+                        )
+                    })
                     .map(|table| ordinary_table(table, norm));
                 if single {
                     return serde_json::to_value(table).map_err(|err| err.to_string());
@@ -1018,8 +1061,15 @@ pub fn run_public_api_json(request_json: &str) -> Result<String, String> {
                         .filter(|table| bbox_intersects(table.bbox, bbox))
                         .collect();
                     if overlapping.is_empty() {
-                        if let Some(table) = recover_table(norm, bbox, None, "Region", output.len())
-                        {
+                        if let Some(table) = recover_table(
+                            norm,
+                            bbox,
+                            None,
+                            "Region",
+                            output.len(),
+                            false,
+                            true,
+                        ) {
                             output.push(structure_table(table, norm));
                         }
                     } else {
@@ -1303,7 +1353,7 @@ mod tests {
                 confidence: None,
                 source: None,
             };
-            assert!(valid_table(&table), "{}x{} table was rejected", rows, cols);
+            assert!(valid_table(&table, false), "{}x{} table was rejected", rows, cols);
         }
     }
 
@@ -1325,7 +1375,7 @@ mod tests {
             confidence: None,
             source: None,
         };
-        assert!(!valid_table(&table));
+        assert!(!valid_table(&table, false));
     }
 
     fn filled_rule_page(fill: Vec<f64>) -> normalizer::NormalizedPageDto {
@@ -1486,7 +1536,7 @@ mod tests {
             "operation": "extract_table_in_region",
             "pdf_path": fixture("page_437_wireless.pdf"),
             "single": true,
-            "regions": [{"page_index": 0, "x0": 0.0, "y0": 0.0, "x1": 1.0, "y1": 1.0}]
+            "regions": [{"page_index": 0, "x0": 0.14, "y0": 0.17, "x1": 0.86, "y1": 0.35}]
         });
         let value: serde_json::Value =
             serde_json::from_str(&run_public_api_json(&request.to_string()).unwrap()).unwrap();
@@ -1495,6 +1545,72 @@ mod tests {
         assert_eq!(table["source"], "wireless_span_recovery");
         assert!(table["h_lines"].is_null());
         assert!(table["v_lines"].is_null());
+    }
+
+    #[test]
+    fn full_page_wireless_region_rejects_false_positive_but_designated_table_region_recovers() {
+        let pdf_path = fixture("page_437_wireless.pdf");
+        let full_page = serde_json::json!({
+            "operation": "extract_table_in_region",
+            "pdf_path": pdf_path,
+            "single": true,
+            "regions": [{"page_index": 0, "x0": 0.0, "y0": 0.0, "x1": 1.0, "y1": 1.0}]
+        });
+        let full_page_value: serde_json::Value = serde_json::from_str(
+            &run_public_api_json(&full_page.to_string()).unwrap(),
+        ).unwrap();
+        assert!(full_page_value["data"].is_null());
+
+        let designated_region = serde_json::json!({
+            "operation": "extract_table_in_region",
+            "pdf_path": fixture("page_437_wireless.pdf"),
+            "single": true,
+            "regions": [{"page_index": 0, "x0": 0.14, "y0": 0.17, "x1": 0.86, "y1": 0.35}]
+        });
+        let designated_value: serde_json::Value = serde_json::from_str(
+            &run_public_api_json(&designated_region.to_string()).unwrap(),
+        ).unwrap();
+        assert_eq!(designated_value["data"]["source"], "wireless_span_recovery");
+        assert!(designated_value["data"]["rows"].as_u64().unwrap() > 1);
+    }
+
+    #[test]
+    fn scanned_region_apis_match_the_saved_text_and_empty_table_baseline() {
+        let baseline: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/rust_public_api/python_baseline.json"
+        )).unwrap();
+        let saved_apis = &baseline["cases"]["page_705_scanned.pdf"]["apis"];
+        let pdf_path = fixture("page_705_scanned.pdf");
+        let text_request = serde_json::json!({
+            "operation": "extract_text_in_region",
+            "pdf_path": pdf_path,
+            "regions": [{"page_index": 0, "x0": 0.0, "y0": 0.0, "x1": 1.0, "y1": 1.0}]
+        });
+        let text_value: serde_json::Value = serde_json::from_str(
+            &run_public_api_json(&text_request.to_string()).unwrap(),
+        ).unwrap();
+        assert_eq!(text_value["data"], saved_apis["text_region"]["result"]["data"]);
+
+        let table_request = serde_json::json!({
+            "operation": "extract_table_in_region",
+            "pdf_path": fixture("page_705_scanned.pdf"),
+            "single": true,
+            "regions": [{"page_index": 0, "x0": 0.0, "y0": 0.0, "x1": 1.0, "y1": 1.0}]
+        });
+        let table_value: serde_json::Value = serde_json::from_str(
+            &run_public_api_json(&table_request.to_string()).unwrap(),
+        ).unwrap();
+        let saved_table = &saved_apis["table_region"]["result"]["data"];
+        assert_eq!(table_value["data"]["bbox"], saved_table["bbox"]);
+        assert_eq!(table_value["data"]["rows"], 4);
+        assert_eq!(table_value["data"]["cols"], 2);
+        assert_eq!(table_value["data"]["source"], "line_projection");
+        assert_eq!(table_value["data"]["cells"], saved_table["cells"]);
+        assert!(table_value["data"]["cells"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|cell| cell["text"] == ""));
     }
 
     #[test]
@@ -1517,7 +1633,7 @@ mod tests {
             "pdf_path": fixture("page_437_wireless.pdf"),
             "single": false,
             "regions": [
-                {"page_index": 0, "x0": 0.0, "y0": 0.0, "x1": 1.0, "y1": 1.0},
+                {"page_index": 0, "x0": 0.14, "y0": 0.17, "x1": 0.86, "y1": 0.35},
                 {"page_index": 0, "x0": 0.0, "y0": 0.0, "x1": 0.01, "y1": 0.01}
             ]
         });

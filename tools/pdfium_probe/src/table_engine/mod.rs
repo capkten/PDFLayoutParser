@@ -53,6 +53,20 @@ pub fn recover_table_in_region(
     _label: &str,
     table_id: usize,
 ) -> Option<crate::markdown::FullTableDto> {
+    recover_table_in_region_with_options(
+        norm_page, bbox, confidence, _label, table_id, false, true,
+    )
+}
+
+pub fn recover_table_in_region_with_options(
+    norm_page: &crate::normalizer::NormalizedPageDto,
+    bbox: [f64; 4],
+    confidence: Option<f64>,
+    _label: &str,
+    table_id: usize,
+    allow_empty_line_projection: bool,
+    allow_wireless_recovery: bool,
+) -> Option<crate::markdown::FullTableDto> {
     let snapshot = norm_page.page_snapshot.as_ref()?;
     let tol = 2.3;
 
@@ -164,7 +178,10 @@ pub fn recover_table_in_region(
             })
             .collect();
 
-        if !region_cells.is_empty() && region_cells.iter().any(|c| !c.text.trim().is_empty()) {
+        if !region_cells.is_empty()
+            && (region_cells.iter().any(|c| !c.text.trim().is_empty())
+                || (allow_empty_line_projection && norm_page.page_type == "scanned"))
+        {
             let num_rows = region_cells
                 .iter()
                 .map(|c| (c.row + c.rowspan) as usize)
@@ -199,6 +216,10 @@ pub fn recover_table_in_region(
                 });
             }
         }
+    }
+
+    if !allow_wireless_recovery {
+        return None;
     }
 
     // 2. Wireless native-span table recovery

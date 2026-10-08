@@ -134,7 +134,12 @@ pub struct NormalizedPageDto {
 }
 
 pub fn normalize_raw_page(raw_page: &PdfiumRawPage) -> NormalizedPageDto {
-    normalize_raw_page_with_meta(raw_page, None, None)
+    normalize_raw_page_with_meta_options(raw_page, None, None, false)
+}
+
+/// Includes native text views for standalone APIs while retaining the scanned classification.
+pub fn normalize_raw_page_for_public_api(raw_page: &PdfiumRawPage) -> NormalizedPageDto {
+    normalize_raw_page_with_meta_options(raw_page, None, None, true)
 }
 
 pub fn normalize_raw_page_with_meta(
@@ -142,9 +147,19 @@ pub fn normalize_raw_page_with_meta(
     source_file: Option<&str>,
     generator: Option<&str>,
 ) -> NormalizedPageDto {
+    normalize_raw_page_with_meta_options(raw_page, source_file, generator, false)
+}
+
+fn normalize_raw_page_with_meta_options(
+    raw_page: &PdfiumRawPage,
+    source_file: Option<&str>,
+    generator: Option<&str>,
+    retain_scanned_text_views: bool,
+) -> NormalizedPageDto {
     let classification = classifier::classify_raw_page(raw_page);
 
-    if !classifier::is_vector_page(&classification) {
+    let is_scanned = !classifier::is_vector_page(&classification);
+    if is_scanned && !retain_scanned_text_views {
         let class_json = serde_json::to_value(&classification).unwrap_or(serde_json::Value::Null);
         return NormalizedPageDto {
             page_type: "scanned".to_string(),
@@ -362,7 +377,7 @@ pub fn normalize_raw_page_with_meta(
     let diagnostics = class_val;
 
     NormalizedPageDto {
-        page_type: "vector".to_string(),
+        page_type: if is_scanned { "scanned" } else { "vector" }.to_string(),
         page_snapshot: Some(page_snapshot),
         rawdict: Some(rawdict),
         words: words_tuples,
@@ -549,6 +564,19 @@ mod tests {
         assert!(norm.rawdict.is_none());
         assert!(norm.words.is_empty());
         assert_eq!(norm.sidecar["classification"]["page_type"], "scanned");
+        assert_eq!(norm.diagnostics["page_type"], "scanned");
+    }
+
+    #[test]
+    fn public_api_scanned_normalization_retains_native_text_views() {
+        let raw_page = make_test_scanned_page();
+        let norm = normalize_raw_page_for_public_api(&raw_page);
+
+        assert_eq!(norm.page_type, "scanned");
+        assert!(norm.page_snapshot.is_some());
+        assert!(norm.rawdict.is_some());
+        assert!(!norm.words.is_empty());
+        assert_eq!(norm.page_snapshot.as_ref().unwrap().spans[0].text, "Bad\u{FFFD}Text");
         assert_eq!(norm.diagnostics["page_type"], "scanned");
     }
 

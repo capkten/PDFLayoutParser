@@ -548,3 +548,11 @@ Phase 5 实现了整个 PDFLayoutParser 全链路纯 Rust 化的终极闭环—�
 6. **静态分析与代码格式**：
    - `cargo clippy --bin pdfium_probe -D warnings`：0 warnings / 0 errors。
    - `git diff --check`：0 格式错误。
+
+## 2026-10-08：Task 10 公开 API 兼容性修复
+
+- 独立 PDF 公开 API 使用新增的扫描页规范化入口：保留 `page_type="scanned"`，同时保留 PDFium native span、rawdict 与 words；主 `parse()` 路径继续使用原扫描页早退行为。
+- 扫描页 `extract_table_in_region` 仅允许 `scanned` 页的 `line_projection` 返回空文本表格，并保持单元格边界检查、跨度范围检查和冲突检查；按保存的基线恢复第 705 页 4×2、3 cells 结果。
+- 第 437 页的整页 `extract_table_in_region` 不再尝试无线 fallback；按明确指定的区域仍保留无线表格恢复。占位冲突检查未放宽。
+- Benchmark 增加归一化、公共字段保留、文本与 cell 文本哈希差异的直接测试。`table_structure` 跳过判断改为隔离子进程实际调用 Rust API；仅识别 Rust 调用报告的 `BadVersion` 版本错误，超时、断言失败和其他错误仍作为失败上报。当前 Cargo feature 树显示 ORT API 下限为 27；未改生产 ORT 依赖或链接配置。
+- 验证：`cargo check --manifest-path tools/pdfium_probe/Cargo.toml --tests` 成功；`tests/test_rust_public_api_benchmark.py` 为 4 passed；`git diff --check` 成功。目标 Rust 测试无法运行：MSVC 14.40 链接默认 ORT 静态库时出现 `LNK1120` / 13 个 `__std_*` 未解析符号。兼容修复后的 Rust 运行时结果与完整差异 benchmark 尚未获得，因此不能据此宣称其余基线差异已消除。

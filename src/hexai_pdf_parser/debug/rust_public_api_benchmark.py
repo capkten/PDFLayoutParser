@@ -5,13 +5,15 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import importlib.metadata
+import os
 import statistics
+import subprocess
+import sys
 import tempfile
 import time
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import fitz
 from hexai_pdf_parser.core.pdf_parser import PDFParser
@@ -149,6 +151,42 @@ def _differences(baseline: Dict[str, Any], current: Dict[str, Any]) -> list:
     return differences
 
 
+def _probe_table_structure(pdf: Path) -> Optional[str]:
+    """Probe the Rust-loaded ORT runtime in isolation; return only a confirmed version error."""
+    probe = r'''import sys
+from hexai_pdf_parser.core.pdf_parser import PDFParser
+try:
+    result = PDFParser(sys.argv[1]).extract_table_structure(page_indices=[0])
+    if result.code < 0:
+        raise RuntimeError(result.message)
+except BaseException as error:
+    print("{}: {}".format(type(error).__name__, error), file=sys.stderr)
+    raise SystemExit(2)
+'''
+    env = os.environ.copy()
+    source_path = str(ROOT / "src")
+    env["PYTHONPATH"] = os.pathsep.join(
+        part for part in (source_path, env.get("PYTHONPATH", "")) if part
+    )
+    try:
+        result = subprocess.run(
+            [sys.executable, "-c", probe, str(pdf)],
+            cwd=str(ROOT),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise RuntimeError("isolated Rust table_structure probe failed: {}".format(error)) from error
+    if result.returncode == 0:
+        return None
+    detail = "\n".join(part for part in (result.stdout, result.stderr) if part).strip()
+    if "BadVersion" in detail and "version_str" in detail:
+        return detail
+    raise RuntimeError("isolated Rust table_structure probe failed: {}".format(detail))
+
+
 def run(baseline_path: Path, runs: int, output: Path, fixture_names: list) -> Dict[str, Any]:
     if runs < 5:
         raise ValueError("--runs must be at least 5")
@@ -174,16 +212,16 @@ def run(baseline_path: Path, runs: int, output: Path, fixture_names: list) -> Di
                 py_median = float(saved["timing_ms"].get("median", statistics.median(py_samples)))
                 case_dir = temp_root / fixture_name / api
                 case_dir.mkdir(parents=True)
-                try:
-                    ort_version = importlib.metadata.version("onnxruntime")
-                except importlib.metadata.PackageNotFoundError:
-                    ort_version = None
-                if api == "table_structure" and ort_version and tuple(int(x) for x in ort_version.split(".")[:2]) < (1, 28):
-                    reports.append({"fixture": fixture_name, "api": api, "status": "skipped",
-                                    "python_median_ms": py_median, "rust_median_ms": None, "speedup": None,
-                                    "difference_summary": [{"field": "runtime", "python_baseline": "ONNX Runtime >= 1.28.0",
-                                                            "rust_current": "installed ONNX Runtime {} is incompatible with ort rc.13".format(ort_version)}]})
-                    continue
+                if api == "table_structure":
+                    runtime_failure = _probe_table_structure(pdf)
+                    if runtime_failure is not None:
+                        reports.append({"fixture": fixture_name, "api": api, "status": "skipped",
+                                        "reason": "isolated Rust API probe reported an ONNX Runtime version mismatch",
+                                        "runtime_probe": runtime_failure,
+                                        "python_median_ms": py_median, "rust_median_ms": None, "speedup": None,
+                                        "difference_summary": [{"field": "runtime_probe", "python_baseline": None,
+                                                                "rust_current": runtime_failure}]})
+                        continue
                 parser = PDFParser(str(pdf))
                 # A current-code warmup precedes the measured Rust samples.
                 warmup = _invoke(parser, api, case_dir / "warmup")
@@ -233,8 +271,7 @@ def main() -> int:
     payload = run(args.baseline, args.runs, args.output, args.fixture)
     for item in payload["results"]:
         if item["status"] == "skipped":
-            print("{fixture} {api}: skipped ({reason})".format(
-                reason=item["difference_summary"][0]["rust_current"], **item))
+            print("{fixture} {api}: skipped ({reason})".format(**item))
             continue
         print("{fixture} {api}: python={python_median_ms:.3f} ms rust={rust_median_ms:.3f} ms speedup={speedup:.3f}x differences={count}".format(
             count=len(item["difference_summary"]), **item))
