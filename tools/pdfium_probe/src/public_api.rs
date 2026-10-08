@@ -1,5 +1,7 @@
 use crate::clustering::WordTupleDto;
-use crate::{classifier, extract_page, get_platform_native_lib, normalizer};
+use crate::{
+    classifier, detector, extract_page, get_platform_native_lib, markdown, normalizer, table_engine,
+};
 use pdfium_render::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -80,6 +82,15 @@ struct BBoxDto {
 }
 
 impl BBoxDto {
+    fn from_array(rect: [f64; 4]) -> Self {
+        Self {
+            x0: rect[0],
+            y0: rect[1],
+            x1: rect[2],
+            y1: rect[3],
+        }
+    }
+
     fn from_word(word: &WordTupleDto) -> Self {
         Self {
             x0: word.0,
@@ -116,6 +127,66 @@ struct BlockDto {
     text: String,
     bbox: BBoxDto,
     lines: Vec<LineDto>,
+}
+
+#[derive(Serialize)]
+struct TableCellDto {
+    text: String,
+    row_index: usize,
+    col_index: usize,
+    bbox: BBoxDto,
+    rowspan: usize,
+    colspan: usize,
+}
+
+#[derive(Serialize)]
+struct TableDto {
+    bbox: BBoxDto,
+    rows: usize,
+    cols: usize,
+    cells: Vec<TableCellDto>,
+    confidence: Option<f64>,
+    source: Option<String>,
+    h_lines: Option<Vec<[f64; 4]>>,
+    v_lines: Option<Vec<[f64; 4]>>,
+}
+
+#[derive(Serialize)]
+struct TextCharDto {
+    text: String,
+    bbox: BBoxDto,
+    confidence: Option<f64>,
+}
+
+#[derive(Serialize)]
+struct TextBlockStructureDto {
+    text: String,
+    bbox: BBoxDto,
+    chars: Vec<TextCharDto>,
+}
+
+#[derive(Serialize)]
+struct CellStructureDto {
+    text: String,
+    row_index: usize,
+    col_index: usize,
+    cell_coord: [[f64; 2]; 4],
+    bbox: BBoxDto,
+    text_block: TextBlockStructureDto,
+    tl_row: usize,
+    tl_col: usize,
+    br_row: usize,
+    br_col: usize,
+}
+
+#[derive(Serialize)]
+struct TableStructureDto {
+    bbox: BBoxDto,
+    rows: usize,
+    cols: usize,
+    cells: Vec<CellStructureDto>,
+    confidence: Option<f64>,
+    source: Option<String>,
 }
 
 fn bind_pdfium(pdfium_library_path: Option<&str>) -> Result<Pdfium, String> {
@@ -254,6 +325,318 @@ fn extract_region(
     Ok(Some(BlockDto { text, bbox, lines }))
 }
 
+fn normalized_page(
+    document: &PdfDocument<'_>,
+    page_index: usize,
+) -> Result<normalizer::NormalizedPageDto, String> {
+    let page = get_page(document, page_index)?;
+    let raw = extract_page(&page, page_index).map_err(|err| err.to_string())?;
+    Ok(normalizer::normalize_raw_page(&raw))
+}
+
+fn region_bbox(region: &RegionInput, norm: &normalizer::NormalizedPageDto) -> Option<[f64; 4]> {
+    let page = &norm.page_snapshot.as_ref()?.page;
+    Some([
+        region.x0 * page.width,
+        region.y0 * page.height,
+        region.x1 * page.width,
+        region.y1 * page.height,
+    ])
+}
+
+fn bbox_intersects(left: [f64; 4], right: [f64; 4]) -> bool {
+    left[0] < right[2] && left[2] > right[0] && left[1] < right[3] && left[3] > right[1]
+}
+
+fn valid_table(table: &markdown::FullTableDto) -> bool {
+    if table.rows < 2 || table.cols < 2 || !table.cells.iter().any(|c| !c.text.trim().is_empty()) {
+        return false;
+    }
+    let mut occupied = vec![false; table.rows * table.cols];
+    for cell in &table.cells {
+        if cell.rowspan == 0
+            || cell.colspan == 0
+            || cell.row_index + cell.rowspan > table.rows
+            || cell.col_index + cell.colspan > table.cols
+        {
+            return false;
+        }
+        for row in cell.row_index..cell.row_index + cell.rowspan {
+            for col in cell.col_index..cell.col_index + cell.colspan {
+                let slot = &mut occupied[row * table.cols + col];
+                if *slot {
+                    return false;
+                }
+                *slot = true;
+            }
+        }
+    }
+    occupied.into_iter().all(|slot| slot)
+}
+
+fn recover_table(
+    norm: &normalizer::NormalizedPageDto,
+    bbox: [f64; 4],
+    confidence: Option<f64>,
+    label: &str,
+    table_id: usize,
+) -> Option<markdown::FullTableDto> {
+    table_engine::recover_table_in_region(norm, bbox, confidence, label, table_id)
+        .filter(valid_table)
+        .map(|mut table| {
+            if let Some(first) = table.cells.first() {
+                let mut tight = first.bbox;
+                for cell in table.cells.iter().skip(1) {
+                    tight[0] = tight[0].min(cell.bbox[0]);
+                    tight[1] = tight[1].min(cell.bbox[1]);
+                    tight[2] = tight[2].max(cell.bbox[2]);
+                    tight[3] = tight[3].max(cell.bbox[3]);
+                }
+                table.bbox = tight;
+            }
+            table
+        })
+}
+
+fn table_lines(
+    norm: &normalizer::NormalizedPageDto,
+    bbox: [f64; 4],
+) -> (Option<Vec<[f64; 4]>>, Option<Vec<[f64; 4]>>) {
+    let mut horizontal = Vec::new();
+    let mut vertical = Vec::new();
+    if let Some(snapshot) = &norm.page_snapshot {
+        for drawing in &snapshot.drawings {
+            if drawing.kind == "f" {
+                continue;
+            }
+            for line in &drawing.lines {
+                let rect = &line.rect;
+                let dx = (rect.x1 - rect.x0).abs();
+                let dy = (rect.y1 - rect.y0).abs();
+                if dx >= 3.0 && dy <= 2.3 {
+                    let y = (rect.y0 + rect.y1) / 2.0;
+                    let x0 = rect.x0.max(bbox[0]);
+                    let x1 = rect.x1.min(bbox[2]);
+                    if y >= bbox[1] && y <= bbox[3] && x1 > x0 {
+                        horizontal.push([x0, y, x1, y]);
+                    }
+                } else if dy >= 3.0 && dx <= 2.3 {
+                    let x = (rect.x0 + rect.x1) / 2.0;
+                    let y0 = rect.y0.max(bbox[1]);
+                    let y1 = rect.y1.min(bbox[3]);
+                    if x >= bbox[0] && x <= bbox[2] && y1 > y0 {
+                        vertical.push([x, y0, x, y1]);
+                    }
+                }
+            }
+        }
+    }
+    (
+        (!horizontal.is_empty()).then_some(horizontal),
+        (!vertical.is_empty()).then_some(vertical),
+    )
+}
+
+fn ordinary_table(table: markdown::FullTableDto, norm: &normalizer::NormalizedPageDto) -> TableDto {
+    let (h_lines, v_lines) = table_lines(norm, table.bbox);
+    TableDto {
+        bbox: BBoxDto::from_array(table.bbox),
+        rows: table.rows,
+        cols: table.cols,
+        cells: table
+            .cells
+            .into_iter()
+            .map(|cell| TableCellDto {
+                text: cell.text,
+                row_index: cell.row_index,
+                col_index: cell.col_index,
+                bbox: BBoxDto::from_array(cell.bbox),
+                rowspan: cell.rowspan,
+                colspan: cell.colspan,
+            })
+            .collect(),
+        confidence: table.confidence,
+        source: table.source,
+        h_lines,
+        v_lines,
+    }
+}
+
+fn cell_text_block(norm: &normalizer::NormalizedPageDto, bbox: [f64; 4]) -> TextBlockStructureDto {
+    let mut selected = Vec::new();
+    if let Some(snapshot) = &norm.page_snapshot {
+        for span in &snapshot.spans {
+            for ch in &span.characters {
+                let rect = &ch.rect;
+                let x = (rect.x0 + rect.x1) / 2.0;
+                let y = (rect.y0 + rect.y1) / 2.0;
+                if x >= bbox[0] && x <= bbox[2] && y >= bbox[1] && y <= bbox[3] {
+                    selected.push((
+                        ch.raw_source_position.clone(),
+                        TextCharDto {
+                            text: ch.text.clone(),
+                            bbox: BBoxDto {
+                                x0: rect.x0,
+                                y0: rect.y0,
+                                x1: rect.x1,
+                                y1: rect.y1,
+                            },
+                            confidence: None,
+                        },
+                    ));
+                }
+            }
+        }
+    }
+    selected.sort_by(|left, right| left.0.cmp(&right.0));
+    let chars: Vec<_> = selected.into_iter().map(|(_, ch)| ch).collect();
+    let mut bbox_out = BBoxDto {
+        x0: 0.0,
+        y0: 0.0,
+        x1: 0.0,
+        y1: 0.0,
+    };
+    if let Some(first) = chars.first() {
+        bbox_out = BBoxDto {
+            x0: first.bbox.x0,
+            y0: first.bbox.y0,
+            x1: first.bbox.x1,
+            y1: first.bbox.y1,
+        };
+        for ch in chars.iter().skip(1) {
+            bbox_out.include(&ch.bbox);
+        }
+    }
+    let text = chars.iter().map(|ch| ch.text.as_str()).collect();
+    TextBlockStructureDto {
+        text,
+        bbox: bbox_out,
+        chars,
+    }
+}
+
+fn structure_table(
+    table: markdown::FullTableDto,
+    norm: &normalizer::NormalizedPageDto,
+) -> TableStructureDto {
+    TableStructureDto {
+        bbox: BBoxDto::from_array(table.bbox),
+        rows: table.rows,
+        cols: table.cols,
+        cells: table
+            .cells
+            .into_iter()
+            .map(|cell| {
+                let [x0, y0, x1, y1] = cell.bbox;
+                CellStructureDto {
+                    text: cell.text,
+                    row_index: cell.row_index,
+                    col_index: cell.col_index,
+                    cell_coord: [[x0, y0], [x1, y0], [x1, y1], [x0, y1]],
+                    bbox: BBoxDto::from_array(cell.bbox),
+                    text_block: cell_text_block(norm, cell.bbox),
+                    tl_row: cell.row_index,
+                    tl_col: cell.col_index,
+                    br_row: cell.row_index + cell.rowspan - 1,
+                    br_col: cell.col_index + cell.colspan - 1,
+                }
+            })
+            .collect(),
+        confidence: table.confidence,
+        source: table.source,
+    }
+}
+
+fn detect_page_tables(
+    document: &PdfDocument<'_>,
+    page_index: usize,
+    norm: &normalizer::NormalizedPageDto,
+    detector: Option<&mut detector::YoloTableDetector>,
+) -> Result<Vec<markdown::FullTableDto>, String> {
+    let Some(snapshot) = &norm.page_snapshot else {
+        return Ok(Vec::new());
+    };
+    let mut tables = Vec::new();
+    if let Some(detector) = detector {
+        let page = get_page(document, page_index)?;
+        let words: Vec<[f32; 4]> = norm
+            .words
+            .iter()
+            .map(|word| [word.0 as f32, word.1 as f32, word.2 as f32, word.3 as f32])
+            .collect();
+        let detections = detector::detect_tables_on_pdf_page_with_detector(&page, &words, detector)
+            .map_err(|err| format!("Could not detect tables on page {}: {}", page_index, err))?;
+        for detection in detections {
+            if let Some(table) = recover_table(
+                norm,
+                [
+                    detection.x0 as f64,
+                    detection.y0 as f64,
+                    detection.x1 as f64,
+                    detection.y1 as f64,
+                ],
+                Some(detection.score as f64),
+                &detection.label,
+                tables.len(),
+            ) {
+                tables.push(table);
+            }
+        }
+    }
+    let (h_lines, v_lines) =
+        table_lines(norm, [0.0, 0.0, snapshot.page.width, snapshot.page.height]);
+    let h_lines = h_lines
+        .unwrap_or_default()
+        .into_iter()
+        .map(|line| (line[0], line[1], line[2], line[3]))
+        .collect();
+    let v_lines = v_lines
+        .unwrap_or_default()
+        .into_iter()
+        .map(|line| (line[0], line[1], line[2], line[3]))
+        .collect();
+    for (region, _, _) in table_engine::wired::find_table_regions(h_lines, v_lines, 2.3) {
+        let bbox = [region.x0, region.y0, region.x1, region.y1];
+        if tables.iter().any(|table| bbox_intersects(table.bbox, bbox)) {
+            continue;
+        }
+        if let Some(table) = recover_table(norm, bbox, None, "Rust wired candidate", tables.len()) {
+            tables.push(table);
+        }
+    }
+    Ok(tables)
+}
+
+fn table_detector(
+    ml_model_path: Option<&str>,
+    ml_confidence: f32,
+) -> Result<Option<detector::YoloTableDetector>, String> {
+    let model = ml_model_path
+        .map(std::path::PathBuf::from)
+        .or_else(detector::resolve_default_model_path)
+        .or_else(|| {
+            let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../src/hexai_pdf_parser/ml/table_detector_model/best.onnx");
+            path.is_file().then_some(path)
+        });
+    let Some(model) = model else {
+        return Ok(None);
+    };
+    let config = detector::TableDetectorConfig {
+        confidence_threshold: ml_confidence,
+        ..Default::default()
+    };
+    detector::YoloTableDetector::new(&model, config)
+        .map(Some)
+        .map_err(|err| {
+            format!(
+                "Could not initialize table detector {}: {}",
+                model.display(),
+                err
+            )
+        })
+}
+
 pub fn run_public_api_json(request_json: &str) -> Result<String, String> {
     let request: PublicApiOperation = serde_json::from_str(request_json)
         .map_err(|err| format!("Invalid public API request: {}", err))?;
@@ -282,6 +665,101 @@ pub fn run_public_api_json(request_json: &str) -> Result<String, String> {
                 |document| { classify_page(document, page_index) }
             )?)
         }
+        PublicApiOperation::ExtractTableInRegion {
+            pdf_path,
+            pdfium_library_path,
+            regions,
+            single,
+        } => with_document(&pdf_path, pdfium_library_path.as_deref(), |document| {
+            let mut pages = BTreeMap::new();
+            let mut tables = Vec::new();
+            for region in &regions {
+                if !pages.contains_key(&region.page_index) {
+                    pages.insert(
+                        region.page_index,
+                        normalized_page(document, region.page_index)?,
+                    );
+                }
+                let norm = &pages[&region.page_index];
+                let table = region_bbox(region, norm)
+                    .and_then(|bbox| recover_table(norm, bbox, None, "Region", tables.len()))
+                    .map(|table| ordinary_table(table, norm));
+                if single {
+                    return serde_json::to_value(table).map_err(|err| err.to_string());
+                }
+                if let Some(table) = table {
+                    tables.push(table);
+                }
+            }
+            if single {
+                Ok(serde_json::Value::Null)
+            } else {
+                serde_json::to_value(tables).map_err(|err| err.to_string())
+            }
+        })?,
+        PublicApiOperation::ExtractTableStructure {
+            pdf_path,
+            pdfium_library_path,
+            page_indices,
+            regions,
+            ml_model_path,
+            ml_confidence,
+        } => with_document(&pdf_path, pdfium_library_path.as_deref(), |document| {
+            let mut detector = table_detector(ml_model_path.as_deref(), ml_confidence)?;
+            let mut output = Vec::new();
+            if let Some(regions) = regions {
+                let mut pages: BTreeMap<
+                    usize,
+                    (normalizer::NormalizedPageDto, Vec<markdown::FullTableDto>),
+                > = BTreeMap::new();
+                for region in &regions {
+                    if !pages.contains_key(&region.page_index) {
+                        let norm = normalized_page(document, region.page_index)?;
+                        let tables = detect_page_tables(
+                            document,
+                            region.page_index,
+                            &norm,
+                            detector.as_mut(),
+                        )?;
+                        pages.insert(region.page_index, (norm, tables));
+                    }
+                    let (norm, tables) = &pages[&region.page_index];
+                    let Some(bbox) = region_bbox(region, norm) else {
+                        continue;
+                    };
+                    let overlapping: Vec<_> = tables
+                        .iter()
+                        .filter(|table| bbox_intersects(table.bbox, bbox))
+                        .collect();
+                    if overlapping.is_empty() {
+                        if let Some(table) = recover_table(norm, bbox, None, "Region", output.len())
+                        {
+                            output.push(structure_table(table, norm));
+                        }
+                    } else {
+                        output.extend(
+                            overlapping
+                                .into_iter()
+                                .map(|table| structure_table(table.clone(), norm)),
+                        );
+                    }
+                }
+            } else {
+                let indices =
+                    page_indices.unwrap_or_else(|| (0..document.pages().len() as usize).collect());
+                for page_index in indices {
+                    let norm = normalized_page(document, page_index)?;
+                    let tables =
+                        detect_page_tables(document, page_index, &norm, detector.as_mut())?;
+                    output.extend(
+                        tables
+                            .into_iter()
+                            .map(|table| structure_table(table, &norm)),
+                    );
+                }
+            }
+            serde_json::to_value(output).map_err(|err| err.to_string())
+        })?,
         _ => return Err("Public API operation is not implemented yet".to_string()),
     };
     serde_json::to_string(&serde_json::json!({ "data": data })).map_err(|err| err.to_string())
@@ -364,6 +842,119 @@ mod tests {
         let value: serde_json::Value =
             serde_json::from_str(&run_public_api_json(&request.to_string()).unwrap()).unwrap();
         assert_eq!(value["data"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn recovers_wireless_table_from_designated_region() {
+        let request = serde_json::json!({
+            "operation": "extract_table_in_region",
+            "pdf_path": fixture("page_437_wireless.pdf"),
+            "single": true,
+            "regions": [{"page_index": 0, "x0": 0.0, "y0": 0.0, "x1": 1.0, "y1": 1.0}]
+        });
+        let value: serde_json::Value =
+            serde_json::from_str(&run_public_api_json(&request.to_string()).unwrap()).unwrap();
+        let table = &value["data"];
+        assert!(!table["cells"].as_array().unwrap().is_empty());
+        assert_eq!(table["source"], "wireless_span_recovery");
+        assert!(table["h_lines"].is_null());
+        assert!(table["v_lines"].is_null());
+    }
+
+    #[test]
+    fn returns_null_for_region_without_table() {
+        let request = serde_json::json!({
+            "operation": "extract_table_in_region",
+            "pdf_path": fixture("page_000_vector.pdf"),
+            "single": true,
+            "regions": [{"page_index": 0, "x0": 0.0, "y0": 0.0, "x1": 0.2, "y1": 0.2}]
+        });
+        let value: serde_json::Value =
+            serde_json::from_str(&run_public_api_json(&request.to_string()).unwrap()).unwrap();
+        assert!(value["data"].is_null());
+    }
+
+    #[test]
+    fn multiple_regions_omit_empty_tables() {
+        let request = serde_json::json!({
+            "operation": "extract_table_in_region",
+            "pdf_path": fixture("page_437_wireless.pdf"),
+            "single": false,
+            "regions": [
+                {"page_index": 0, "x0": 0.0, "y0": 0.0, "x1": 1.0, "y1": 1.0},
+                {"page_index": 0, "x0": 0.0, "y0": 0.0, "x1": 0.01, "y1": 0.01}
+            ]
+        });
+        let value: serde_json::Value =
+            serde_json::from_str(&run_public_api_json(&request.to_string()).unwrap()).unwrap();
+        assert_eq!(value["data"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn full_page_structure_has_recovered_cells() {
+        let request = serde_json::json!({
+            "operation": "extract_table_structure",
+            "pdf_path": fixture("page_437_wireless.pdf"),
+            "page_indices": [0],
+            "ml_confidence": 0.4
+        });
+        let value: serde_json::Value =
+            serde_json::from_str(&run_public_api_json(&request.to_string()).unwrap()).unwrap();
+        assert!(value["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|table| { !table["cells"].as_array().unwrap().is_empty() }));
+    }
+
+    #[test]
+    fn structure_cells_have_native_character_geometry_and_no_slot_conflicts() {
+        let request = serde_json::json!({
+            "operation": "extract_table_structure",
+            "pdf_path": fixture("page_437_wireless.pdf"),
+            "regions": [{"page_index": 0, "x0": 0.0, "y0": 0.0, "x1": 1.0, "y1": 1.0}],
+            "ml_confidence": 0.4
+        });
+        let value: serde_json::Value =
+            serde_json::from_str(&run_public_api_json(&request.to_string()).unwrap()).unwrap();
+        let tables = value["data"].as_array().unwrap();
+        assert!(!tables.is_empty());
+        for table in tables {
+            let rows = table["rows"].as_u64().unwrap() as usize;
+            let cols = table["cols"].as_u64().unwrap() as usize;
+            let mut occupancy = vec![vec![false; cols]; rows];
+            for cell in table["cells"].as_array().unwrap() {
+                let row = cell["row_index"].as_u64().unwrap() as usize;
+                let col = cell["col_index"].as_u64().unwrap() as usize;
+                let bottom = cell["br_row"].as_u64().unwrap() as usize;
+                let right = cell["br_col"].as_u64().unwrap() as usize;
+                assert_eq!(cell["tl_row"], row);
+                assert_eq!(cell["tl_col"], col);
+                let corners = cell["cell_coord"].as_array().unwrap();
+                assert_eq!(corners.len(), 4);
+                assert_eq!(
+                    corners[0],
+                    serde_json::json!([cell["bbox"]["x0"], cell["bbox"]["y0"]])
+                );
+                assert_eq!(
+                    corners[2],
+                    serde_json::json!([cell["bbox"]["x1"], cell["bbox"]["y1"]])
+                );
+                assert!(bottom < rows && right < cols);
+                for line in occupancy.iter_mut().take(bottom + 1).skip(row) {
+                    for occupied in line.iter_mut().take(right + 1).skip(col) {
+                        assert!(!*occupied, "table cells overlap");
+                        *occupied = true;
+                    }
+                }
+                if !cell["text"].as_str().unwrap().is_empty() {
+                    let chars = cell["text_block"]["chars"].as_array().unwrap();
+                    assert!(!chars.is_empty());
+                    assert!(chars.iter().all(|ch| ch["bbox"]["x1"].is_number()));
+                }
+            }
+            assert!(occupancy.iter().flatten().all(|occupied| *occupied));
+        }
     }
 
     #[test]
