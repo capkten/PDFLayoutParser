@@ -6,6 +6,8 @@ import pytest
 
 from hexai_pdf_parser.core.pdf_parser import PDFParser
 from hexai_pdf_parser.extractors.page_classifier import classify_pdf_page
+from hexai_pdf_parser import pdfium_api
+from hexai_pdf_parser.models import Document, Page
 
 
 def _make_vector_pdf(path: Path) -> None:
@@ -87,3 +89,33 @@ def test_pdf_parser_classify_page(tmp_path: Path):
     res = parser.classify_page(page_index=0)
     assert res.code == 1
     assert res.data == "vector"
+
+
+def test_classify_inputs_dispatch_to_rust(monkeypatch, tmp_path):
+    pdf_path = tmp_path / "vector.pdf"
+    _make_vector_pdf(pdf_path)
+    requests = []
+    bytes_calls = []
+    monkeypatch.setattr(pdfium_api, "_run", lambda request: requests.append(request) or {"data": "vector"})
+    monkeypatch.setattr(pdfium_api, "classify_bytes", lambda data, index: bytes_calls.append((data, index)) or "vector")
+    with fitz.open(pdf_path) as doc:
+        assert classify_pdf_page(doc, 0).data == "vector"
+        assert classify_pdf_page(doc[0]).data == "vector"
+    assert len(bytes_calls) == 2
+    assert all(data.startswith(b"%PDF-") and index == 0 for data, index in bytes_calls)
+    monkeypatch.setattr(fitz, "open", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("PyMuPDF opened path")))
+    assert classify_pdf_page(pdf_path).data == "vector"
+    assert requests == [{"operation": "classify_page", "pdf_path": str(pdf_path), "page_index": 0}]
+
+
+def test_classify_cached_document_only_for_document_source(monkeypatch):
+    document = Document(file_name="cached.pdf", page_count=1, pages=[
+        Page(index=0, size={"width": 100, "height": 100}, rotation=0, page_type="scanned"),
+    ])
+    requests = []
+    monkeypatch.setattr(pdfium_api, "_run", lambda request: requests.append(request) or {"data": "vector"})
+    assert PDFParser(document).classify_page(0).data == "scanned"
+    parser = PDFParser("cached.pdf")
+    parser._document = document
+    assert parser.classify_page(0).data == "vector"
+    assert requests[0]["operation"] == "classify_page"

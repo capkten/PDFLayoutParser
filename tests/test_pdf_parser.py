@@ -156,6 +156,8 @@ def test_context_manager_closes_handle(tmp_dir):
     make_text_pdf(pdf_path, text="Hello")
     with PDFParser(pdf_path) as parser:
         assert parser.classify_page(0).code == 1
+        assert parser._pdf_doc is None
+        assert parser.extract_text().code == 1
         pdf_doc = parser._pdf_doc
         assert not pdf_doc.is_closed
     assert pdf_doc.is_closed
@@ -495,17 +497,10 @@ def test_to_markdown_without_parse_auto_parses(tmp_dir):
 
 
 def test_normalize_region_single(tmp_dir):
-    pdf_path = os.path.join(tmp_dir, "test.pdf")
-    make_text_pdf(pdf_path, text="Region test")
-    parser = PDFParser(pdf_path)
-    # A4 page: 595.276 x 841.89 points
-    page_sizes = parser._get_page_sizes()
     region = {"page_index": 0, "x0": 0.0, "y0": 0.0, "x1": 0.5, "y1": 0.5}
-    result = PDFParser._normalize_regions(region, page_sizes)
-    assert len(result) == 1
-    assert result[0]["page_index"] == 0
-    assert abs(result[0]["x0"] - 0.0) < 0.01
-    assert abs(result[0]["x1"] - 297.638) < 1.0  # 595.276 * 0.5
+    result = PDFParser._normalize_regions(region)
+    assert result == [region]
+    assert result[0] is not region
 
 
 def test_normalize_region_list():
@@ -876,35 +871,35 @@ def test_extract_text_in_region_returns_error_result_on_normalize_failure(real_p
     assert_error_result(result, "normalize exploded")
 
 
-def test_extract_table_in_region_returns_error_result_on_extractor_failure(real_pdf_path, monkeypatch):
+def test_extract_table_in_region_returns_error_result_on_rust_failure(real_pdf_path, monkeypatch):
     parser = PDFParser(real_pdf_path)
 
     def boom(*args, **kwargs):
         raise RuntimeError("table region exploded")
 
-    monkeypatch.setattr("hexai_pdf_parser.table_extractor.TableExtractor.extract", boom)
+    monkeypatch.setattr("hexai_pdf_parser.pdfium_api._run", boom)
     result = parser.extract_table_in_region(REAL_TABLE_REGION)
     assert_error_result(result, "table region exploded")
 
 
-def test_extract_image_in_region_returns_error_result_on_image_failure(real_pdf_path, tmp_dir, monkeypatch):
+def test_extract_image_in_region_returns_error_result_on_rust_failure(real_pdf_path, tmp_dir, monkeypatch):
     parser = PDFParser(real_pdf_path)
 
     def boom(*args, **kwargs):
         raise RuntimeError("image region exploded")
 
-    monkeypatch.setattr(PDFParser, "extract_images", boom)
+    monkeypatch.setattr("hexai_pdf_parser.pdfium_api._run", boom)
     result = parser.extract_image_in_region(REAL_IMAGE_REGION, os.path.join(tmp_dir, "region-images"))
     assert_error_result(result, "image region exploded")
 
 
-def test_render_region_returns_error_result_on_render_failure(real_pdf_path, tmp_dir, monkeypatch):
+def test_render_region_returns_error_result_on_rust_failure(real_pdf_path, tmp_dir, monkeypatch):
     parser = PDFParser(real_pdf_path)
 
     def boom(*args, **kwargs):
         raise RuntimeError("render region exploded")
 
-    monkeypatch.setattr("fitz.Page.get_pixmap", boom)
+    monkeypatch.setattr("hexai_pdf_parser.pdfium_api._run", boom)
     result = parser.render_region(REAL_TEXT_REGION, os.path.join(tmp_dir, "crops"))
     assert_error_result(result, "render region exploded")
 
@@ -968,7 +963,7 @@ def test_parse_with_process_backend(real_pdf_path):
     assert _PROCESS_POOL is not None
 
 
-def test_region_apis_reuse_one_pdf_handle_and_close_reopens(tmp_dir, monkeypatch):
+def test_region_apis_do_not_reopen_python_pdf_handle(tmp_dir, monkeypatch):
     pdf_path = os.path.join(tmp_dir, "reuse.pdf")
     make_text_pdf(pdf_path, text="Hello Region")
     region = {"page_index": 0, "x0": 0.0, "y0": 0.0, "x1": 1.0, "y1": 1.0}
@@ -998,7 +993,7 @@ def test_region_apis_reuse_one_pdf_handle_and_close_reopens(tmp_dir, monkeypatch
     parser.close()
 
     assert parser.extract_text_in_region(region).code == 1
-    assert len(opened) == 2
+    assert len(opened) == 1
     parser.close()
 
 
@@ -1153,6 +1148,9 @@ def test_separate_parser_instances_open_separate_documents(tmp_dir, monkeypatch)
     second = PDFParser(pdf_path)
     assert first.classify_page(0).code == 1
     assert second.classify_page(0).code == 1
+    assert opened == []
+    assert first.extract_text().code == 1
+    assert second.extract_text().code == 1
 
     assert len(opened) == 2
     assert opened[0] is not opened[1]

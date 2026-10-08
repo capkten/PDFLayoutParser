@@ -6,11 +6,11 @@ and individual extractors behind a unified interface.
 
 from __future__ import annotations
 
-import os
 from typing import List, Optional
 
-from hexai_pdf_parser.core.models import ApiResult, BBox, Block, Document, Image, Line, RenderInfo, Table
-from hexai_pdf_parser.page_normalizer import isolated_page, normalize_page_rotation
+from hexai_pdf_parser.core.models import ApiResult, Document
+from hexai_pdf_parser import pdfium_api
+from hexai_pdf_parser.page_normalizer import normalize_page_rotation
 
 
 class PDFParser:
@@ -277,28 +277,13 @@ class PDFParser:
     ) -> ApiResult:
         """Extract embedded images from the PDF, writing to *output_dir*."""
         def _do():
-            from hexai_pdf_parser.core.loader import Loader
-            from hexai_pdf_parser.extractors.image_extractor import ImageExtractor
-
-            pdf_path = self._pdf_path
-            if pdf_path is None:
+            if self._pdf_path is None:
                 raise ValueError("extract_images requires a PDF file path, not a Document")
-            pdf_doc = self._get_pdf_doc()
-            document = Loader(pdf_path).load(pdf_doc, page_indices=page_indices)
-            extractor = ImageExtractor(output_dir)
-            images: List[Image] = []
-            for page in document.pages:
-                if page_indices is not None and page.index not in page_indices:
-                    continue
-                with isolated_page(pdf_doc[page.index]) as working_page:
-                    images.extend(
-                        extractor.extract_page(
-                            working_page.parent,
-                            page.index,
-                            page=working_page,
-                        )
-                    )
-            return images
+            data = pdfium_api._run({
+                "operation": "extract_images", "pdf_path": str(self._pdf_path),
+                "output_dir": output_dir, "page_indices": page_indices,
+            })["data"]
+            return [pdfium_api.image(item) for item in data]
 
         return self._execute_result(_do, "images extracted", "no images extracted")
 
@@ -311,30 +296,15 @@ class PDFParser:
     ) -> ApiResult:
         """Render PDF pages as PNG files into *output_dir*."""
         def _do():
-            from hexai_pdf_parser.core.loader import Loader
-            from hexai_pdf_parser.writers.render_engine import RenderEngine
-
-            pdf_path = self._pdf_path
-            if pdf_path is None:
+            if self._pdf_path is None:
                 raise ValueError("render_pages requires a PDF file path, not a Document")
             effective_dpi = dpi if dpi is not None else self._render_dpi
-            pdf_doc = self._get_pdf_doc()
-            document = Loader(pdf_path).load(pdf_doc, page_indices=page_indices)
-            engine = RenderEngine(output_dir, effective_dpi)
-            renders: List[RenderInfo] = []
-            for page in document.pages:
-                if page_indices is not None and page.index not in page_indices:
-                    continue
-                with isolated_page(pdf_doc[page.index]) as working_page:
-                    renders.append(
-                        engine.render_page(
-                            working_page.parent,
-                            page.index,
-                            page=working_page,
-                            page_type=page.page_type,
-                        )
-                    )
-            return renders
+            data = pdfium_api._run({
+                "operation": "render_pages", "pdf_path": str(self._pdf_path),
+                "output_dir": output_dir, "dpi": effective_dpi,
+                "page_indices": page_indices,
+            })["data"]
+            return [pdfium_api.render(item) for item in data]
 
         return self._execute_result(_do, "pages rendered", "no pages rendered")
 
@@ -344,25 +314,22 @@ class PDFParser:
     ) -> ApiResult:
         """Classify whether a page is 'vector' or 'scanned'.
 
-        If a cached Document exists, returns the cached page_type.
-        Otherwise loads that specific page and classifies it.
+        A parser constructed from a Document uses its cached page_type.
+        A path source is always classified by Rust.
         """
         def _do() -> str:
-            if self._document is not None:
+            if self._pdf_path is None and self._document is not None:
                 for page in self._document.pages:
                     if page.index == page_index:
                         return page.page_type
                 raise IndexError(f"page_index {page_index} out of range")
 
-            from hexai_pdf_parser.extractors.page_classifier import classify_page_type
-
             if self._pdf_path is None:
                 raise ValueError("classify_page requires a PDF file path")
-
-            doc = self._get_pdf_doc()
-            if page_index < 0 or page_index >= len(doc):
-                raise IndexError(f"page_index {page_index} out of range (total pages: {len(doc)})")
-            return classify_page_type(doc[page_index])
+            return pdfium_api._run({
+                "operation": "classify_page", "pdf_path": str(self._pdf_path),
+                "page_index": page_index,
+            })["data"]
 
         return self._execute_result(_do, "page classified", "page classified but empty")
 
@@ -436,116 +403,23 @@ class PDFParser:
         return items
 
     @staticmethod
-    def _normalize_regions(
-        region: dict | list[dict],
-        page_sizes: dict[int, tuple[float, float]] | None = None,
-    ) -> list[dict]:
-        """Convert normalized 0~1 region coords to PDF point coords.
-
-        If *page_sizes* is provided, multiplies normalized coords by page
-        dimensions. Otherwise returns coords as-is.
-        """
-        regions = region if isinstance(region, list) else [region]
-        result = []
-        for r in regions:
-            if page_sizes and r["page_index"] in page_sizes:
-                w, h = page_sizes[r["page_index"]]
-                result.append({
-                    "page_index": r["page_index"],
-                    "x0": r["x0"] * w,
-                    "y0": r["y0"] * h,
-                    "x1": r["x1"] * w,
-                    "y1": r["y1"] * h,
-                })
-            else:
-                result.append(dict(r))
-        return result
-
-    def _get_page_sizes(self) -> dict[int, tuple[float, float]]:
-        """Return {page_index: (width, height)} from cached doc or PDF."""
-        if self._document is not None:
-            return {
-                p.index: (p.size["width"], p.size["height"])
-                for p in self._document.pages
-            }
-        doc = self._get_pdf_doc()
-        return {
-            i: (doc[i].rect.width, doc[i].rect.height)
-            for i in range(len(doc))
-        }
-
-    @staticmethod
-    def _bbox_intersects(block_bbox, region_bbox: dict) -> bool:
-        """Check if block_bbox overlaps with region_bbox."""
-        return not (
-            block_bbox.x1 < region_bbox["x0"]
-            or block_bbox.x0 > region_bbox["x1"]
-            or block_bbox.y1 < region_bbox["y0"]
-            or block_bbox.y0 > region_bbox["y1"]
-        )
+    def _normalize_regions(region: dict | list[dict]) -> list[dict]:
+        """Preserve normalized coordinates for Rust's page-size conversion."""
+        return [dict(item) for item in (region if isinstance(region, list) else [region])]
 
     def extract_text_in_region(
         self,
         region: dict | list[dict],
     ) -> ApiResult:
-        """Extract text from the given region(s) using word-level matching.
-
-        Region coordinates are normalized 0~1 relative to page size.
-        Uses PyMuPDF word-level extraction for precise region clipping.
-        """
+        """Extract text from normalized 0~1 region coordinates."""
         def _do():
             if self._pdf_path is None:
                 raise ValueError("extract_text_in_region requires a PDF file path")
-            page_sizes = self._get_page_sizes()
-            regions = self._normalize_regions(region, page_sizes)
-
-            blocks: List[Block] = []
-            pdf_doc = self._get_pdf_doc()
-            for r in regions:
-                page_idx = r["page_index"]
-                page = pdf_doc[page_idx]
-                words = page.get_text("words")  # (x0, y0, x1, y1, text, block_no, line_no, word_no)
-
-                matched = [
-                    w for w in words
-                    if self._bbox_intersects(
-                        BBox(w[0], w[1], w[2], w[3]), r
-                    )
-                ]
-                if not matched:
-                    continue
-
-                # Group by (block_no, line_no) to preserve line structure
-                from collections import OrderedDict
-                lines_map: dict[tuple[int, int], list] = OrderedDict()
-                for w in matched:
-                    key = (w[5], w[6])
-                    lines_map.setdefault(key, []).append(w)
-
-                lines: List[Line] = []
-                for words_in_line in lines_map.values():
-                    words_in_line.sort(key=lambda w: w[0])  # sort by x
-                    line_text = " ".join(w[4] for w in words_in_line)
-                    lx0 = min(w[0] for w in words_in_line)
-                    ly0 = min(w[1] for w in words_in_line)
-                    lx1 = max(w[2] for w in words_in_line)
-                    ly1 = max(w[3] for w in words_in_line)
-                    lines.append(Line(
-                        text=line_text,
-                        bbox=BBox(lx0, ly0, lx1, ly1),
-                    ))
-
-                block_text = "\n".join(l.text for l in lines)
-                bx0 = min(l.bbox.x0 for l in lines)
-                by0 = min(l.bbox.y0 for l in lines)
-                bx1 = max(l.bbox.x1 for l in lines)
-                by1 = max(l.bbox.y1 for l in lines)
-                blocks.append(Block(
-                    text=block_text,
-                    bbox=BBox(bx0, by0, bx1, by1),
-                    lines=lines,
-                ))
-            return blocks
+            data = pdfium_api._run({
+                "operation": "extract_text_in_region", "pdf_path": str(self._pdf_path),
+                "regions": self._normalize_regions(region),
+            })["data"]
+            return [pdfium_api.block(item) for item in data]
 
         return self._execute_result(_do, "region text extracted", "no text found in region")
 
@@ -559,28 +433,16 @@ class PDFParser:
         Returns ApiResult wrapping Table for single region (or None), list[Table] for multiple.
         """
         def _do():
-            from hexai_pdf_parser.tables.table_extractor import TableExtractor
-
-            is_single = isinstance(region, dict)
-            page_sizes = self._get_page_sizes()
-            regions = self._normalize_regions(region, page_sizes)
-
-            pdf_doc = self._get_pdf_doc()
-            extractor = TableExtractor(
-                use_ml_table_detector=False,
+            if self._pdf_path is None:
+                raise ValueError("PDF file path required")
+            single = isinstance(region, dict)
+            data = pdfium_api._run({
+                "operation": "extract_table_in_region", "pdf_path": str(self._pdf_path),
+                "regions": self._normalize_regions(region), "single": single,
+            })["data"]
+            return pdfium_api.table(data) if single and data is not None else (
+                None if single else [pdfium_api.table(item) for item in data]
             )
-            results: list[Table] = []
-            for r in regions:
-                page_idx = r["page_index"]
-                page_handle = pdf_doc[page_idx]
-                r_bbox = BBox(r["x0"], r["y0"], r["x1"], r["y1"])
-                with isolated_page(page_handle) as working_page:
-                    table = extractor.extract_table_in_region(working_page, r_bbox)
-                if is_single:
-                    return table
-                if table is not None:
-                    results.append(table)
-            return results
 
         return self._execute_result(_do, "region table extracted", "no table found in region")
 
@@ -598,43 +460,16 @@ class PDFParser:
         - region: extract from normalized 0~1 region(s)
         """
         def _do():
-            from hexai_pdf_parser.core.loader import Loader
-            from hexai_pdf_parser.tables.table_extractor import TableExtractor
-
             if self._pdf_path is None:
                 raise ValueError("extract_table_structure requires a PDF file path")
-            extractor = TableExtractor(
-                ml_model_path=self._ml_model_path,
-                ml_confidence=self._ml_confidence,
-            )
-
-            if region is not None:
-                page_sizes = self._get_page_sizes()
-                regions = self._normalize_regions(region, page_sizes)
-                pdf_doc = self._get_pdf_doc()
-                all_results = []
-                for r in regions:
-                    page_idx = r["page_index"]
-                    page_handle = pdf_doc[page_idx]
-                    with isolated_page(page_handle) as working_page:
-                        structures = extractor.extract_table_structure(working_page)
-                    for s in structures:
-                        if self._bbox_intersects(s.bbox, r):
-                            all_results.append(s)
-                return all_results
-            else:
-                pdf_doc = self._get_pdf_doc()
-                document = Loader(self._pdf_path).load(pdf_doc, page_indices=page_indices)
-                all_results = []
-                for page in document.pages:
-                    if page_indices is not None and page.index not in page_indices:
-                        continue
-                    page_handle = pdf_doc[page.index]
-                    with isolated_page(page_handle) as working_page:
-                        all_results.extend(
-                            extractor.extract_table_structure(working_page)
-                        )
-                return all_results
+            data = pdfium_api._run({
+                "operation": "extract_table_structure", "pdf_path": str(self._pdf_path),
+                "page_indices": page_indices,
+                "regions": self._normalize_regions(region) if region is not None else None,
+                "ml_model_path": self._ml_model_path,
+                "ml_confidence": self._ml_confidence,
+            })["data"]
+            return [pdfium_api.table_structure(item) for item in data]
 
         return self._execute_result(_do, "table structure extracted", "no table structure extracted")
 
@@ -648,31 +483,17 @@ class PDFParser:
         Region coordinates are normalized 0~1 relative to page size.
         """
         def _do():
-            is_single = isinstance(region, dict)
-            page_sizes = self._get_page_sizes()
-            regions = self._normalize_regions(region, page_sizes)
-
-            # Get all images first
-            all_page_indices = list({r["page_index"] for r in regions})
-            images_result = self.extract_images(
-                output_dir, page_indices=all_page_indices
+            if self._pdf_path is None:
+                raise ValueError("extract_images requires a PDF file path, not a Document")
+            single = isinstance(region, dict)
+            data = pdfium_api._run({
+                "operation": "extract_image_in_region", "pdf_path": str(self._pdf_path),
+                "regions": self._normalize_regions(region),
+                "output_dir": output_dir, "single": single,
+            })["data"]
+            return pdfium_api.image(data) if single and data is not None else (
+                None if single else [pdfium_api.image(item) for item in data]
             )
-            if images_result.code == -1:
-                raise RuntimeError(images_result.message)
-            all_images = images_result.data or []
-
-            results: list[Image] = []
-            for r in regions:
-                matched = [
-                    img for img in all_images
-                    if img.page_index == r["page_index"]
-                    and img.bbox is not None
-                    and self._bbox_intersects(img.bbox, r)
-                ]
-                if is_single:
-                    return matched[0] if matched else None
-                results.extend(matched)
-            return results
 
         return self._execute_result(_do, "region image extracted", "no image found in region")
 
@@ -687,36 +508,16 @@ class PDFParser:
         Region coordinates are normalized 0~1 relative to page size.
         """
         def _do():
-            is_single = isinstance(region, dict)
-            effective_dpi = dpi if dpi is not None else self._render_dpi
-            page_sizes = self._get_page_sizes()
-            regions = self._normalize_regions(region, page_sizes)
-
-            os.makedirs(output_dir, exist_ok=True)
             if self._pdf_path is None:
                 raise ValueError("render_region requires a PDF file path")
-            import fitz as _fitz
-            pdf_doc = self._get_pdf_doc()
-            results: list[RenderInfo] = []
-            for idx, r in enumerate(regions):
-                page_handle = pdf_doc[r["page_index"]]
-                clip = _fitz.Rect(r["x0"], r["y0"], r["x1"], r["y1"])
-                mat = _fitz.Matrix(effective_dpi / 72, effective_dpi / 72)
-                pix = page_handle.get_pixmap(matrix=mat, clip=clip)
-
-                file_name = f"region-{r['page_index']:03d}-{idx:03d}.png"
-                path = os.path.join(output_dir, file_name)
-                pix.save(path)
-
-                info = RenderInfo(
-                    path=path,
-                    width=pix.width,
-                    height=pix.height,
-                    dpi=effective_dpi,
-                )
-                if is_single:
-                    return info
-                results.append(info)
-            return results
+            single = isinstance(region, dict)
+            data = pdfium_api._run({
+                "operation": "render_region", "pdf_path": str(self._pdf_path),
+                "regions": self._normalize_regions(region), "output_dir": output_dir,
+                "dpi": dpi if dpi is not None else self._render_dpi, "single": single,
+            })["data"]
+            return pdfium_api.render(data) if single and data is not None else (
+                None if single else [pdfium_api.render(item) for item in data]
+            )
 
         return self._execute_result(_do, "region rendered", "region rendered but empty")

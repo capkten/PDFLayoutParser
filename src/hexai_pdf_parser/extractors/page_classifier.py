@@ -14,6 +14,7 @@ from typing_extensions import Literal
 import fitz
 
 from hexai_pdf_parser.core.models import ApiResult
+from hexai_pdf_parser import pdfium_api
 
 
 def classify_pdf_page(
@@ -33,17 +34,17 @@ def classify_pdf_page(
     """
     def _do() -> str:
         if isinstance(source, fitz.Page):
-            return classify_page_type(source)
+            return pdfium_api.classify_bytes(source.parent.tobytes(), source.number)
 
         if isinstance(source, fitz.Document):
             if page_index < 0 or page_index >= len(source):
                 raise IndexError(f"page_index {page_index} out of range (total pages: {len(source)})")
-            return classify_page_type(source[page_index])
+            return pdfium_api.classify_bytes(source.tobytes(), page_index)
 
-        with fitz.open(str(source)) as doc:
-            if page_index < 0 or page_index >= len(doc):
-                raise IndexError(f"page_index {page_index} out of range (total pages: {len(doc)})")
-            return classify_page_type(doc[page_index])
+        return pdfium_api._run({
+            "operation": "classify_page", "pdf_path": str(source),
+            "page_index": page_index,
+        })["data"]
 
     try:
         page_type = _do()

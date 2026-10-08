@@ -7,6 +7,8 @@ import fitz
 
 from hexai_pdf_parser import _pdf_fast
 from hexai_pdf_parser.pdf_parser import PDFParser
+from hexai_pdf_parser import pdfium_api
+from hexai_pdf_parser.models import BBox, Block, Cell, CellStructure, Image, RenderInfo, Table, TableStructure, TextBlock, TextChar
 from tests.conftest import make_pdf_with_image
 
 
@@ -17,6 +19,98 @@ API_NAMES = {
     "text_region", "table_region", "table_structure", "images",
     "image_region", "render_pages", "render_region", "classify_page",
 }
+
+
+def test_python_wrapper_dispatches_all_path_operations(monkeypatch, tmp_path):
+    requests = []
+
+    def fake_run(request):
+        requests.append(request)
+        return {"data": [] if not request.get("single") else None}
+
+    monkeypatch.setattr(pdfium_api, "_run", fake_run)
+    parser = PDFParser("input.pdf", render_dpi=96, ml_model_path="model.onnx", ml_confidence=0.7)
+    region = {"page_index": 2, "x0": 0.1, "y0": 0.2, "x1": 0.8, "y1": 0.9}
+    parser.extract_text_in_region(region)
+    parser.extract_table_in_region(region)
+    parser.extract_table_structure(page_indices=[2], region=region)
+    parser.extract_images(str(tmp_path), page_indices=[2])
+    parser.extract_image_in_region(region, str(tmp_path))
+    parser.render_pages(str(tmp_path), dpi=144, page_indices=[2])
+    parser.render_region(region, str(tmp_path), dpi=150)
+    parser.classify_page(2)
+    assert [r["operation"] for r in requests] == [
+        "extract_text_in_region", "extract_table_in_region", "extract_table_structure",
+        "extract_images", "extract_image_in_region", "render_pages", "render_region", "classify_page",
+    ]
+    assert all(r["pdf_path"] == "input.pdf" for r in requests)
+    assert all(r["regions"] == [region] for r in (requests[i] for i in (0, 1, 2, 4, 6)))
+    assert requests[1]["single"] is True
+    assert requests[2]["page_indices"] == [2]
+    assert requests[2]["ml_model_path"] == "model.onnx"
+    assert requests[2]["ml_confidence"] == 0.7
+    assert requests[3]["page_indices"] == [2]
+    assert requests[3]["output_dir"] == str(tmp_path)
+    assert requests[4]["single"] is True
+    assert requests[5]["dpi"] == 144
+    assert requests[6]["dpi"] == 150
+    assert requests[7]["page_index"] == 2
+
+
+def test_python_wrapper_converts_rust_dtos(monkeypatch):
+    box = {"x0": 1, "y0": 2, "x1": 3, "y1": 4}
+    responses = {
+        "extract_text_in_region": [{"text": "a", "bbox": box, "lines": [{"text": "a", "bbox": box, "words": []}]}],
+        "extract_table_in_region": {"bbox": box, "rows": 1, "cols": 1, "cells": [{"text": "a", "row_index": 0, "col_index": 0, "bbox": box, "rowspan": 1, "colspan": 1}], "confidence": 0.9, "source": "Region", "h_lines": None, "v_lines": None},
+        "extract_table_structure": [{"bbox": box, "rows": 1, "cols": 1, "cells": [{"text": "a", "row_index": 0, "col_index": 0, "cell_coord": [[1, 2], [3, 2], [3, 4], [1, 4]], "bbox": box, "text_block": {"text": "a", "bbox": box, "chars": [{"text": "a", "bbox": box, "confidence": None}]}, "tl_row": 0, "tl_col": 0, "br_row": 0, "br_col": 0}], "confidence": None, "source": "Region"}],
+        "extract_images": [{"bbox": box, "page_index": 0, "resource_index": 1, "width": 10, "height": 20, "path": "image.png", "ext": "png"}],
+        "render_pages": [{"path": "page-000.png", "width": 100, "height": 200, "dpi": 96}],
+    }
+    monkeypatch.setattr(pdfium_api, "_run", lambda r: {"data": responses[r["operation"]]})
+    parser = PDFParser("input.pdf")
+    region = {"page_index": 0, "x0": 0, "y0": 0, "x1": 1, "y1": 1}
+    block = parser.extract_text_in_region(region).data[0]
+    table = parser.extract_table_in_region(region).data
+    structure = parser.extract_table_structure(region=region).data[0]
+    image = parser.extract_images("out").data[0]
+    render = parser.render_pages("out").data[0]
+    assert isinstance(block, Block) and isinstance(block.bbox, BBox) and isinstance(block.lines[0].bbox, BBox)
+    assert isinstance(table, Table) and isinstance(table.cells[0], Cell)
+    assert isinstance(structure, TableStructure) and isinstance(structure.cells[0], CellStructure)
+    assert isinstance(structure.cells[0].text_block, TextBlock)
+    assert isinstance(structure.cells[0].text_block.chars[0], TextChar)
+    assert isinstance(image, Image) and isinstance(image.bbox, BBox)
+    assert isinstance(render, RenderInfo)
+
+
+def test_json_bridge_calls_rust_with_native_path_or_none(monkeypatch):
+    calls = []
+    monkeypatch.setattr(pdfium_api, "_library_path", lambda: None)
+    monkeypatch.setattr(_pdf_fast, "run_public_pdf_api", lambda payload: calls.append(json.loads(payload)) or '{"data":"vector"}', raising=False)
+    assert pdfium_api._run({"operation": "classify_page", "pdf_path": "input.pdf", "page_index": 0}) == {"data": "vector"}
+    assert calls == [{"operation": "classify_page", "pdf_path": "input.pdf", "page_index": 0, "pdfium_library_path": None}]
+
+
+def test_all_path_wrappers_avoid_pymupdf_open(monkeypatch, tmp_path):
+    def forbidden(*args, **kwargs):
+        raise AssertionError("PyMuPDF read on Rust path")
+
+    monkeypatch.setattr(fitz, "open", forbidden)
+    for name in ("get_text", "get_pixmap", "get_drawings", "get_images"):
+        monkeypatch.setattr(fitz.Page, name, forbidden)
+    monkeypatch.setattr(pdfium_api, "_run", lambda request: {"data": "vector" if request["operation"] == "classify_page" else (None if request.get("single") else [])})
+    parser = PDFParser("input.pdf")
+    calls = [
+        parser.extract_text_in_region(FULL_PAGE),
+        parser.extract_table_in_region(FULL_PAGE),
+        parser.extract_table_structure(region=FULL_PAGE),
+        parser.extract_images(str(tmp_path)),
+        parser.extract_image_in_region(FULL_PAGE, str(tmp_path)),
+        parser.render_pages(str(tmp_path)),
+        parser.render_region(FULL_PAGE, str(tmp_path)),
+        parser.classify_page(0),
+    ]
+    assert all(call.code >= 0 for call in calls)
 
 
 def test_python_baseline_has_replayable_cases():
