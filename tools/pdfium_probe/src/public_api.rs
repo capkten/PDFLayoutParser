@@ -69,7 +69,7 @@ pub enum PublicApiOperation {
     ClassifyPage {
         pdf_path: String,
         pdfium_library_path: Option<String>,
-        page_index: usize,
+        page_index: i64,
     },
 }
 
@@ -939,7 +939,16 @@ pub fn run_public_api_json(request_json: &str) -> Result<String, String> {
             serde_json::json!(with_document(
                 &pdf_path,
                 pdfium_library_path.as_deref(),
-                |document| { classify_page(document, page_index) }
+                |document| {
+                    let index = usize::try_from(page_index).map_err(|_| {
+                        format!(
+                            "page_index {} out of range (total pages: {})",
+                            page_index,
+                            document.pages().len()
+                        )
+                    })?;
+                    classify_page(document, index)
+                }
             )?)
         }
         PublicApiOperation::ExtractTableInRegion {

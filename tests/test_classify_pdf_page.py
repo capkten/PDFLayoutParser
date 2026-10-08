@@ -91,6 +91,26 @@ def test_pdf_parser_classify_page(tmp_path: Path):
     assert res.data == "vector"
 
 
+def test_pdf_parser_negative_page_index_reports_page_count(tmp_path: Path):
+    pdf_path = tmp_path / "one-page.pdf"
+    _make_vector_pdf(pdf_path)
+
+    result = PDFParser(str(pdf_path)).classify_page(-1)
+    assert result.code == -1
+    assert result.data is None
+    assert result.message == "page_index -1 out of range (total pages: 1)"
+
+
+def test_classify_pdf_page_negative_index_reports_page_count(tmp_path: Path):
+    pdf_path = tmp_path / "one-page.pdf"
+    _make_vector_pdf(pdf_path)
+
+    result = classify_pdf_page(str(pdf_path), -1)
+    assert result.code == -1
+    assert result.data is None
+    assert result.message == "page_index -1 out of range (total pages: 1)"
+
+
 def test_classify_inputs_dispatch_to_rust(monkeypatch, tmp_path):
     pdf_path = tmp_path / "vector.pdf"
     _make_vector_pdf(pdf_path)
