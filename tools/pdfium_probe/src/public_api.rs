@@ -785,7 +785,9 @@ pub fn run_public_api_json(request_json: &str) -> Result<String, String> {
                     continue;
                 }
                 let page_type = classify_page(&document, page_index)?;
-                let page = get_page(&document, page_index)?;
+                let mut page = get_page(&document, page_index)?;
+                // Full-page rendering matches RenderEngine's in-memory rotation normalization.
+                page.set_rotation(PdfPageRenderRotation::None);
                 let mut image = render_public_page(&page, dpi)?;
                 draw_page_type_badge(
                     &pdfium,
@@ -1742,6 +1744,47 @@ mod tests {
         assert!(run_public_api_json(&request.to_string())
             .unwrap_err()
             .contains("Could not write render"));
+    }
+
+    #[test]
+    fn render_pages_normalizes_nonsquare_rotation_without_changing_region_viewport_or_source() {
+        let output =
+            std::env::temp_dir().join(format!("pdfium-render-nonsquare-{}", std::process::id()));
+        std::fs::create_dir_all(&output).unwrap();
+        let path = output.join("rotated.pdf");
+        let pdfium = bind_pdfium(None).unwrap();
+        let mut document = pdfium.create_new_pdf().unwrap();
+        let mut page = document
+            .pages_mut()
+            .create_page_at_end(PdfPagePaperSize::new_custom(
+                PdfPoints::new(400.0),
+                PdfPoints::new(200.0),
+            ))
+            .unwrap();
+        page.set_rotation(PdfPageRenderRotation::Degrees90);
+        drop(page);
+        document.save_to_file(&path).unwrap();
+        drop(document);
+        drop(pdfium);
+        let original_bytes = std::fs::read(&path).unwrap();
+        let request = serde_json::json!({
+            "operation": "render_pages", "pdf_path": path,
+            "output_dir": output.join("pages"), "dpi": 72.0,
+        });
+        let full: serde_json::Value =
+            serde_json::from_str(&run_public_api_json(&request.to_string()).unwrap()).unwrap();
+        assert_eq!(full["data"][0]["width"], 400);
+        assert_eq!(full["data"][0]["height"], 200);
+        let request = serde_json::json!({
+            "operation": "render_region", "pdf_path": path,
+            "output_dir": output.join("regions"), "dpi": 72.0, "single": true,
+            "regions": [{"page_index": 0, "x0": 0.0, "y0": 0.0, "x1": 1.0, "y1": 1.0}]
+        });
+        let region: serde_json::Value =
+            serde_json::from_str(&run_public_api_json(&request.to_string()).unwrap()).unwrap();
+        assert_eq!(region["data"]["width"], 200);
+        assert_eq!(region["data"]["height"], 400);
+        assert_eq!(std::fs::read(&path).unwrap(), original_bytes);
     }
 
     #[test]
