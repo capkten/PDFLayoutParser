@@ -19,7 +19,10 @@ def detect_platform_key():
     if system == "linux" and machine in ("x86_64", "amd64"):
         return "linux-x64"
     if system == "darwin":
-        return "mac-arm64" if "arm" in machine or machine == "aarch64" else "mac-x64"
+        if machine in ("x86_64", "amd64"):
+            return "mac-x64"
+        if machine in ("arm64", "aarch64"):
+            return "mac-arm64"
     raise RuntimeError("Unsupported system/arch: {} {}".format(system, machine))
 
 

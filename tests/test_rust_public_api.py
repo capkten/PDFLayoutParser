@@ -77,6 +77,14 @@ def test_stage_pdfium_package(tmp_path):
         assert copied.read_bytes() == key.encode("ascii")
 
 
+def test_stage_pdfium_rejects_unsupported_darwin_architecture(monkeypatch):
+    stager = _load_pdfium_stager()
+    monkeypatch.setattr(stager.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(stager.platform, "machine", lambda: "sparc")
+    with pytest.raises(RuntimeError, match="Unsupported system/arch: darwin sparc"):
+        stager.detect_platform_key()
+
+
 def test_python_wrapper_dispatches_all_path_operations(monkeypatch, tmp_path):
     requests = []
 
