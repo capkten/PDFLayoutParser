@@ -1,5 +1,30 @@
 # Task 6 & 验收评审整改变更记录 (changes.md)
 
+## 2026-10-08：Task 10 Rust 公开 PDF API 验收
+
+### 范围、根因与调用链
+
+Task 8 将七个独立路径接口与路径分类切换到 `PDFParser -> pdfium_api._run -> _pdf_fast.run_public_pdf_api -> pdfium_probe 共享 Rust 库/PDFium`。本轮仅补验收脚本和回归证明；文件路径入口没有 PyMuPDF 读取、渲染或失败后备。`fitz.Page` / `fitz.Document` 分类仅通过 `tobytes()` 将原 PDF 字节交给 Rust 分类；`parse()` 主流水线不属于本迁移范围。
+
+### 新增覆盖与差异结果
+
+- `tests/test_rust_public_api.py` 将 `fitz.open`、`Page.get_text/get_images/get_image_info/get_pixmap/get_drawings` 与 `Document.extract_image` 替换为立即失败桩，并调用每个公开路径 API；另外对 fitz 对象分类记录 `tobytes()`，确认调用来源只包含这项序列化操作。
+- `src/hexai_pdf_parser/debug/rust_public_api_benchmark.py` 读取且不改写保存的 Python 基线，对四个 fixture 的八个 API 报告基线中位数、Rust 预热后五次测量的中位数、speedup 和规范化公开结果摘要。基线中的 `file`、解码状态和哈希是捕获脚本添加的诊断元数据，不是 Image/RenderInfo 公共字段；摘要忽略这些诊断键，并对数值统一保留六位小数。完整结果写到 `output/rust-public-api-benchmark.json`。
+- 实际结果仍有未解决差异，故不宣称两端等价：扫描页 `page_705_scanned.pdf` 的 `text_region` 与 `table_region` 在 Python 基线中分别有 1 项内容和 1 张表，Rust 当前均返回空；`page_437_wireless.pdf` 的全页 `table_region` 基线为空，Rust 返回 `wireless_span_recovery` 的 44 行、2 列、88 cells。后者需要确认是否误把相邻表合并；`table_structure` 因 ORT 不兼容未能对比。
+- 文本 bbox 有可见数值偏差：`page_000_vector.pdf` 首个文本框 y0/y1 分别约偏 1.34/1.13 pt，wireless 页首个框约偏 0.068 pt。Task 10 未擅自设容差；这些偏差以及文本/单元格内容摘要差异都保留在 benchmark 的 `difference_summary` 中。
+- 图片导出 metadata、页码、资源索引、bbox、尺寸、扩展名和路径的摘要在三个有图像 fixture 上未报告字段差异。基线附加的文件哈希/解码字段已从比较中剔除；渲染 PNG 的公开像素尺寸一致，但 Rust 与基线图片摘要的其余内容仍应以 benchmark JSON 差异摘要为准。
+
+### 命令与实测结果
+
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 E:\softanaconda\envs\langchain_chat\python.exe -m pytest -q tests/test_rust_public_api.py`：**13 passed**。
+- `PYTHONPATH=src E:\softanaconda\envs\langchain_chat\python.exe src/hexai_pdf_parser/debug/rust_public_api_benchmark.py --baseline tests/fixtures/rust_public_api/python_baseline.json --runs 5 --output output/rust-public-api-benchmark.json`：生成 32 个 fixture/API 行，其中 28 个完成两侧中位数比较，4 个 `table_structure` 明确标记 skipped；Rust 端每个已测 API/fixture 先预热一次，再采集 5 次。
+- `cargo test --manifest-path tools/pdfium_probe/Cargo.toml` 和 `cargo test --manifest-path Cargo.toml --lib`：均因 MSVC 14.40 链接失败退出 1，报 `LNK1120` 与 13 个 ONNX Runtime 静态链接的 `__std_*` 未解析符号。未改生产 ORT 链接模式。
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 E:\softanaconda\envs\langchain_chat\python.exe -m pytest -q tests/test_pdf_parser.py tests/test_classify_pdf_page.py tests/test_page_classifier.py tests/test_extract_table_region.py tests/test_image_extractor.py tests/test_rust_public_api.py`：**82 passed、32 skipped、17 failed**。首次表格结构调用加载失败：`BadVersion { version_str: "1.17.1" }`，后续因 PDFium 互斥状态被 panic 污染而出现连锁失败。Python 包元数据显示 ORT 1.20.1，但 Rust 运行时实际加载 DLL 报告 1.17.1。
+- 获取匹配 ORT 动态库失败：NuGet 下载因 DNS 报“未知主机”；`pip download --no-deps --only-binary=:all: --timeout 60 --retries 1 ... onnxruntime==1.28.0` 解析到 cp311 win_amd64 wheel 元数据，但 13.8 MB wheel 下载超过 60 秒无进度后中断，临时目录无 wheel。未改 Python 环境或提交 DLL。
+- 无线表格页面独立输出目录：`C:\Users\Capkin\.codex\worktrees\rust-public-api\PDFLayoutParser\output\rust-public-api-wireless-v29e_slk`。`render_pages(page_indices=[0])` 成功，生成 `renders/page-000.png`（595×843），人工查看截图可见页面上三张表格边界和间距清楚，相邻表未在图像渲染上误并。`extract_table_structure(page_indices=[0])` 在 ORT DLL 版本错误处 panic，故本轮没有结构化 Cell/跨度/bbox/空槽位检查结果。
+
+Task 10 当前不满足合并条件：表格结构结果缺失、Rust 与 Python 回归/Rust 链接测试失败，且已确认的扫描页输出差异和无线表格区域误合并疑点待针对性修复。未切换或合并 `dev-rust`。
+
 ## 1. 任务背景与核心改动
 
 本任务完成了 **Task 6: 样本矩阵、确定性输出和中文验收报告**，并根据行为验收评审反馈落实了 5 项核心治理：

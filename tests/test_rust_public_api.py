@@ -11,6 +11,7 @@ import pytest
 from hexai_pdf_parser import _pdf_fast
 from hexai_pdf_parser.pdf_parser import PDFParser
 from hexai_pdf_parser import pdfium_api
+from hexai_pdf_parser.extractors.page_classifier import classify_pdf_page
 from hexai_pdf_parser.models import BBox, Block, Cell, CellStructure, Image, RenderInfo, Table, TableStructure, TextBlock, TextChar
 from tests.conftest import make_pdf_with_image
 
@@ -160,8 +161,9 @@ def test_all_path_wrappers_avoid_pymupdf_open(monkeypatch, tmp_path):
         raise AssertionError("PyMuPDF read on Rust path")
 
     monkeypatch.setattr(fitz, "open", forbidden)
-    for name in ("get_text", "get_pixmap", "get_drawings", "get_images"):
+    for name in ("get_text", "get_pixmap", "get_drawings", "get_images", "get_image_info"):
         monkeypatch.setattr(fitz.Page, name, forbidden)
+    monkeypatch.setattr(fitz.Document, "extract_image", forbidden)
     monkeypatch.setattr(pdfium_api, "_run", lambda request: {"data": "vector" if request["operation"] == "classify_page" else (None if request.get("single") else [])})
     parser = PDFParser("input.pdf")
     calls = [
@@ -175,6 +177,31 @@ def test_all_path_wrappers_avoid_pymupdf_open(monkeypatch, tmp_path):
         parser.classify_page(0),
     ]
     assert all(call.code >= 0 for call in calls)
+
+
+def test_fitz_object_classification_only_serializes_original_pdf_bytes(monkeypatch, tmp_path):
+    calls = []
+    original_tobytes = fitz.Document.tobytes
+
+    def tracked_tobytes(document, *args, **kwargs):
+        calls.append(("tobytes", document))
+        return original_tobytes(document, *args, **kwargs)
+
+    monkeypatch.setattr(fitz.Document, "tobytes", tracked_tobytes)
+    for name in ("get_text", "get_pixmap", "get_images", "get_image_info", "get_drawings"):
+        monkeypatch.setattr(fitz.Page, name, lambda *a, **k: (_ for _ in ()).throw(AssertionError(name)))
+    monkeypatch.setattr(fitz.Document, "extract_image", lambda *a, **k: (_ for _ in ()).throw(AssertionError("extract_image")))
+    monkeypatch.setattr(pdfium_api, "classify_bytes", lambda data, index: "vector" if data else "scanned")
+
+    source = tmp_path / "source.pdf"
+    with fitz.open() as created:
+        created.new_page()
+        created.save(source)
+    with fitz.open(source) as document:
+        assert classify_pdf_page(document).data == "vector"
+        assert classify_pdf_page(document[0]).data == "vector"
+    assert len(calls) == 2
+    assert all(name == "tobytes" for name, _ in calls)
 
 
 def test_python_baseline_has_replayable_cases():
