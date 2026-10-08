@@ -10,4 +10,5 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 pyo3 = { version = "=0.22.6", features = ["extension-module", "abi3-py37"] }
+pdfium_probe = { path = "tools/pdfium_probe" }
 

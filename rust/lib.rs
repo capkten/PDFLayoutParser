@@ -5,6 +5,7 @@ pub mod english_wireless;
 pub mod geometry;
 pub mod native_span;
 pub mod personal_credit;
+mod pdfium_api;
 pub mod snapshot;
 pub mod table_normalization;
 pub mod types;
@@ -1175,6 +1176,8 @@ fn normalize_financial_header_tokens_binding<'py>(
 
 #[pymodule]
 fn _pdf_fast(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    module.add_function(wrap_pyfunction!(pdfium_api::run_public_pdf_api, module)?)?;
+    module.add_function(wrap_pyfunction!(pdfium_api::classify_page_from_bytes, module)?)?;
     module.add_function(wrap_pyfunction!(rect_overlap_binding, module)?)?;
     module.add_function(wrap_pyfunction!(filter_regions_binding, module)?)?;
     module.add_function(wrap_pyfunction!(cluster_rows_binding, module)?)?;
