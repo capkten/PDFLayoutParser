@@ -661,6 +661,75 @@ pub fn run_public_api_json(request_json: &str) -> Result<String, String> {
     let request: PublicApiOperation = serde_json::from_str(request_json)
         .map_err(|err| format!("Invalid public API request: {}", err))?;
     let data = match request {
+        PublicApiOperation::ExtractImages {
+            pdf_path,
+            pdfium_library_path,
+            output_dir,
+            page_indices,
+        } => with_document(&pdf_path, pdfium_library_path.as_deref(), |document| {
+            let indices =
+                page_indices.unwrap_or_else(|| (0..document.pages().len() as usize).collect());
+            let mut images = Vec::new();
+            for page_index in indices {
+                let page = get_page(document, page_index)?;
+                images.extend(crate::image_extraction::extract_page_images(
+                    &page,
+                    page_index,
+                    Path::new(&output_dir),
+                )?);
+            }
+            serde_json::to_value(images).map_err(|err| err.to_string())
+        })?,
+        PublicApiOperation::ExtractImageInRegion {
+            pdf_path,
+            pdfium_library_path,
+            output_dir,
+            regions,
+            single,
+        } => with_document(&pdf_path, pdfium_library_path.as_deref(), |document| {
+            let mut pages = BTreeMap::new();
+            for region in &regions {
+                if !pages.contains_key(&region.page_index) {
+                    let page = get_page(document, region.page_index)?;
+                    let images = crate::image_extraction::extract_page_images(
+                        &page,
+                        region.page_index,
+                        Path::new(&output_dir),
+                    )?;
+                    pages.insert(
+                        region.page_index,
+                        (
+                            page.width().value as f64,
+                            page.height().value as f64,
+                            images,
+                        ),
+                    );
+                }
+            }
+            let mut output = Vec::new();
+            for region in &regions {
+                let (width, height, images) = &pages[&region.page_index];
+                let bbox = [
+                    region.x0 * width,
+                    region.y0 * height,
+                    region.x1 * width,
+                    region.y1 * height,
+                ];
+                let selected = images
+                    .iter()
+                    .filter(|image| crate::image_extraction::intersects(image, bbox));
+                if single {
+                    return serde_json::to_value(selected.into_iter().next())
+                        .map_err(|err| err.to_string());
+                }
+                output.extend(selected.cloned());
+            }
+            if single {
+                Ok(serde_json::Value::Null)
+            } else {
+                serde_json::to_value(output).map_err(|err| err.to_string())
+            }
+        })?,
         PublicApiOperation::ExtractTextInRegion {
             pdf_path,
             pdfium_library_path,
@@ -788,6 +857,178 @@ pub fn run_public_api_json(request_json: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn image_fixture(name: &str, form: bool, rotated: bool) -> std::path::PathBuf {
+        let directory =
+            std::env::temp_dir().join(format!("pdfium-images-{}-{}", std::process::id(), name));
+        std::fs::create_dir_all(&directory).unwrap();
+        let content = if form {
+            "q 2 0 0 2 20 20 cm /Fm Do Q"
+        } else {
+            "q 100 0 0 100 100 200 cm /Im Do Q q 100 0 0 100 300 0 cm /Im Do Q"
+        };
+        let page_extra = if rotated {
+            "/CropBox [50 50 400 400] /Rotate 90"
+        } else {
+            ""
+        };
+        let form_content = "q 50 0 0 50 10 20 cm /Im Do Q";
+        let objects = vec![
+            "<< /Type /Catalog /Pages 2 0 R >>".as_bytes().to_vec(),
+            "<< /Type /Pages /Kids [3 0 R 7 0 R] /Count 2 >>".as_bytes().to_vec(),
+            format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 400] {} /Resources << /XObject << /Im 5 0 R /Fm 6 0 R >> >> /Contents 4 0 R >>", page_extra).into_bytes(),
+            format!("<< /Length {} >>\nstream\n{}\nendstream", content.len(), content).into_bytes(),
+            [b"<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Length 3 >>\nstream\n".as_slice(), &[255, 0, 0], b"\nendstream"].concat(),
+            format!("<< /Type /XObject /Subtype /Form /BBox [0 0 100 100] /Matrix [1 0 0 1 5 7] /Resources << /XObject << /Im 5 0 R >> >> /Length {} >>\nstream\n{}\nendstream", form_content.len(), form_content).into_bytes(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 400] /Resources << /XObject << /Im 5 0 R >> >> /Contents 4 0 R >>".as_bytes().to_vec(),
+        ];
+        let mut bytes = b"%PDF-1.4\n".to_vec();
+        let mut offsets = vec![0];
+        for (index, object) in objects.iter().enumerate() {
+            offsets.push(bytes.len());
+            bytes.extend_from_slice(format!("{} 0 obj\n", index + 1).as_bytes());
+            bytes.extend_from_slice(object);
+            bytes.extend_from_slice(b"\nendobj\n");
+        }
+        let start = bytes.len();
+        bytes.extend_from_slice(
+            format!("xref\n0 {}\n0000000000 65535 f \n", offsets.len()).as_bytes(),
+        );
+        for offset in offsets.iter().skip(1) {
+            bytes.extend_from_slice(format!("{:010} 00000 n \n", offset).as_bytes());
+        }
+        bytes.extend_from_slice(
+            format!(
+                "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{}\n%%EOF",
+                offsets.len(),
+                start
+            )
+            .as_bytes(),
+        );
+        let path = directory.join("images.pdf");
+        std::fs::write(&path, bytes).unwrap();
+        path
+    }
+
+    fn image_request(path: &Path, operation: &str, output: &Path) -> serde_json::Value {
+        serde_json::json!({"operation": operation, "pdf_path": path, "output_dir": output, "page_indices": [0]})
+    }
+
+    #[test]
+    fn images_track_each_placement() {
+        let path = image_fixture("placements", false, false);
+        let output = path.parent().unwrap().join("export");
+        let request = image_request(&path, "extract_images", &output);
+        let result: serde_json::Value =
+            serde_json::from_str(&run_public_api_json(&request.to_string()).unwrap()).unwrap();
+        let images = result["data"].as_array().unwrap();
+        assert_eq!(images.len(), 2);
+        for (index, image) in images.iter().enumerate() {
+            assert_eq!(image["resource_index"], index);
+            assert_eq!(image["width"], 1);
+            assert_eq!(image["height"], 1);
+            let image_path = image["path"].as_str().unwrap();
+            assert!(Path::new(image_path).exists());
+            assert_eq!(
+                image::open(image_path).unwrap().to_rgb8().get_pixel(0, 0).0,
+                [255, 0, 0]
+            );
+        }
+        assert_eq!(
+            images[0]["bbox"],
+            serde_json::json!({"x0":100.0,"y0":100.0,"x1":200.0,"y1":200.0})
+        );
+        assert_eq!(
+            images[1]["bbox"],
+            serde_json::json!({"x0":300.0,"y0":300.0,"x1":400.0,"y1":400.0})
+        );
+    }
+
+    #[test]
+    fn images_region_writes_all_target_page_placements() {
+        let path = image_fixture("regions", false, false);
+        let output = path.parent().unwrap().join("export");
+        let mut request = image_request(&path, "extract_image_in_region", &output);
+        request["single"] = serde_json::json!(true);
+        // Touching the first image's edge still counts as an intersection.
+        request["regions"] =
+            serde_json::json!([{ "page_index":0,"x0":0.5,"y0":0.25,"x1":0.6,"y1":0.5 }]);
+        let result: serde_json::Value =
+            serde_json::from_str(&run_public_api_json(&request.to_string()).unwrap()).unwrap();
+        assert_eq!(result["data"]["resource_index"], 0);
+        assert_eq!(std::fs::read_dir(&output).unwrap().count(), 2);
+        request["single"] = serde_json::json!(false);
+        request["regions"] = serde_json::json!([
+            { "page_index":0,"x0":0.25,"y0":0.25,"x1":0.5,"y1":0.5 },
+            { "page_index":0,"x0":0.0,"y0":0.0,"x1":1.0,"y1":1.0 }
+        ]);
+        let result: serde_json::Value =
+            serde_json::from_str(&run_public_api_json(&request.to_string()).unwrap()).unwrap();
+        assert_eq!(result["data"].as_array().unwrap().len(), 3);
+        request["single"] = serde_json::json!(true);
+        request["regions"] =
+            serde_json::json!([{ "page_index":0,"x0":0.0,"y0":0.0,"x1":0.01,"y1":0.01 }]);
+        let result: serde_json::Value =
+            serde_json::from_str(&run_public_api_json(&request.to_string()).unwrap()).unwrap();
+        assert!(result["data"].is_null());
+    }
+
+    #[test]
+    fn images_apply_form_parent_matrix_and_crop_rotation() {
+        for (name, form, rotated, bbox) in [
+            (
+                "form",
+                true,
+                false,
+                serde_json::json!({"x0":50.0,"y0":226.0,"x1":150.0,"y1":326.0}),
+            ),
+            (
+                "rotation",
+                false,
+                true,
+                serde_json::json!({"x0":150.0,"y0":50.0,"x1":250.0,"y1":150.0}),
+            ),
+        ] {
+            let path = image_fixture(name, form, rotated);
+            let request = image_request(
+                &path,
+                "extract_images",
+                &path.parent().unwrap().join("export"),
+            );
+            let result: serde_json::Value =
+                serde_json::from_str(&run_public_api_json(&request.to_string()).unwrap()).unwrap();
+            assert_eq!(result["data"][0]["bbox"], bbox);
+        }
+    }
+
+    #[test]
+    fn images_propagate_file_errors() {
+        let path = image_fixture("write-error", false, false);
+        let request = image_request(&path, "extract_images", &path);
+        assert!(run_public_api_json(&request.to_string()).is_err());
+    }
+
+    #[test]
+    fn images_region_deduplicates_pages_and_keeps_page_scope() {
+        let path = image_fixture("page-scope", false, false);
+        let output = path.parent().unwrap().join("export");
+        let mut request = image_request(&path, "extract_image_in_region", &output);
+        request["single"] = serde_json::json!(false);
+        request["regions"] = serde_json::json!([
+            { "page_index":1,"x0":0.0,"y0":0.0,"x1":0.01,"y1":0.01 },
+            { "page_index":1,"x0":0.0,"y0":0.0,"x1":1.0,"y1":1.0 }
+        ]);
+        let result: serde_json::Value =
+            serde_json::from_str(&run_public_api_json(&request.to_string()).unwrap()).unwrap();
+        assert_eq!(result["data"].as_array().unwrap().len(), 2);
+        assert_eq!(std::fs::read_dir(&output).unwrap().count(), 2);
+        assert!(output.join("page-001-img-000.png").exists());
+        assert!(!output.join("page-000-img-000.png").exists());
+        request["regions"][0]["page_index"] = serde_json::json!(999);
+        assert!(run_public_api_json(&request.to_string())
+            .unwrap_err()
+            .contains("out of range"));
+    }
 
     #[test]
     fn accepts_single_axis_tables_when_every_slot_has_one_cell() {

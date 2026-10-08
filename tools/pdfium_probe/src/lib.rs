@@ -9,6 +9,7 @@ pub mod classifier;
 pub mod clustering;
 pub mod detector;
 pub mod drawings;
+pub mod image_extraction;
 pub mod json_export;
 pub mod layout;
 pub mod markdown;
