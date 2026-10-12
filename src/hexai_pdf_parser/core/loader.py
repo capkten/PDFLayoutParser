@@ -7,6 +7,7 @@ containing per-page metadata (size, rotation, etc.).
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Optional
 
 import fitz
 
@@ -26,14 +27,13 @@ class Loader:
     def __init__(self, file_path: str):
         self.file_path = file_path
 
-    def load(self) -> Document:
-        """Open the PDF and return a :class:`Document`."""
+    def load(self, pdf_doc: Optional[fitz.Document] = None) -> Document:
+        """Return a :class:`Document` using an optional caller-owned PDF."""
         file_name = Path(self.file_path).name
 
-        with fitz.open(self.file_path) as pdf:
+        def _build_document(pdf: fitz.Document) -> Document:
             page_count = len(pdf)
             pages: list[Page] = []
-
             for idx, page in enumerate(pdf):
                 rect = page.rect
                 pages.append(
@@ -44,5 +44,9 @@ class Loader:
                         page_type=classify_page_type(page),
                     )
                 )
+            return Document(file_name=file_name, page_count=page_count, pages=pages)
 
-        return Document(file_name=file_name, page_count=page_count, pages=pages)
+        if pdf_doc is not None:
+            return _build_document(pdf_doc)
+        with fitz.open(self.file_path) as pdf:
+            return _build_document(pdf)

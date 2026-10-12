@@ -10,7 +10,6 @@ from __future__ import annotations
 
 from typing import Any, Callable, Dict, List
 
-from hexai_pdf_parser.core.models import Table
 from hexai_pdf_parser.tables.table_region_rules import TableRegionCandidate
 from hexai_pdf_parser.tables.table_structure_rules import TableStructureCandidate
 

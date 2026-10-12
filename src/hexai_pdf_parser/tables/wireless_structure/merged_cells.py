@@ -155,6 +155,11 @@ def _same_slot_horizontal_prefix(
         and left.get("source_line_start") == left.get("source_line_end")
         and right.get("source_line_start") == right.get("source_line_end")
         and left.get("source_line_start") == right.get("source_line_start")
+    ) or (
+        bool(left.get("source_blocks"))
+        and bool(right.get("source_blocks"))
+        and left.get("source_blocks")[-1] == right.get("source_blocks")[0]
+        and left.get("source_line_end") == right.get("source_line_start")
     )
     if not same_source_line or not _native_continuous(left, right):
         return False

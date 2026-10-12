@@ -4,7 +4,7 @@ set -e
 ARCH=$(uname -m)
 
 # 每次提交代码,请将版本号加1
-VER="1.1.1"
+VER="1.1.5"
 
 SRV_NAME="hexai_pdf_parser"
 
@@ -31,7 +31,7 @@ RELEASE_FILE="${SRV_NAME}-${VER}-py3-none-any.whl"
 echo $RELEASE_FILE
 
 mkdir -p dist
-VER=${VER} python setup.py sdist bdist_wheel
+python -m pip wheel . --no-deps --wheel-dir dist
 cd dist
 ls -lh
 cd ..

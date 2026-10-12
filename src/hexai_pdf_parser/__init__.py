@@ -2,7 +2,6 @@
 
 import importlib
 import sys
-from importlib.abc import MetaPathFinder
 
 # Ensure PyMuPDF (fitz) compatibility across packaging variants
 try:
@@ -60,26 +59,6 @@ _LEGACY_MODULE_MAP = {
 }
 
 
-import importlib.util
-
-class _LegacySubmoduleRedirector(MetaPathFinder):
-    """Dynamic finder that aliases hexai_pdf_parser.<old_module> to the appropriate subpackage."""
-
-    def find_spec(self, fullname, path=None, target=None):
-        prefix = "hexai_pdf_parser."
-        if fullname.startswith(prefix):
-            subname = fullname[len(prefix):]
-            if subname in _LEGACY_MODULE_MAP:
-                target_module_name = _LEGACY_MODULE_MAP[subname]
-                spec = importlib.util.find_spec(target_module_name)
-                if spec is not None:
-                    return spec
-        return None
-
-
-if not any(isinstance(f, _LegacySubmoduleRedirector) for f in sys.meta_path):
-    sys.meta_path.insert(0, _LegacySubmoduleRedirector())
-
 # Pre-populate sys.modules aliases so that identical module objects are shared
 for _subname, _target_module_name in _LEGACY_MODULE_MAP.items():
     _mod = importlib.import_module(_target_module_name)
@@ -116,8 +95,17 @@ from hexai_pdf_parser.core.models import (
 # Extractors & Builders
 from hexai_pdf_parser.extractors.text_extractor import TextExtractor
 from hexai_pdf_parser.extractors.language_detector import detect_page_language
-from hexai_pdf_parser.extractors.page_classifier import classify_page_type, is_scanned_page
-from hexai_pdf_parser.tables.table_extractor import TableExtractor
+from hexai_pdf_parser.extractors.page_classifier import (
+    classify_page_type,
+    classify_pdf_page,
+    is_scanned_page,
+)
+from hexai_pdf_parser.tables.table_extractor import (
+    TableExtractor,
+    extract_table_from_region,
+    extract_table_html_from_region,
+    table_to_html,
+)
 from hexai_pdf_parser.tables.extractors import (
     ChineseTableExtractor,
     EnglishTableExtractor,
@@ -180,6 +168,9 @@ __all__ = [
     # Extractors & Builders
     "TextExtractor",
     "TableExtractor",
+    "extract_table_from_region",
+    "extract_table_html_from_region",
+    "table_to_html",
     "EnglishTableExtractor",
     "ChineseTableExtractor",
     "ImageExtractor",
@@ -187,6 +178,7 @@ __all__ = [
     "LayoutBuilder",
     "detect_page_language",
     "classify_page_type",
+    "classify_pdf_page",
     "is_scanned_page",
     # Writers & Renderers
     "JSONWriter",

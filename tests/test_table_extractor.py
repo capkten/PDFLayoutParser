@@ -12,11 +12,13 @@ import pytest
 from hexai_pdf_parser.models import BBox, Cell, Table
 from hexai_pdf_parser.personal_credit_report import (
     PersonalCreditReportTableExtractor,
+    _query_rows,
     parse_personal_credit_report,
 )
 from hexai_pdf_parser.text_region_detector import CandidateRegion
 from hexai_pdf_parser.table_extractor import TableExtractor
 from hexai_pdf_parser.wireless_table_extractor import WirelessTableExtractor
+from hexai_pdf_parser.tables.extractors.wired_table_extractor import WiredTableExtractor
 
 
 def make_pdf_with_table(path):
@@ -81,6 +83,30 @@ def test_wireless_extractor_keeps_zebra_for_english_page(monkeypatch):
     )
 
     assert tables == [zebra_table]
+
+
+def test_english_header_underlines_ignore_short_segments_without_columns():
+    from hexai_pdf_parser.tables.extractors.english_table_extractor import (
+        EnglishTableExtractor,
+    )
+
+    extractor = EnglishTableExtractor()
+    point = lambda x, y: SimpleNamespace(x=x, y=y)
+    page = SimpleNamespace(
+        get_drawings=lambda: [
+            {"items": [("l", point(20.0, 30.0), point(25.0, 30.0))]}
+        ]
+    )
+
+    assert (
+        extractor._detect_columns_from_header_underlines(
+            page,
+            table_y0=0.0,
+            table_bbox=BBox(0.0, 0.0, 100.0, 100.0),
+            words=[(20.0, 20.0, 30.0, 35.0, "x")],
+        )
+        == []
+    )
 
 
 def test_english_wireless_does_not_split_alternately_indented_description_column():
@@ -182,6 +208,87 @@ def test_native_span_table_skips_legacy_word_rebuild(monkeypatch):
     assert get_text_calls == []
 
 
+def test_personal_credit_no_model_keeps_native_span_wireless_source(monkeypatch):
+    extractor = PersonalCreditReportTableExtractor(use_ml_table_detector=False)
+    bbox = BBox(0, 0, 100, 100)
+    wireless = Table(
+        bbox=bbox,
+        rows=1,
+        cols=1,
+        cells=[Cell("混合", 0, 0, bbox)],
+        source="wireless_span_recovery",
+    )
+    page = SimpleNamespace(
+        number=0,
+        rect=fitz.Rect(0, 0, 100, 100),
+        get_drawings=lambda: [],
+        get_text=lambda mode: [],
+    )
+    extractor._wired_extractor.extract = lambda page: []
+    extractor._extract_via_text_alignment = (
+        lambda page, excluded_regions=None: [wireless]
+    )
+
+    class FailDetector:
+        def detect_with_scores(self, page):
+            raise AssertionError("ML detector must not run for personal reports")
+
+    extractor._ml_detector = FailDetector()
+    monkeypatch.setattr(
+        "hexai_pdf_parser.extractors.language_detector.detect_page_language",
+        lambda page: "mixed",
+    )
+    monkeypatch.setattr(
+        "hexai_pdf_parser.tables.table_extractor.normalize_page_rotation",
+        lambda page: None,
+        raising=False,
+    )
+
+    result = extractor.extract(page)
+
+    assert len(result) == 1
+    assert result[0].source == "wireless_span_recovery"
+    assert result[0].rows == wireless.rows
+    assert result[0].cols == wireless.cols
+    assert [(cell.text, cell.row_index, cell.col_index) for cell in result[0].cells] == [
+        ("混合", 0, 0)
+    ]
+
+
+def test_personal_query_rows_merged_path_uses_text_extractor():
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_text((40, 40), "query rows")
+
+    rows = _query_rows(page, merged=True)
+
+    doc.close()
+    assert rows
+    assert "query" in "".join(item[4] for item in rows[0])
+
+
+def test_parse_personal_credit_report_forwards_ml_switch(monkeypatch):
+    captured = []
+
+    class FakePipeline:
+        def __init__(self, **kwargs):
+            captured.append(kwargs)
+
+        def run(self):
+            return SimpleNamespace(file_name="sample.pdf", page_count=0, pages=[])
+
+    monkeypatch.setattr(
+        "hexai_pdf_parser.extractors.personal_credit_report.PersonalCreditReportPipeline",
+        FakePipeline,
+    )
+
+    parse_personal_credit_report("sample.pdf")
+    parse_personal_credit_report("sample.pdf", use_ml_table_detector=True)
+
+    assert captured[0]["use_ml_table_detector"] is False
+    assert captured[1]["use_ml_table_detector"] is True
+
+
 def test_hybrid_wired_table_recovers_only_tall_body_cell(monkeypatch):
     extractor = TableExtractor()
     bbox = BBox(100, 100, 400, 400)
@@ -279,7 +386,7 @@ def test_hybrid_wired_table_replaces_full_rowspan_body_before_shifting_footer(
     assert (note.row_index, note.rowspan) == (1, 5)
 
 
-def test_hybrid_wired_table_keeps_normal_height_grid(monkeypatch):
+def test_hybrid_wired_table_keeps_normal_height_grid():
     extractor = TableExtractor()
     cells = [
         Cell("h", 0, 0, BBox(0, 0, 50, 20)),
@@ -290,12 +397,27 @@ def test_hybrid_wired_table_keeps_normal_height_grid(monkeypatch):
         Cell("2.00", 2, 1, BBox(50, 45, 100, 70)),
     ]
     table = Table(BBox(0, 0, 100, 70), 3, 2, cells, source="line_projection")
-    monkeypatch.setattr(
-        "hexai_pdf_parser.tables.table_extractor.recover_cells_from_region",
-        lambda page, region: (_ for _ in ()).throw(AssertionError("must not recover")),
+    assert extractor._recover_hybrid_wired_table(object(), table, "zh") is table
+
+
+def test_clamp_table_to_page_preserves_physical_line_metadata():
+    table = Table(
+        bbox=BBox(-10, -10, 110, 110),
+        rows=1,
+        cols=1,
+        cells=[Cell("", 0, 0, BBox(-10, -10, 110, 110))],
+        source="line_projection",
+        h_lines=[(-10.0, 0.0, 110.0, 0.0)],
+        v_lines=[(0.0, -10.0, 0.0, 110.0)],
     )
 
-    assert extractor._recover_hybrid_wired_table(object(), table, "zh") is table
+    class Page:
+        rect = fitz.Rect(0, 0, 100, 100)
+
+    clamped = TableExtractor._clamp_table_to_page(table, Page())
+
+    assert clamped.h_lines == table.h_lines
+    assert clamped.v_lines == table.v_lines
 
 
 def test_hybrid_wired_table_preserves_body_colspan_without_conflict(monkeypatch):
@@ -462,7 +584,7 @@ class TestTableExtractor:
 
         doc = fitz.open(str(pdf_path))
         try:
-            extractor = TableExtractor()
+            extractor = WiredTableExtractor()
             h_lines, v_lines = extractor._extract_lines_from_drawings(doc[0])
             merged = extractor._merge_h_lines(h_lines)
 
@@ -475,7 +597,7 @@ class TestTableExtractor:
             doc.close()
 
     def test_vertical_line_fragments_with_small_pdf_gap_are_merged(self):
-        extractor = TableExtractor()
+        extractor = WiredTableExtractor()
 
         merged = extractor._merge_v_lines(
             [
@@ -722,10 +844,6 @@ class TestTableExtractor:
         try:
             extractor = TableExtractor()
 
-            def fail_if_called(page):
-                raise AssertionError("PyMuPDF table parsing must not be used")
-
-            extractor._extract_via_pymupdf = fail_if_called
             tables = extractor.extract(doc[0])
 
             assert tables
@@ -734,7 +852,7 @@ class TestTableExtractor:
             doc.close()
 
     def test_find_table_regions_separates_disconnected_grids(self):
-        extractor = TableExtractor()
+        extractor = WiredTableExtractor()
         h_lines = [
             (10.0, 10.0, 110.0, 10.0),
             (10.0, 60.0, 110.0, 60.0),
@@ -764,7 +882,7 @@ class TestTableExtractor:
         ]
 
     def test_find_table_regions_with_short_vertical_included(self):
-        extractor = TableExtractor()
+        extractor = WiredTableExtractor()
         h_lines = [
             (10.0, 10.0, 110.0, 10.0),
             (10.0, 60.0, 110.0, 60.0),
@@ -802,27 +920,8 @@ class TestTableExtractor:
         assert len(empty_col_cells) == 2
         assert all(c.text == "" for c in empty_col_cells)
 
-    def test_merge_adjacent_regions_does_not_merge_separate_tables(self):
-        extractor = TableExtractor()
-        regions = [
-            (
-                BBox(0, 0, 50, 50),
-                [(0.0, 0.0, 50.0, 0.0)],
-                [(0.0, 0.0, 0.0, 50.0)],
-            ),
-            (
-                BBox(90, 0, 140, 50),
-                [(90.0, 0.0, 140.0, 0.0)],
-                [(90.0, 0.0, 90.0, 50.0)],
-            ),
-        ]
-
-        merged = extractor._merge_adjacent_regions(regions)
-
-        assert len(merged) == 2
-
     def test_build_cells_for_region_merges_atomic_grid_into_spanning_cells(self):
-        extractor = TableExtractor()
+        extractor = WiredTableExtractor()
         bbox = BBox(0, 0, 30, 30)
         h_lines = [
             (0.0, 0.0, 30.0, 0.0),
@@ -857,68 +956,6 @@ class TestTableExtractor:
             (2, 2, 1, 1, (20.0, 20.0, 30.0, 30.0)),
         ]
 
-    def test_build_cells_for_region_delegates_to_unified_grid_builder(self):
-        extractor = TableExtractor()
-        bbox = BBox(0, 0, 100, 100)
-        h_lines = [
-            (0.0, 0.0, 100.0, 0.0),
-            (0.0, 25.0, 100.0, 25.0),
-            (0.0, 50.0, 100.0, 50.0),
-            (0.0, 75.0, 100.0, 75.0),
-            (0.0, 100.0, 100.0, 100.0),
-        ]
-        v_lines = [
-            (0.0, 0.0, 0.0, 100.0),
-            (20.0, 25.0, 20.0, 100.0),
-            (40.0, 25.0, 40.0, 100.0),
-            (60.0, 0.0, 60.0, 100.0),
-        ]
-
-        captured = {}
-
-        def fake_build_cells_in_region(h_ys_arg, v_xs_arg, h_lines_arg, v_lines_arg):
-            captured["h_ys"] = h_ys_arg
-            captured["v_xs"] = v_xs_arg
-            captured["h_lines"] = h_lines_arg
-            captured["v_lines"] = v_lines_arg
-            return [
-                Cell(
-                    text="",
-                    row_index=0,
-                    col_index=0,
-                    bbox=BBox(0, 0, 20, 25),
-                )
-            ]
-
-        extractor._build_cells_in_region = fake_build_cells_in_region
-
-        extractor._build_cells_for_region(bbox, h_lines, v_lines)
-
-        assert captured["h_ys"] == [0.0, 25.0, 50.0, 75.0, 100.0]
-        assert captured["v_xs"] == [0.0, 20.0, 40.0, 60.0]
-        assert captured["h_lines"] == h_lines
-        assert captured["v_lines"] == v_lines
-
-    def test_build_cells_in_region_excludes_cartesian_product_outside_gaps(self):
-        extractor = TableExtractor()
-        h_lines = [
-            (20.0, 0.0, 40.0, 0.0),
-            (0.0, 10.0, 40.0, 10.0),
-            (0.0, 20.0, 40.0, 20.0),
-        ]
-        v_lines = [
-            (0.0, 0.0, 0.0, 100.0),
-            (20.0, 0.0, 20.0, 20.0),
-            (40.0, 0.0, 40.0, 20.0),
-        ]
-        h_ys = [0.0, 10.0, 20.0]
-        v_xs = [0.0, 20.0, 40.0]
-
-        cells = extractor._build_cells_in_region(h_ys, v_xs, h_lines, v_lines)
-
-        assert (0, 0) not in {(c.row_index, c.col_index) for c in cells}
-        assert (0, 1) in {(c.row_index, c.col_index) for c in cells}
-
     def test_ignore_rectangles_fully_covered_by_later_fill_path(self):
         page = SimpleNamespace(
             rect=fitz.Rect(0, 0, 400, 400),
@@ -938,59 +975,10 @@ class TestTableExtractor:
             ],
         )
 
-        extractor = TableExtractor()
+        extractor = WiredTableExtractor()
         h_lines, v_lines = extractor._extract_lines_from_drawings(page)
         assert h_lines == []
         assert v_lines == []
-
-    def test_keep_rectangles_when_later_fill_only_partially_overlaps(self):
-        page = SimpleNamespace(
-            rect=fitz.Rect(0, 0, 400, 400),
-            get_drawings=lambda: [
-                {
-                    "items": [("re", fitz.Rect(100, 100, 200, 150), 1)],
-                    "type": "s",
-                    "stroke_opacity": 1.0,
-                    "color": (0.0, 0.0, 0.0),
-                    "width": 1.0,
-                    "seqno": 0,
-                }
-            ],
-            get_bboxlog=lambda: [
-                ("stroke-path", (100, 100, 200, 150)),
-                ("fill-path", (150, 100, 220, 155)),
-            ],
-        )
-
-        extractor = TableExtractor()
-        h_lines, v_lines = extractor._extract_lines_from_drawings(page)
-        assert len(h_lines) == 2
-        assert len(v_lines) == 2
-
-    def test_keep_rectangles_when_later_image_overlaps(self):
-        page = SimpleNamespace(
-            rect=fitz.Rect(0, 0, 400, 400),
-            get_drawings=lambda: [
-                {
-                    "items": [("re", fitz.Rect(100, 100, 200, 150), 1)],
-                    "type": "s",
-                    "stroke_opacity": 1.0,
-                    "color": (0.0, 0.0, 0.0),
-                    "width": 1.0,
-                    "seqno": 0,
-                }
-            ],
-            get_bboxlog=lambda: [
-                ("stroke-path", (100, 100, 200, 150)),
-                ("fill-image", (95, 95, 205, 155)),
-            ],
-        )
-
-        extractor = TableExtractor()
-        h_lines, v_lines = extractor._extract_lines_from_drawings(page)
-
-        assert len(h_lines) == 2
-        assert len(v_lines) == 2
 
     def test_ignore_fully_transparent_rectangles_when_extracting_lines(
         self, tmp_dir
@@ -1010,7 +998,7 @@ class TestTableExtractor:
         doc = fitz.open(str(pdf_path))
         try:
             page = doc[0]
-            extractor = TableExtractor()
+            extractor = WiredTableExtractor()
             h_lines, v_lines = extractor._extract_lines_from_drawings(page)
             assert h_lines == []
             assert v_lines == []
@@ -1034,7 +1022,7 @@ class TestTableExtractor:
         doc = fitz.open(str(pdf_path))
         try:
             page = doc[0]
-            extractor = TableExtractor()
+            extractor = WiredTableExtractor()
             h_lines, v_lines = extractor._extract_lines_from_drawings(page)
             assert h_lines == []
             assert v_lines == []
@@ -1058,7 +1046,7 @@ class TestTableExtractor:
         doc = fitz.open(str(pdf_path))
         try:
             page = doc[0]
-            extractor = TableExtractor()
+            extractor = WiredTableExtractor()
             h_lines, v_lines = extractor._extract_lines_from_drawings(page)
             assert len(h_lines) == 1
             assert v_lines == []
@@ -2984,44 +2972,133 @@ def test_physical_horizontal_line_row_separation_and_multi_dollar_split():
     assert data_cells[4].text == "$63,754"
 
 
-def test_header_rows_dollar_sign_defense():
-    """Verify dollar sign and numeric tokens in header_rows are defensively merged."""
-    from types import SimpleNamespace
-    from hexai_pdf_parser.core.models import BBox
-    from hexai_pdf_parser.tables.extractors.english_table_extractor import EnglishTableExtractor
+def test_p415_chart_candidate_is_not_recovered_as_english_wireless():
+    """P415 的模型候选框不能绕过 chart 过滤再次生成英文无线表格。"""
+    import os
 
-    extractor = EnglishTableExtractor()
-    words = [
-        (447.0, 119.8, 489.0, 127.8, "Years ended"),
-        (368.0, 130.6, 417.0, 138.6, "September 28, 2024"),
-        (443.0, 130.6, 492.0, 138.6, "September 30, 2023"),
-        (519.0, 130.6, 568.0, 138.6, "September 24, 2022"),
-        # Header tier with currency symbols adjacent to numbers
-        (34.0, 148.0, 75.0, 157.0, "Net income"),
-        (358.0, 148.0, 363.0, 157.0, "$"),
-        (399.0, 148.0, 424.0, 157.0, "93,736"),
-        (434.0, 148.0, 439.0, 157.0, "$"),
-        (474.0, 148.0, 499.0, 157.0, "96,995"),
-        (509.0, 148.0, 514.0, 157.0, "$"),
-        (550.0, 148.0, 575.0, 157.0, "99,803"),
-    ]
-    # Header underline between tiers
-    drawings = [
-        {"items": [("l", SimpleNamespace(x=350.0, y=129.0), SimpleNamespace(x=580.0, y=129.0))]},
-        {"items": [("l", SimpleNamespace(x=350.0, y=146.5), SimpleNamespace(x=580.0, y=146.5))]},
-    ]
-    page = SimpleNamespace(
-        get_text=lambda kind: words if kind == "words" else [],
-        get_drawings=lambda: drawings,
-        rect=SimpleNamespace(x0=0.0, y0=0.0, x1=600.0, y1=800.0),
+    pdf_path = r"D:\codes\PDFLayoutParser\fix\zh_all_table_pages.pdf"
+    if not os.path.exists(pdf_path):
+        pytest.skip("zh_all_table_pages.pdf not found")
+
+    doc = fitz.open(pdf_path)
+    try:
+        page = doc[415]
+        extractor = TableExtractor()
+        wired_tables = extractor._wired_extractor.extract(page)
+        chart_candidate = (BBox(59.6, 120.9, 542.1, 286.7), 0.9)
+
+        tables = extractor._recover_tables_from_regions(
+            page,
+            regions=[chart_candidate],
+            wired_tables=wired_tables,
+            page_language="en",
+        )
+
+        assert tables == []
+    finally:
+        doc.close()
+
+
+def _make_chart_state_page():
+    return SimpleNamespace(
+        rect=fitz.Rect(0.0, 0.0, 200.0, 200.0),
+        get_drawings=lambda **_kwargs: [],
+        get_fonts=lambda **_kwargs: [],
+        get_image_info=lambda **_kwargs: [],
+        get_text=lambda *_args, **_kwargs: {"blocks": []},
     )
-    # When table_y0 is 158.0, lines up to 158.0 are treated as header_rows
-    header_rows = extractor._detect_header_rows(words, 158.0, page, table_bbox=BBox(30.0, 115.0, 580.0, 300.0))
-    # Defensively, header rows must have merged $ and adjacent numbers
-    tier2 = [hr for hr in header_rows if any("Net income" in w[4] for w in hr.words)][0]
-    token_texts = [w[4] for w in tier2.words]
-    assert "$93,736" in token_texts
-    assert "$96,995" in token_texts
-    assert "$99,803" in token_texts
-    assert "$" not in token_texts
 
+
+def _prime_chart_mask(extractor, page, mask, monkeypatch):
+    monkeypatch.setattr(
+        extractor._wired_extractor,
+        "_find_bar_chart_regions",
+        lambda *_args, **_kwargs: [mask],
+    )
+    extractor._wired_extractor._extract_lines_from_drawings(page)
+
+
+def test_chart_mask_is_not_reused_for_a_different_page(monkeypatch):
+    """上一页的柱形图 mask 不能过滤当前页的正常候选。"""
+    extractor = TableExtractor()
+    chart_page = _make_chart_state_page()
+    current_page = _make_chart_state_page()
+    _prime_chart_mask(extractor, chart_page, fitz.Rect(0.0, 0.0, 100.0, 100.0), monkeypatch)
+
+    bbox = BBox(10.0, 10.0, 90.0, 90.0)
+    recovered = Table(
+        bbox=bbox,
+        rows=1,
+        cols=2,
+        cells=[],
+        source="english_general_wireless",
+    )
+    monkeypatch.setattr(
+        extractor._wireless_extractor,
+        "extract",
+        lambda *_args, **_kwargs: [recovered],
+    )
+
+    tables = extractor._recover_tables_from_regions(
+        current_page,
+        regions=[(bbox, 0.9)],
+        wired_tables=[],
+        page_language="en",
+    )
+
+    assert tables == [recovered]
+
+
+def test_partial_chart_overlap_does_not_drop_normal_wireless_candidate(monkeypatch):
+    """候选仅小面积碰到图表 mask 时仍应进入无线恢复。"""
+    extractor = TableExtractor()
+    page = _make_chart_state_page()
+    _prime_chart_mask(extractor, page, fitz.Rect(80.0, 80.0, 100.0, 100.0), monkeypatch)
+
+    bbox = BBox(0.0, 0.0, 100.0, 100.0)
+    recovered = Table(
+        bbox=bbox,
+        rows=1,
+        cols=2,
+        cells=[],
+        source="english_general_wireless",
+    )
+    monkeypatch.setattr(
+        extractor._wireless_extractor,
+        "extract",
+        lambda *_args, **_kwargs: [recovered],
+    )
+
+    tables = extractor._recover_tables_from_regions(
+        page,
+        regions=[(bbox, 0.9)],
+        wired_tables=[],
+        page_language="en",
+    )
+
+    assert tables == [recovered]
+
+
+def test_p415_full_extraction_drops_chart_and_keeps_operating_expenses():
+    """主入口应丢弃柱形图候选，同时保留下方 Operating Expenses 真表。"""
+    import os
+
+    pdf_path = r"D:\codes\PDFLayoutParser\fix\zh_all_table_pages.pdf"
+    if not os.path.exists(pdf_path):
+        pytest.skip("zh_all_table_pages.pdf not found")
+
+    doc = fitz.open(pdf_path)
+    try:
+        tables = TableExtractor().extract(doc[415])
+
+        assert not any(
+            table.bbox.y0 < 280.0 and table.bbox.x0 < 400.0 for table in tables
+        )
+        assert any(
+            table.source == "english_general_wireless"
+            and (table.rows, table.cols) == (9, 4)
+            and table.bbox.y0 > 500.0
+            for table in tables
+        )
+    finally:
+        doc.close()

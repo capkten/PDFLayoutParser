@@ -58,7 +58,24 @@ For multi-step tasks, state a brief plan:
 
 Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
 
-## 5. 中文无线表格结构恢复约束
+## 5. Evidence and Honesty
+
+**Never present assumptions or intended actions as completed facts.**
+
+- Never claim a file was read unless it was actually inspected.
+- Never claim a command was executed unless it was actually run.
+- Never claim a test passed unless its successful result was observed.
+- Never claim a bug is fixed or code is working solely from code inspection.
+- "Should work" is not the same as "works".
+- If something was not verified, explicitly state that it was not verified.
+- Tool output overrides expectations. If execution fails, treat it as a failure even if the implementation looks correct.
+
+When reporting completion, distinguish:
+- **Changed:** what was actually modified.
+- **Verified:** what was actually executed or checked.
+- **Unverified:** anything that remains uncertain.
+
+## 6. 中文无线表格结构恢复约束
 
 处理 `zh`/`mixed` 页面的无线表格时，默认遵循以下不变量：
 
@@ -82,15 +99,6 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 
 For PDF table debugging, single-page runs, CodeGraph usage, visual verification, language-aware extraction, testing, and commit conventions, load [DEVELOPMENT_WORKFLOW.md](DEVELOPMENT_WORKFLOW.md) when needed.
 
-<!-- CODEGRAPH_START -->
-## CodeGraph
-
-In repositories indexed by CodeGraph (a `.codegraph/` directory exists at the repo root), reach for it BEFORE grep/find or reading files when you need to understand or locate code:
-
-- **MCP tool** (when available): `codegraph_explore` answers most code questions in one call — the relevant symbols' verbatim source plus the call paths between them, including dynamic-dispatch hops grep can't follow. Name a file or symbol in the query to read its current line-numbered source. If it's listed but deferred, load it by name via tool search.
-- **Shell** (always works): `codegraph explore "<symbol names or question>"` prints the same output.
-
-If there is no `.codegraph/` directory, skip CodeGraph entirely — indexing is the user's decision.
 
 ## fix
 修复任务的时候，需要新建分支实现，验证通过了再合并，使用worktree，因为同时有多个agent在修复不同问题

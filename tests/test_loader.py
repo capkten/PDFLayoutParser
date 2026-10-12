@@ -10,6 +10,23 @@ from tests.conftest import make_multi_page_pdf, make_text_pdf
 
 
 class TestLoader:
+    def test_load_uses_caller_owned_pdf_document(self, tmp_dir):
+        pdf_path = Path(tmp_dir) / "caller-owned.pdf"
+        make_text_pdf(pdf_path, text="Hello World")
+        pdf = fitz.open(str(pdf_path))
+
+        try:
+            document = Loader(str(pdf_path)).load(pdf)
+            assert document.page_count == 1
+            assert document.pages[0].page_type == "vector"
+            assert document.pages[0].size["width"] == pytest.approx(pdf[0].rect.width)
+            assert document.pages[0].size["height"] == pytest.approx(pdf[0].rect.height)
+            assert document.pages[0].rotation == pdf[0].rotation
+            assert not pdf.is_closed
+            assert pdf[0].rect.width == pytest.approx(595.0, rel=1e-3)
+        finally:
+            pdf.close()
+
     def test_load_single_page_pdf(self, tmp_dir):
         pdf_path = Path(tmp_dir) / "single.pdf"
         make_text_pdf(pdf_path, text="Hello World")
