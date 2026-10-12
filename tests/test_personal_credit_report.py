@@ -732,4 +732,3 @@ def test_extract_page_char_words_exact_bbox():
     # 严格检验起始坐标是真实字符的 154.36，而不是被大量空格估算推移的坐标
     assert words[1][0] == 154.36
     assert words[1][2] == 186.0
-

@@ -206,4 +206,3 @@
   git add src/hexai_pdf_parser/core/pipeline.py tests/test_pipeline.py
   git commit -m "perf: avoid repeated page selection checks"
   ```
-

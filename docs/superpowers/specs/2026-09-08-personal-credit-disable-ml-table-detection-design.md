@@ -82,4 +82,3 @@ document = parse_personal_credit_report(
 - 有线与无线候选重叠时，有线结果优先且不重复输出。
 - 线程和进程后端都能正确传播开关。
 - 运行新增测试、相关表格/Pipeline 测试和 `git diff --check`。
-

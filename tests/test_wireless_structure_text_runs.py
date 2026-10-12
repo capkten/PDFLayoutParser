@@ -755,4 +755,3 @@ def test_build_text_runs_columnar_mode_does_not_merge_wrapped_field_runs():
 
     assert len(result) == 2
     assert [item["text"] for item in result] == ["归属于母公司所有者的净利润", "少数股东损益"]
-

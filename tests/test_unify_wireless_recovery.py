@@ -95,4 +95,3 @@ def test_rule_branch_preserves_unmatched_wired_tables(monkeypatch):
     results = extractor._extract_rule_tables(page, candidates=[wired_table], page_language="en")
     assert len(results) == 1
     assert results[0].source == "line_projection"
-

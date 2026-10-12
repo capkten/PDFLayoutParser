@@ -365,4 +365,3 @@ git diff --check
 git add src tests changes.md
 git commit -m "feat: disable ML table detection for personal reports"
 ~~~
-

@@ -673,4 +673,3 @@ def test_page_590_financial_table_does_not_collapse_rows():
     assert rows >= 28
     assert columns >= 10
     assert len(cells) >= 280
-

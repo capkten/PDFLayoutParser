@@ -138,4 +138,3 @@ def test_page_075_table_headers_upward_merge():
         row3_cells = {c.col_index: c for c in rows[3]}
         assert 1 in row3_cells and "2023" in row3_cells[1].text and row3_cells[1].rowspan == 1
         assert 2 in row3_cells and "2024" in row3_cells[2].text and row3_cells[2].rowspan == 1
-

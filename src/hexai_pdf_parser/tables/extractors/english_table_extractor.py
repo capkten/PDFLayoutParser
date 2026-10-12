@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import copy
-import os
 import re
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import fitz
 
@@ -15,7 +13,6 @@ from hexai_pdf_parser.core.models import BBox, Cell, Table
 from hexai_pdf_parser.tables.base_table_extractor import BaseTableExtractor
 from hexai_pdf_parser.extractors.language_detector import detect_page_language
 from hexai_pdf_parser.tables.wireless_table_recovery import recover_wireless_tables
-from hexai_pdf_parser.tables.wireless_structure import continuations
 
 
 # 英文斑马底色行背景的颜色常量
@@ -1384,8 +1381,6 @@ class EnglishTableExtractor(BaseTableExtractor):
             return []
 
         min_word_y = min(w[1] for w in header_words)
-        max_word_y = max(w[3] for w in header_words)
-
         dividing_lines = sorted(list(set(
             y for y in unique_h_lines
             if min_word_y + 3.0 < y < table_y0 - 3.0
@@ -1463,17 +1458,17 @@ class EnglishTableExtractor(BaseTableExtractor):
                     color=None,
                     is_header=True,
                 ))
-            return header_rows
+            return self._handle_dollar_signs(header_rows)
         else:
             # 原则 3：表格顶部边界到第一道下划线区域（Table Top to First Underline）合并为顶层表头
             header_words_sorted = sorted(header_words, key=lambda w: (round((w[1] + w[3]) / 2.0 / 4.0), w[0]))
-            return [_RowData(
+            return self._handle_dollar_signs([_RowData(
                 words=header_words_sorted,
                 y0=min(w[1] for w in header_words_sorted),
                 y1=max(w[3] for w in header_words_sorted),
                 color=None,
                 is_header=True,
-            )]
+            )])
 
     def _handle_dollar_signs(self, rows: List[_RowData]) -> List[_RowData]:
         for row in rows:
@@ -1627,7 +1622,6 @@ class EnglishTableExtractor(BaseTableExtractor):
             rows_by_y[matched_y].append(w)
 
         all_row_segs: List[Tuple[float, List[Tuple[float, float]]]] = []
-        total_tbl_w = (table_bbox.x1 - table_bbox.x0) if table_bbox else ((max(w[2] for w in words) - min(w[0] for w in words)) if words else 500.0)
         for ry, rwords in rows_by_y.items():
             rwords.sort(key=lambda w: w[0])
             cur: List[Tuple] = []
@@ -1769,7 +1763,6 @@ class EnglishTableExtractor(BaseTableExtractor):
             while ci < len(columns) - 1:
                 cx0, cx1 = columns[ci]
                 nx0, nx1 = columns[ci + 1]
-                c_words = [w for w in (words or []) if cx0 - 2.0 <= (w[0] + w[2]) / 2.0 <= cx1 + 2.0]
                 n_words = [w for w in (words or []) if nx0 - 2.0 <= (w[0] + w[2]) / 2.0 <= nx1 + 2.0]
                 
                 # 检查两列是否存在多行稳定共存且有显著列间隙的独立列特征
@@ -2496,7 +2489,7 @@ class EnglishTableExtractor(BaseTableExtractor):
             next_x0 = float(next_cluster["x0"])
             next_x1 = float(next_cluster["x1"])
             mid_cut = (curr_span[1] + next_x0) / 2.0
-            
+
             # 检查是否有任何行存在跨越 mid_cut 切分线的连续文本
             is_cut = False
             for r in rows:
@@ -2509,7 +2502,7 @@ class EnglishTableExtractor(BaseTableExtractor):
                     is_cut = True
                 if is_cut:
                     break
-            
+
             if is_cut:
                 curr_span[1] = max(curr_span[1], next_x1)
             else:
@@ -2733,7 +2726,6 @@ class EnglishTableExtractor(BaseTableExtractor):
         # 2. 自底向上推断父表头跨列合并（叶子行保持单列，只推断父层表头；优先级 1：物理下划线；优先级 2：中心对称扩充）
         for t in range(num_tiers - 2, -1, -1):
             cur_tier_cells = [c for c in rows_dict[sorted_row_indices[t]] if c.text.strip()]
-            next_tier_cells = rows_dict[sorted_row_indices[t + 1]] if t + 1 < num_tiers else []
             # 支撑列为所有下层表头中有效列的并集
             supported_cols = {
                 ci for nt in range(t + 1, num_tiers)
@@ -3259,6 +3251,9 @@ class EnglishTableExtractor(BaseTableExtractor):
             return None
         if not columns:
             return None
+
+        header_rows = self._handle_dollar_signs(header_rows)
+        data_rows = self._handle_dollar_signs(data_rows)
 
         # 1. 表头行单元格构建与短语归列
         raw_header_cells: List[Cell] = []
@@ -3790,7 +3785,7 @@ class EnglishTableExtractor(BaseTableExtractor):
                         span_x1 = columns[ec][1]
                         if px0 < span_x0 - 6.0 or px1 > span_x1 + 6.0:
                             continue
-                        
+
                         other_in_span = any(
                             op is not p
                             and any(sc <= ci <= ec for ci in [next((i for i, (cx0, cx1) in enumerate(columns) if cx0 <= (ow[0] + ow[2]) / 2.0 < cx1), -1) for ow in op])

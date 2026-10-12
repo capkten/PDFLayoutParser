@@ -78,4 +78,3 @@ def test_parse_personal_credit_report_passes_ml_render_dpi():
         mock_pipeline_cls.assert_called_once()
         _, kwargs = mock_pipeline_cls.call_args
         assert kwargs.get("ml_render_dpi") == 110
-

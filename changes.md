@@ -279,6 +279,11 @@
   - **测试与页面验证**：新增 PDF clip 截断回归测试，先确认原实现返回 `823.2422` 的 RED，再验证可见终点为 `813.4832`；`tests/test_wired_table_extractor.py` 为 `33 passed`。相关组合测试为 `119 passed, 1 failed`，唯一失败为既有 `test_hybrid_wired_table_replaces_full_rowspan_body_before_shifting_footer`，与本次有线 clip 修复无关。
   - **端到端验证**：使用 `test_single.py` 对 `征信解析样例.pdf` 页索引 `0、1` 独立输出到 `D:\codes\PDFLayoutParser\output\e2e_visible_lines_20260907_final\`。第 1 页目标表为 `line_projection`、`3x11`、bbox `[28.0,765.8,564.7,810.9]`，仅含 `2025-12` 数据行；第 2 页首行 `2025-09` 保留，表格为 `11x11`。最终 PNG `征信解析样例_page_000_visualized.png` 与 `征信解析样例_page_001_visualized.png` 视觉核验通过，页脚位于表格框外且表格与页脚之间存在空白。
 
+## 2026-09-05
+
+- 修复英文无线表格列检测在 `col_segs=[]` 时仍访问 `col_segs[0]` / `col_segs[-1]`，导致全量 PDF 解析在页面级抛出 `IndexError` 中断的问题。修复位置为 `src/hexai_pdf_parser/tables/extractors/english_table_extractor.py::_detect_columns_from_header_underlines()`：只有存在恰好一个有效列段时才执行紧贴文字过滤；没有列段时直接跳过该分支并继续返回空列结果。新增回归测试 `tests/test_table_extractor.py::test_english_header_underlines_ignore_short_segments_without_columns`。
+- 使用 Conda 环境 `langchain_chat`、顺序后端和 150 DPI 全量重跑 `fix/zh_all_table_pages.pdf`：1,023/1,023 页完成，输出至 `out_fix_feature_dev_20260905_final/`；共恢复 2,199 张表格，其中 `line_projection` 1,711、`wireless_span_recovery` 445、`english_general_wireless` 32、`hybrid_line_span_recovery` 10、`text_alignment` 1。结构审计发现 31 张既有表存在未物化空槽位，未发现重复占用或越界；重点页面 1002 保持 `25x6` 与 `7x4` 两张无线表格。
+
 ## 2026-09-04
 
 - 修复英文多级表头中垂直折行单元格（如 `Accumulated Deficit`、`Nine Months Ended September 30,`）因横线跨层越界误匹配及非整除共享横线下切碎原子列带导致跨行被拆分的问题（针对 `en_all_table_pages_page_347.pdf` 和 `en_all_table_pages_page_169.pdf`）。

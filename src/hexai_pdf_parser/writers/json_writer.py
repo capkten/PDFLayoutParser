@@ -4,7 +4,6 @@ import json
 from typing import Any, Dict, List
 
 from hexai_pdf_parser.core.models import (
-    BBox,
     Block,
     Cell,
     Char,

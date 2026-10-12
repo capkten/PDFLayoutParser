@@ -82,4 +82,3 @@ def test_clear_session_cache_forces_recreation():
     session2 = det2._load_session()
 
     assert session1 is not session2
-
