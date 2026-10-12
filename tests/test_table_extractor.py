@@ -2982,3 +2982,46 @@ def test_physical_horizontal_line_row_separation_and_multi_dollar_split():
     assert data_cells[2].text == "$10,680"
     assert data_cells[3].text == "$47,396"
     assert data_cells[4].text == "$63,754"
+
+
+def test_header_rows_dollar_sign_defense():
+    """Verify dollar sign and numeric tokens in header_rows are defensively merged."""
+    from types import SimpleNamespace
+    from hexai_pdf_parser.core.models import BBox
+    from hexai_pdf_parser.tables.extractors.english_table_extractor import EnglishTableExtractor
+
+    extractor = EnglishTableExtractor()
+    words = [
+        (447.0, 119.8, 489.0, 127.8, "Years ended"),
+        (368.0, 130.6, 417.0, 138.6, "September 28, 2024"),
+        (443.0, 130.6, 492.0, 138.6, "September 30, 2023"),
+        (519.0, 130.6, 568.0, 138.6, "September 24, 2022"),
+        # Header tier with currency symbols adjacent to numbers
+        (34.0, 148.0, 75.0, 157.0, "Net income"),
+        (358.0, 148.0, 363.0, 157.0, "$"),
+        (399.0, 148.0, 424.0, 157.0, "93,736"),
+        (434.0, 148.0, 439.0, 157.0, "$"),
+        (474.0, 148.0, 499.0, 157.0, "96,995"),
+        (509.0, 148.0, 514.0, 157.0, "$"),
+        (550.0, 148.0, 575.0, 157.0, "99,803"),
+    ]
+    # Header underline between tiers
+    drawings = [
+        {"items": [("l", SimpleNamespace(x=350.0, y=129.0), SimpleNamespace(x=580.0, y=129.0))]},
+        {"items": [("l", SimpleNamespace(x=350.0, y=146.5), SimpleNamespace(x=580.0, y=146.5))]},
+    ]
+    page = SimpleNamespace(
+        get_text=lambda kind: words if kind == "words" else [],
+        get_drawings=lambda: drawings,
+        rect=SimpleNamespace(x0=0.0, y0=0.0, x1=600.0, y1=800.0),
+    )
+    # When table_y0 is 158.0, lines up to 158.0 are treated as header_rows
+    header_rows = extractor._detect_header_rows(words, 158.0, page, table_bbox=BBox(30.0, 115.0, 580.0, 300.0))
+    # Defensively, header rows must have merged $ and adjacent numbers
+    tier2 = [hr for hr in header_rows if any("Net income" in w[4] for w in hr.words)][0]
+    token_texts = [w[4] for w in tier2.words]
+    assert "$93,736" in token_texts
+    assert "$96,995" in token_texts
+    assert "$99,803" in token_texts
+    assert "$" not in token_texts
+
