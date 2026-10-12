@@ -1458,17 +1458,17 @@ class EnglishTableExtractor(BaseTableExtractor):
                     color=None,
                     is_header=True,
                 ))
-            return header_rows
+            return self._handle_dollar_signs(header_rows)
         else:
             # 原则 3：表格顶部边界到第一道下划线区域（Table Top to First Underline）合并为顶层表头
             header_words_sorted = sorted(header_words, key=lambda w: (round((w[1] + w[3]) / 2.0 / 4.0), w[0]))
-            return [_RowData(
+            return self._handle_dollar_signs([_RowData(
                 words=header_words_sorted,
                 y0=min(w[1] for w in header_words_sorted),
                 y1=max(w[3] for w in header_words_sorted),
                 color=None,
                 is_header=True,
-            )]
+            )])
 
     def _handle_dollar_signs(self, rows: List[_RowData]) -> List[_RowData]:
         for row in rows:
@@ -3251,6 +3251,9 @@ class EnglishTableExtractor(BaseTableExtractor):
             return None
         if not columns:
             return None
+
+        header_rows = self._handle_dollar_signs(header_rows)
+        data_rows = self._handle_dollar_signs(data_rows)
 
         # 1. 表头行单元格构建与短语归列
         raw_header_cells: List[Cell] = []
