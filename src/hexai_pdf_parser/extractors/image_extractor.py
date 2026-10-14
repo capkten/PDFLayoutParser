@@ -8,9 +8,9 @@ from collections import defaultdict
 from typing import List, Optional
 
 import fitz
-from hexai_pdf_parser.page_normalizer import normalize_page_rotation
-
 from hexai_pdf_parser.core.models import BBox, Image
+from hexai_pdf_parser.core.pymupdf_sync import pymupdf_lock
+from hexai_pdf_parser.page_normalizer import normalize_page_rotation
 
 
 class ImageExtractor:
@@ -29,11 +29,12 @@ class ImageExtractor:
 
     def extract(self, file_path: str, page_index: int) -> List[Image]:
         """Return a list of :class:`Image` objects for the given *page_index*."""
-        doc = fitz.open(file_path)
-        try:
-            return self.extract_page(doc, page_index)
-        finally:
-            doc.close()
+        with pymupdf_lock:
+            doc = fitz.open(file_path)
+            try:
+                return self.extract_page(doc, page_index)
+            finally:
+                doc.close()
 
     def extract_page(
         self,
@@ -44,12 +45,13 @@ class ImageExtractor:
         page_already_normalized: bool = False,
     ) -> List[Image]:
         """Extract images from an existing document/page without reopening it."""
-        page = page if page is not None else document[page_index]
-        if not page_already_normalized:
-            normalize_page_rotation(page)
+        with pymupdf_lock:
+            page = page if page is not None else document[page_index]
+            if not page_already_normalized:
+                normalize_page_rotation(page)
+            image_list = page.get_images(full=True)
+            image_infos = page.get_image_info(xrefs=True)
 
-        image_list = page.get_images(full=True)
-        image_infos = page.get_image_info(xrefs=True)
         bbox_by_xref = defaultdict(list)
         for info in image_infos:
             xref = info.get("xref")
@@ -70,16 +72,19 @@ class ImageExtractor:
             # Keep only images that PyMuPDF can locate on this page.
             if bbox is None:
                 continue
-            base_image = document.extract_image(xref)
-            image_bytes = base_image["image"]
-            ext = base_image["ext"]
-            width = base_image["width"]
-            height = base_image["height"]
+
+            with pymupdf_lock:
+                base_image = document.extract_image(xref)
+                image_bytes = base_image["image"]
+                ext = base_image["ext"]
+                width = base_image["width"]
+                height = base_image["height"]
 
             file_name = f"page-{page_index:03d}-img-{img_index:03d}.{ext}"
             path = os.path.join(self.output_dir, file_name)
             with open(path, "wb") as f:
                 f.write(image_bytes)
+
 
             images.append(
                 Image(

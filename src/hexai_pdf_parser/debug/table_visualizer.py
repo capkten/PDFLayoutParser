@@ -15,8 +15,10 @@ except ImportError:
     import fitz
 
 from hexai_pdf_parser.core.models import Cell, Table
+from hexai_pdf_parser.core.pymupdf_sync import pymupdf_lock
 from hexai_pdf_parser.page_normalizer import normalize_page_rotation
 from hexai_pdf_parser.page_type_label import draw_page_type_label
+
 
 # ==============================================================================
 # 路径与参数配置区域（可直接在此修改路径）
@@ -472,31 +474,33 @@ def render_table_visualization(
     os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
     matrix = fitz.Matrix(dpi / 72.0, dpi / 72.0)
 
-    if isinstance(source, fitz.Page):
-        # Draw directly on the provided page
-        if not page_already_normalized:
-            normalize_page_rotation(source)
-        draw_tables_on_page(source, tables)
-        draw_page_type_label(source, page_type)
-        pix = source.get_pixmap(matrix=matrix, alpha=False)
-        pix.save(output_path)
-        return output_path
+    with pymupdf_lock:
+        if isinstance(source, fitz.Page):
+            # Draw directly on the provided page
+            if not page_already_normalized:
+                normalize_page_rotation(source)
+            draw_tables_on_page(source, tables)
+            draw_page_type_label(source, page_type)
+            pix = source.get_pixmap(matrix=matrix, alpha=False)
+            pix.save(output_path)
+            return output_path
 
-    # If file path is provided, open a fresh page handle
-    idx = page_index if page_index is not None else 0
-    doc = fitz.open(source)
-    try:
-        page = doc[idx]
-        # Tables are extracted after rotation normalization; use the same
-        # coordinate system when reopening the source for the overlay.
-        normalize_page_rotation(page)
-        draw_tables_on_page(page, tables)
-        draw_page_type_label(page, page_type)
-        pix = page.get_pixmap(matrix=matrix, alpha=False)
-        pix.save(output_path)
-        return output_path
-    finally:
-        doc.close()
+        # If file path is provided, open a fresh page handle
+        idx = page_index if page_index is not None else 0
+        doc = fitz.open(source)
+        try:
+            page = doc[idx]
+            # Tables are extracted after rotation normalization; use the same
+            # coordinate system when reopening the source for the overlay.
+            normalize_page_rotation(page)
+            draw_tables_on_page(page, tables)
+            draw_page_type_label(page, page_type)
+            pix = page.get_pixmap(matrix=matrix, alpha=False)
+            pix.save(output_path)
+            return output_path
+        finally:
+            doc.close()
+
 
 
 

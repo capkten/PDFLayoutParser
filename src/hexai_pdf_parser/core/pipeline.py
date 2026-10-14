@@ -33,7 +33,11 @@ from hexai_pdf_parser.tables.table_extractor import TableExtractor
 from hexai_pdf_parser.debug.table_visualizer import render_table_visualization
 from hexai_pdf_parser.debug.text_alignment_debug import render_text_alignment_debug_page
 from hexai_pdf_parser.extractors.text_extractor import TextExtractor
+from hexai_pdf_parser.core.pymupdf_sync import pymupdf_lock
 from hexai_pdf_parser.page_normalizer import normalize_page_rotation
+
+
+
 
 
 # Process pool reference for the multi-processing execution backend.  The pool
@@ -221,8 +225,10 @@ def _run_page_pipeline(
         stage_totals[stage] = stage_totals.get(stage, 0.0) + elapsed
         return result
 
-    page_handle = pdf_doc[page.index]
+    with pymupdf_lock:
+        page_handle = pdf_doc[page.index]
     normalize_page_rotation(page_handle)
+
 
     if page.page_type == "scanned":
         return _run_scanned_page_pipeline(
@@ -550,8 +556,9 @@ class Pipeline:
         self.backend = backend
         self._use_ml_table_detector = use_ml_table_detector
         self._lock = threading.Lock()
-        self._fitz_lock = threading.Lock()
+        self._fitz_lock = pymupdf_lock
         self._stage_totals: dict[str, float] = {}
+
         self._page_totals: list[dict[str, float]] = []
         self._thread_state = threading.local()
 
@@ -678,26 +685,26 @@ class Pipeline:
         page = document.pages[page_index]
         page_start = perf_counter()
 
-        with self._fitz_lock:
-            stage_totals = _run_page_pipeline(
-                pdf_doc=pdf_doc,
-                page=page,
-                pdf_path=self.pdf_path,
-                images_dir=images_dir,
-                pages_dir=pages_dir,
-                text_alignment_debug_dir=text_alignment_debug_dir,
-                render_dpi=self.render_dpi,
-                seal_coords=self.seal_coords,
-                ml_model_path=self._ml_model_path,
-                ml_confidence=self._ml_confidence,
-                debug=self.debug,
-                debug_pipeline=self.debug_pipeline,
-                table_config=self._table_config,
-                output_dir=self.output_dir,
-                use_ml_table_detector=self._use_ml_table_detector,
-                table_extractor=table_extractor,
-                table_extractor_factory=self._create_table_extractor,
-            )
+        stage_totals = _run_page_pipeline(
+            pdf_doc=pdf_doc,
+            page=page,
+            pdf_path=self.pdf_path,
+            images_dir=images_dir,
+            pages_dir=pages_dir,
+            text_alignment_debug_dir=text_alignment_debug_dir,
+            render_dpi=self.render_dpi,
+            seal_coords=self.seal_coords,
+            ml_model_path=self._ml_model_path,
+            ml_confidence=self._ml_confidence,
+            debug=self.debug,
+            debug_pipeline=self.debug_pipeline,
+            table_config=self._table_config,
+            output_dir=self.output_dir,
+            use_ml_table_detector=self._use_ml_table_detector,
+            table_extractor=table_extractor,
+            table_extractor_factory=self._create_table_extractor,
+        )
+
 
         for stage, elapsed in stage_totals.items():
             with self._lock:
@@ -818,7 +825,8 @@ class Pipeline:
                     with thread_documents_lock:
                         thread_doc = thread_documents.get(thread_id)
                         if thread_doc is None:
-                            thread_doc = fitz.open(self.pdf_path)
+                            with pymupdf_lock:
+                                thread_doc = fitz.open(self.pdf_path)
                             thread_documents[thread_id] = thread_doc
                         return thread_doc
 
@@ -839,10 +847,12 @@ class Pipeline:
                     with ThreadPoolExecutor(max_workers=num_workers) as executor:
                         list(executor.map(process_page_job, pages_to_process))
                 finally:
-                    for thread_doc in thread_documents.values():
-                        thread_doc.close()
+                    with pymupdf_lock:
+                        for thread_doc in thread_documents.values():
+                            thread_doc.close()
         else:
-            pdf_doc = fitz.open(self.pdf_path)
+            with pymupdf_lock:
+                pdf_doc = fitz.open(self.pdf_path)
             sequential_table_extractor = None
             try:
                 for page_index in pages_to_process:
@@ -861,7 +871,9 @@ class Pipeline:
                         table_extractor=sequential_table_extractor,
                     )
             finally:
-                pdf_doc.close()
+                with pymupdf_lock:
+                    pdf_doc.close()
+
 
         # 3. Output writers
         if self.output_dir is not None:

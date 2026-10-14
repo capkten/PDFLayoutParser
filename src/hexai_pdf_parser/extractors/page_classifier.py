@@ -14,9 +14,11 @@ from typing_extensions import Literal
 import fitz
 
 from hexai_pdf_parser.core.models import ApiResult
+from hexai_pdf_parser.core.pymupdf_sync import pymupdf_lock
 
 
 def classify_pdf_page(
+
     source: str | Path | fitz.Page | fitz.Document,
     page_index: int = 0,
 ) -> ApiResult:
@@ -61,9 +63,11 @@ def classify_page_type(page: fitz.Page) -> Literal["vector", "scanned"]:
                    consists of vector-outlined drawing paths.
         "vector":  if the page contains normal, extractable digital text.
     """
-    if is_scanned_page(page):
-        return "scanned"
-    return "vector"
+    with pymupdf_lock:
+        if is_scanned_page(page):
+            return "scanned"
+        return "vector"
+
 
 
 

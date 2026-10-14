@@ -7,9 +7,9 @@ import os
 from typing import Optional
 
 import fitz
-from hexai_pdf_parser.page_normalizer import normalize_page_rotation
-
 from hexai_pdf_parser.core.models import RenderInfo
+from hexai_pdf_parser.core.pymupdf_sync import pymupdf_lock
+from hexai_pdf_parser.page_normalizer import normalize_page_rotation
 from hexai_pdf_parser.page_type_label import draw_page_type_label
 
 
@@ -35,11 +35,12 @@ class RenderEngine:
         page_type: Optional[str] = None,
     ) -> RenderInfo:
         """Render *page_index* of *file_path* to a PNG and return :class:`RenderInfo`."""
-        doc = fitz.open(file_path)
-        try:
-            return self.render_page(doc, page_index, page_type=page_type)
-        finally:
-            doc.close()
+        with pymupdf_lock:
+            doc = fitz.open(file_path)
+            try:
+                return self.render_page(doc, page_index, page_type=page_type)
+            finally:
+                doc.close()
 
     def render_page(
         self,
@@ -51,20 +52,23 @@ class RenderEngine:
         page_already_normalized: bool = False,
     ) -> RenderInfo:
         """Render an existing document/page without reopening the PDF."""
-        page = page if page is not None else document[page_index]
-        if not page_already_normalized:
-            normalize_page_rotation(page)
-        draw_page_type_label(page, page_type)
-        mat = fitz.Matrix(self.dpi / 72, self.dpi / 72)
-        pix = page.get_pixmap(matrix=mat)
-
         file_name = f"page-{page_index:03d}.png"
         path = os.path.join(self.output_dir, file_name)
-        pix.save(path)
+
+        with pymupdf_lock:
+            page = page if page is not None else document[page_index]
+            if not page_already_normalized:
+                normalize_page_rotation(page)
+            draw_page_type_label(page, page_type)
+            mat = fitz.Matrix(self.dpi / 72, self.dpi / 72)
+            pix = page.get_pixmap(matrix=mat)
+            pix.save(path)
+            width = pix.width
+            height = pix.height
 
         return RenderInfo(
             path=path,
-            width=pix.width,
-            height=pix.height,
+            width=width,
+            height=height,
             dpi=self.dpi,
         )

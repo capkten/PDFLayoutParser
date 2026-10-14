@@ -12,6 +12,7 @@ from typing import Optional
 import fitz
 
 from hexai_pdf_parser.core.models import Document, Page
+from hexai_pdf_parser.core.pymupdf_sync import pymupdf_lock
 from hexai_pdf_parser.extractors.page_classifier import classify_page_type
 
 
@@ -46,7 +47,8 @@ class Loader:
                 )
             return Document(file_name=file_name, page_count=page_count, pages=pages)
 
-        if pdf_doc is not None:
-            return _build_document(pdf_doc)
-        with fitz.open(self.file_path) as pdf:
-            return _build_document(pdf)
+        with pymupdf_lock:
+            if pdf_doc is not None:
+                return _build_document(pdf_doc)
+            with fitz.open(self.file_path) as pdf:
+                return _build_document(pdf)

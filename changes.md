@@ -1,6 +1,21 @@
 # Changes
 
+## 2026-10-14
+
+- 修复高并发/Gunicorn多线程环境下 PyMuPDF 原生调用竞态引发段错误 (SIGSEGV 139) 的问题，实现基于进程级 RLock 的精细局部同步方案：
+  - **根因与调用位置**：在 Gunicorn `gthread` 等多线程 Web 部署环境下，`Pipeline._fitz_lock = threading.Lock()` 为实例级互斥锁，无法防止多个 HTTP 请求实例跨线程同时调用底层 `libmupdf.so`。原生 C 库在同一个进程内共享内存结构与全局状态；并发执行 `normalize_page_rotation`（内部调用 `page.clean_contents()` 重构内容流）与 `page.get_text()` / `get_drawings()` 时，导致 `pdf_drop_processor` 访问非法指针，触发 SIGSEGV（退出码 139）。同时，旧实现将 `_process_single_page` 中的整次 `_run_page_pipeline`（包括极耗时的表格几何与无线表格拓扑算法）全部包裹在实例锁内，严重阻碍单文档内部多页并发性能。
+  - **判定与修复**：
+    1. 新增进程级可重入互斥锁模块 `src/hexai_pdf_parser/core/pymupdf_sync.py`（提供进程级 `pymupdf_lock = threading.RLock()` 及同步上下文）。
+    2. 在底层所有原生调用与变异点进行局部精准加锁：`page_normalizer.py`（`normalize_page_rotation`、`isolated_page`）、`page_cache.py`（`CachedPage` 缓存未命中读取）、`loader.py`（`Loader.load` 打开与元数据构建）、`render_engine.py`、`image_extractor.py`（图像提取与光栅化）、`page_type_label.py`、`table_visualizer.py`，并将文件磁盘 I/O 移至锁外。
+    3. 移除 `pipeline.py` 中对 `_run_page_pipeline` 的外层粗粒度实例锁，使复杂的表格结构算法、无线表格拓扑推断、模板匹配、ONNX/ML 推理及文件写出完全在锁外并发执行。
+    4. 严格遵循中文无线表格 native-span 规范，不引入 words 回读，保持对外 API 与返回数据结构完全一致。
+  - **测试与验证**：
+    1. 新增 `tests/test_pymupdf_concurrency.py`：包含跨请求实例互斥验证（证明旧实现并发度为 2 失败、新实现严格互斥通过）、锁外纯算法并发交错验证（证明一线程暂停在计算阶段时不阻塞第二线程原生抽取）、可重入锁嵌套及异常安全释放测试（全部 3 项通过）。
+    2. 核心回归测试：`test_pymupdf_concurrency.py`、`test_pipeline.py`、`test_personal_credit_report.py`、`test_pdf_parser.py`、`test_page_cache.py`、`test_loader.py`、`test_render_engine.py`、`test_image_extractor.py`、`test_page_classifier.py` 共 126 项测试全部通过（`126 passed, 32 skipped`）。
+    3. 无线表格结构测试 223 项全部通过（`223 passed`）；有线表格提取测试 63 项全部通过（`63 passed`）；文本提取测试 9 项全部通过（`9 passed`）。
+
 ## 2026-09-28
+
 
 - 修复个人信用报告页内普通编号正文被误恢复成查询记录续表的问题：
   - **根因与调用位置**：`PersonalCreditReportTableExtractor.extract()` 和 `_extract_via_text_alignment()` 都会调用 `_make_query_tables()`。当页面没有查询表头时，`_make_query_tables()` 会尝试把页面内匹配 `_is_query_record_row()` 的行作为无表头续表；原判据只要求左侧有数字、中间任意位置出现“年”、右侧有文字。目标 PDF 第 2 页的信用卡、贷款和其他业务描述也满足这些条件，因此被拼成 `19x4` 表格。

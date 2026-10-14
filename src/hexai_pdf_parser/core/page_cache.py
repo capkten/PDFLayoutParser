@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from hexai_pdf_parser.core.pymupdf_sync import pymupdf_lock
+
 
 def _freeze(value: Any) -> Any:
     """Return a hashable representation for common PyMuPDF arguments."""
@@ -40,11 +42,15 @@ class CachedPage:
     def get_text(self, *args: Any, **kwargs: Any) -> Any:
         key = self._key(args, kwargs)
         if key not in self._text_cache:
-            self._text_cache[key] = self._page.get_text(*args, **kwargs)
+            with pymupdf_lock:
+                if key not in self._text_cache:
+                    self._text_cache[key] = self._page.get_text(*args, **kwargs)
         return self._text_cache[key]
 
     def get_drawings(self, *args: Any, **kwargs: Any) -> Any:
         key = self._key(args, kwargs)
         if key not in self._drawings_cache:
-            self._drawings_cache[key] = self._page.get_drawings(*args, **kwargs)
+            with pymupdf_lock:
+                if key not in self._drawings_cache:
+                    self._drawings_cache[key] = self._page.get_drawings(*args, **kwargs)
         return self._drawings_cache[key]

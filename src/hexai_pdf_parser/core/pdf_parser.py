@@ -10,7 +10,9 @@ import os
 from typing import List, Optional
 
 from hexai_pdf_parser.core.models import ApiResult, BBox, Block, Document, Image, Line, RenderInfo, Table
+from hexai_pdf_parser.core.pymupdf_sync import pymupdf_lock
 from hexai_pdf_parser.page_normalizer import isolated_page, normalize_page_rotation
+
 
 
 class PDFParser:
@@ -65,15 +67,18 @@ class PDFParser:
     def _get_pdf_doc(self):
         if self._pdf_path is None:
             raise ValueError("PDF file path required")
-        if self._pdf_doc is None or self._pdf_doc.is_closed:
-            import fitz
-            self._pdf_doc = fitz.open(self._pdf_path)
-        return self._pdf_doc
+        with pymupdf_lock:
+            if self._pdf_doc is None or self._pdf_doc.is_closed:
+                import fitz
+                self._pdf_doc = fitz.open(self._pdf_path)
+            return self._pdf_doc
 
     def close(self) -> None:
-        if self._pdf_doc is not None:
-            self._pdf_doc.close()
-            self._pdf_doc = None
+        with pymupdf_lock:
+            if self._pdf_doc is not None:
+                self._pdf_doc.close()
+                self._pdf_doc = None
+
 
     # ------------------------------------------------------------------
     # Response helpers
