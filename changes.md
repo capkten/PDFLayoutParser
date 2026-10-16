@@ -1,5 +1,25 @@
 # Changes
 
+## 2026-10-16
+
+- 修复辉瑞 10-K（PDF 第 65 页，Consolidated Balance Sheets 资产负债表）等包含单列高亮底色财报表格的识别与结构恢复问题：
+  - **根因与调用位置**：
+    1. **`NameError: name 'next_tier_cells' is not defined`**：位于 `src/hexai_pdf_parser/tables/extractors/english_table_extractor.py:2728`。在 `_normalize_headers` 自底向上推断父表头跨列合并的循环 `for t in range(num_tiers - 2, -1, -1):` 中，使用了 `next_tier_cells` 但未赋初值定义；同时在列合并逻辑（第 1839 行）中 `c_words` 也未定义。
+    2. **整列底色误判斑马纹导致 42 行严重坍塌为 7 行乱码**：位于 `_detect_row_backgrounds()`（第 1163 行起）。该页面 2024 年这一列整列带有浅蓝底色（`x0=432.8, x1=497.6`，宽 64.8pt，占表格总宽仅 12%）。原逻辑仅检查色块宽度是否 `>= 30.0`，将上下相邻的 82 个窄矩形自上而下纵向合并成了 5 个高度达 183pt 的超大“行背景”，导致 `extract_zebra()` 将这 5 个假行背景作为数据行，把 40 多行资产负债明细强行塞进 5 个单元格内，数字完全串线拼成一团乱码。
+    3. **表头多层分割线漏检导致双层表头压成单行**：位于 `extract_general_wireless()`（第 731 行起）。`y=102.0` 处的水平线恰好位于父表头 `As of December 31,` 下方、`2024` / `2023` 上方，宽 134.3pt。由于原判定条件要求融合后段数 `>= 2` 或线宽覆盖表格总宽的 55% 以上，单段且覆盖两列的父表头分割线被误漏；同时表格顶边框线 `y=89.9` 因上方无文字却被误判为表头线，导致表头切分异常。
+  - **判定与修复**：
+    1. 在 `_normalize_headers` 循环入口补齐 `next_tier_cells = rows_dict[sorted_row_indices[t + 1]]`；在列合并循环中补齐 `c_words = [w for w in (words or []) if cx0 - 2.0 <= (w[0] + w[2]) / 2.0 <= cx1 + 2.0]`。
+    2. **确立整列底色判定规则**：在 `_detect_row_backgrounds()` 中支持接收 `table_bbox` 并透传。对底色色块做几何分布分析：若绝大多数（>= 80%）色块宽度小于参考宽度的 45%，且所有色块水平包络跨度小于参考宽度的 50%（或纵向跨度达横向跨度 2 倍以上且水平包络小于 60%），判定为“整列底色/列高亮”，不算行斑马纹，直接返回空列表 `[]`，退出 `extract_zebra()` 并顺利转入通用无线表格提取器。
+    3. **增强表头层级线判定**：在 `extract_general_wireless()` 中，要求候选线必须在当前线上方存在表头文字，以排除无文字的表格顶外框线；对于线长 `>= 30.0pt` 且在线段水平区间内上方有文字、下方且在首个数据行之前也有文字的横线，严格识别为父表头层级分割线（`is_header_line = True`）。
+  - **测试与验证**：
+    1. 新增专项测试 `tests/test_pfizer_balance_sheet_table.py`：包含 `test_column_shading_rejected_as_zebra`（验证单列底色拒绝斑马纹）和 `test_pfizer_page_65_balance_sheet_structure`（验证行数 43 行、表头跨 2 列及数值对齐），全部通过（`2 passed`）。
+    2. 英文无线相关回归测试全数通过：`test_english_wireless_does_not_split_alternately_indented_description_column`、`test_physical_horizontal_line_row_separation_and_multi_dollar_split`、`test_p415_full_extraction_drops_chart_and_keeps_operating_expenses` 均 PASSED；有线提取器基线测试通过（`63 passed`）。
+  - **页面级端到端验证**：
+    - 针对目标 PDF `c:\Users\23662\xwechat_files\wxid_gi29mv53wwtn22_e71e\msg\file\2026-10\0000078003_10-K_20250227.pdf` 第 65 页（page index 64）进行完整 Pipeline 提取并输出至独立目录 `output/pfizer_p65_verified/`。
+    - 成功提取出 1 张完整表格：`source=english_general_wireless`，`rows=43, cols=3`，bbox=`[30.9, 90.1, 571.3, 598.3]`。
+    - 表头第一层 `As of December 31,` 正确跨 2 列（`colspan=2`，对应 2024 和 2023 两列），第二层分别为 `(MILLIONS, EXCEPT PER SHARE DATA)`、`2024`、`2023`；`Assets` 独立为分类行；`Cash and cash equivalents` 对应 `$1,043` 与 `$2,853`，后续 40+ 项资产与负债明细行全部完整、精准对应。
+    - 视觉核验确认 `table_page_65.png` 单元格红框与绿框、蓝框完全贴合，表格 Markdown 与 JSON 结构完整。
+
 ## 2026-10-14
 
 - 修复高并发/Gunicorn多线程环境下 PyMuPDF 原生调用竞态引发段错误 (SIGSEGV 139) 的问题，实现基于进程级 RLock 的精细局部同步方案：
