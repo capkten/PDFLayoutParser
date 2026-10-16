@@ -732,10 +732,29 @@ class EnglishTableExtractor(BaseTableExtractor):
                 if y >= data_row_y_min - 1.0 or y > max_header_y or len(header_line_levels) >= 3:
                     break
                 min_x = min(s[0] for s in segs)
-                max_w = max(s[1] for s in segs) - min_x
+                max_x = max(s[1] for s in segs)
+                max_w = max_x - min_x
+
+                y_prev = header_line_levels[-1] if header_line_levels else (sub_y0 - 2.0)
+                # 顶线过滤：当前线上方必须有属于当前表头层的文字，若上方没有任何文字则属于表格上边框而非表头底线
+                has_words_above = any(
+                    y_prev < (w[1] + w[3]) / 2.0 < y - 1.0
+                    for w in sub_words
+                )
+                if not has_words_above:
+                    continue
+
+                # 检查线下是否还有子表头文字（处于父表头与子表头之间）
+                has_words_below = any(
+                    y + 1.0 < (w[1] + w[3]) / 2.0 < data_row_y_min - 1.0
+                    and min_x - 10.0 <= (w[0] + w[2]) / 2.0 <= max_x + 10.0
+                    for w in sub_words
+                )
+
                 is_header_line = (
                     len(segs) >= 2
                     or (max_w >= sub_w * 0.55 and min_x <= sub_bbox.x0 + sub_w * 0.35)
+                    or (max_w >= 30.0 and has_words_below)
                 )
                 if is_header_line:
                     header_line_levels.append(y)
@@ -836,7 +855,7 @@ class EnglishTableExtractor(BaseTableExtractor):
             except Exception:
                 pass
 
-        row_backgrounds = self._detect_row_backgrounds(page)
+        row_backgrounds = self._detect_row_backgrounds(page, table_bbox=table_bbox)
         if not row_backgrounds:
             return []
 
@@ -1160,14 +1179,16 @@ class EnglishTableExtractor(BaseTableExtractor):
             return False
         return all(abs(c1 - c2) <= self.color_tolerance for c1, c2 in zip(color1, color2))
 
-    def _detect_row_backgrounds(self, page: fitz.Page) -> List[Tuple[float, float, str]]:
+    def _detect_row_backgrounds(
+        self, page: fitz.Page, table_bbox: Optional[BBox] = None
+    ) -> List[Tuple[float, float, str]]:
         try:
             drawings = page.get_drawings()
         except Exception:
             return []
 
-        colored_rects: List[List[Any]] = []
-        white_rects: List[List[Any]] = []
+        colored_rect_objs: List[Any] = []
+        white_rect_objs: List[Any] = []
 
         def _is_white(fill_val: Any) -> bool:
             if isinstance(fill_val, (tuple, list)):
@@ -1193,25 +1214,72 @@ class EnglishTableExtractor(BaseTableExtractor):
                 continue
 
             rect_list = []
-            if rect is not None and rect.height >= 4.0 and rect.width >= 30.0:
+            if rect is not None and rect.height >= 4.0 and rect.width >= 20.0:
                 rect_list.append(rect)
             for it in items:
                 if it[0] == "re":
                     r = it[1]
-                    if r.height >= 4.0 and r.width >= 30.0:
+                    if r.height >= 4.0 and r.width >= 20.0:
                         rect_list.append(r)
+
+            if table_bbox is not None:
+                rect_list = [
+                    r for r in rect_list
+                    if max(r.x0, table_bbox.x0 - 2.0) < min(r.x1, table_bbox.x1 + 2.0)
+                    and max(r.y0, table_bbox.y0 - 2.0) < min(r.y1, table_bbox.y1 + 2.0)
+                ]
 
             if _is_colored_bg(fill):
                 for r in rect_list:
                     if r.height <= 80.0:
-                        colored_rects.append([r.y0, r.y1, "colored"])
+                        colored_rect_objs.append(r)
             elif _is_white(fill):
                 for r in rect_list:
                     if r.height <= 40.0:
-                        white_rects.append([r.y0, r.y1, "white"])
+                        white_rect_objs.append(r)
 
-        if not colored_rects and not white_rects:
+        if not colored_rect_objs and not white_rect_objs:
             return []
+
+        # 估算表格/内容参考宽度
+        if table_bbox is not None:
+            ref_width = max(50.0, table_bbox.x1 - table_bbox.x0)
+        else:
+            try:
+                blocks = page.get_text("blocks")
+                text_b = [b for b in blocks if len(b) >= 5 and isinstance(b[4], str) and b[4].strip()]
+                if text_b:
+                    ref_width = max(b[2] for b in text_b) - min(b[0] for b in text_b)
+                else:
+                    ref_width = page.rect.width * 0.75
+            except Exception:
+                ref_width = page.rect.width * 0.75 if page else 500.0
+
+        # 规则：整列底色排除判定 (Column Highlighting vs Row Zebra)
+        # 如果底色色块集中在整列中（列垂直高亮），而不是行交替的，不算斑马纹表格，直接拒绝
+        if colored_rect_objs:
+            total_colored = len(colored_rect_objs)
+            min_x0 = min(r.x0 for r in colored_rect_objs)
+            max_x1 = max(r.x1 for r in colored_rect_objs)
+            min_y0 = min(r.y0 for r in colored_rect_objs)
+            max_y1 = max(r.y1 for r in colored_rect_objs)
+            span_w = max_x1 - min_x0
+            span_h = max_y1 - min_y0
+
+            narrow_count = sum(1 for r in colored_rect_objs if r.width < ref_width * 0.45)
+            if (narrow_count / total_colored >= 0.8) and (
+                span_w < ref_width * 0.5 or (span_h >= span_w * 2.0 and span_w < ref_width * 0.6)
+            ):
+                return []
+
+        # 过滤掉属于窄列底色的孤立小色块，保留具有行特征的背景（宽度需覆盖行的大部分）
+        valid_colored = [r for r in colored_rect_objs if r.width >= ref_width * 0.45]
+        valid_white = [r for r in white_rect_objs if r.width >= ref_width * 0.45]
+        if not valid_colored and not valid_white:
+            return []
+
+        colored_rects = [[r.y0, r.y1, "colored"] for r in valid_colored]
+        white_rects = [[r.y0, r.y1, "white"] for r in valid_white]
 
         # 将垂直方向重叠或相邻的背景色块合并为统一的行区间
         colored_rects.sort(key=lambda x: x[0])
@@ -1763,8 +1831,9 @@ class EnglishTableExtractor(BaseTableExtractor):
             while ci < len(columns) - 1:
                 cx0, cx1 = columns[ci]
                 nx0, nx1 = columns[ci + 1]
+                c_words = [w for w in (words or []) if cx0 - 2.0 <= (w[0] + w[2]) / 2.0 <= cx1 + 2.0]
                 n_words = [w for w in (words or []) if nx0 - 2.0 <= (w[0] + w[2]) / 2.0 <= nx1 + 2.0]
-                
+
                 # 检查两列是否存在多行稳定共存且有显著列间隙的独立列特征
                 co_occurring_rows = 0
                 seen_ys = set()
@@ -2726,6 +2795,7 @@ class EnglishTableExtractor(BaseTableExtractor):
         # 2. 自底向上推断父表头跨列合并（叶子行保持单列，只推断父层表头；优先级 1：物理下划线；优先级 2：中心对称扩充）
         for t in range(num_tiers - 2, -1, -1):
             cur_tier_cells = [c for c in rows_dict[sorted_row_indices[t]] if c.text.strip()]
+            next_tier_cells = rows_dict[sorted_row_indices[t + 1]]
             # 支撑列为所有下层表头中有效列的并集
             supported_cols = {
                 ci for nt in range(t + 1, num_tiers)
