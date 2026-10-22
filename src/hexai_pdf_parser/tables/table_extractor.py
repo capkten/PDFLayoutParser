@@ -387,6 +387,34 @@ class TableExtractor:
             page_language=page_language,
         )
 
+    @staticmethod
+    def _region_has_wired_ambiguity(page, bbox, wired_tables) -> bool:
+        """Prefer a containing region when wired candidates leave content unexplained."""
+        def contains(outer, inner):
+            return (
+                outer.x0 - 2.0 <= inner.x0
+                and outer.y0 - 2.0 <= inner.y0
+                and outer.x1 + 2.0 >= inner.x1
+                and outer.y1 + 2.0 >= inner.y1
+            )
+
+        if not all(contains(bbox, table.bbox) for table in wired_tables):
+            return False
+        if len(wired_tables) > 1:
+            return True
+        native = page.get_text("dict")
+        for block in native.get("blocks", []) if isinstance(native, dict) else []:
+            for line in block.get("lines", []):
+                for span in line.get("spans", []):
+                    if not span.get("text", "").strip():
+                        continue
+                    rect = BBox(*span["bbox"])
+                    if contains(bbox, rect) and not any(
+                        contains(table.bbox, rect) for table in wired_tables
+                    ):
+                        return True
+        return False
+
     def _recover_tables_from_regions(
         self,
         page: fitz.Page,
@@ -439,7 +467,10 @@ class TableExtractor:
                 and self._bbox_overlaps(table.bbox, bbox)
                 and (min(table.bbox.y1, bbox.y1) - max(table.bbox.y0, bbox.y0)) >= 0.5 * bbox_h
             ]
-            if full_matching_wired:
+            if full_matching_wired and (
+                not self._use_ml_table_detector
+                or not self._region_has_wired_ambiguity(page, bbox, full_matching_wired)
+            ):
                 tables.extend(full_matching_wired)
                 included_wired.update(id(table) for table in full_matching_wired)
                 continue

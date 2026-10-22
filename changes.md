@@ -1,5 +1,20 @@
 # Changes
 
+## 2026-10-22（模型区域歧义恢复第一版）
+
+- **根因**：`TableExtractor._recover_tables_from_regions()` 的有线优先只要求纵向重叠达到模型区域高度的 50%；辉瑞 PDF 第 45 页（索引 44）的窄而高的列块因此抢占模型整框，输出局部 `2x2/2x1/4x1/2x1`，完整区域恢复被提前跳过。
+- **判定与调用位置**：在有线优先返回前调用 `_region_has_wired_ambiguity()`。仅模型开启时，对模型区域以 2pt 容差包含的匹配有线候选判定：包含多个候选，或模型区域内存在未被这些候选包含的非空 native span，均进入原有整区域结构恢复。仅部分相交、未发现歧义、模型关闭时保留原路径。恢复返回多个表时保留多个结果，不机械拼接；返回空时仍保留有线候选。
+- **边界**：这是一条区域选择策略，不证明多个候选必然属于同一表；模型误包独立表或注释仍有误恢复风险。读取 `dict` 中的 native spans，不新增 `page.get_text("words")` 回读，不修改 zh/mixed 的 native-span/atom/逻辑网格恢复。
+- **测试先行**：两个目标用例在原实现下 `2 failed, 2 passed`；新增覆盖包含多个候选、单候选外文字、部分相交拒绝、整框失败回退、主入口路由、恢复返回多表、区域内外文字边界及模型关闭，共 8 项。最终规则路由与有线专项 `82 passed`。
+- **扩展回归**：新增前七项时，三个模块合跑 `170 passed, 3 failed`；三个失败为 hybrid source、后绘制填充遮挡矩形、透明矩形过滤，已在未修改的主工作区 feature-dev `0d5275e` 单独复现 `3 failed`。未修复这些既有失败。`git diff --check` 通过。
+- **页面级验证**：Python 源码位于 `.worktrees/model-region-ambiguity`，分支 `codex/model-region-ambiguity`，基线 `0d5275e`；通过 `PDFParser.parse(page_indices=[44,64])`、thread/1 worker、200 DPI、显式 best.onnx 重跑。进程退出 0，ApiResult.code=1。独立目录 `D:/codes/PDFLayoutParser/output/model_region_ambiguity_20261022_v1/`，日志为其同级 `.log`。
+  - 索引 44：结果从 5 张变为 3 张，均为 `english_general_wireless`，结构分别 `15x4/9x4/5x8`；中部、底部完整区域恢复，未见相邻表误并。索引 64 维持 `43x3`，未见明显视觉回归。
+  - `structure_audit.json` 中四张表缺槽/占位冲突/越界均为 0；PNG 位于 `tables/page-044.png`、`tables/page-064.png`。
+  - **未通过完整结构验收**：索引 44 底部 Product/Global Revenues 的可视化分界偏移；地区及对应金额仍在单 Cell 中打包，例 `$$4,8032,563 7,366`，不能据此宣称金额逐项配对正确。顶部说明句被纳入表格的问题仍存在。本版仅验证区域选择效果，不宣称整页恢复完成；用户已明确要求将此版本合并回 feature-dev。
+
+
+- **全量运行**：独立输出目录 `D:/codes/PDFLayoutParser/output/10k_20250227_region_v1_full_20261022_160648/`；130 页，68 个表格页、107 张表格，进程退出 0、ApiResult.code=1，耗时 323.58 秒；已核对 130 个页面 JSON、130 张表格 PNG 和末页索引 129。与旧版相比 31 页的来源或规格变化，见 `comparison_summary.json`。仅抽查第 45、65、51 页图片，未完成全量人工结构验收。
+
 ## 2026-10-16 (v1.1.7)
 
 - 修复辉瑞 10-K（PDF 第 65 页，Consolidated Balance Sheets 资产负债表）等包含单列高亮底色财报表格的识别与结构恢复问题：

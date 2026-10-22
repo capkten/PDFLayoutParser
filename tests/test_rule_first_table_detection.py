@@ -332,3 +332,95 @@ def test_overlapping_model_region_prefers_rule_wired_table(monkeypatch):
     assert detector_calls
     assert result == [wired_table]
     assert structure_calls == []
+
+
+def test_contained_wired_fragments_recover_full_model_region():
+    extractor = TableExtractor()
+    left = _table("line_projection", 10)
+    right = _table("line_projection", 130)
+    full = _table("english_general_wireless", 0)
+    full.bbox = BBox(0, 0, 250, 110)
+    calls = []
+    def recover(page, **kwargs):
+        calls.append(kwargs["table_bbox"])
+        return [full]
+    extractor._wireless_extractor.extract = recover
+    result = extractor._recover_tables_from_regions(
+        _page(), [(full.bbox, 0.95)], [left, right], "en")
+    assert result == [full]
+    assert calls == [full.bbox]
+
+
+def test_unassigned_native_span_recovers_larger_model_region():
+    extractor = TableExtractor()
+    wired = _table("line_projection", 10)
+    full = _table("english_general_wireless", 0)
+    full.bbox = BBox(0, 0, 250, 110)
+    page = _page()
+    page.get_text = lambda mode: {"blocks": [{"lines": [{"spans": [
+        {"text": "2023", "bbox": (160, 25, 190, 35)}]}]}]}
+    extractor._wireless_extractor.extract = lambda *args, **kwargs: [full]
+    assert extractor._recover_tables_from_regions(
+        page, [(full.bbox, 0.95)], [wired], "en") == [full]
+
+
+def test_partial_overlap_does_not_replace_independent_wired_table():
+    extractor = TableExtractor()
+    wired = _table("line_projection", 10)
+    extractor._wireless_extractor.extract = lambda *args, **kwargs: (
+        (_ for _ in ()).throw(AssertionError("must retain wired")))
+    assert extractor._recover_tables_from_regions(
+        _page(), [(BBox(60, 0, 200, 110), 0.95)], [wired], "en") == [wired]
+
+
+def test_failed_full_region_recovery_keeps_wired_fragments():
+    extractor = TableExtractor()
+    wired = [_table("line_projection", 10), _table("line_projection", 130)]
+    extractor._wireless_extractor.extract = lambda *args, **kwargs: []
+    assert extractor._recover_tables_from_regions(
+        _page(), [(BBox(0, 0, 250, 110), 0.95)], wired, "en") == wired
+
+
+def test_model_entry_recovers_contained_wired_fragments(monkeypatch):
+    extractor = TableExtractor()
+    wired = [_table("line_projection", 10), _table("line_projection", 130)]
+    full = _table("english_general_wireless", 0)
+    full.bbox = BBox(0, 0, 250, 110)
+    _configure_rule_candidates(extractor, wired)
+    extractor._ml_detector = SimpleNamespace(
+        detect_with_scores=lambda page: [(full.bbox, 0.95)])
+    extractor._wireless_extractor.extract = lambda *args, **kwargs: [full]
+    monkeypatch.setattr(
+        "hexai_pdf_parser.tables.table_extractor.normalize_page_rotation",
+        lambda page: None)
+    assert extractor.extract(_page()) == [full]
+
+
+def test_region_recovery_may_preserve_two_independent_tables():
+    extractor = TableExtractor()
+    wired = [_table("line_projection", 10), _table("line_projection", 130)]
+    extractor._wireless_extractor.extract = lambda *args, **kwargs: wired
+    assert extractor._recover_tables_from_regions(
+        _page(), [(BBox(0, 0, 250, 110), 0.95)], wired, "en") == wired
+
+
+def test_span_inside_wired_or_outside_model_does_not_trigger_recovery():
+    extractor = TableExtractor()
+    wired = _table("line_projection", 10)
+    page = _page()
+    page.get_text = lambda mode: {"blocks": [{"lines": [{"spans": [
+        {"text": "data", "bbox": (20, 25, 60, 35)},
+        {"text": "footnote", "bbox": (20, 125, 60, 135)}]}]}]}
+    extractor._wireless_extractor.extract = lambda *args, **kwargs: (
+        (_ for _ in ()).throw(AssertionError("must retain wired")))
+    assert extractor._recover_tables_from_regions(
+        page, [(BBox(0, 0, 250, 110), 0.95)], [wired], "en") == [wired]
+
+
+def test_model_disabled_retains_contained_wired_fragments():
+    extractor = TableExtractor(use_ml_table_detector=False)
+    wired = [_table("line_projection", 10), _table("line_projection", 130)]
+    extractor._wireless_extractor.extract = lambda *args, **kwargs: (
+        (_ for _ in ()).throw(AssertionError("must retain rule behavior")))
+    assert extractor._recover_tables_from_regions(
+        _page(), [(BBox(0, 0, 250, 110), 0.95)], wired, "en") == wired
