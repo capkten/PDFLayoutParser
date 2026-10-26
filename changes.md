@@ -1,5 +1,17 @@
 # Changes
 
+## 2026-10-26（v1.1.7，区域内有线组件归组）
+
+- **根因**：国投电力年报索引155页的四个分节标题行没有内部竖线，原有相交拓扑把一张表分成五个组件；表头竖向虚线的端点略短，覆盖率不足90%，被误合为单格并过滤。指定区域入口只取最大有线结果，主流程也没有利用检测整框统一恢复有线拓扑。
+- **调用位置**：`WiredTableExtractor.extract()` 在明确给定区域时、逐组件生成和过滤Cell之前归组；新增 `extract_grouped_region()` 供 `TableExtractor._recover_tables_from_regions()` 在有线优先及无线兜底之前调用。两个入口共用归组、网格构建与occupancy检查，全页物理组件发现仍按原相交逻辑进行。
+- **归组条件**：组件左右边界及内部列锚点与第一组件对齐；间隔高度接近正常物理行高中位数，误差不超过 `max(line_tolerance, 20%行高)`；间隔内有单行native-span文字且全部位于首列。具有外侧竖边、空白间隔、不同列结构或间隔内多字段时拒绝归组。归组保留原始线段起止和 `h_lines/v_lines`，不把内部竖线贯通分节行；分节行由现有拓扑自然形成跨列Cell。
+- **端点与误并保护**：竖向短线只有两端都接近当前行的真实边界、且行高大于两倍容差时才补充认可，不修改原始线段坐标。主流程对各有完整四边外框的多个有线结果直接分别保留，防止拒绝归组后又被无线兜底合成一表。归组后的缺槽、越界或占位冲突均拒绝输出，回到原独立组件结果/原恢复流程。
+- **文字约束**：新归组只读取native span和物理线段，不使用业务标题关键词；没有修改中文/混合无线表格的native-span→atom流程，也没有增加atom形成后的words回读。文字分配复用既有有线提取器，不调用legacy无线重建。
+- **测试先行**：指定区域整表恢复、主流程有线优先、短虚线表头、主流程完整独立外框保护均先观察失败，再修改实现。新增 `tests/test_wired_region_components.py` 共10项用例，涵盖空格、跨列、独立框、不同列、空白间隔、多字段间隔和真缺边；最终扩展回归 `214 passed, 3 failed`。三项失败已在未修改的 `feature-dev@db91765` 独立复现：`test_hybrid_wired_table_replaces_full_rowspan_body_before_shifting_footer`、`test_ignore_rectangles_fully_covered_by_later_fill_path`、`test_ignore_fully_transparent_rectangles_when_extracting_lines`，本次未修复。
+- **公开主流程验收**：使用真实 `best.onnx`，`PDFParser.parse(page_indices=[154,155,156])` 返回 `code=1`。索引155页及用户指定区域都得到一张 `line_projection`、`28×5`、124个Cell（29个空Cell），四个分节行各 `colspan=5`，140个逻辑槽位无缺失、冲突或越界；bbox约 `(56.7,156.8,539.5,553.5)`。索引154页保持三张表的来源和规格；索引156页同类分节主表恢复为 `31×11`，下方独立 `2×3` 表保留。已目视检查三页最终PNG，未见分节行被列线切开或上下独立表误并；未执行226页全量回归。
+- **独立输出**：`C:/Users/23662/.codex/worktrees/wired-region-components-20261026/PDFLayoutParser/output/guotou_region_components_verified_20261026/`，包含 `verify.py`、`audit.json`、`region.json/png`、`public/pages/page-154.json` 至 `page-156.json`、`public/tables/page-154.png` 至 `page-156.png` 及Markdown。
+- **版本与范围**：实现基于 `db91765`，在独立分支 `codex/wired-region-components-20261026` 验证；`version` 文件与 `setup.py` 默认版本统一为 `1.1.7`。规则只处理上述有明确几何证据的开放网格分节结构；多行分节、列结构变化和任意同框多表不作无条件归组。
+
 ## 2026-10-22（模型区域歧义恢复第一版）
 
 - **根因**：`TableExtractor._recover_tables_from_regions()` 的有线优先只要求纵向重叠达到模型区域高度的 50%；辉瑞 PDF 第 45 页（索引 44）的窄而高的列块因此抢占模型整框，输出局部 `2x2/2x1/4x1/2x1`，完整区域恢复被提前跳过。

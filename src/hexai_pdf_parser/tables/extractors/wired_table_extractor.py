@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from statistics import median
 from typing import Dict, List, Optional, Tuple
 
 import fitz
@@ -33,6 +34,16 @@ class WiredTableExtractor(BaseTableExtractor):
         confidence: Optional[float] = None,
     ) -> List[Table]:
         """Extract wired tables using physical vector line-projection and intersection topology."""
+        table_regions = self._extract_line_regions(page, table_bbox)
+        if table_bbox is not None:
+            grouped = self._group_table_regions(page, table_regions)
+            if grouped is not None:
+                table = self._build_grouped_table(page, grouped, confidence)
+                if table is not None:
+                    return [table]
+        return self._build_tables(page, table_regions, confidence)
+
+    def _extract_line_regions(self, page: fitz.Page, table_bbox: Optional[BBox]):
         h_lines, v_lines = self._extract_lines_from_drawings(page, clip_bbox=table_bbox)
 
         if len(h_lines) < 2 or not v_lines:
@@ -44,10 +55,114 @@ class WiredTableExtractor(BaseTableExtractor):
         if len(h_lines) < 2 or not v_lines:
             return []
 
-        table_regions = self._find_table_regions(h_lines, v_lines)
-        if not table_regions:
-            return []
+        return self._find_table_regions(h_lines, v_lines)
 
+    def extract_grouped_region(
+        self, page: fitz.Page, table_bbox: BBox, confidence: Optional[float] = None
+    ) -> Optional[Table]:
+        """Recover one region whose physical grids are separated by section rows."""
+        regions = self._extract_line_regions(page, table_bbox)
+        grouped = self._group_table_regions(page, regions)
+        if grouped is None:
+            return None
+        return self._build_grouped_table(page, grouped, confidence)
+
+    def _build_grouped_table(
+        self, page: fitz.Page, grouped, confidence: Optional[float]
+    ) -> Optional[Table]:
+        tables = self._build_tables(page, [grouped], confidence)
+        if not tables:
+            return None
+        table = tables[0]
+        occupied = set()
+        for cell in table.cells:
+            for row in range(cell.row_index, cell.row_index + cell.rowspan):
+                for col in range(cell.col_index, cell.col_index + cell.colspan):
+                    if (
+                        not (0 <= row < table.rows and 0 <= col < table.cols)
+                        or (row, col) in occupied
+                    ):
+                        return None
+                    occupied.add((row, col))
+        if len(occupied) != table.rows * table.cols:
+            return None
+        return table
+
+    def _group_table_regions(self, page: fitz.Page, regions):
+        """Join aligned open grids only across evidenced full-width section rows."""
+        if len(regions) < 2:
+            return None
+        tol = self.line_tolerance
+        first_bbox = regions[0][0]
+        columns = []
+        heights = []
+        for bbox, h_lines, v_lines in regions:
+            if (
+                abs(bbox.x0 - first_bbox.x0) > tol
+                or abs(bbox.x1 - first_bbox.x1) > tol
+            ):
+                return None
+            # Closed independent frames must not be joined through their captions.
+            if any(
+                abs(line[0] - edge) <= tol
+                for line in v_lines for edge in (bbox.x0, bbox.x1)
+            ):
+                return None
+            xs = sorted({round(line[0], 1) for line in v_lines})
+            if columns and (
+                len(xs) != len(columns)
+                or any(abs(a - b) > tol for a, b in zip(xs, columns))
+            ):
+                return None
+            if not columns:
+                columns = xs
+            ys = sorted({round(line[1], 1) for line in h_lines})
+            heights.extend(b - a for a, b in zip(ys, ys[1:]) if b - a > 2 * tol)
+        if not columns or not heights:
+            return None
+        row_height = median(heights)
+        gaps = [(upper[0].y1, lower[0].y0) for upper, lower in zip(regions, regions[1:])]
+        if any(
+            abs(bottom - top - row_height) > max(tol, row_height * 0.2)
+            for top, bottom in gaps
+        ):
+            return None
+        native = page.get_text("dict")
+        spans = [
+            span
+            for block in native.get("blocks", [])
+            for line in block.get("lines", [])
+            for span in line.get("spans", [])
+            if span.get("text", "").strip()
+        ]
+        for top, bottom in gaps:
+            section = [
+                span for span in spans
+                if top < (span["bbox"][1] + span["bbox"][3]) / 2 < bottom
+                and first_bbox.x0 <= (span["bbox"][0] + span["bbox"][2]) / 2 <= first_bbox.x1
+            ]
+            if not section or any(
+                span["bbox"][0] < first_bbox.x0 - tol
+                or span["bbox"][2] > columns[0] + tol
+                for span in section
+            ):
+                return None
+            centers = [(span["bbox"][1] + span["bbox"][3]) / 2 for span in section]
+            if max(centers) - min(centers) > tol:
+                return None
+        bbox = BBox(
+            min(region[0].x0 for region in regions), regions[0][0].y0,
+            max(region[0].x1 for region in regions), regions[-1][0].y1,
+        )
+        return (
+            bbox,
+            [line for _, lines, _ in regions for line in lines],
+            [line for _, _, lines in regions for line in lines],
+        )
+
+    def _build_tables(
+        self, page: fitz.Page, table_regions, confidence: Optional[float]
+    ) -> List[Table]:
         tables: List[Table] = []
         for region_bbox, region_h_lines, region_v_lines in table_regions:
             region_h_lines = self._merge_region_line_coordinates(
@@ -1672,7 +1787,14 @@ class WiredTableExtractor(BaseTableExtractor):
                 if abs(abs(lx - x) - nearest_distance) > 1e-6:
                     continue
                 overlap = min(ly1, y1 + tol) - max(ly0, y0 - tol)
-                if overlap >= max(span - tol, span * 0.9):
+                # A dashed separator may stop just short of both row edges.
+                # Accept only local endpoint error, never extend it across a row.
+                endpoints_match = (
+                    span > 2 * tol
+                    and abs(ly0 - y0) <= tol
+                    and abs(ly1 - y1) <= tol
+                )
+                if overlap >= max(span - tol, span * 0.9) or endpoints_match:
                     return True
             return False
 

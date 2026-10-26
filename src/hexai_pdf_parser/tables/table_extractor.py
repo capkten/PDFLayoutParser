@@ -459,6 +459,45 @@ class TableExtractor:
             ):
                 continue
 
+            overlapping_wired = [
+                table for table in valid_wired_tables
+                if id(table) not in included_wired and self._bbox_overlaps(table.bbox, bbox)
+            ]
+            if len(overlapping_wired) > 1:
+                grouped = self._wired_extractor.extract_grouped_region(page, bbox, score)
+                if grouped is not None and all(
+                    grouped.bbox.x0 - self.line_tolerance <= table.bbox.x0
+                    and grouped.bbox.y0 - self.line_tolerance <= table.bbox.y0
+                    and grouped.bbox.x1 + self.line_tolerance >= table.bbox.x1
+                    and grouped.bbox.y1 + self.line_tolerance >= table.bbox.y1
+                    for table in overlapping_wired
+                ):
+                    tables.append(grouped)
+                    included_wired.update(id(table) for table in overlapping_wired)
+                    continue
+                # Complete independent frames remain separate even if the model
+                # puts them in one region; wireless recovery would erase that evidence.
+                tol = self.line_tolerance
+                closed_frames = all(
+                    all(any(
+                        abs(line[0] - edge) <= tol
+                        and line[1] <= table.bbox.y0 + tol
+                        and line[3] >= table.bbox.y1 - tol
+                        for line in table.v_lines or []
+                    ) for edge in (table.bbox.x0, table.bbox.x1))
+                    and all(any(
+                        abs(line[1] - edge) <= tol
+                        and line[0] <= table.bbox.x0 + tol
+                        and line[2] >= table.bbox.x1 - tol
+                        for line in table.h_lines or []
+                    ) for edge in (table.bbox.y0, table.bbox.y1))
+                    for table in overlapping_wired
+                )
+                if closed_frames:
+                    tables.extend(overlapping_wired)
+                    included_wired.update(id(table) for table in overlapping_wired)
+                    continue
+
             bbox_h = max(1.0, bbox.y1 - bbox.y0)
             full_matching_wired = [
                 table
@@ -481,12 +520,6 @@ class TableExtractor:
                 confidence=score,
                 page_language=page_language,
             )
-            overlapping_wired = [
-                table
-                for table in valid_wired_tables
-                if id(table) not in included_wired
-                and self._bbox_overlaps(table.bbox, bbox)
-            ]
             if region_tables:
                 included_wired.update(id(table) for table in overlapping_wired)
             else:
